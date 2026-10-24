@@ -170,6 +170,17 @@ public final class VoiceSpeaker: NSObject, ObservableObject, AVSpeechSynthesizer
     private let synthesizer = AVSpeechSynthesizer()
     private var player: AVAudioPlayer?
     private var generation = 0
+    private var currentUtterance: AVSpeechUtterance?
+
+    /// Called when Cartesia fails and the Mac's own voice takes over, with a reason a person can act on.
+    public var onCartesiaFailure: ((String) -> Void)?
+    /// Called with the words being spoken when speech starts, and with nil when it ends (for captions).
+    public var onCaption: ((String?) -> Void)?
+
+    // Cartesia's API (https://docs.cartesia.ai/api-reference/tts/bytes). `generation_config.speed`
+    // needs sonic-3 or newer; earlier models ignore it.
+    static let cartesiaVersion = "2026-08-14"
+    static let cartesiaModel = "sonic-3"
 
     public override init() {
         super.init()
@@ -190,15 +201,17 @@ public final class VoiceSpeaker: NSObject, ObservableObject, AVSpeechSynthesizer
         let cartesiaKey = Keychain.get("cartesia") ?? ""
         let voice = Voices.voice(voiceID)
         if !cartesiaKey.isEmpty && !voice.cartesiaID.isEmpty {
+            let spoken = String(cleaned.prefix(900))
             Task {
                 do {
-                    let audio = try await requestCartesia(text: String(cleaned.prefix(900)), key: cartesiaKey,
-                                                          voiceID: voice.cartesiaID, speed: speed)
+                    let audio = try await Self.requestCartesia(text: spoken, key: cartesiaKey,
+                                                               voiceID: voice.cartesiaID, speed: speed)
                     guard current == self.generation else { return }
-                    try self.play(audio)
+                    try self.play(audio, text: spoken, generation: current)
                 } catch {
                     guard current == self.generation else { return }
                     self.lastError = error.localizedDescription
+                    self.onCartesiaFailure?(error.localizedDescription)
                     self.speakSystem(cleaned, speed: speed)
                 }
             }
@@ -207,60 +220,114 @@ public final class VoiceSpeaker: NSObject, ObservableObject, AVSpeechSynthesizer
         }
     }
 
-    private func requestCartesia(text: String, key: String, voiceID: String, speed: Double) async throws -> Data {
-        var request = URLRequest(url: URL(string: "https://api.cartesia.ai/tts/bytes")!)
+    private static func cartesiaRequest(_ path: String, key: String) -> URLRequest {
+        var request = URLRequest(url: URL(string: "https://api.cartesia.ai/\(path)")!)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue(cartesiaVersion, forHTTPHeaderField: "Cartesia-Version")
+        request.timeoutInterval = 30
+        return request
+    }
+
+    /// What went wrong, in words that say what to do about it.
+    private static func cartesiaProblem(status: Int) -> String {
+        switch status {
+        case 401, 403: return "Cartesia rejected the key. Check it in Keys."
+        case 402: return "Your Cartesia account is out of credits."
+        case 404: return "Cartesia doesn't have that voice any more. Pick another in Settings."
+        case 429: return "Cartesia is rate limiting right now."
+        default: return "Cartesia didn't answer (\(status))."
+        }
+    }
+
+    private static func requestCartesia(text: String, key: String, voiceID: String, speed: Double) async throws -> Data {
+        var request = cartesiaRequest("tts/bytes", key: key)
         request.httpMethod = "POST"
-        request.setValue(key, forHTTPHeaderField: "X-API-Key")
-        request.setValue("2025-03-24", forHTTPHeaderField: "Cartesia-Version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         let body: [String: Any] = [
-            "model_id": "sonic-2",
+            "model_id": cartesiaModel,
             "transcript": text,
-            "voice": ["mode": "id", "id": voiceID],
+            "voice": ["id": voiceID],
             "output_format": ["container": "wav", "sample_rate": 44100, "encoding": "pcm_s16le"],
             "language": "en",
             "generation_config": ["speed": max(0.6, min(1.5, speed))],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count > 100 else {
-            throw NSError(domain: "okidoki.tts", code: 1, userInfo: [NSLocalizedDescriptionKey: "voice service unavailable"])
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status), data.count > 100 else {
+            throw NSError(domain: "okidoki.tts", code: status, userInfo: [NSLocalizedDescriptionKey: cartesiaProblem(status: status)])
         }
         return data
     }
 
-    private func play(_ data: Data) throws {
+    /// Checks a key and the built-in voices: (ok, a line to show, names of voices Cartesia no longer has).
+    public static func checkCartesia(key: String) async -> (ok: Bool, detail: String, missingVoices: [String]) {
+        guard let (_, response) = try? await URLSession.shared.data(for: cartesiaRequest("voices?limit=1", key: key)),
+              let status = (response as? HTTPURLResponse)?.statusCode else {
+            return (false, "Couldn't reach Cartesia.", [])
+        }
+        guard (200..<300).contains(status) else { return (false, cartesiaProblem(status: status), []) }
+        var missing: [String] = []
+        for voice in Voices.all where !voice.cartesiaID.isEmpty {
+            let result = try? await URLSession.shared.data(for: cartesiaRequest("voices/\(voice.cartesiaID)", key: key))
+            if (result?.1 as? HTTPURLResponse)?.statusCode == 404 { missing.append(voice.name) }
+        }
+        return (true, "Voices will use Cartesia.", missing)
+    }
+
+    private func play(_ data: Data, text: String, generation current: Int) throws {
         let player = try AVAudioPlayer(data: data)
         self.player = player
         player.prepareToPlay()
         isSpeaking = true
+        onCaption?(text)
         player.play()
         DispatchQueue.main.asyncAfter(deadline: .now() + player.duration) { [weak self] in
-            self?.isSpeaking = false
+            // A newer reply may have started meanwhile; only end the one this timer belongs to.
+            guard let self, current == self.generation else { return }
+            self.finished()
         }
     }
 
     private func speakSystem(_ text: String, speed: Double) {
-        let utterance = AVSpeechUtterance(string: String(text.prefix(700)))
+        let spoken = String(text.prefix(700))
+        let utterance = AVSpeechUtterance(string: spoken)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = min(max(Float(0.48 * speed), 0.32), 0.68)
         utterance.pitchMultiplier = 1.02
+        currentUtterance = utterance
         isSpeaking = true
+        onCaption?(spoken)
         synthesizer.speak(utterance)
     }
 
+    private func finished() {
+        isSpeaking = false
+        onCaption?(nil)
+    }
+
     public func stop() {
+        currentUtterance = nil
         synthesizer.stopSpeaking(at: .immediate)
         player?.stop()
         player = nil
-        isSpeaking = false
+        if isSpeaking { finished() }
     }
 
+    // These arrive asynchronously, possibly after the next reply started: only end the current one.
     nonisolated public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = false }
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in self.utteranceEnded(id) }
     }
 
     nonisolated public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = false }
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in self.utteranceEnded(id) }
+    }
+
+    private func utteranceEnded(_ id: ObjectIdentifier) {
+        guard let current = currentUtterance, ObjectIdentifier(current) == id else { return }
+        currentUtterance = nil
+        finished()
     }
 }

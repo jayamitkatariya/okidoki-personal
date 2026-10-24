@@ -6,9 +6,15 @@ import { SyncLogin } from "../components/CloudAuth";
 import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
-  { id: "sarah", name: "Sarah", blurb: "Calm, clear, a little dry" },
-  { id: "brielle", name: "Brielle", blurb: "Warm and quick" },
-  { id: "barney", name: "Barney", blurb: "Low, friendly, unhurried" },
+  { id: "sarah", name: "Sarah", blurb: "Soothing and calm · American" },
+  { id: "barney", name: "Barney", blurb: "Deep, steady, conversational · American" },
+  { id: "eden", name: "Eden", blurb: "Clear, gender-neutral · American" },
+  { id: "archie", name: "Archie", blurb: "Warm and casual · British" },
+  { id: "siobhan", name: "Siobhan", blurb: "Friendly and everyday · Irish" },
+  { id: "devansh", name: "Devansh", blurb: "Warm and easygoing · Indian English" },
+  { id: "ella", name: "Ella", blurb: "Bright and light · Australian" },
+  { id: "brenda", name: "Brenda", blurb: "Cheerful and upbeat · African American" },
+  { id: "wyatt", name: "Wyatt", blurb: "Clear, with a gentle drawl · Southern US" },
   { id: "system", name: "System voice", blurb: "Your Mac's own voice" },
 ];
 
@@ -169,7 +175,9 @@ export function SettingsPage() {
                 </span>
                 <div className="voice-grid">
                   {VOICES.map((voice) => {
-                    const selected = settings.voiceID === voice.id;
+                    // A retired voice (like "brielle") plays as Sarah on the Mac, so show Sarah as chosen.
+                    const known = VOICES.some((item) => item.id === settings.voiceID);
+                    const selected = known ? settings.voiceID === voice.id : voice.id === VOICES[0].id;
                     return (
                       <button
                         key={voice.id}

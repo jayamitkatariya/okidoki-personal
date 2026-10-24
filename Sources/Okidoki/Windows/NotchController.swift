@@ -87,6 +87,8 @@ final class NotchModel: ObservableObject {
     @Published var expanded = false
     @Published var listening = false
     @Published var quiet = false
+    /// What okidoki is saying right now, while captions are on.
+    @Published var caption: String?
     @Published var hoveredRunID: String?
 
     /// True while the island is open (drives the open / close spring).
@@ -174,8 +176,8 @@ final class NotchModel: ObservableObject {
 
     // MARK: Derived layout
 
-    var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || listening }
-    var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty }
+    var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || listening || caption != nil }
+    var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || caption != nil }
 
     var islandWidth: CGFloat {
         let m = metrics
@@ -186,7 +188,7 @@ final class NotchModel: ObservableObject {
 
     /// Anything that changes the island's shape. Drives the content spring.
     var layoutKey: [String] {
-        [expanded ? "x" : "c", listening ? "l" : "", quiet ? "q" : ""]
+        [expanded ? "x" : "c", listening ? "l" : "", quiet ? "q" : "", caption == nil ? "" : "s"]
             + toasts.map(\.id)
             + waiting.map(\.id)
             + live.map { $0.id + $0.status.rawValue }

@@ -249,6 +249,7 @@ private struct NotchContent: View {
     private var statusText: String {
         if model.quiet { return "Quiet" }
         if model.listening { return "Listening" }
+        if model.caption != nil { return "Speaking" }
         if !model.waiting.isEmpty { return "Needs you" }
         if !model.live.isEmpty { return "Working" }
         if !model.toasts.isEmpty { return "Just now" }
@@ -312,6 +313,14 @@ private struct NotchContent: View {
         VStack(alignment: .leading, spacing: 12) {
             NotchScrollArea(maxHeight: m.maxBodyHeight) {
                 VStack(alignment: .leading, spacing: model.expanded ? 16 : 8) {
+                    if let caption = model.caption {
+                        Text(caption)
+                            .font(.okBody(13, .medium))
+                            .foregroundStyle(NotchInk.primary)
+                            .lineLimit(model.expanded ? 8 : 3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .transition(rowTransition)
+                    }
                     if !shownWaiting.isEmpty {
                         section(model.expanded ? "Needs you" : nil) {
                             ForEach(shownWaiting) { run in

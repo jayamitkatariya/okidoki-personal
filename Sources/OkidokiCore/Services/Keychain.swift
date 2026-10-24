@@ -95,9 +95,16 @@ public struct VoiceOption: Identifiable, Sendable {
 
 public enum Voices {
     public static let all: [VoiceOption] = [
-        VoiceOption(id: "sarah", name: "sarah", blurb: "calm, clear, a little dry", cartesiaID: "694f9389-aac1-45b6-b726-9d9369183238"),
-        VoiceOption(id: "brielle", name: "brielle", blurb: "warm and quick", cartesiaID: "79a125e8-cd45-4c13-8a67-188112f4dd22"),
-        VoiceOption(id: "barney", name: "barney", blurb: "low, friendly, unhurried", cartesiaID: "a0e99841-438c-4a64-b679-ae501e7d6091"),
+        // Cartesia voices (sonic-3). An id no longer listed here (like the retired "brielle") falls back to sarah.
+        VoiceOption(id: "sarah", name: "sarah", blurb: "soothing and calm · american", cartesiaID: "694f9389-aac1-45b6-b726-9d9369183238"),
+        VoiceOption(id: "barney", name: "barney", blurb: "deep, steady, conversational · american", cartesiaID: "a0e99841-438c-4a64-b679-ae501e7d6091"),
+        VoiceOption(id: "eden", name: "eden", blurb: "clear, gender-neutral · american", cartesiaID: "83ae58a1-7e97-4b94-b03f-e4cc0a10d8af"),
+        VoiceOption(id: "archie", name: "archie", blurb: "warm and casual · british", cartesiaID: "ef191366-f52f-447a-a398-ed8c0f2943a1"),
+        VoiceOption(id: "siobhan", name: "siobhan", blurb: "friendly and everyday · irish", cartesiaID: "d79d2b77-9192-4e10-9407-5d43ca034803"),
+        VoiceOption(id: "devansh", name: "devansh", blurb: "warm and easygoing · indian english", cartesiaID: "1259b7e3-cb8a-43df-9446-30971a46b8b0"),
+        VoiceOption(id: "ella", name: "ella", blurb: "bright and light · australian", cartesiaID: "2a12b36c-7f9b-4c3a-9f7a-72731b15323a"),
+        VoiceOption(id: "brenda", name: "brenda", blurb: "cheerful and upbeat · african american", cartesiaID: "607167f6-9bf2-473c-accc-ac7b3b66b30b"),
+        VoiceOption(id: "wyatt", name: "wyatt", blurb: "clear, with a gentle drawl · southern us", cartesiaID: "5fc5c797-12c5-4f2b-ac9b-d4e53c08098f"),
         VoiceOption(id: "system", name: "system voice", blurb: "uses your Mac's own voice", cartesiaID: ""),
     ]
     public static func voice(_ id: String) -> VoiceOption { all.first { $0.id == id } ?? all[0] }

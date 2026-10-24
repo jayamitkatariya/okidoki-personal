@@ -132,6 +132,11 @@ final class AppEnvironment: ObservableObject {
 
         shake.onShake = { [weak self] in self?.handleShake() }
         watch.onFinish = { [weak self] steps in self?.handleWatchFinished(steps) }
+        speaker.onCaption = { [weak self] text in
+            guard let self else { return }
+            self.notch.model.caption = self.store.settings.captions ? text : nil
+        }
+        speaker.onCartesiaFailure = { [weak self] reason in self?.cartesiaFailed(reason) }
 
         store.$settings
             .receive(on: RunLoop.main)
@@ -1604,6 +1609,18 @@ final class AppEnvironment: ObservableObject {
             Keychain.set(trimmed, for: provider)
             toast(title: "key saved", detail: "\(provider) · stored in the keychain", kind: .success,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            if provider == "cartesia" {
+                // Check the key and the built-in voices now, not on the first spoken reply.
+                cartesiaWarned = false
+                Task { [weak self] in
+                    let check = await VoiceSpeaker.checkCartesia(key: trimmed)
+                    let missing = check.missingVoices.isEmpty ? "" : " Cartesia no longer has: \(check.missingVoices.joined(separator: ", "))."
+                    self?.toast(title: check.ok ? "cartesia connected" : "cartesia key didn't work",
+                                detail: check.detail + missing,
+                                kind: check.ok && check.missingVoices.isEmpty ? .success : .warning,
+                                undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+                }
+            }
             if provider == "moss" {
                 // New credentials: build the memory index now rather than on the next change.
                 lastMemoryHash = nil
@@ -2004,8 +2021,21 @@ final class AppEnvironment: ObservableObject {
     }
 
     func speak(_ text: String) {
-        guard store.settings.voiceEnabled else { return }
+        // Quiet during calls, screen shares and quiet mode, as promised; the card still shows the answer.
+        guard store.settings.voiceEnabled, !store.settings.quietMode, !inCall else { return }
         speaker.speak(text, voiceID: store.settings.voiceID, speed: store.settings.voiceSpeed)
+    }
+
+    /// Set once Cartesia's failure has been shown, so a broken key doesn't toast on every reply.
+    private var cartesiaWarned = false
+
+    private func cartesiaFailed(_ reason: String) {
+        guard !cartesiaWarned else { return }
+        cartesiaWarned = true
+        toast(title: "using your Mac's voice", detail: reason, kind: .warning,
+              undoLabel: nil, onUndo: nil, editLabel: "keys", onEdit: { [weak self] in
+                  self?.openDashboard(.keys)
+              }, runID: nil)
     }
 
     func signOut() {
