@@ -154,6 +154,36 @@ public enum SetupRecipes {
         SetupRecipe(id: "restic", name: "restic", aliases: ["restic"], binary: "restic",
                     install: ["brew install restic"], needs: ["homebrew"], update: ["brew upgrade restic"],
                     blurb: "Encrypted, versioned backups to a drive or cloud storage."),
+        SetupRecipe(id: "tesseract", name: "Tesseract", aliases: ["tesseract", "image ocr"], binary: "tesseract",
+                    install: ["brew install tesseract"], needs: ["homebrew"], update: ["brew upgrade tesseract"],
+                    blurb: "Copies the text out of screenshots, photos and scans."),
+        SetupRecipe(id: "qrencode", name: "qrencode", aliases: ["qrencode", "qr code generator"], binary: "qrencode",
+                    install: ["brew install qrencode"], needs: ["homebrew"], update: ["brew upgrade qrencode"],
+                    blurb: "Makes QR codes for links, text and Wi-Fi as PNG or SVG."),
+        SetupRecipe(id: "zbar", name: "zbar", aliases: ["zbar", "zbarimg", "qr code reader", "barcode reader"], binary: "zbarimg",
+                    install: ["brew install zbar"], needs: ["homebrew"], update: ["brew upgrade zbar"],
+                    blurb: "Reads QR codes and barcodes from images and screenshots."),
+        SetupRecipe(id: "img2pdf", name: "img2pdf", aliases: ["img2pdf", "image to pdf"], binary: "img2pdf",
+                    install: ["brew install img2pdf"], needs: ["homebrew"], update: ["brew upgrade img2pdf"],
+                    blurb: "Turns photos and scans into one PDF without losing quality."),
+        SetupRecipe(id: "jpegoptim", name: "jpegoptim", aliases: ["jpegoptim"], binary: "jpegoptim",
+                    install: ["brew install jpegoptim"], needs: ["homebrew"], update: ["brew upgrade jpegoptim"],
+                    blurb: "Makes photos smaller with little visible change."),
+        SetupRecipe(id: "croc", name: "croc", aliases: ["croc"], binary: "croc",
+                    install: ["brew install croc"], needs: ["homebrew"], update: ["brew upgrade croc"],
+                    blurb: "Sends files to another computer, encrypted, with no size limit."),
+        SetupRecipe(id: "age", name: "age", aliases: ["age", "age encryption"], binary: "age",
+                    install: ["brew install age"], needs: ["homebrew"], update: ["brew upgrade age"],
+                    blurb: "Locks files with a password or key, simply and securely."),
+        SetupRecipe(id: "smartmontools", name: "smartmontools", aliases: ["smartmontools", "smartctl"], binary: "smartctl",
+                    install: ["brew install smartmontools"], needs: ["homebrew"], update: ["brew upgrade smartmontools"],
+                    blurb: "Checks the health of your Mac's drive and external disks."),
+        SetupRecipe(id: "switchaudio", name: "SwitchAudio", aliases: ["switchaudio", "switchaudiosource", "switchaudio-osx"], binary: "SwitchAudioSource",
+                    install: ["brew install switchaudio-osx"], needs: ["homebrew"], update: ["brew upgrade switchaudio-osx"],
+                    blurb: "Switches your sound output or microphone from one command."),
+        SetupRecipe(id: "topgrade", name: "topgrade", aliases: ["topgrade"], binary: "topgrade",
+                    install: ["brew install topgrade"], needs: ["homebrew"], update: ["brew upgrade topgrade"],
+                    blurb: "Updates Homebrew, App Store apps and your other tools in one go."),
     ]
 
     public static func recipe(id: String) -> SetupRecipe? { all.first { $0.id == id } }
@@ -431,6 +461,11 @@ public enum TerminalActions {
             return ["chat", "setup", "model", "tui", "login", "auth", "config", "gateway"].contains(args[0])
         case "duckdb": return !args.contains { ["-c", "-s", "-version", "--version", "-help", "--help"].contains($0) }
         case "gh": return args.prefix(2) == ["auth", "login"]
+        // croc send waits for the other side and shows the code; age asks for a password; topgrade asks for the Mac password.
+        case "croc": return args.contains("send")
+        case "age": return args.contains { ["-p", "--passphrase"].contains($0) }
+            || (args.contains { ["-d", "--decrypt"].contains($0) } && !args.contains { ["-i", "--identity"].contains($0) })
+        case "topgrade": return !args.contains { ["--dry-run", "-n", "--help", "-h", "--version", "-V"].contains($0) }
         case "mo", "mole": return args.first.map { ["analyze", "status", "touchid", "uninstall", "optimize", "installer", "slim", "remove"].contains($0) && !args.contains("--dry-run") && !args.contains("-n") } ?? true
         case "ollama": return args.first == "run" && args.count == 2
         case "python", "python3", "node", "bun", "deno", "ruby":

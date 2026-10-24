@@ -162,9 +162,9 @@ public enum SafetyPolicy {
         ]
         let matches = { (pattern: String) in command.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
         if (installs + deletes).contains(where: matches) { return true }
-        // Mole's dry run only looks; the real clean, purge or uninstall removes files.
+        // Mole's and topgrade's dry runs only look; the real clean or update removes or installs things.
         let previewOnly = matches(#"\s(--dry-run|-n)(\s|$)"#)
-        return !previewOnly && matches(#"\b(mo|mole)\s+(clean|purge|uninstall|remove|optimize)\b"#)
+        return !previewOnly && (matches(#"\b(mo|mole)\s+(clean|purge|uninstall|remove|optimize)\b"#) || matches(#"\btopgrade\b"#))
     }
 
     /// What "always allow" remembers for a command: its program and first argument, e.g. "mo clean".

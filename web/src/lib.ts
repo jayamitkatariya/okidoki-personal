@@ -105,7 +105,7 @@ export function scheduleLabel(routine: {
 }
 
 // Rough yearly price of the paid app each free tool stands in for. Mirrors ToolCatalog.paidAlternatives.
-const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59, "yt-dlp": 45, gifski: 15, sox: 35, whisper: 100, pngquant: 39, oxipng: 15, exiftool: 20, webp: 15, qpdf: 80, ghostscript: 6, czkawka: 20, sevenzip: 25, duckdb: 100, restic: 60, gh: 69 };
+const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59, "yt-dlp": 45, gifski: 15, sox: 35, whisper: 100, pngquant: 39, oxipng: 15, exiftool: 20, webp: 15, qpdf: 80, ghostscript: 6, czkawka: 20, sevenzip: 25, duckdb: 100, restic: 60, gh: 69, tesseract: 8, qrencode: 30, img2pdf: 10, jpegoptim: 15, croc: 120, age: 20, smartmontools: 20, topgrade: 15 };
 
 export function toolPrice(id: string): number {
   return TOOL_PRICES[id] ?? 0;

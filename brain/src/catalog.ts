@@ -438,6 +438,168 @@ Never merge, close or delete anything without approval.`,
     license: "MIT",
     category: "dev",
   },
+  {
+    id: "tesseract",
+    name: "Tesseract",
+    command: "tesseract",
+    replaces: "TextSniper",
+    blurb: "Copies the text out of screenshots, photos and scans.",
+    examples: ["copy the text out of this screenshot", "read the text in this photo", "turn this image into text"],
+    installCommand: "brew install tesseract",
+    docs: `Tesseract reads text in images:
+  tesseract screenshot.png -
+  tesseract photo.jpg photo-text
+The first prints the text; the second writes photo-text.txt next to the image.
+English is included. Other languages need "brew install tesseract-lang", then -l fra, -l deu or -l eng+spa.
+For PDFs use OCRmyPDF instead.`,
+    license: "Apache-2.0",
+    category: "documents",
+  },
+  {
+    id: "qrencode",
+    name: "qrencode",
+    command: "qrencode",
+    replaces: "paid QR code generators",
+    blurb: "Makes QR codes for links, text and Wi-Fi as PNG or SVG.",
+    examples: ["make a qr code for this link", "make a qr code for my wifi", "make a printable qr code"],
+    installCommand: "brew install qrencode",
+    docs: `qrencode makes QR codes:
+  qrencode -o "$HOME/Downloads/qr.png" -s 10 -m 2 "https://example.com"
+  qrencode -t SVG -o "$HOME/Downloads/qr.svg" "https://example.com"
+  qrencode -o "$HOME/Downloads/wifi-qr.png" -s 10 "WIFI:T:WPA;S:NetworkName;P:password;;"
+-s sets the size of each dot. Use SVG for print. Don't overwrite an existing file.`,
+    license: "LGPL-2.1",
+    category: "images",
+  },
+  {
+    id: "zbar",
+    name: "zbar",
+    command: "zbarimg",
+    replaces: "QR code scanner apps",
+    blurb: "Reads QR codes and barcodes from images and screenshots.",
+    examples: ["what does this qr code say", "read the barcode in this photo"],
+    installCommand: "brew install zbar",
+    docs: `zbarimg reads QR codes and barcodes in an image (the command is zbarimg):
+  zbarimg -q --raw screenshot.png
+Read-only. If a QR code holds a link, show the link and don't open it unless the person asks.`,
+    license: "LGPL-2.1",
+    category: "images",
+  },
+  {
+    id: "img2pdf",
+    name: "img2pdf",
+    command: "img2pdf",
+    replaces: "paid JPG to PDF tools",
+    blurb: "Turns photos and scans into one PDF without losing quality.",
+    examples: ["turn these photos into one pdf", "make a pdf from these scans", "combine these images into a pdf"],
+    installCommand: "brew install img2pdf",
+    docs: `img2pdf puts images into a PDF without re-encoding them:
+  img2pdf page1.jpg page2.jpg -o scans.pdf
+  img2pdf *.jpg --pagesize A4 -o photos.pdf
+HEIC isn't supported; make JPEG copies first with: sips -s format jpeg photo.heic --out photo.jpg
+PNGs with transparency fail; flatten them with ImageMagick first. Never overwrite an existing PDF.`,
+    license: "LGPL-3.0",
+    category: "documents",
+  },
+  {
+    id: "jpegoptim",
+    name: "jpegoptim",
+    command: "jpegoptim",
+    replaces: "JPEG compressors",
+    blurb: "Makes photos smaller with little visible change.",
+    examples: ["make these jpegs smaller", "compress these photos for email", "shrink photos for my website"],
+    installCommand: "brew install jpegoptim",
+    docs: `jpegoptim shrinks JPEGs. It edits files in place by default, so always write copies with --dest:
+  mkdir -p smaller
+  jpegoptim --max=85 --strip-all --dest=smaller *.jpg
+--max sets the quality (lower is smaller). --strip-all also removes metadata such as location.
+Never run it without --dest unless the person asks to change the originals.`,
+    license: "GPL-3.0",
+    category: "images",
+  },
+  {
+    id: "croc",
+    name: "croc",
+    command: "croc",
+    replaces: "WeTransfer Pro",
+    blurb: "Sends files to another computer, encrypted, with no size limit.",
+    examples: ["send this file to my other computer", "send this folder to a friend", "receive a file with a code"],
+    installCommand: "brew install croc",
+    docs: `croc sends files between computers with a one-time code:
+  croc send "$HOME/Desktop/report.pdf"
+Sending prints a code phrase and waits for the other side, so it opens in a Terminal window.
+The other computer runs croc too, with the code (never put the code on the command line itself):
+  CROC_SECRET="code-phrase" croc --yes --out "$HOME/Downloads"
+Only send what the person chose. Tell them the transfer is end-to-end encrypted.`,
+    license: "MIT",
+    category: "files",
+  },
+  {
+    id: "age",
+    name: "age",
+    command: "age",
+    replaces: "paid file encryption apps",
+    blurb: "Locks files with a password or key, simply and securely.",
+    examples: ["encrypt this file with a password", "decrypt this file", "lock this folder before I upload it"],
+    installCommand: "brew install age",
+    docs: `age encrypts files. With a password it asks for it in a Terminal window:
+  age -p -o report.pdf.age report.pdf
+  age -d -o report.pdf report.pdf.age
+For a folder, make an archive first: tar -czf folder.tar.gz folder
+Never put a password in a command. Keep the original until the person confirms they can decrypt the copy.`,
+    license: "BSD-3-Clause",
+    category: "security",
+  },
+  {
+    id: "smartmontools",
+    name: "smartmontools",
+    command: "smartctl",
+    replaces: "DriveDx",
+    blurb: "Checks the health of your Mac's drive and external disks.",
+    examples: ["is my drive healthy", "check my ssd health", "how worn out is my disk"],
+    installCommand: "brew install smartmontools",
+    docs: `smartctl reads a drive's health report (the command is smartctl):
+  diskutil list
+  smartctl -H disk0
+  smartctl -a disk0
+-H gives pass or fail. -a gives detail; explain "Percentage Used", "Available Spare" and "Media and Data Integrity Errors" in plain English.
+Read-only. Some external drives don't report health data; say so plainly.`,
+    license: "GPL-2.0",
+    category: "system",
+  },
+  {
+    id: "switchaudio",
+    name: "SwitchAudio",
+    command: "SwitchAudioSource",
+    replaces: "SoundSource",
+    blurb: "Switches your sound output or microphone from one command.",
+    examples: ["switch the sound to my airpods", "play sound through my speakers", "which audio output am i using"],
+    installCommand: "brew install switchaudio-osx",
+    docs: `SwitchAudioSource changes the sound device:
+  SwitchAudioSource -a -t output
+  SwitchAudioSource -c
+  SwitchAudioSource -t output -s "AirPods Pro"
+  SwitchAudioSource -t input -s "MacBook Pro Microphone"
+List devices first and use the exact name. Say which device was active before, so it's easy to switch back.`,
+    license: "MIT",
+    category: "system",
+  },
+  {
+    id: "topgrade",
+    name: "topgrade",
+    command: "topgrade",
+    replaces: "MacUpdater",
+    blurb: "Updates Homebrew, App Store apps and your other tools in one go.",
+    examples: ["update everything on my mac", "update all my apps and tools"],
+    installCommand: "brew install topgrade",
+    docs: `topgrade updates everything it finds: Homebrew, App Store apps (with mas), npm, pip and more:
+  topgrade --dry-run
+  topgrade --yes
+Show the dry run first. The real update asks for the Mac password and runs for a while, so it opens in a Terminal window.
+It installs updates, so it always needs approval.`,
+    license: "GPL-3.0",
+    category: "system",
+  },
 ];
 
 export function findTools(query: string): ToolSpec[] {

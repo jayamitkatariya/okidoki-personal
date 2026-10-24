@@ -56,7 +56,9 @@ final class TerminalActionsTests: XCTestCase {
         let expected = ["whisper-cli -m model.bin -f a.wav": "brew install whisper.cpp", "7zz a out.7z folder": "brew install sevenzip",
                         "pdftotext a.pdf a.txt": "brew install poppler", "gs -sDEVICE=pdfwrite -o small.pdf a.pdf": "brew install ghostscript",
                         "czkawka_cli dup --directories ~/Pictures": "brew install czkawka", "cwebp -q 80 a.png -o a.webp": "brew install webp",
-                        "qpdf --empty --pages a.pdf b.pdf -- merged.pdf": "brew install qpdf", "duckdb -c \"SELECT 1\"": "brew install duckdb"]
+                        "qpdf --empty --pages a.pdf b.pdf -- merged.pdf": "brew install qpdf", "duckdb -c \"SELECT 1\"": "brew install duckdb",
+                        "zbarimg -q --raw qr.png": "brew install zbar", "smartctl -H disk0": "brew install smartmontools",
+                        "SwitchAudioSource -c": "brew install switchaudio-osx", "tesseract shot.png -": "brew install tesseract"]
         for (command, install) in expected {
             XCTAssertEqual(try TerminalActions.prepare([command], installed: onlyBrew), [install, command], command)
         }
@@ -92,7 +94,8 @@ final class TerminalActionsTests: XCTestCase {
             XCTAssertFalse(SafetyPolicy.preApproved(commands: [command], risk: .medium, settings: settings), command)
         }
         XCTAssertFalse(SafetyPolicy.preApproved(commands: ["sudo -v", "mo clean --dry-run", "mo clean"], risk: .medium, settings: settings))
-        for command in ["mo clean --dry-run", "mo clean -n", "mo status", "sudo -v", "qpdf --empty --pages a.pdf b.pdf -- out.pdf", "brew list"] {
+        XCTAssertTrue(SafetyPolicy.alwaysNeedsApproval("topgrade --yes"), "topgrade installs updates")
+        for command in ["mo clean --dry-run", "mo clean -n", "mo status", "sudo -v", "qpdf --empty --pages a.pdf b.pdf -- out.pdf", "brew list", "topgrade --dry-run"] {
             XCTAssertFalse(SafetyPolicy.alwaysNeedsApproval(command), command)
         }
         // Always ask wins over always allow, and matches whole words only.
@@ -134,6 +137,12 @@ final class TerminalActionsTests: XCTestCase {
         }
         for command in ["duckdb", "duckdb sales.duckdb", "gh auth login"] {
             XCTAssertTrue(TerminalActions.needsRealTerminal(command), command)
+        }
+        for command in ["croc send report.pdf", "age -p -o a.age a.pdf", "age -d -o a.pdf a.age", "topgrade --yes"] {
+            XCTAssertTrue(TerminalActions.needsRealTerminal(command), command)
+        }
+        for command in ["CROC_SECRET=\"code\" croc --yes --out ~/Downloads", "age -d -i key.txt -o a.pdf a.age", "topgrade --dry-run"] {
+            XCTAssertFalse(TerminalActions.needsRealTerminal(command), command)
         }
         for command in ["duckdb -c \"SELECT 1\"", "gh pr list", "gh auth status"] {
             XCTAssertFalse(TerminalActions.needsRealTerminal(command), command)

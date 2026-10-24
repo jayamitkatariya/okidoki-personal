@@ -20,7 +20,8 @@ public enum CommandRisk {
         if high.contains(where: { c.contains($0) }) { return .high }
         let medium = ["npm install", "pip3 install", "uv ", "mkdir ", "touch ", "ditto ", "git ", "brew install", "brew upgrade", "curl ", "wget ", "pip install", "npm install -g", "ffmpeg", "pandoc", "ocrmypdf", "magick", "rclone", "ollama", "git clone", "npm run", "bun ", "yarn ",
                       "yt-dlp", "gifski", "sox ", "whisper-cli", "pngquant", "oxipng", "exiftool", "cwebp", "dwebp", "qpdf", "gs -",
-                      "pdfimages", "pdfunite", "typst", "czkawka", "7zz", "unar ", "duckdb", "restic", "mas upgrade", "gh repo", "gh pr", "gh issue"]
+                      "pdfimages", "pdfunite", "typst", "czkawka", "7zz", "unar ", "duckdb", "restic", "mas upgrade", "gh repo", "gh pr", "gh issue",
+                      "tesseract", "qrencode", "img2pdf", "jpegoptim", "croc", "age -", "switchaudiosource -s", "topgrade"]
         if medium.contains(where: { c.contains($0) }) { return .medium }
         return .low
     }
