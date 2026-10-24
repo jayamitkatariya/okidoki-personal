@@ -56,9 +56,27 @@ export interface Settings {
   claudeModel: string;
   agentExtraArgs: Record<string, string>;
   lastWorkingDirectory: string;
+  mcpServers: McpServer[];
 }
 
-export type RunKind = "answer" | "quickAction" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine";
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: "stdio" | "http";
+  command: string;
+  args: string[];
+  url: string;
+  enabled: boolean;
+}
+
+export interface McpStatus {
+  id: string;
+  ok: boolean;
+  error?: string | null;
+  tools: { name: string; description: string }[];
+}
+
+export type RunKind = "answer" | "quickAction" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine" | "connector";
 export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled";
 export type Risk = "low" | "medium" | "high";
 
@@ -196,6 +214,7 @@ export interface Tool {
   license: string;
   category: string;
   examples: string[];
+  popularity?: number;
 }
 
 export interface NativeState {
@@ -220,6 +239,8 @@ export interface NativeState {
   version: string;
   savings: number;
   convexConfigured: boolean;
+  mcpStatus?: Record<string, McpStatus>;
+  mcpSecretNames?: Record<string, string[]>;
 }
 
 export interface NavItem {

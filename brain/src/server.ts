@@ -2,7 +2,10 @@ import { think } from "./llm";
 import { execute, pause, resume, stop, isBlocked } from "./executor";
 import { tools, findTools } from "./catalog";
 import { computerAct } from "./computer";
-import type { ComputerRequest, ExecuteRequest, ThinkRequest } from "./types";
+import { checkToken } from "./apify";
+import { closeAll, forget } from "./mcp";
+import { mcpCatalog, runConnector } from "./connectors";
+import type { ComputerRequest, ConnectorRunRequest, ExecuteRequest, McpServerConfig, ThinkRequest } from "./types";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4319);
 
@@ -130,6 +133,47 @@ const server = Bun.serve({
       });
     }
 
+    // Connects to each MCP server and lists its tools. The Mac calls this when servers change, to show
+    // status in the Toolbox and to warm the cache so /think doesn't wait on a cold start.
+    if (url.pathname === "/mcp/tools" && request.method === "POST") {
+      try {
+        const { servers } = await body<{ servers: McpServerConfig[] }>(request);
+        const catalog = await mcpCatalog(servers ?? [], 30_000);
+        return json({
+          servers: catalog.map((entry) => ({
+            id: entry.server.id,
+            ok: !entry.error,
+            error: entry.error,
+            tools: entry.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+          })),
+        });
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    if (url.pathname === "/mcp/forget" && request.method === "POST") {
+      const { id } = await body<{ id: string }>(request);
+      forget(id);
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/apify/check" && request.method === "POST") {
+      const { token } = await body<{ token: string }>(request);
+      return json(await checkToken(token ?? ""));
+    }
+
+    if (url.pathname === "/connector/run" && request.method === "POST") {
+      try {
+        const payload = await body<ConnectorRunRequest>(request);
+        if (!payload.call?.connector) return json({ error: "call required" }, 400);
+        const key = request.headers.get("x-anthropic-key") ?? undefined;
+        return json(await runConnector(payload, key));
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
     if (url.pathname === "/stop" && request.method === "POST") {
       const { runId } = await body<{ runId: string }>(request);
       return json({ stopped: stop(runId) });
@@ -156,6 +200,7 @@ setInterval(() => {
   const ppid = process.ppid;
   if (!ppid || ppid === 1) {
     console.log(`parent gone (ppid=${ppid}) — exiting`);
+    closeAll(); // don't leave MCP server processes behind
     process.exit(0);
   }
 }, 3000);

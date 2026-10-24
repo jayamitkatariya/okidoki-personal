@@ -1,17 +1,18 @@
 import type { Decision, ThinkRequest } from "./types";
 import { localRouter } from "./router";
 import { toolDocs } from "./catalog";
+import { checkConnectorDecision, connectorPrompt, mcpCatalog, type McpCatalogEntry } from "./connectors";
 
 const responseTool = {
   name: "okidoki_respond",
   description:
-    "Always respond with this. Decide how to help: answer, quick_action, terminal, coding, background, teach, borrow, watch, memory, routine, computer_use, or overlay.",
+    "Always respond with this. Decide how to help: answer, quick_action, terminal, coding, background, teach, borrow, watch, memory, routine, computer_use, overlay, or connector.",
   input_schema: {
     type: "object",
     properties: {
       kind: {
         type: "string",
-        enum: ["answer", "quick_action", "terminal", "coding", "background", "teach", "borrow", "watch", "memory", "routine", "computer_use", "overlay"],
+        enum: ["answer", "quick_action", "terminal", "coding", "background", "teach", "borrow", "watch", "memory", "routine", "computer_use", "overlay", "connector"],
       },
       title: { type: "string", description: "short lowercase title, max 6 words" },
       answer: { type: "string", description: "the response to show in the card; short, warm, concrete, markdown allowed" },
@@ -83,6 +84,19 @@ const responseTool = {
         required: ["type", "title"],
       },
       pick_file: { type: "string", enum: ["video", "pdf", "document", "images", "folder"] },
+      connector_call: {
+        type: "object",
+        description: "for connector: which connected service to call. Apify needs actor + input; MCP needs server + tool + arguments.",
+        properties: {
+          connector: { type: "string", enum: ["apify", "mcp"] },
+          actor: { type: "string", description: "Apify actor id, e.g. apify/google-search-scraper" },
+          input: { type: "object", description: "the actor's input" },
+          server: { type: "string", description: "MCP server id" },
+          tool: { type: "string", description: "MCP tool name" },
+          arguments: { type: "object", description: "the MCP tool's arguments" },
+        },
+        required: ["connector"],
+      },
       builtin: { type: "string" },
       clarification: { type: "string" },
       actions: { type: "array", items: { type: "string" } },
@@ -107,6 +121,7 @@ const KEY_MAP: Record<string, string> = {
   overlay_title: "overlayTitle",
   overlay_width: "overlayWidth",
   overlay_height: "overlayHeight",
+  connector_call: "connectorCall",
 };
 
 function normalize(input: Record<string, unknown>): Decision {
@@ -121,10 +136,11 @@ function normalize(input: Record<string, unknown>): Decision {
   return mapped as unknown as Decision;
 }
 
-function systemPrompt(request: ThinkRequest): string {
+function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[]): string {
   const memory = request.memory?.length ? request.memory.map((m) => `· ${m}`).join("\n") : "nothing yet.";
   const docs = toolDocs(request.installedTools ?? []);
   const native = request.nativeContext;
+  const connectors = connectorPrompt(request.connectors, catalog);
   const lines = [
     `You are Okidoki, a warm, quick Mac assistant that lives in the notch and beside your cursor.`,
     `Speak like a sharp friend: lowercase in labels, short sentences, no emoji, no corporate voice.`,
@@ -141,6 +157,7 @@ function systemPrompt(request: ThinkRequest): string {
     `- seeing a concept in motion — "explain with a simulation", "show me how this works", physics/dynamics/visualize → overlay, with overlay_html rendered as a floating canvas right on their screen`,
     `- a single click in the current app → borrow, with a clear preview`,
     `- "watch me" → watch`,
+    `- live web data, or a job one of their connected services (below) can do → connector, with connector_call and a preview`,
     `- a durable fact → memory`,
     `- a recurring job → routine`,
     `If the request is genuinely unclear, answer with one short question in clarification and set actions to ["show", "do"]. Ask once, not twice.`,
@@ -170,6 +187,7 @@ function systemPrompt(request: ThinkRequest): string {
     native?.frontWindow ? `Front window: ${native.frontWindow}` : "",
     request.documentName ? `Attached document: ${request.documentName}` : "",
     docs ? `\nOpen-source tool docs you can rely on:\n${docs}` : "",
+    connectors ? `\nConnected services:\n${connectors}` : "",
   ];
   return lines.filter(Boolean).join("\n");
 }
@@ -201,6 +219,8 @@ export async function think(request: ThinkRequest, apiKey: string | undefined): 
   if (messages.length && messages[messages.length - 1].role === "user" && String(messages[messages.length - 1].content) === request.text) {
     messages.pop();
   }
+  // Cached after the first listing, so this is usually instant; a slow server is left out rather than stalling.
+  const catalog = request.connectors?.mcpServers?.length ? await mcpCatalog(request.connectors.mcpServers, 4_000) : [];
   const content: unknown[] = [];
   if (request.screenshotBase64) {
     content.push({
@@ -218,7 +238,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined): 
   const body = {
     model,
     max_tokens: 1600,
-    system: systemPrompt(request),
+    system: systemPrompt(request, catalog),
     messages,
     tools: [responseTool],
     tool_choice: { type: "tool", name: "okidoki_respond" },
@@ -244,7 +264,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined): 
     const blocks = json.content ?? [];
     for (const block of blocks) {
       if (block.type === "tool_use" && block.input) {
-        return { decision: normalize(block.input), usedModel: true };
+        return { decision: checkConnectorDecision(normalize(block.input), request.connectors, catalog), usedModel: true };
       }
     }
     const text = blocks.find((b) => b.type === "text")?.text;

@@ -12,7 +12,8 @@ export type DecisionKind =
   | "memory"
   | "routine"
   | "computer_use"
-  | "overlay";
+  | "overlay"
+  | "connector";
 
 export interface TeachMark {
   kind: "circle" | "box" | "arrow" | "label" | "dim" | "cursor" | "ink";
@@ -66,6 +67,54 @@ export interface Decision {
   overlayTitle?: string;
   overlayWidth?: number;
   overlayHeight?: number;
+  connectorCall?: ConnectorCall;
+  // The same call as a JSON string: the Mac app keeps it opaque and hands it back to /connector/run.
+  connectorCallJSON?: string;
+}
+
+export type ConnectorCall =
+  | { connector: "apify"; actor: string; input: Record<string, unknown> }
+  | { connector: "mcp"; server: string; tool: string; arguments: Record<string, unknown> };
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  // Secrets come from the Mac's Keychain on every request; the sidecar never stores them.
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+}
+
+export interface ConnectorsContext {
+  apify?: boolean;
+  mcpServers?: McpServerConfig[];
+}
+
+export interface ConnectorRunRequest {
+  runId: string;
+  prompt: string;
+  call: ConnectorCall;
+  apifyToken?: string;
+  mcpServers?: McpServerConfig[];
+  spendingLimit?: number;
+  settings?: { claudeModel?: string };
+}
+
+export interface ConnectorRunResult {
+  ok: boolean;
+  answer: string;
+  summary: string;
+  output: string;
+  error?: string;
 }
 
 export interface HistoryMessage {
@@ -103,6 +152,7 @@ export interface ThinkRequest {
   clipboardText?: string;
   installedTools?: string[];
   nativeContext?: NativeContext;
+  connectors?: ConnectorsContext;
 }
 
 export interface ThinkResponse {

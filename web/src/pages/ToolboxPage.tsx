@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
-import { cx, copyText, money, toolPrice } from "../lib";
-import type { Tool } from "../types";
-import { Button, Modal, PageTitle, PixelIcon, Switch, TextField } from "../components/ui";
+import { cx, copyText, findTools, money, toolBlocked, toolPrice } from "../lib";
+import type { Connector, McpServer, Tool } from "../types";
+import { Button, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField } from "../components/ui";
 
 const AGENTS = [
   {
@@ -57,20 +57,20 @@ export function ToolboxPage() {
     notify("Install preview", `${tool.name} · approval first`, "approval");
   };
 
-  const findResults = useMemo(() => {
-    if (!findQuery.trim()) return [];
-    const q = findQuery.toLowerCase();
-    return state.tools
-      .map((tool) => {
-        const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")}`.toLowerCase();
-        const score = q.split(/[^a-z0-9]+/).filter((token) => token.length > 2).reduce((sum, token) => sum + (hay.includes(token) ? 1 : 0), 0);
-        return { tool, score };
-      })
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3)
-      .map((entry) => entry.tool);
-  }, [findQuery, state.tools]);
+  // Turning a tool off puts its command on the blocked list, which the Mac enforces before running anything.
+  const setToolEnabled = (tool: Tool, enabled: boolean) => {
+    const rest = settings.blockedApps.filter((item) => item.trim().toLowerCase() !== tool.command.toLowerCase());
+    updateSettings({ blockedApps: enabled ? rest : [...rest, tool.command] });
+    notify(enabled ? "Tool on" : "Tool off", enabled ? tool.name : `okidoki won't run ${tool.command}`, "info");
+  };
+
+  const findResults = useMemo(() => findTools(state.tools, findQuery), [findQuery, state.tools]);
+  const askFurther = () => {
+    const job = findQuery.trim();
+    if (!job) return;
+    invoke("ask", { text: `Find me a free, open-source tool to ${job}` });
+    notify("Asked okidoki", "It'll compare options and ask before installing");
+  };
 
   return (
     <div className="toolbox-page">
@@ -81,7 +81,7 @@ export function ToolboxPage() {
           <header className="tile-head">
             <h2>Find a free tool</h2>
           </header>
-          <p className="tb-lead">Describe the job. okidoki ranks open-source options by popularity, upkeep and license.</p>
+          <p className="tb-lead">Describe the job. okidoki ranks the free tools it knows by fit and popularity, and can look further if none fit.</p>
           {!findQuery.trim() ? (
             <div className="tb-examples tb-suggest">
               {state.tools
@@ -97,15 +97,9 @@ export function ToolboxPage() {
             </div>
           ) : null}
           <div className="tb-find-bar">
-            <TextField
-              value={findQuery}
-              onChange={setFindQuery}
-              placeholder="e.g. compress a video for Discord"
-              icon="search"
-              onEnter={() => setFindQuery(findQuery || "video compression")}
-            />
-            <Button variant="primary" onClick={() => setFindQuery(findQuery || "video compression")}>
-              Compare
+            <TextField value={findQuery} onChange={setFindQuery} placeholder="e.g. compress a video for Discord" icon="search" onEnter={askFurther} />
+            <Button variant="primary" icon="spark" disabled={!findQuery.trim()} onClick={askFurther}>
+              Ask okidoki
             </Button>
           </div>
           {findQuery.trim() ? (
@@ -121,9 +115,13 @@ export function ToolboxPage() {
                       </em>
                     </span>
                     {tool.installed ? (
-                      <span className="tb-ready">
-                        <PixelIcon name="check" size={14} /> Installed
-                      </span>
+                      toolBlocked(tool, settings.blockedApps) ? (
+                        <span className="tb-off">Off</span>
+                      ) : (
+                        <span className="tb-ready">
+                          <PixelIcon name="check" size={14} /> Installed
+                        </span>
+                      )
                     ) : (
                       <Button variant="secondary" size="sm" onClick={() => installTool(tool)}>
                         Install
@@ -133,7 +131,7 @@ export function ToolboxPage() {
                 ))}
               </div>
             ) : (
-              <p className="tb-none">No match in the catalog yet. Try different words, like “convert” or “scan”.</p>
+              <p className="tb-none">Nothing in the catalog fits that job. Ask okidoki to look further.</p>
             )
           ) : null}
         </section>
@@ -213,21 +211,19 @@ export function ToolboxPage() {
         </div>
         {tools.length ? (
           <div className="tb-grid">
-            {tools.map((tool) => (
-              <article className={cx("tile tb-tool", tool.installed && "is-installed")} key={tool.id}>
+            {tools.map((tool) => {
+              const off = tool.installed && toolBlocked(tool, settings.blockedApps);
+              return (
+              <article className={cx("tile tb-tool", tool.installed && "is-installed", off && "is-off")} key={tool.id}>
                 <div className="tb-tool-top">
                   <span className="tb-mark" style={markStyle(tool.id)}>
                     {tool.name.slice(0, 1).toUpperCase()}
                   </span>
                   <span className="row-copy">
                     <strong className="tb-tool-name">{tool.name}</strong>
-                    <em>Instead of {tool.replaces}</em>
+                    <em>{off ? `Off · okidoki won't run ${tool.command}` : `Instead of ${tool.replaces}`}</em>
                   </span>
-                  {tool.installed ? (
-                    <span className="tb-ready">
-                      <PixelIcon name="check" size={14} /> Installed
-                    </span>
-                  ) : null}
+                  {tool.installed ? <Switch label={`Use ${tool.name}`} checked={!off} onChange={(value) => setToolEnabled(tool, value)} /> : null}
                 </div>
                 <p className="tb-blurb">{tool.blurb}</p>
                 {tool.examples.length ? (
@@ -263,7 +259,8 @@ export function ToolboxPage() {
                   )}
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="tile tb-empty">
@@ -280,31 +277,7 @@ export function ToolboxPage() {
         </header>
         <div className="pref-list tb-connectors">
           {state.connectors.map((connector) => (
-            <div className="pref-row" key={connector.id}>
-              <span className={cx("kind-icon small", !connector.enabled && "is-off")}>
-                <PixelIcon name={CONNECTOR_ICON[connector.id] ?? (connector.kind === "apple" ? "apple" : "link")} size={14} />
-              </span>
-              <span className="pref-copy">
-                <strong>{connector.name}</strong>
-                <em>
-                  {connector.blurb}
-                  {connector.kind === "apple" ? " Uses Apple Events." : ""}
-                </em>
-              </span>
-              <Switch
-                label={connector.name}
-                checked={connector.enabled}
-                onChange={(value) => {
-                  if (connector.kind === "apple") {
-                    invoke(value ? "connectApple" : "disconnectApple", { id: connector.id });
-                    notify(value ? "Connecting" : "Disconnected", connector.name, "info");
-                  } else {
-                    invoke("setConnector", { id: connector.id, enabled: value });
-                    notify(value ? "Connector on" : "Connector off", connector.name, "info");
-                  }
-                }}
-              />
-            </div>
+            <ConnectorRow key={connector.id} connector={connector} />
           ))}
         </div>
       </section>
@@ -333,6 +306,312 @@ export function ToolboxPage() {
         ) : null}
       </Modal>
     </div>
+  );
+}
+
+function ConnectorRow({ connector }: { connector: Connector }) {
+  const { state, invoke, notify } = useDashboard();
+  // Apify can't do anything without a key, so the switch asks for one first.
+  const needsKey = connector.id === "apify" && !state.keys.apify;
+  const toggle = (value: boolean) => {
+    if (value && needsKey) {
+      notify("Add an Apify key first", "Keys › Apify", "warning");
+      return;
+    }
+    if (connector.kind === "apple") {
+      invoke(value ? "connectApple" : "disconnectApple", { id: connector.id });
+      notify(value ? "Connecting" : "Disconnected", connector.name, "info");
+    } else {
+      invoke("setConnector", { id: connector.id, enabled: value });
+      notify(value ? "Connector on" : "Connector off", connector.name, "info");
+    }
+  };
+  return (
+    <>
+      <div className="pref-row">
+        <span className={cx("kind-icon small", !connector.enabled && "is-off")}>
+          <PixelIcon name={CONNECTOR_ICON[connector.id] ?? (connector.kind === "apple" ? "apple" : "link")} size={14} />
+        </span>
+        <span className="pref-copy">
+          <strong>{connector.name}</strong>
+          <em>
+            {connector.blurb}
+            {connector.kind === "apple" ? " Uses Apple Events." : ""}
+            {connector.id === "apify" && !needsKey ? " Every run shows a preview first and uses your Apify credits." : ""}
+            {needsKey ? (
+              <>
+                {" Needs an Apify key. "}
+                <button className="text-link" onClick={() => (window.location.hash = "#/keys")}>
+                  Add key
+                </button>
+              </>
+            ) : null}
+          </em>
+        </span>
+        <Switch label={connector.name} checked={connector.enabled && !needsKey} onChange={toggle} />
+      </div>
+      {connector.id === "mcp" && connector.enabled ? <McpServers /> : null}
+    </>
+  );
+}
+
+function McpServers() {
+  const { state, settings, updateSettings, invoke, notify } = useDashboard();
+  const [editing, setEditing] = useState<McpServer | "new" | null>(null);
+  const servers = settings.mcpServers ?? [];
+  return (
+    <div className="tb-mcp">
+      {servers.map((server) => {
+        const status = state.mcpStatus?.[server.id];
+        const tone = !server.enabled ? "is-off" : !status ? "is-pending" : status.ok ? "is-ok" : "is-error";
+        return (
+          <div className="tb-mcp-row" key={server.id}>
+            <span className={cx("tb-mcp-dot", tone)} aria-hidden />
+            <span className="tb-mcp-copy">
+              <strong>{server.name}</strong>
+              <code className="tb-mcp-cmd">{server.transport === "http" ? server.url : joinCommand([server.command, ...server.args])}</code>
+              <em className={cx(tone === "is-error" && "tb-mcp-error")}>
+                {!server.enabled
+                  ? "Off"
+                  : !status
+                    ? "Connecting…"
+                    : status.ok
+                      ? `${status.tools.length} tool${status.tools.length === 1 ? "" : "s"}${status.tools.length ? ` · ${status.tools.slice(0, 3).map((tool) => tool.name).join(", ")}${status.tools.length > 3 ? "…" : ""}` : ""}`
+                      : status.error || "Couldn't connect"}
+              </em>
+            </span>
+            <Switch
+              label={`Use ${server.name}`}
+              checked={server.enabled}
+              onChange={(value) => {
+                updateSettings({ mcpServers: servers.map((item) => (item.id === server.id ? { ...item, enabled: value } : item)) });
+                if (value) invoke("refreshMcp");
+              }}
+            />
+            <IconButton icon="edit" label={`Edit ${server.name}`} onClick={() => setEditing(server)} />
+          </div>
+        );
+      })}
+      <div className="tb-mcp-actions">
+        <Button variant="secondary" size="sm" icon="plus" onClick={() => setEditing("new")}>
+          Add server
+        </Button>
+        {servers.length ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="refresh"
+            onClick={() => {
+              invoke("refreshMcp");
+              notify("Reconnecting", `${servers.length} MCP server${servers.length === 1 ? "" : "s"}`, "info");
+            }}
+          >
+            Reconnect
+          </Button>
+        ) : (
+          <span className="tb-mcp-hint">Any MCP server works: a command okidoki starts, or a URL.</span>
+        )}
+      </div>
+      <McpServerModal server={editing} onClose={() => setEditing(null)} />
+    </div>
+  );
+}
+
+// Joins words back into a command line, quoting any with spaces so splitCommand reads them back the same.
+function joinCommand(words: string[]): string {
+  return words.map((word) => (/\s/.test(word) ? `"${word}"` : word)).join(" ");
+}
+
+// Splits a command line into words, keeping quoted parts together.
+function splitCommand(line: string): string[] {
+  const words: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(line))) words.push(match[1] ?? match[2] ?? match[3]);
+  return words;
+}
+
+// Accepts the JSON snippets MCP READMEs hand out: a bare server, or {"mcpServers": {"name": {...}}}.
+function parseServerJSON(text: string): { name?: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string> } | null {
+  try {
+    let value = JSON.parse(text) as Record<string, any>;
+    let name: string | undefined;
+    if (value.mcpServers) value = value.mcpServers;
+    if (!value.command && !value.url) {
+      const first = Object.entries(value)[0];
+      if (!first) return null;
+      [name, value] = first;
+    }
+    if (!value.command && !value.url) return null;
+    return { name, command: value.command, args: value.args, url: value.url, env: value.env, headers: value.headers };
+  } catch {
+    return null;
+  }
+}
+
+function parsePairs(text: string, separator: "=" | ":"): Record<string, string> {
+  const pairs: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const at = line.indexOf(separator);
+    if (at <= 0) continue;
+    const key = line.slice(0, at).trim();
+    if (key) pairs[key] = line.slice(at + 1).trim();
+  }
+  return pairs;
+}
+
+function McpServerModal({ server, onClose }: { server: McpServer | "new" | null; onClose: () => void }) {
+  const { state, invoke, notify } = useDashboard();
+  const existing = server && server !== "new" ? server : null;
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState<McpServer["transport"]>("stdio");
+  const [target, setTarget] = useState("");
+  const [secretText, setSecretText] = useState("");
+  const [clearSecrets, setClearSecrets] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const stored = existing ? (state.mcpSecretNames?.[existing.id] ?? []) : [];
+
+  useEffect(() => {
+    setName(existing?.name ?? "");
+    setTransport(existing?.transport ?? "stdio");
+    setTarget(existing ? (existing.transport === "http" ? existing.url : joinCommand([existing.command, ...existing.args])) : "");
+    setSecretText("");
+    setClearSecrets(false);
+    setConfirmRemove(false);
+  }, [server]);
+
+  // Pasting a README's JSON fills the whole form.
+  const onTarget = (value: string) => {
+    const parsed = value.trim().startsWith("{") ? parseServerJSON(value) : null;
+    if (!parsed) {
+      setTarget(value);
+      return;
+    }
+    if (parsed.name && !name) setName(parsed.name);
+    if (parsed.url) {
+      setTransport("http");
+      setTarget(parsed.url);
+      setSecretText(Object.entries(parsed.headers ?? {}).map(([key, val]) => `${key}: ${val}`).join("\n"));
+    } else {
+      setTransport("stdio");
+      setTarget(joinCommand([parsed.command ?? "", ...(parsed.args ?? [])]));
+      setSecretText(Object.entries(parsed.env ?? {}).map(([key, val]) => `${key}=${val}`).join("\n"));
+    }
+  };
+
+  const words = splitCommand(target.trim());
+  const valid = name.trim() && (transport === "http" ? /^https?:\/\/\S+$/.test(target.trim()) : words.length > 0);
+  const save = () => {
+    if (!valid) return;
+    const next: McpServer = {
+      id: existing?.id ?? `mcp-${Math.random().toString(16).slice(2, 10)}`,
+      name: name.trim(),
+      transport,
+      command: transport === "stdio" ? words[0] : "",
+      args: transport === "stdio" ? words.slice(1) : [],
+      url: transport === "http" ? target.trim() : "",
+      enabled: existing?.enabled ?? true,
+    };
+    const typed = secretText.trim();
+    // Secrets go only when changed, straight to the Keychain; leaving the box empty keeps what's saved.
+    const secrets = typed
+      ? transport === "http"
+        ? { env: {}, headers: parsePairs(typed, ":") }
+        : { env: parsePairs(typed, "="), headers: {} }
+      : clearSecrets || !existing
+        ? { env: {}, headers: {} }
+        : undefined;
+    invoke("saveMcpServer", { server: next, ...(secrets ? { secrets } : {}) });
+    notify(existing ? "Server updated" : "Server added", `${next.name} · connecting`, "info");
+    onClose();
+  };
+
+  return (
+    <Modal
+      open={Boolean(server)}
+      onClose={onClose}
+      title={existing ? `Edit ${existing.name}` : "Add an MCP server"}
+      subtitle="okidoki lists its tools and asks before calling any of them."
+      width={560}
+    >
+      <div className="form-stack tb-mcp-form">
+        <label className="tb-field">
+          <span className="form-label">Name</span>
+          <TextField value={name} onChange={setName} placeholder="GitHub" autoFocus={!existing} />
+        </label>
+        <div className="tb-field">
+          <span className="form-label">How it runs</span>
+          <Segmented
+            options={[
+              { value: "stdio", label: "Command" },
+              { value: "http", label: "URL" },
+            ]}
+            value={transport}
+            onChange={setTransport}
+          />
+        </div>
+        <label className="tb-field">
+          <span className="form-label">{transport === "http" ? "Server URL" : "Command"}</span>
+          <TextField
+            value={target}
+            onChange={onTarget}
+            placeholder={transport === "http" ? "https://example.com/mcp" : "npx -y @modelcontextprotocol/server-github"}
+            icon={transport === "http" ? "link" : "terminal"}
+          />
+          <span className="tb-mcp-hint">{transport === "http" ? "A streamable HTTP endpoint." : "Or paste the JSON from the server's README."}</span>
+        </label>
+        <label className="tb-field">
+          <span className="form-label">{transport === "http" ? "Headers" : "Environment variables"}</span>
+          <TextArea
+            value={secretText}
+            onChange={setSecretText}
+            rows={3}
+            placeholder={transport === "http" ? "Authorization: Bearer …" : "GITHUB_PERSONAL_ACCESS_TOKEN=…"}
+          />
+          <span className="tb-mcp-hint">
+            <PixelIcon name="lock" size={12} /> Saved to your Keychain, never synced.{" "}
+            {stored.length && !clearSecrets ? (
+              <>
+                Saved now: {stored.join(", ")}. Leave empty to keep them, or{" "}
+                <button className="text-link" onClick={() => setClearSecrets(true)}>
+                  remove them
+                </button>
+                .
+              </>
+            ) : clearSecrets ? (
+              "Saved values will be removed."
+            ) : null}
+          </span>
+        </label>
+      </div>
+      <footer className="modal-actions">
+        {existing ? (
+          <Button
+            variant="ghost"
+            icon="trash"
+            className="tb-mcp-remove"
+            onClick={() => {
+              if (!confirmRemove) {
+                setConfirmRemove(true);
+                return;
+              }
+              invoke("deleteMcpServer", { id: existing.id });
+              notify("Server removed", existing.name, "info");
+              onClose();
+            }}
+          >
+            {confirmRemove ? "Remove for good" : "Remove"}
+          </Button>
+        ) : null}
+        <span className="spacer" />
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!valid} onClick={save}>
+          {existing ? "Save" : "Add server"}
+        </Button>
+      </footer>
+    </Modal>
   );
 }
 

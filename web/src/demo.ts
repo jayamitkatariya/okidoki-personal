@@ -16,6 +16,7 @@ const tools: Tool[] = [
     license: "MIT",
     category: "system",
     examples: ["my mac is out of space", "what's taking up so much space?"],
+    popularity: 96,
   },
   {
     id: "ffmpeg",
@@ -29,6 +30,7 @@ const tools: Tool[] = [
     license: "LGPL / GPL",
     category: "video",
     examples: ["compress this video for discord", "turn this into a gif"],
+    popularity: 99,
   },
   {
     id: "pandoc",
@@ -42,6 +44,7 @@ const tools: Tool[] = [
     license: "GPL",
     category: "documents",
     examples: ["convert this to word", "make slides from this outline"],
+    popularity: 95,
   },
   {
     id: "ocrmypdf",
@@ -55,6 +58,7 @@ const tools: Tool[] = [
     license: "MPL-2.0",
     category: "documents",
     examples: ["make these scans searchable", "ocr this pdf"],
+    popularity: 88,
   },
   {
     id: "imagemagick",
@@ -68,6 +72,7 @@ const tools: Tool[] = [
     license: "ImageMagick License",
     category: "images",
     examples: ["resize every image to 1600px", "convert these heic photos to jpg"],
+    popularity: 90,
   },
   {
     id: "ollama",
@@ -81,6 +86,7 @@ const tools: Tool[] = [
     license: "MIT",
     category: "ai",
     examples: ["run a model on my mac", "summarize this privately"],
+    popularity: 92,
   },
   {
     id: "rclone",
@@ -94,6 +100,7 @@ const tools: Tool[] = [
     license: "MIT",
     category: "cloud",
     examples: ["back up my desktop to google drive", "sync this folder to dropbox"],
+    popularity: 86,
   },
   {
     id: "handbrake",
@@ -107,6 +114,7 @@ const tools: Tool[] = [
     license: "GPL",
     category: "video",
     examples: ["batch convert these videos", "make these videos smaller"],
+    popularity: 84,
   },
 ];
 
@@ -330,6 +338,10 @@ export const demoState: NativeState = {
     claudeModel: "claude-sonnet-4-5",
     agentExtraArgs: {},
     lastWorkingDirectory: "/Users/jay/Desktop",
+    mcpServers: [
+      { id: "mcp-github", name: "GitHub", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], url: "", enabled: true },
+      { id: "mcp-wiki", name: "Team wiki", transport: "http", command: "", args: [], url: "https://wiki.example.com/mcp", enabled: true },
+    ],
   },
   runs,
   threads: [
@@ -492,6 +504,19 @@ export const demoState: NativeState = {
   tools,
   installedAgents: ["claude", "opencode", "omp", "hermes"],
   keys: { anthropic: false, cartesia: false, moss: false, apify: false, convex: false },
+  mcpStatus: {
+    "mcp-github": {
+      id: "mcp-github",
+      ok: true,
+      tools: [
+        { name: "search_issues", description: "Search issues and pull requests" },
+        { name: "create_issue", description: "Open a new issue" },
+        { name: "get_file_contents", description: "Read a file from a repository" },
+      ],
+    },
+    "mcp-wiki": { id: "mcp-wiki", ok: false, error: "Team wiki rejected the credentials (401)", tools: [] },
+  },
+  mcpSecretNames: { "mcp-github": ["GITHUB_PERSONAL_ACCESS_TOKEN"], "mcp-wiki": ["Authorization"] },
   permissions: { screen: "granted", microphone: "granted", accessibility: "granted", automation: "granted" },
   signedOut: false,
   inCall: false,

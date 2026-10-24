@@ -344,6 +344,7 @@ function kindGlyph(kind: Run["kind"]): string {
       borrow: "hand",
       computer_use: "hand",
       routine: "clock",
+      connector: "link",
     } as const
   )[kind] ?? "spark";
 }

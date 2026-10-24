@@ -123,6 +123,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var agentExtraArgs: [String: String] = [:]
     public var lastWorkingDirectory: String = ""
 
+    /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Keychain, not here.
+    public var mcpServers: [MCPServer] = []
+
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -133,7 +136,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
         case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
         case convexSiteURL, syncEnabled, lastSyncAt, onboardingComplete, tourComplete, showedWelcome
-        case claudeModel, agentExtraArgs, lastWorkingDirectory
+        case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers
     }
 
     public init(from decoder: Decoder) throws {
@@ -183,7 +186,44 @@ public struct AppSettings: Codable, Equatable, Sendable {
         claudeModel = string(.claudeModel, "claude-sonnet-4-5")
         agentExtraArgs = (try? c.decodeIfPresent([String: String].self, forKey: .agentExtraArgs)).flatMap { $0 } ?? [:]
         lastWorkingDirectory = string(.lastWorkingDirectory, "")
+        mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
     }
+}
+
+// MARK: - MCP servers
+
+public struct MCPServer: Identifiable, Codable, Equatable, Sendable {
+    public enum Transport: String, Codable, Sendable { case stdio, http }
+
+    public var id: String
+    public var name: String
+    public var transport: Transport
+    /// stdio: the program to start, e.g. "npx", with its arguments.
+    public var command: String
+    public var args: [String]
+    /// http: the server's streamable HTTP endpoint.
+    public var url: String
+    public var enabled: Bool
+
+    public init(id: String = UUID().uuidString, name: String, transport: Transport = .stdio,
+                command: String = "", args: [String] = [], url: String = "", enabled: Bool = true) {
+        self.id = id; self.name = name; self.transport = transport
+        self.command = command; self.args = args; self.url = url; self.enabled = enabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString
+        name = (try? c.decode(String.self, forKey: .name)) ?? "mcp server"
+        transport = (try? c.decode(Transport.self, forKey: .transport)) ?? .stdio
+        command = (try? c.decode(String.self, forKey: .command)) ?? ""
+        args = (try? c.decode([String].self, forKey: .args)) ?? []
+        url = (try? c.decode(String.self, forKey: .url)) ?? ""
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? true
+    }
+
+    /// Keychain account holding this server's secrets as JSON: {"env": {...}, "headers": {...}}.
+    public var keychainKey: String { "mcp.\(id)" }
 }
 
 // MARK: - Coding agents
@@ -358,7 +398,7 @@ public struct ChatThread: Identifiable, Codable, Equatable, Sendable {
 // MARK: - Runs
 
 public enum RunKind: String, Codable, CaseIterable, Sendable {
-    case answer, quickAction = "quick_action", terminal, coding, background, teach, watch, borrow, computerUse = "computer_use", routine
+    case answer, quickAction = "quick_action", terminal, coding, background, teach, watch, borrow, computerUse = "computer_use", routine, connector
     public var label: String {
         switch self {
         case .answer: return "answer"
@@ -371,6 +411,7 @@ public enum RunKind: String, Codable, CaseIterable, Sendable {
         case .borrow: return "screen borrow"
         case .computerUse: return "computer use"
         case .routine: return "routine"
+        case .connector: return "connector"
         }
     }
 }
@@ -694,6 +735,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         case routine
         case computerUse = "computer_use"
         case overlay
+        case connector
     }
 
     public var kind: Kind
@@ -723,6 +765,8 @@ public struct BrainDecision: Codable, Equatable, Sendable {
     public var overlayTitle: String?
     public var overlayWidth: Int?
     public var overlayHeight: Int?
+    /// For connector: the Apify or MCP call as JSON. The app keeps it opaque and hands it back to the brain to run.
+    public var connectorCallJSON: String?
 
     public init(kind: Kind, title: String, answer: String, speak: String = "",
                 risk: RiskLevel = .low, previewSummary: String = "", previewSteps: [String] = [],
@@ -732,7 +776,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
                 routineMinute: Int? = nil, clarification: String? = nil, actions: [String] = [],
                 quickAction: QuickActionPayload? = nil, pickFile: String? = nil, builtin: String? = nil,
                 teachPlan: [TeachPlanStep] = [], overlayHTML: String? = nil, overlayTitle: String? = nil,
-                overlayWidth: Int? = nil, overlayHeight: Int? = nil) {
+                overlayWidth: Int? = nil, overlayHeight: Int? = nil, connectorCallJSON: String? = nil) {
         self.kind = kind; self.title = title; self.answer = answer; self.speak = speak
         self.risk = risk; self.previewSummary = previewSummary; self.previewSteps = previewSteps
         self.commands = commands; self.apps = apps; self.files = files; self.teachSteps = teachSteps
@@ -742,13 +786,14 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         self.quickAction = quickAction; self.pickFile = pickFile; self.builtin = builtin
         self.teachPlan = teachPlan; self.overlayHTML = overlayHTML; self.overlayTitle = overlayTitle
         self.overlayWidth = overlayWidth; self.overlayHeight = overlayHeight
+        self.connectorCallJSON = connectorCallJSON
     }
 
     enum CodingKeys: String, CodingKey {
         case kind, title, answer, speak, risk, previewSummary, previewSteps, commands, apps, files
         case teachSteps, memory, routineName, routineCadence, routineWeekday, routineHour, routineMinute
         case clarification, actions, quickAction, pickFile, builtin
-        case teachPlan, overlayHTML, overlayTitle, overlayWidth, overlayHeight
+        case teachPlan, overlayHTML, overlayTitle, overlayWidth, overlayHeight, connectorCallJSON
         case teachStepsSnake = "teach_steps"
         case teachPlanSnake = "teach_plan"
         case overlayHTMLSnake = "overlay_html"
@@ -795,6 +840,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
             ?? (try? c.decodeIfPresent(Int.self, forKey: .overlayWidthSnake))
         overlayHeight = (try? c.decodeIfPresent(Int.self, forKey: .overlayHeight))
             ?? (try? c.decodeIfPresent(Int.self, forKey: .overlayHeightSnake))
+        connectorCallJSON = try? c.decodeIfPresent(String.self, forKey: .connectorCallJSON)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -826,6 +872,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         try c.encodeIfPresent(overlayTitle, forKey: .overlayTitle)
         try c.encodeIfPresent(overlayWidth, forKey: .overlayWidth)
         try c.encodeIfPresent(overlayHeight, forKey: .overlayHeight)
+        try c.encodeIfPresent(connectorCallJSON, forKey: .connectorCallJSON)
     }
 }
 

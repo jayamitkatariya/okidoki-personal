@@ -220,21 +220,37 @@ public enum ToolCatalog {
         Connector(id: "apify", name: "Apify", kind: "cloud",
                   blurb: "Run ready-made scrapers and actors when a task needs live web data.",
                   installCommand: "",
-                  docs: "Requires an Apify API key. Ask before starting any actor that costs credits."),
+                  docs: "Requires an Apify API key (Keys). Runs actors through the brain's connector kind; always preview first, since actors cost credits."),
         Connector(id: "mcp", name: "MCP servers", kind: "mcp",
                   blurb: "Bring your existing model-context tools into Okidoki runs.",
                   installCommand: "",
-                  docs: "MCP servers are configured in Settings → Keys and Toolbox. Always show which server a tool belongs to."),
+                  docs: "Add servers in Toolbox › MCP servers; their secrets stay in the Keychain. Always show which server a tool belongs to."),
     ]
+
+    /// Words that say nothing about the job. Mirrors FILLER in web/src/lib.ts.
+    static let filler: Set<String> = [
+        "the", "and", "for", "this", "that", "these", "those", "with", "from", "into", "onto", "your", "mine",
+        "make", "want", "need", "can", "how", "what", "please", "help", "some", "all", "any", "out", "get", "just", "mac",
+    ]
+
+    /// Whole words, with a trailing "s" dropped so "videos" matches "video" but "edit" doesn't match "editors".
+    static func singular(_ word: String) -> String {
+        word.count > 3 && word.hasSuffix("s") ? String(word.dropLast()) : word
+    }
+
+    static func words(_ text: String) -> [String] {
+        text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+    }
 
     public static func findTools(for query: String) -> [ToolSpec] {
         let q = query.lowercased()
-        let tokens = q.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 2 }
+        let tokens = words(query).filter { $0.count > 2 && !filler.contains($0) }.map(singular)
         return tools
             .map { tool -> (ToolSpec, Int) in
                 var score = 0
                 let haystack = (tool.name + " " + tool.replaces + " " + tool.blurb + " " + tool.examples.joined(separator: " ") + " " + tool.category).lowercased()
-                for token in tokens where haystack.contains(token) { score += 3 }
+                let vocabulary = Set(words(haystack).map(singular))
+                for token in tokens where vocabulary.contains(token) { score += 3 }
                 if haystack.contains(q) { score += 8 }
                 score += tool.popularity / 20
                 return (tool, score)

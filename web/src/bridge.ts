@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ConvexClient } from "convex/browser";
 import { anyApi } from "convex/server";
-import type { Account, AccountKind, NativeState, Settings } from "./types";
+import type { Account, AccountKind, McpServer, NativeState, Settings } from "./types";
 import { demoState } from "./demo";
 
 declare global {
@@ -52,6 +52,32 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
     }
     case "updateSettings": {
       state.settings = { ...state.settings, ...((payload.patch ?? payload.settings) as Partial<Settings>) };
+      break;
+    }
+    case "setConnector": {
+      state.connectors = state.connectors.map((connector) => (connector.id === payload.id ? { ...connector, enabled: Boolean(payload.enabled) } : connector));
+      break;
+    }
+    case "saveKey":
+    case "deleteKey": {
+      state.keys = { ...state.keys, [payload.provider as string]: type === "saveKey" && Boolean(payload.value) };
+      break;
+    }
+    case "saveMcpServer": {
+      const server = payload.server as McpServer;
+      const exists = state.settings.mcpServers.some((item) => item.id === server.id);
+      state.settings = {
+        ...state.settings,
+        mcpServers: exists ? state.settings.mcpServers.map((item) => (item.id === server.id ? server : item)) : [...state.settings.mcpServers, server],
+      };
+      const secrets = payload.secrets as { env?: Record<string, string>; headers?: Record<string, string> } | undefined;
+      if (secrets) state.mcpSecretNames = { ...state.mcpSecretNames, [server.id]: [...Object.keys(secrets.env ?? {}), ...Object.keys(secrets.headers ?? {})].sort() };
+      // No real server to reach in the preview: pretend it answered with one tool.
+      state.mcpStatus = { ...state.mcpStatus, [server.id]: { id: server.id, ok: true, tools: [{ name: "ping", description: "Preview stand-in" }] } };
+      break;
+    }
+    case "deleteMcpServer": {
+      state.settings = { ...state.settings, mcpServers: state.settings.mcpServers.filter((item) => item.id !== payload.id) };
       break;
     }
     default:

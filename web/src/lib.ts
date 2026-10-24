@@ -1,3 +1,5 @@
+import type { Tool } from "./types";
+
 export function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
 }
@@ -115,4 +117,50 @@ const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake
 
 export function toolPrice(id: string): number {
   return TOOL_PRICES[id] ?? 0;
+}
+
+// Words that say nothing about the job, so "make this video smaller" doesn't match Pandoc's "convert this to word".
+const FILLER = new Set([
+  "the", "and", "for", "this", "that", "these", "those", "with", "from", "into", "onto", "your", "mine",
+  "make", "want", "need", "can", "how", "what", "please", "help", "some", "all", "any", "out", "get", "just", "mac",
+]);
+
+// Whole words, with a trailing "s" dropped so "videos" matches "video" but "edit" doesn't match "editors".
+function singular(word: string): string {
+  return word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
+}
+
+function words(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+export function jobWords(query: string): string[] {
+  return words(query)
+    .filter((word) => word.length > 2 && !FILLER.has(word))
+    .map(singular);
+}
+
+// Ranks the catalog for a job description. Mirrors ToolCatalog.findTools: word hits first, popularity breaks ties.
+export function findTools(tools: Tool[], query: string, limit = 3): Tool[] {
+  const wanted = jobWords(query);
+  if (!wanted.length) return [];
+  const phrase = query.trim().toLowerCase();
+  return tools
+    .map((tool) => {
+      const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")} ${tool.category}`.toLowerCase();
+      const vocab = new Set(words(hay).map(singular));
+      const hits = wanted.filter((word) => vocab.has(word)).length;
+      const score = hits * 3 + (hay.includes(phrase) ? 8 : 0) + Math.floor((tool.popularity ?? 0) / 20);
+      return { tool, hits, score };
+    })
+    .filter((entry) => entry.hits > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.tool);
+}
+
+// A tool is off when its command is on the blocked list (Settings › Safety).
+export function toolBlocked(tool: Tool, blocked: string[]): boolean {
+  const command = tool.command.toLowerCase();
+  return blocked.some((item) => item.trim().toLowerCase() === command);
 }

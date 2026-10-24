@@ -235,6 +235,23 @@
   align-items: center;
   gap: 11px;
 }
+/* Turned off: still listed, visibly resting, and the switch stays sharp so it's obvious how to turn it back on. */
+.tb-tool.is-off .tb-mark,
+.tb-tool.is-off .tb-blurb,
+.tb-tool.is-off .tb-examples {
+  opacity: 0.5;
+}
+.tb-tool-top .row-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tb-off {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .tb-tool-name::first-letter {
   text-transform: none !important;
 }
@@ -371,4 +388,87 @@
 /* suggestions sit under the lead, so the find card isn't an empty well above its search bar */
 .tb-suggest {
   margin-top: 14px;
+}
+
+/* MCP servers, nested under the MCP connector row */
+.tb-mcp {
+  margin: 0 20px 14px 59px;
+  padding: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+}
+.tb-mcp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.tb-mcp-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--faint);
+}
+.tb-mcp-dot.is-ok {
+  background: var(--accent-bright);
+}
+.tb-mcp-dot.is-error {
+  background: var(--red);
+}
+.tb-mcp-dot.is-pending {
+  background: var(--amber);
+}
+.tb-mcp-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tb-mcp-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tb-mcp-copy em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tb-mcp-copy em.tb-mcp-error {
+  color: var(--red);
+}
+.tb-mcp-cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-mcp-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.tb-mcp-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tb-mcp-form .tb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tb-mcp-form .form-label {
+  margin-top: 0;
+}
+.tb-mcp-form .segmented {
+  align-self: flex-start;
+}
+.tb-mcp-remove {
+  color: var(--red);
 }

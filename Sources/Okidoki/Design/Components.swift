@@ -346,6 +346,7 @@ struct RunKindGlyph: View {
         case .borrow: return "hand"
         case .computerUse: return "hand"
         case .routine: return "clock"
+        case .connector: return "link"
         }
     }
 }

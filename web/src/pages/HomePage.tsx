@@ -26,6 +26,7 @@ export const kindGlyph: Record<RunKind, string> = {
   watch: "eye",
   borrow: "hand",
   routine: "clock",
+  connector: "link",
 };
 
 type ToggleKey = "okidokiEnabled" | "backgroundMode" | "screenBorrowing" | "voiceEnabled" | "captions" | "quietMode";

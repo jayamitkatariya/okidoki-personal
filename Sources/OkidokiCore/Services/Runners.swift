@@ -90,11 +90,19 @@ public enum SafetyPolicy {
     public static func blocked(commands: [String], settings: AppSettings) -> String? {
         for command in commands {
             if CommandRisk.isBlocked(command) { return "that command could destroy your Mac. i won't run it." }
-            for blocked in settings.blockedApps where command.lowercased().contains(blocked.lowercased()) {
+            for blocked in settings.blockedApps where mentions(command, blocked) {
                 return "\(blocked) is on your blocked list."
             }
         }
         return nil
+    }
+
+    /// True when `term` appears in `command` as a whole word, so blocking "mo" (Mole) doesn't block "remove".
+    static func mentions(_ command: String, _ term: String) -> Bool {
+        let term = term.trimmingCharacters(in: .whitespaces)
+        guard !term.isEmpty else { return false }
+        let pattern = "(?<![A-Za-z0-9_-])" + NSRegularExpression.escapedPattern(for: term) + "(?![A-Za-z0-9_-])"
+        return command.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     public static func isAlwaysAllowed(commands: [String], settings: AppSettings) -> Bool {

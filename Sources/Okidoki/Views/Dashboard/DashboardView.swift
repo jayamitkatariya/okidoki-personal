@@ -51,6 +51,7 @@ struct DashboardToolPayload: Encodable {
     var license: String
     var category: String
     var examples: [String]
+    var popularity: Int
 }
 
 struct DashboardPayload: Encodable {
@@ -75,6 +76,9 @@ struct DashboardPayload: Encodable {
     var version: String
     var savings: Double
     var convexConfigured: Bool
+    var mcpStatus: [String: MCPServerStatus]
+    /// Names (never values) of each MCP server's stored secrets, so the page can show what's set.
+    var mcpSecretNames: [String: [String]]
 }
 
 // MARK: - Controller
@@ -295,7 +299,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                                      installed: env.store.toolInstalled[tool.id] == true,
                                      installCommand: tool.installCommand, docs: tool.docs,
                                      license: tool.license, category: tool.category,
-                                     examples: tool.examples)
+                                     examples: tool.examples, popularity: tool.popularity)
             },
             installedAgents: env.installedAgents.map(\.rawValue),
             keys: Dictionary(uniqueKeysWithValues: KeyProviders.all.map { ($0.id, env.hasKey($0.id)) }),
@@ -307,7 +311,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             sidecar: env.sidecar.status.label,
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
             savings: env.store.savings,
-            convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty
+            convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty,
+            mcpStatus: env.mcpStatus,
+            mcpSecretNames: Dictionary(uniqueKeysWithValues: env.store.settings.mcpServers.map { server in
+                let secrets = env.mcpSecrets(server)
+                return (server.id, (secrets.env.keys.map { $0 } + secrets.headers.keys.map { $0 }).sorted())
+            })
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -472,7 +481,23 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String, let enabled = payload["enabled"] as? Bool {
                 env.store.setConnector(id, enabled: enabled)
                 env.store.saveNow()
+                if id == "mcp" && enabled { env.refreshMCP() }
             }
+        case "saveMcpServer":
+            if let raw = payload["server"] as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: raw),
+               let server = try? JSONDecoder().decode(MCPServer.self, from: data) {
+                // Secrets arrive only when the page changed them; otherwise the Keychain copy stays.
+                var secrets: (env: [String: String], headers: [String: String])?
+                if let given = payload["secrets"] as? [String: Any] {
+                    secrets = (given["env"] as? [String: String] ?? [:], given["headers"] as? [String: String] ?? [:])
+                }
+                env.saveMCPServer(server, secrets: secrets)
+            }
+        case "deleteMcpServer":
+            if let id = payload["id"] as? String { env.deleteMCPServer(id) }
+        case "refreshMcp":
+            env.refreshMCP()
         case "requestPermission":
             if let raw = payload["kind"] as? String, let kind = PermissionKind(rawValue: raw) {
                 Task {

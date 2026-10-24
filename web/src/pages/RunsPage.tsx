@@ -15,6 +15,7 @@ const kindGlyph: Record<RunKind, string> = {
   borrow: "hand",
   computer_use: "hand",
   routine: "clock",
+  connector: "link",
 };
 
 const kindName: Record<RunKind, string> = {
@@ -28,6 +29,7 @@ const kindName: Record<RunKind, string> = {
   borrow: "Borrow",
   computer_use: "Computer use",
   routine: "Routine",
+  connector: "Connector",
 };
 
 type FilterId = "all" | "waiting" | "running" | "done" | "failed";

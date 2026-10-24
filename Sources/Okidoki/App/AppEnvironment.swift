@@ -86,6 +86,8 @@ final class AppEnvironment: ObservableObject {
     @Published var inCall = false
     @Published var installedAgents: [CodingAgentID] = []
     @Published var keysVersion = 0
+    /// Last connection result per MCP server id, for the Toolbox.
+    @Published var mcpStatus: [String: MCPServerStatus] = [:]
     @Published var isBusy = false
     @Published var suspendSummonForTour = false
     @Published var lastError: String?
@@ -95,6 +97,8 @@ final class AppEnvironment: ObservableObject {
     private var watchRunID: String?
     private var pendingStarts: [String: DispatchWorkItem] = [:]
     private var pendingToolInstalls: [String: String] = [:]
+    /// Approved-later connector calls by run id: the brain's call JSON, handed back untouched when the run starts.
+    private var pendingConnectorCalls: [String: String] = [:]
     private var syncWork: DispatchWorkItem?
     private var callTimer: Timer?
     private var nudgeTimer: Timer?
@@ -162,6 +166,13 @@ final class AppEnvironment: ObservableObject {
         scheduler.start()
 
         refreshInstalled()
+        // Start MCP servers whenever the brain comes up, so the first request doesn't wait on a cold start.
+        sidecar.$status
+            .removeDuplicates()
+            .filter(\.isReady)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshMCP() }
+            .store(in: &cancellables)
 
         callTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.detectCall() }
@@ -386,7 +397,8 @@ final class AppEnvironment: ObservableObject {
                                                     memory: memory, events: events,
                                                     settings: store.settings, account: store.activeAccount,
                                                     installedTools: installed,
-                                                    frontWindow: appName)
+                                                    frontWindow: appName,
+                                                    connectors: connectorsPayload())
         }
         if let decision = result?.decision {
             await handleDecision(decision, request: request, threadID: thread.id, source: source)
@@ -484,6 +496,9 @@ final class AppEnvironment: ObservableObject {
 
         case .overlay:
             await handleOverlay(decision: decision, request: request, threadID: threadID, source: source)
+
+        case .connector:
+            await prepareConnector(decision: decision, request: request, threadID: threadID, source: source)
         }
     }
 
@@ -1048,6 +1063,8 @@ final class AppEnvironment: ObservableObject {
             ghost.begin(target: target, appName: run.preview?.apps.first ?? "app", runID: run.id)
         case .computerUse:
             driver.begin(run: run)
+        case .connector:
+            Task { await executeConnector(run) }
         case .teach:
             break
         case .watch:
@@ -1576,6 +1593,16 @@ final class AppEnvironment: ObservableObject {
             Keychain.set(trimmed, for: provider)
             toast(title: "key saved", detail: "\(provider) · stored in the keychain", kind: .success,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            if provider == "apify", sidecar.status.isReady {
+                // Catch a mistyped key now rather than on the first scrape.
+                Task { [weak self] in
+                    let check = await BrainClient.shared.checkApify(token: trimmed)
+                    self?.toast(title: check.ok ? "apify connected" : "apify key didn't work",
+                                detail: check.ok ? "signed in as \(check.detail)" : check.detail,
+                                kind: check.ok ? .success : .warning,
+                                undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+                }
+            }
         }
         keysVersion += 1
     }
@@ -1584,6 +1611,190 @@ final class AppEnvironment: ObservableObject {
         Keychain.delete(provider)
         keysVersion += 1
         toast(title: "key removed", detail: provider, kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+    }
+
+    // MARK: - Connectors (Apify, MCP)
+
+    func connectorsPayload() -> BrainConnectorsPayload {
+        let enabled = { (id: String) in self.store.connectors.first(where: { $0.id == id })?.enabled == true }
+        return BrainConnectorsPayload(apify: enabled("apify") && hasKey("apify"),
+                                      mcpServers: enabled("mcp") ? mcpServerPayloads() : [])
+    }
+
+    func mcpServerPayloads() -> [BrainMCPServerPayload] {
+        store.settings.mcpServers.filter(\.enabled).map { server in
+            let secrets = mcpSecrets(server)
+            return BrainMCPServerPayload(id: server.id, name: server.name, transport: server.transport.rawValue,
+                                         command: server.command, args: server.args, url: server.url,
+                                         env: secrets.env, headers: secrets.headers)
+        }
+    }
+
+    func mcpSecrets(_ server: MCPServer) -> (env: [String: String], headers: [String: String]) {
+        guard let raw = Keychain.get(server.keychainKey), let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ([:], [:]) }
+        return (json["env"] as? [String: String] ?? [:], json["headers"] as? [String: String] ?? [:])
+    }
+
+    /// Adds or updates a server. `secrets` nil keeps what's in the Keychain; empty dictionaries remove it.
+    func saveMCPServer(_ server: MCPServer, secrets: (env: [String: String], headers: [String: String])?) {
+        var servers = store.settings.mcpServers
+        if let index = servers.firstIndex(where: { $0.id == server.id }) {
+            servers[index] = server
+        } else {
+            servers.append(server)
+        }
+        store.settings.mcpServers = servers
+        if let secrets {
+            if secrets.env.isEmpty && secrets.headers.isEmpty {
+                Keychain.delete(server.keychainKey)
+            } else if let data = try? JSONSerialization.data(withJSONObject: ["env": secrets.env, "headers": secrets.headers]),
+                      let text = String(data: data, encoding: .utf8) {
+                Keychain.set(text, for: server.keychainKey)
+            }
+        }
+        store.saveNow()
+        mcpStatus[server.id] = nil
+        BrainClient.shared.forgetMCP(id: server.id)
+        refreshMCP()
+    }
+
+    func deleteMCPServer(_ id: String) {
+        store.settings.mcpServers.removeAll { $0.id == id }
+        Keychain.delete("mcp.\(id)")
+        mcpStatus[id] = nil
+        BrainClient.shared.forgetMCP(id: id)
+        store.saveNow()
+    }
+
+    /// Connects to every enabled server and records what it offers, or why it failed.
+    func refreshMCP() {
+        guard sidecar.status.isReady else { return }
+        let servers = mcpServerPayloads()
+        guard !servers.isEmpty else {
+            mcpStatus = [:]
+            return
+        }
+        Task { [weak self] in
+            guard let statuses = await BrainClient.shared.mcpTools(servers: servers) else { return }
+            self?.mcpStatus = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+        }
+    }
+
+    private func prepareConnector(decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
+        guard let callJSON = decision.connectorCallJSON, let data = callJSON.data(using: .utf8),
+              let call = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            // Nothing runnable came back; show what the brain said instead.
+            let run = store.createRun(kind: .answer, title: decision.title, prompt: request.text, threadID: threadID, status: .done)
+            store.appendMessage(threadID: threadID, role: .assistant, text: decision.answer, runID: run.id)
+            present(makeAnswerCard(decision: decision, request: request, threadID: threadID, run: run), source: source)
+            return
+        }
+        let isApify = call["connector"] as? String == "apify"
+        let target: String
+        let lines: [String]
+        if isApify {
+            target = "Apify"
+            lines = ["apify · \(call["actor"] as? String ?? "actor")", "input · \(compactJSON(call["input"]))"]
+        } else {
+            let serverID = call["server"] as? String ?? ""
+            target = store.settings.mcpServers.first(where: { $0.id == serverID })?.name ?? serverID
+            lines = ["mcp · \(target) · \(call["tool"] as? String ?? "tool")", "arguments · \(compactJSON(call["arguments"]))"]
+        }
+        // "apify" or a server's name on the blocked list stops it, like any blocked tool.
+        if let blocked = SafetyPolicy.blocked(commands: lines, settings: store.settings) {
+            present(AnswerCardModel(title: "i won't run that", text: blocked,
+                                    threadTitle: store.thread(threadID)?.title, threadID: threadID), source: source)
+            return
+        }
+        // Actors spend Apify credits, so they're never low risk.
+        let risk: RiskLevel = isApify && decision.risk == .low ? .medium : decision.risk
+        let steps = (decision.previewSteps.isEmpty ? ["call \(target)", "read the results", "write up the answer"] : decision.previewSteps)
+            .map { RunStep(title: $0) }
+        let summary = decision.previewSummary.isEmpty ? decision.title : decision.previewSummary
+        let preview = ActionPreview(summary: isApify ? "\(summary) · uses Apify credits" : summary,
+                                    risk: risk, steps: steps.map { PreviewStep($0.title) },
+                                    commands: lines, apps: [target], files: [])
+        let run = store.createRun(kind: .connector, title: decision.title, prompt: request.text,
+                                  threadID: threadID, preview: preview, steps: steps, status: .waiting)
+        pendingConnectorCalls[run.id] = callJSON
+        store.appendMessage(threadID: threadID, role: .assistant,
+                            text: "prepared “\(run.title)”. \(preview.summary). waiting for your okay.", runID: run.id)
+
+        let actions = [
+            CardAction(title: "review preview", kind: .secondary, glyph: "grid") { [weak self] in
+                self?.openDashboard(.runs, runID: run.id)
+            },
+            CardAction(title: "do it", kind: .primary, glyph: "bolt") { [weak self] in
+                self?.approveRun(run.id)
+            },
+        ]
+        let card = AnswerCardModel(title: decision.title, text: decision.answer, actions: actions,
+                                   threadTitle: store.thread(threadID)?.title, runID: run.id, threadID: threadID)
+        card.footnote = "action preview · \(risk.label) risk"
+        present(card, source: source)
+        store.saveNow()
+        speak(decision.speak.isEmpty ? "Here's the plan. Want me to go ahead?" : decision.speak)
+    }
+
+    private func executeConnector(_ run: AgentRun) async {
+        guard let callJSON = pendingConnectorCalls[run.id] else {
+            store.finishRun(run.id, status: .failed, summary: "this was prepared before okidoki restarted. ask again and i'll set it up fresh.")
+            return
+        }
+        guard sidecar.status.isReady else {
+            store.finishRun(run.id, status: .failed, summary: "the brain isn't running, so connectors can't either. try again in a moment.")
+            return
+        }
+        store.updateRun(run.id) { current in
+            if current.steps.indices.contains(0) {
+                current.steps[0].status = .running
+                current.steps[0].startedAt = Date()
+            }
+        }
+        let result = await BrainClient.shared.runConnector(runID: run.id, prompt: run.prompt, callJSON: callJSON,
+                                                           apifyToken: Keychain.get("apify"),
+                                                           servers: mcpServerPayloads(),
+                                                           spendingLimit: store.settings.spendingLimit,
+                                                           model: store.settings.claudeModel)
+        pendingConnectorCalls[run.id] = nil
+        guard store.run(run.id)?.status != .cancelled else { return }
+        guard let result, result.ok else {
+            let message = result?.error ?? "couldn't reach the brain"
+            store.finishRun(run.id, status: .failed, summary: message)
+            toast(title: "that didn't work", detail: String(message.prefix(140)), kind: .warning,
+                  undoLabel: nil, onUndo: nil, editLabel: "open run",
+                  onEdit: { [weak self] in self?.openDashboard(.runs, runID: run.id) }, runID: run.id)
+            store.saveNow()
+            return
+        }
+        store.updateRun(run.id) { current in
+            current.output = result.output
+            for index in current.steps.indices { current.steps[index].status = .done }
+        }
+        store.finishRun(run.id, status: .done, summary: result.summary)
+        if let threadID = run.threadID {
+            store.appendMessage(threadID: threadID, role: .assistant, text: result.answer, runID: run.id)
+        }
+        let card = AnswerCardModel(title: run.title, text: result.answer,
+                                   actions: [CardAction(title: "details", kind: .ghost, glyph: "grid") { [weak self] in
+                                       self?.openDashboard(.runs, runID: run.id)
+                                   }],
+                                   threadTitle: run.threadID.flatMap { store.thread($0)?.title },
+                                   runID: run.id, threadID: run.threadID)
+        card.footnote = result.summary
+        present(card, source: "connector")
+        toast(title: "done", detail: result.summary, kind: .success, undoLabel: nil, onUndo: nil,
+              editLabel: "details", onEdit: { [weak self] in self?.openDashboard(.runs, runID: run.id) }, runID: run.id)
+        speak(result.summary)
+        store.saveNow()
+    }
+
+    private func compactJSON(_ value: Any?) -> String {
+        guard let value, JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text.count > 300 ? String(text.prefix(300)) + "…" : text
     }
 
     func refreshInstalled() {

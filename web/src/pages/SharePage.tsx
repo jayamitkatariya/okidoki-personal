@@ -22,6 +22,7 @@ const KIND_LABEL: Record<string, string> = {
   borrow: "Borrowed screen",
   routine: "Routine",
   computer_use: "Computer use",
+  connector: "Connector",
 };
 
 export function SharePage({ token }: { token: string }) {

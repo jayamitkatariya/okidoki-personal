@@ -264,6 +264,10 @@ export function SettingsPage() {
                 draft={appDraft}
                 setDraft={setAppDraft}
                 items={settings.blockedApps}
+                labelFor={(item) => {
+                  const tool = state.tools.find((candidate) => candidate.command.toLowerCase() === item.trim().toLowerCase());
+                  return tool && tool.name.toLowerCase() !== item.toLowerCase() ? `${tool.name} (${item})` : item;
+                }}
                 empty="Nothing blocked."
                 onAdd={() => {
                   addToList("blockedApps", appDraft);
@@ -631,6 +635,7 @@ function ListEditor({
   draft,
   setDraft,
   items,
+  labelFor = (item) => item,
   empty,
   onAdd,
   onRemove,
@@ -641,6 +646,7 @@ function ListEditor({
   draft: string;
   setDraft: (value: string) => void;
   items: string[];
+  labelFor?: (item: string) => string;
   empty: string;
   onAdd: () => void;
   onRemove: (item: string) => void;
@@ -659,7 +665,7 @@ function ListEditor({
       </div>
       <div className="chip-row">
         {items.map((item) => (
-          <RemovableChip key={item} label={item} onRemove={() => onRemove(item)} />
+          <RemovableChip key={item} label={labelFor(item)} onRemove={() => onRemove(item)} />
         ))}
         {!items.length ? <span className="pref-hint">{empty}</span> : null}
       </div>

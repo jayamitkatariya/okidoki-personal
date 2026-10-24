@@ -228,6 +228,44 @@ struct BrainAccountPayload: Encodable {
     var kind: String
 }
 
+/// An MCP server as the brain needs it, secrets included (read from the Keychain per request).
+struct BrainMCPServerPayload: Encodable {
+    var id: String
+    var name: String
+    var transport: String
+    var command: String
+    var args: [String]
+    var url: String
+    var env: [String: String]
+    var headers: [String: String]
+}
+
+struct BrainConnectorsPayload: Encodable {
+    var apify: Bool
+    var mcpServers: [BrainMCPServerPayload]
+}
+
+struct MCPToolSummary: Codable, Equatable {
+    var name: String
+    var description: String
+}
+
+/// What the brain found when it connected to an MCP server; shown in the Toolbox.
+struct MCPServerStatus: Codable, Equatable {
+    var id: String
+    var ok: Bool
+    var error: String?
+    var tools: [MCPToolSummary]
+}
+
+struct BrainConnectorResult: Decodable {
+    var ok: Bool
+    var answer: String
+    var summary: String
+    var output: String
+    var error: String?
+}
+
 struct BrainThinkPayload: Encodable {
     var text: String
     var appName: String
@@ -245,6 +283,7 @@ struct BrainThinkPayload: Encodable {
     var clipboardText: String
     var installedTools: [String]
     var nativeContext: BrainNativeContext
+    var connectors: BrainConnectorsPayload
 }
 
 enum BrainExecEvent {
@@ -277,7 +316,8 @@ final class BrainClient {
 
     func think(text: String, request: BrainRequest, history: [BrainMessage], memory: [String],
                events: [BrainNativeEvent], settings: AppSettings, account: Account,
-               installedTools: [String], frontWindow: String) async -> BrainThinkEnvelope? {
+               installedTools: [String], frontWindow: String,
+               connectors: BrainConnectorsPayload) async -> BrainThinkEnvelope? {
         let payload = BrainThinkPayload(
             text: text,
             appName: request.appName,
@@ -299,7 +339,8 @@ final class BrainClient {
             clipboardText: request.clipboardText,
             installedTools: installedTools,
             nativeContext: BrainNativeContext(now: ISO8601DateFormatter().string(from: Date()),
-                                              events: events, reminders: [], frontWindow: frontWindow)
+                                              events: events, reminders: [], frontWindow: frontWindow),
+            connectors: connectors
         )
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("think"))
         urlRequest.httpMethod = "POST"
@@ -449,6 +490,75 @@ final class BrainClient {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 5
         URLSession.shared.dataTask(with: request).resume()
+    }
+
+    // MARK: - Connectors
+
+    func mcpTools(servers: [BrainMCPServerPayload]) async -> [MCPServerStatus]? {
+        struct Envelope: Decodable { var servers: [MCPServerStatus] }
+        var request = URLRequest(url: baseURL.appendingPathComponent("mcp/tools"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 45
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        do {
+            request.httpBody = try JSONEncoder().encode(["servers": servers])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return try JSONDecoder().decode(Envelope.self, from: data).servers
+        } catch {
+            return nil
+        }
+    }
+
+    func forgetMCP(id: String) {
+        post("mcp/forget", body: ["id": id])
+    }
+
+    func checkApify(token: String) async -> (ok: Bool, detail: String) {
+        var request = URLRequest(url: baseURL.appendingPathComponent("apify/check"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token])
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (false, "the brain isn't running")
+        }
+        if json["ok"] as? Bool == true { return (true, json["username"] as? String ?? "connected") }
+        return (false, json["error"] as? String ?? "Apify didn't answer")
+    }
+
+    /// Runs an approved Apify or MCP call. `callJSON` is the brain's own call, handed back untouched.
+    func runConnector(runID: String, prompt: String, callJSON: String, apifyToken: String?,
+                      servers: [BrainMCPServerPayload], spendingLimit: Double, model: String) async -> BrainConnectorResult? {
+        guard let callData = callJSON.data(using: .utf8),
+              let call = try? JSONSerialization.jsonObject(with: callData),
+              let serverData = try? JSONEncoder().encode(servers),
+              let serverList = try? JSONSerialization.jsonObject(with: serverData) else { return nil }
+        var body: [String: Any] = [
+            "runId": runID,
+            "prompt": prompt,
+            "call": call,
+            "mcpServers": serverList,
+            "spendingLimit": spendingLimit,
+            "settings": ["claudeModel": model],
+        ]
+        if let apifyToken, !apifyToken.isEmpty { body["apifyToken"] = apifyToken }
+        var request = URLRequest(url: baseURL.appendingPathComponent("connector/run"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60 * 6
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let key = Keychain.get("anthropic"), !key.isEmpty {
+            request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
+        }
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return try JSONDecoder().decode(BrainConnectorResult.self, from: data)
+        } catch {
+            return nil
+        }
     }
 
     func tools() async -> [[String: Any]] {
