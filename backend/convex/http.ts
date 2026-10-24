@@ -23,7 +23,10 @@ function options() {
 
 function authorized(request: Request): boolean {
   const secret = process.env.OKIDOKI_SYNC_SECRET;
-  if (!secret) return true; // local development default; set the env var for real use
+  if (!secret) {
+    console.error("OKIDOKI_SYNC_SECRET is not set; rejecting request. Run `npx convex env set OKIDOKI_SYNC_SECRET ...`.");
+    return false;
+  }
   return request.headers.get("authorization") === `Bearer ${secret}`;
 }
 

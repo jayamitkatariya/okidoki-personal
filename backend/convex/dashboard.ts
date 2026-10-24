@@ -1,6 +1,16 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 
+// Older snapshots may hold the state as a JSON string.
+function parseState(state: unknown) {
+  if (typeof state !== "string") return state ?? null;
+  try {
+    return JSON.parse(state);
+  } catch {
+    return null;
+  }
+}
+
 export const bootstrap = query({
   args: { accountId: v.string() },
   handler: async (ctx, { accountId }) => {
@@ -9,15 +19,7 @@ export const bootstrap = query({
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .first();
     if (!snapshot) return null;
-    let state = snapshot.state;
-    if (typeof state === "string") {
-      try {
-        state = JSON.parse(state);
-      } catch {
-        state = null;
-      }
-    }
-    return { state, updatedAt: snapshot.updatedAt, device: snapshot.device };
+    return { state: parseState(snapshot.state), updatedAt: snapshot.updatedAt, device: snapshot.device };
   },
 });
 
@@ -28,7 +30,7 @@ export const state = query({
       .query("snapshots")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .first();
-    return snapshot?.state ?? null;
+    return snapshot ? parseState(snapshot.state) : null;
   },
 });
 

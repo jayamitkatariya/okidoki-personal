@@ -18,7 +18,7 @@ Copy the key into `.env.local` (see `.env.local.example`) and keep
 
 ```bash
 cp .env.local.example .env.local
-# edit .env.local with the generated admin key and a sync secret
+# edit .env.local with the generated admin key
 npx convex dev
 ```
 
@@ -29,6 +29,7 @@ is at <http://localhost:6791>.
 
 Set these in the Convex deployment (for cloud: `npx convex env set ...`; for
 self-hosted: `npx convex env set` targets the deployment from `.env.local`).
+The sync endpoints reject every request until `OKIDOKI_SYNC_SECRET` is set.
 
 ```bash
 npx convex env set OKIDOKI_SYNC_SECRET "<same secret you paste into the app>"

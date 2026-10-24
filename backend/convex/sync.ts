@@ -1,8 +1,35 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 
 function asArray(value: unknown): any[] {
   return Array.isArray(value) ? value : [];
+}
+
+// Deletes this account's rows whose ids the Mac no longer sends, so deletions reach Convex.
+// Skipped when the field is missing, so a partial payload never wipes a table.
+async function removeMissing(
+  ctx: MutationCtx,
+  table: "threads" | "memories" | "runs" | "skills" | "routines",
+  accountId: string,
+  items: unknown,
+) {
+  if (!Array.isArray(items)) return;
+  const keep = new Set(items.map((item) => String(item.id)));
+  const rows = await ctx.db
+    .query(table)
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .collect();
+  for (const row of rows) {
+    if (keep.has(row.clientId)) continue;
+    if (table === "runs") {
+      const previews = await ctx.db
+        .query("actionPreviews")
+        .withIndex("by_run", (q) => q.eq("runId", row.clientId))
+        .collect();
+      for (const preview of previews) await ctx.db.delete(preview._id);
+    }
+    await ctx.db.delete(row._id);
+  }
 }
 
 export const pushSnapshot = internalMutation({
@@ -37,8 +64,9 @@ export const pushSnapshot = internalMutation({
       .query("settings")
       .withIndex("by_account", (q) => q.eq("accountId", args.accountId))
       .first();
-    if (existingSettings) await ctx.db.patch(existingSettings._id, { data: state.settings, updatedAt: now });
-    else await ctx.db.insert("settings", { accountId: args.accountId, data: state.settings, updatedAt: now });
+    const settings = state.settings ?? {};
+    if (existingSettings) await ctx.db.patch(existingSettings._id, { data: settings, updatedAt: now });
+    else await ctx.db.insert("settings", { accountId: args.accountId, data: settings, updatedAt: now });
 
     for (const thread of asArray(state.threads)) {
       const existing = await ctx.db
@@ -178,6 +206,12 @@ export const pushSnapshot = internalMutation({
       if (existing) await ctx.db.patch(existing._id, document);
       else await ctx.db.insert("connectors", document);
     }
+
+    await removeMissing(ctx, "threads", args.accountId, state.threads);
+    await removeMissing(ctx, "memories", args.accountId, state.memories);
+    await removeMissing(ctx, "runs", args.accountId, state.runs);
+    await removeMissing(ctx, "skills", args.accountId, state.skills);
+    await removeMissing(ctx, "routines", args.accountId, state.routines);
 
     const existingSnapshot = await ctx.db
       .query("snapshots")
