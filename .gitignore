@@ -1,0 +1,21 @@
+# build output
+.build/
+build/
+web/dist/
+brain/dist/
+Resources/brain/
+web/tsconfig.tsbuildinfo
+
+# dependencies
+node_modules/
+
+# local config and secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
+.claude/settings.local.json
+
+# OS and editor noise
+.DS_Store
+*.log
