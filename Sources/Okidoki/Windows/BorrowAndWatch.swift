@@ -82,11 +82,8 @@ final class GhostCursorController {
     private var screen: NSScreen?
     private var escMonitor: Any?
     private var globalEsc: Any?
-    private var moveMonitor: Any?
     private var runID: String?
     private var targetGlobal: CGPoint = .zero
-    private var startMouse: CGPoint = .zero
-    private var started = Date()
     private var cancelled = false
     /// Bumped per takeover so a cancelled one's pending click/finish can't fire into the next.
     private var session = 0
@@ -102,14 +99,23 @@ final class GhostCursorController {
         let front = NSWorkspace.shared.frontmostApplication
         let pid = front?.processIdentifier ?? 0
         let found = AccessibilityLocator.find(target: target, pid: pid)
-        let axPoint = found?.point ?? CGPoint(x: NSEvent.mouseLocation.x, y: (NSScreen.screens.first?.frame.height ?? 0) - NSEvent.mouseLocation.y)
-        model.label = found == nil ? "taking over — clicking here" : "clicking “\(found!.label)”"
         let mainHeight = NSScreen.screens.first?.frame.height ?? 0
-        let globalBL = CGPoint(x: axPoint.x, y: mainHeight - axPoint.y)
-        targetGlobal = globalBL
-        screen = NSScreen.screens.first(where: { $0.frame.contains(globalBL) }) ?? NSScreen.okidokiPrimary
+        // AX frames and CGEvent locations share Quartz space: top-left origin, y downward.
+        // The ghost view is laid out in AppKit space, so only the drawing point is flipped.
+        let quartz: CGPoint
+        if let found {
+            quartz = found.point
+        } else if let live = CGEvent(source: nil)?.location {
+            quartz = live
+        } else {
+            quartz = CGPoint(x: NSEvent.mouseLocation.x, y: mainHeight - NSEvent.mouseLocation.y)
+        }
+        model.label = found == nil ? "taking over — clicking here" : "clicking “\(found!.label)”"
+        let appKit = CGPoint(x: quartz.x, y: mainHeight - quartz.y)
+        targetGlobal = quartz
+        screen = NSScreen.screens.first(where: { $0.frame.contains(appKit) }) ?? NSScreen.okidokiPrimary
         guard let screen else { return }
-        let local = CGPoint(x: globalBL.x - screen.frame.minX, y: screen.frame.maxY - globalBL.y)
+        let local = CGPoint(x: appKit.x - screen.frame.minX, y: screen.frame.maxY - appKit.y)
         model.screenFrame = screen.frame
         model.point = local
         model.visible = true
@@ -128,8 +134,6 @@ final class GhostCursorController {
         panel.setFrame(screen.frame, display: false)
         panel.orderFrontRegardless()
         self.panel = panel
-        startMouse = NSEvent.mouseLocation
-        started = Date()
         installMonitors()
         env?.speaker.speak("taking over for a second.", voiceID: env?.store.settings.voiceID ?? "sarah",
                            speed: env?.store.settings.voiceSpeed ?? 1)
@@ -140,15 +144,6 @@ final class GhostCursorController {
 
     private func performClick(session: Int) {
         guard session == self.session, !cancelled, model.visible else { return }
-        if let moveMonitor {
-            NSEvent.removeMonitor(moveMonitor)
-            self.moveMonitor = nil
-        }
-        let mouse = NSEvent.mouseLocation
-        if hypot(mouse.x - startMouse.x, mouse.y - startMouse.y) > 8 {
-            cancel(reason: "you moved — control is yours")
-            return
-        }
         guard AccessibilityActions.click(at: targetGlobal) else {
             // No permission to post events: don't animate a click that never happened.
             cancel(reason: "couldn't click — allow accessibility access, then try again")
@@ -174,22 +169,12 @@ final class GhostCursorController {
                 Task { @MainActor in self?.cancel(reason: "okay, stopping") }
             }
         }
-        moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.model.visible, Date().timeIntervalSince(self.started) > 0.25 else { return }
-                let mouse = NSEvent.mouseLocation
-                if hypot(mouse.x - self.startMouse.x, mouse.y - self.startMouse.y) > 8 {
-                    self.cancel(reason: "you moved — control is yours")
-                }
-            }
-        }
     }
 
     private func removeMonitors() {
         if let escMonitor { NSEvent.removeMonitor(escMonitor) }
         if let globalEsc { NSEvent.removeMonitor(globalEsc) }
-        if let moveMonitor { NSEvent.removeMonitor(moveMonitor) }
-        escMonitor = nil; globalEsc = nil; moveMonitor = nil
+        escMonitor = nil; globalEsc = nil
     }
 
     private func finish() {
@@ -244,26 +229,22 @@ struct GhostCursorView: View {
                     }
                 }
                 .position(model.point)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("okidoki")
-                        .font(.okDisplay(18))
-                        .foregroundStyle(Color(hex: 0x1FB57A))
-                    Text(model.label)
-                        .font(.okMono(8.5))
-                        .foregroundStyle(Color.white.opacity(0.6))
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x0B0B0C).opacity(0.94)))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.1), lineWidth: 0.7))
-                .position(x: model.point.x + 20, y: model.point.y + 62)
-                Text("move your mouse or press esc to take back control")
-                    .font(.okMono(9))
-                    .foregroundStyle(Color.white.opacity(0.5))
-                    .padding(.horizontal, 11)
-                    .frame(height: 28)
-                    .background(Capsule().fill(Color(hex: 0x0B0B0C).opacity(0.9)))
+                Text(model.label)
+                    .font(.okBody(12, .medium))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.55)))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+                    .position(x: model.point.x + 20, y: model.point.y + 58)
+                Text("Press esc to take back control")
+                    .font(.okBody(12, .medium))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .padding(.horizontal, 14)
+                    .frame(height: 34)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.5))
                     .position(x: model.screenFrame.width / 2, y: model.screenFrame.height - 42)
             }
             .frame(width: model.screenFrame.width, height: model.screenFrame.height)
@@ -325,7 +306,7 @@ final class WatchHUDController {
         model.steps = 0
         let screen = NSScreen.okidokiPrimary
         let width: CGFloat = 310
-        let height: CGFloat = 40
+        let height: CGFloat = 46
         let y = screen.visibleFrame.maxY - height - 12
         let panel = WatchPanel(contentRect: NSRect(x: screen.frame.midX - width / 2, y: y, width: width, height: height),
                                styleMask: [.borderless, .nonactivatingPanel],
@@ -347,7 +328,7 @@ final class WatchHUDController {
             Task { @MainActor in
                 guard let self, let env = self.env else { return }
                 self.model.elapsed = env.watch.startedAt.map { Date().timeIntervalSince($0) } ?? 0
-                self.model.steps = max(0, env.watch.steps.count - 1)
+                self.model.steps = env.watch.steps.count
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -365,46 +346,29 @@ final class WatchHUDController {
 
 struct WatchHUDView: View {
     @ObservedObject var model: WatchHUDModel
-    @EnvironmentObject private var env: AppEnvironment
     var onStop: () -> Void
-    @State private var pulse = false
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(Color(hex: 0xFF453A).opacity(0.2)).frame(width: 20, height: 20)
-                    .scaleEffect(pulse ? 1.16 : 0.9)
-                    .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulse)
-                Circle().fill(Color(hex: 0xFF453A)).frame(width: 6, height: 6)
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                Text("watching you")
-                    .font(.okBody(11, .medium))
+            Circle().fill(Color(hex: 0xFF453A)).frame(width: 6, height: 6)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Recording")
+                    .font(.okBody(12, .medium))
                     .foregroundStyle(Color.white.opacity(0.92))
-                Text("\(timeString) · \(model.steps) steps · click stop when you're done")
-                    .font(.okMono(8))
-                    .foregroundStyle(Color.white.opacity(0.42))
+                Text("\(timeString) · \(model.steps) steps")
+                    .font(.okBody(11))
+                    .foregroundStyle(Color.white.opacity(0.5))
                     .lineLimit(1)
-                    .truncationMode(.tail)
             }
             Spacer(minLength: 0)
-            Button("stop") { onStop() }
+            Button("Stop", action: onStop)
                 .buttonStyle(.plain)
-                .font(.okMono(9, .semibold))
-                .foregroundStyle(Color(hex: 0x1A120E))
-                .padding(.horizontal, 10)
-                .frame(height: 24)
-                .background(Capsule().fill(Color(hex: 0x0F7A5C)))
+                .font(.okBody(12, .medium))
+                .foregroundStyle(Color.white.opacity(0.72))
         }
-        .padding(.horizontal, 11)
-        .frame(width: 310, height: 38)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(hex: 0x0B0B0C).opacity(0.96))
-                .shadow(color: .black.opacity(0.3), radius: 18, y: 7)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 0.7))
-        .onAppear { pulse = true }
+        .padding(.horizontal, 16)
+        .frame(width: 310, height: 46)
+        .overlayGlass(cornerRadius: 23, veil: 0.42, tone: .dark)
     }
 
     private var timeString: String {

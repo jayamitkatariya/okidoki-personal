@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { createPortal } from "react-dom";
 import { useDashboard } from "../store";
 import { cx } from "../lib";
 import type { AccountKind } from "../types";
+import { useDialog } from "./useDialog";
 import {
   Avatar,
   Button,
@@ -34,12 +36,17 @@ const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }
       { id: "home", title: "Home", icon: "home" },
       { id: "runs", title: "Runs", icon: "runs" },
       { id: "history", title: "History", icon: "clock" },
-      { id: "memory", title: "Memory", icon: "memory" },
-      { id: "skills", title: "Skills & routines", icon: "wand" },
     ],
   },
   {
-    label: "configure",
+    label: "knowledge",
+    items: [
+      { id: "memory", title: "Memory", icon: "memory" },
+      { id: "skills", title: "Skills", icon: "record" },
+    ],
+  },
+  {
+    label: "setup",
     items: [
       { id: "toolbox", title: "Toolbox", icon: "grid" },
       { id: "keys", title: "Keys", icon: "key" },
@@ -53,7 +60,7 @@ const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   runs: { title: "Runs", subtitle: "Live work and action previews" },
   history: { title: "History", subtitle: "Threads and past requests" },
   memory: { title: "Memory", subtitle: "What okidoki knows about you" },
-  skills: { title: "Skills & routines", subtitle: "Learned skills and repeating tasks" },
+  skills: { title: "Skills", subtitle: "Show it once, replay it forever" },
   toolbox: { title: "Toolbox", subtitle: "Free tools, agents and Apple apps" },
   keys: { title: "Keys", subtitle: "Your API keys, kept in the Keychain" },
   settings: { title: "Settings", subtitle: "Input, voice, permissions, look" },
@@ -75,6 +82,7 @@ export function AppShell({
   const { state, settings, account, invoke, updateSettings, toasts, dismissToast, convexConnected, native } = useDashboard();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteAsk, setPaletteAsk] = useState(false);
+  const [palettePrompt, setPalettePrompt] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
   const [addAccount, setAddAccount] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
@@ -90,6 +98,7 @@ export function AppShell({
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteAsk(false);
+        setPalettePrompt("");
         setPaletteOpen(true);
       }
       if (event.key === "Escape") setAccountOpen(false);
@@ -109,6 +118,7 @@ export function AppShell({
 
   useEffect(() => {
     if (askOpen) {
+      setPalettePrompt("");
       setPaletteAsk(true);
       setPaletteOpen(true);
       setAskOpen(false);
@@ -116,12 +126,18 @@ export function AppShell({
   }, [askOpen, setAskOpen]);
 
   useEffect(() => {
-    (window as unknown as { okidokiOpenAsk?: () => void }).okidokiOpenAsk = () => {
+    const bridge = window as unknown as { okidokiOpenAsk?: (prompt?: string) => void; okidokiNavigate?: (page: string) => void };
+    bridge.okidokiOpenAsk = (prompt = "") => {
+      setPalettePrompt(prompt);
       setPaletteAsk(true);
       setPaletteOpen(true);
     };
-    (window as unknown as { okidokiNavigate?: (page: string) => void }).okidokiNavigate = (next: string) => {
-      setPage(next as Page);
+    bridge.okidokiNavigate = (next: string) => {
+      if (NAV.some((group) => group.items.some((item) => item.id === next))) setPage(next as Page);
+    };
+    return () => {
+      delete bridge.okidokiOpenAsk;
+      delete bridge.okidokiNavigate;
     };
   }, [setPage]);
 
@@ -137,7 +153,7 @@ export function AppShell({
           ? [`${waiting} waiting for you`, "is-waiting"]
           : live
             ? [`${live} working`, ""]
-            : ["Ready · shake to summon", ""];
+            : ["Ready when you are", ""];
 
   const runBadge = (id: Page): number => {
     if (id === "home") return waiting;
@@ -146,34 +162,113 @@ export function AppShell({
   };
 
   const openAsk = () => {
+    setPalettePrompt("");
     setPaletteAsk(true);
     setPaletteOpen(true);
   };
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      <aside className="sidebar" aria-label="Workspace navigation">
         <div className="brand">
-          <Logo size={30} glow />
           <div className="brand-text">
             <span className="brand-name">okidoki</span>
-            <span className={cx("brand-status", tone)}>
+            <span className={cx("brand-status", tone)} title={status}>
               <i />
-              {status}
+              <span>{status}</span>
             </span>
           </div>
           <ThemeToggle onToggle={(next) => updateSettings({ appearance: next })} />
         </div>
 
-        <button className="side-ask" onClick={openAsk}>
+        <div className="account-wrap workspace-switcher" ref={accountRef}>
+          <button className={cx("account", accountOpen && "is-open")} aria-expanded={accountOpen} aria-haspopup="menu" aria-label="Switch workspace" onClick={() => setAccountOpen((value) => !value)}>
+            <Avatar account={account} size={28} />
+            <span className="account-text">
+              <strong>{account.name}</strong>
+              <em>{account.kind === "work" ? "Work" : "Personal"}</em>
+            </span>
+            <PixelIcon name="chevron" size={15} className="account-chevron" />
+          </button>
+          <AnimatePresence>
+            {accountOpen ? (
+              <motion.div
+                className="account-pop"
+                initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                transition={{ type: "spring", stiffness: 460, damping: 34 }}
+              >
+                <div className="pop-label">Accounts</div>
+                {state.accounts.map((item) => (
+                  <button
+                    key={item.id}
+                    className={cx("pop-account", item.id === state.currentAccountID && "is-current")}
+                    onClick={() => {
+                      invoke("switchAccount", { id: item.id });
+                      setAccountOpen(false);
+                    }}
+                  >
+                    <Avatar account={item} size={26} />
+                    <span>
+                      <strong>{item.name}</strong>
+                      <em>{item.email || item.kind}</em>
+                    </span>
+                    {item.id === state.currentAccountID ? <PixelIcon name="check" size={15} /> : null}
+                  </button>
+                ))}
+                <button
+                  className="pop-action"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    setAddAccount(true);
+                  }}
+                >
+                  <PixelIcon name="plus" size={15} /> Add account
+                </button>
+                <div className="pop-sep" />
+                <button
+                  className="pop-action"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    invoke("openOnboarding");
+                  }}
+                >
+                  <PixelIcon name="spark" size={15} /> Replay onboarding
+                </button>
+                <button
+                  className="pop-action"
+                  onClick={() => {
+                    setPage("settings");
+                    setAccountOpen(false);
+                  }}
+                >
+                  <PixelIcon name="gear" size={15} /> Settings
+                </button>
+                <button
+                  className="pop-action pop-danger"
+                  onClick={() => {
+                    invoke("signOut");
+                    setAccountOpen(false);
+                  }}
+                >
+                  <PixelIcon name="logout" size={15} /> Sign out
+                </button>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
+
+        <button className="side-ask" aria-label="Search or ask okidoki" onClick={openAsk}>
           <PixelIcon name="search" size={15} />
-          <span>Ask okidoki</span>
+          <span>Search or ask</span>
           <KeyHint>⌘K</KeyHint>
         </button>
 
-        <nav className="nav">
+        <nav className="nav" aria-label="Main navigation">
           {NAV.map((group) => (
             <div className="nav-group" key={group.label}>
+              <span className="nav-label">{group.label}</span>
               {group.items.map((item) => {
                 const badge = runBadge(item.id);
                 return (
@@ -182,6 +277,7 @@ export function AppShell({
                     className={cx("nav-item", page === item.id && "nav-active")}
                     onClick={() => setPage(item.id)}
                     aria-current={page === item.id ? "page" : undefined}
+                    aria-label={item.title}
                   >
                     <PixelIcon name={item.icon} size={17} />
                     <span>{item.title}</span>
@@ -194,93 +290,39 @@ export function AppShell({
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="account-wrap" ref={accountRef}>
-            <button className={cx("account", accountOpen && "is-open")} onClick={() => setAccountOpen((value) => !value)}>
-              <Avatar account={account} size={30} />
-              <span className="account-text">
-                <strong>{account.name}</strong>
-                <em>{account.kind}</em>
-              </span>
-              <PixelIcon name="dots" size={16} />
-            </button>
-            <AnimatePresence>
-              {accountOpen ? (
-                <motion.div
-                  className="account-pop"
-                  initial={{ opacity: 0, y: 6, scale: 0.97 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 4, scale: 0.98 }}
-                  transition={{ type: "spring", stiffness: 460, damping: 34 }}
-                >
-                  <div className="pop-label">Accounts</div>
-                  {state.accounts.map((item) => (
-                    <button
-                      key={item.id}
-                      className={cx("pop-account", item.id === state.currentAccountID && "is-current")}
-                      onClick={() => {
-                        invoke("switchAccount", { id: item.id });
-                        setAccountOpen(false);
-                      }}
-                    >
-                      <Avatar account={item} size={26} />
-                      <span>
-                        <strong>{item.name}</strong>
-                        <em>{item.email || item.kind}</em>
-                      </span>
-                      {item.id === state.currentAccountID ? <PixelIcon name="check" size={15} /> : null}
-                    </button>
-                  ))}
-                  <button
-                    className="pop-action"
-                    onClick={() => {
-                      setAccountOpen(false);
-                      setAddAccount(true);
-                    }}
-                  >
-                    <PixelIcon name="plus" size={15} /> Add account
-                  </button>
-                  <div className="pop-sep" />
-                  <button
-                    className="pop-action"
-                    onClick={() => {
-                      setAccountOpen(false);
-                      invoke("openOnboarding");
-                    }}
-                  >
-                    <PixelIcon name="spark" size={15} /> Replay onboarding
-                  </button>
-                  <button
-                    className="pop-action"
-                    onClick={() => {
-                      setPage("settings");
-                      setAccountOpen(false);
-                    }}
-                  >
-                    <PixelIcon name="gear" size={15} /> Settings
-                  </button>
-                  <button
-                    className="pop-action pop-danger"
-                    onClick={() => {
-                      invoke("signOut");
-                      setAccountOpen(false);
-                    }}
-                  >
-                    <PixelIcon name="logout" size={15} /> Sign out
-                  </button>
-                  <div className="pop-sep" />
-                  <div className={cx("pop-sync", convexConnected ? "is-live" : native ? "is-local" : "")}>
-                    <i />
-                    {convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}
-                    <span className="spacer" />v{state.version}
-                  </div>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
+          <div className={cx("sidebar-foot", convexConnected ? "is-live" : native ? "is-local" : "")}>
+            <i />
+            <span>{convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}</span>
+            <span className="spacer" />
+            <span>v{state.version}</span>
           </div>
         </div>
       </aside>
 
       <main className="main">
+        <header className="workspace-bar">
+          <span className="workspace-breadcrumb">
+            Workspace <PixelIcon name="chevron" size={12} /> <strong>{SECTION_META[page].title}</strong>
+          </span>
+          <div className="workspace-actions">
+            <span className="workspace-local">
+              <PixelIcon name="lock" size={12} />
+              {convexConnected ? "Synced" : native ? "On your Mac" : "Preview"}
+            </span>
+            <button className="bar-ask" onClick={openAsk} aria-label="Ask okidoki">
+              <PixelIcon name="spark" size={14} />
+              <span>Ask</span>
+            </button>
+            <button
+              className={cx("bar-bell", waiting > 0 && "is-hot")}
+              onClick={() => setPage("runs")}
+              aria-label={waiting > 0 ? `${waiting} waiting for you` : "No notifications"}
+              title={waiting > 0 ? `${waiting} waiting for you` : "Nothing waiting"}
+            >
+              <PixelIcon name="bell" size={15} />
+            </button>
+          </div>
+        </header>
         <div className="content" ref={contentRef}>
           {/* the next page fades straight in: no exit wait, so navigation never lags a beat */}
           <motion.div
@@ -298,6 +340,7 @@ export function AppShell({
       <CommandPalette
         open={paletteOpen}
         askFirst={paletteAsk}
+        initialQuery={palettePrompt}
         onClose={() => setPaletteOpen(false)}
         onNavigate={(next) => {
           setPage(next);
@@ -314,11 +357,13 @@ export function AppShell({
 function CommandPalette({
   open,
   askFirst,
+  initialQuery,
   onClose,
   onNavigate,
 }: {
   open: boolean;
   askFirst: boolean;
+  initialQuery: string;
   onClose: () => void;
   onNavigate: (page: Page) => void;
 }) {
@@ -327,6 +372,8 @@ function CommandPalette({
   const [askMode, setAskMode] = useState(false);
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectedRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useDialog(open, onClose);
 
   const sections = useMemo(
     () =>
@@ -341,11 +388,11 @@ function CommandPalette({
 
   useLayoutEffect(() => {
     if (!open) return;
-    setQuery("");
+    setQuery(initialQuery);
     setAskMode(askFirst);
     setIndex(0);
     inputRef.current?.focus();
-  }, [open, askFirst]);
+  }, [open, askFirst, initialQuery]);
 
   const examples = [
     "What's on my screen?",
@@ -354,6 +401,10 @@ function CommandPalette({
     "My Mac is out of space",
     "Remind me to call Mom at 6",
   ];
+
+  useEffect(() => {
+    if (open && !askMode) selectedRef.current?.scrollIntoView({ block: "nearest" });
+  }, [open, askMode, index, query]);
 
   const ask = (text: string) => {
     invoke("ask", { text });
@@ -367,7 +418,7 @@ function CommandPalette({
       if (trimmed) ask(trimmed);
       return;
     }
-    const target = sections[index] ?? sections[0];
+    const target = sections[index];
     if (target) {
       onNavigate(target.id);
       return;
@@ -375,12 +426,19 @@ function CommandPalette({
     if (trimmed) ask(trimmed);
   };
 
-  return (
+  return createPortal(
     <AnimatePresence>
       {open ? (
-        <motion.div className="palette-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+        <motion.div className="palette-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}>
           <motion.div
+            ref={dialogRef}
             className="palette"
+            role="dialog"
+            aria-modal="true"
+            aria-label={askMode ? "Ask okidoki" : "Search the workspace"}
+            tabIndex={-1}
             initial={{ opacity: 0, y: -12, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.98 }}
@@ -390,6 +448,7 @@ function CommandPalette({
               <PixelIcon name={askMode ? "spark" : "search"} size={18} />
               <input
                 ref={inputRef}
+                aria-label={askMode ? "Your request" : "Search pages"}
                 autoFocus
                 value={query}
                 placeholder={askMode ? "Ask, do, or learn anything…" : "Search pages or ask…"}
@@ -406,7 +465,7 @@ function CommandPalette({
                   }
                   if (event.key === "ArrowDown") {
                     event.preventDefault();
-                    setIndex((value) => Math.min(sections.length - 1, value + 1));
+                    setIndex((value) => Math.max(0, Math.min(sections.length + (query.trim() ? 1 : 0) - 1, value + 1)));
                   }
                   if (event.key === "ArrowUp") {
                     event.preventDefault();
@@ -438,6 +497,7 @@ function CommandPalette({
                 {sections.map((item, itemIndex) => (
                   <button
                     key={item.id}
+                    ref={itemIndex === index ? selectedRef : undefined}
                     className={cx("palette-row", itemIndex === index && "is-selected")}
                     onMouseEnter={() => setIndex(itemIndex)}
                     onClick={() => onNavigate(item.id)}
@@ -450,8 +510,8 @@ function CommandPalette({
                     {itemIndex === index ? <span className="palette-enter">↵</span> : null}
                   </button>
                 ))}
-                {query ? (
-                  <button className="palette-row ask" onClick={() => ask(query.trim())}>
+                {query.trim() ? (
+                  <button ref={index === sections.length ? selectedRef : undefined} className={cx("palette-row ask", index === sections.length && "is-selected")} onMouseEnter={() => setIndex(sections.length)} onClick={() => ask(query.trim())}>
                     <PixelIcon name="spark" size={17} />
                     <span>
                       <strong>Ask okidoki “{query.trim()}”</strong>
@@ -476,7 +536,8 @@ function CommandPalette({
           </motion.div>
         </motion.div>
       ) : null}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 

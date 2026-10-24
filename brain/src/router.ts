@@ -1,5 +1,5 @@
-import type { Decision, NativeContext, ThinkRequest } from "./types";
-import { findTools } from "./catalog";
+import type { Decision, NativeContext, TeachMark, TeachPlanStep, ThinkRequest } from "./types";
+import { terminalDecision } from "./terminal";
 
 const weekdays: Record<string, number> = {
   sunday: 1,
@@ -90,46 +90,92 @@ export function parseRoutine(text: string): {
   return { name, action: action || "run my routine", weekday: weekdayNum, hour, minute: 0, schedule: `every ${dayName} at ${displayHour}${hour < 12 ? "am" : "pm"}` };
 }
 
-export function teachSteps(topic: string): string[] {
+function isLesson(t: string): boolean {
+  return t.includes("teach me") || t.startsWith("how do i") || t.startsWith("how to") || t.includes("walk me through") || t.includes("show me how") || t.includes("learn ") || t.startsWith("explain ") || t.startsWith("what is ") || t.startsWith("what's a ");
+}
+
+const LEARN_WORD = /\b(how|why|what|explain|learn|teach|show|walk|understand|stuck|mean)\b/;
+const ACT_WORD = /\b(make|create|open|send|set|add|change|delete|remove|move|fix|click|type|put|turn|enable|disable|rename|export|import|draw|build|write|fill|resize|do)\b/;
+
+/** Show when they want to understand it. Do when they want the result. */
+export function prefersShowing(text: string, appName = ""): boolean {
+  const t = text.toLowerCase();
+  const learn = LEARN_WORD.exec(t);
+  const act = ACT_WORD.exec(t);
+  if (learn && !act) return true;
+  if (act && !learn) return false;
+  if (learn && act) return learn.index <= act.index;
+  const app = appName.trim().toLowerCase();
+  const system = new Set(["", "finder", "okidoki", "unknown", "loginwindow", "system settings", "system preferences"]);
+  return !system.has(app);
+}
+
+const circle = (rect: [number, number, number, number], text: string): TeachMark => ({ kind: "circle", rect, text });
+const region = (rect: [number, number, number, number], text: string): TeachMark => ({ kind: "box", rect, text });
+const drag = (point: [number, number], to: [number, number], text: string): TeachMark => ({ kind: "arrow", point, to, text });
+const prompt = (text: string): TeachMark => ({ kind: "box", rect: [0.06, 0.78, 0.88, 0.14], text });
+
+export function teachPlan(topic: string): TeachPlanStep[] {
   const t = topic.toLowerCase();
+  const say = (text: string, ...marks: TeachMark[]): TeachPlanStep => ({ say: text, marks });
   if (t.includes("auto layout") || (t.includes("figma") && t.includes("layout"))) {
     return [
-      "select the two cards you want to arrange, then press shift + a. figma wraps them in an auto layout frame.",
-      "in the right panel, set direction to ↓ and gap to 16.",
-      "click the padding field and set 24 on all four sides.",
-      "resize the frame from its edge — the cards reflow instead of overlapping.",
-      "drag a third card into the frame. it joins the stack automatically.",
-      "turn on “clip content” only if you want the frame to crop. that's auto layout.",
+      say("click one object, then shift-click a second. auto layout needs both, or it has nothing to arrange.", circle([0.4, 0.36, 0.18, 0.16], "select both")),
+      say("press shift A. figma wraps them in a frame that owns the gap. the frame is in charge now, not the objects.", region([0.75, 0.16, 0.23, 0.12], "shift A")),
+      say("on the right, the arrows pick a direction. down is a stack, right is a row. set the gap to 16 — the space between them.", region([0.75, 0.16, 0.23, 0.14], "direction")),
+      say("padding is the space inside the frame. set it to 24. gap is between the objects, padding is around them.", region([0.75, 0.22, 0.23, 0.12], "padding")),
+      say("drag the frame's edge. the objects reflow instead of overlapping.", drag([0.58, 0.42], [0.72, 0.42], "resize")),
+      say("drag another object into the frame. it joins the stack on its own.", drag([0.3, 0.55], [0.48, 0.42], "drop it in")),
+    ];
+  }
+  if (t.includes("figma") && (t.includes("component") || t.includes("variant"))) {
+    return [
+      say("select the thing you want to reuse and press option command K. that makes a component, the source.", circle([0.42, 0.38, 0.14, 0.12], "make component")),
+      say("hold option and drag to pull off an instance. an instance is a live copy of the source.", drag([0.42, 0.4], [0.62, 0.4], "option drag")),
+      say("edit the main component and every instance follows, because they point back at it.", circle([0.42, 0.38, 0.14, 0.12], "the main one")),
+      say("edit one instance and only that one changes.", circle([0.6, 0.4, 0.12, 0.1], "one instance")),
+    ];
+  }
+  if (t.includes("figma")) {
+    return [
+      say("press F, or click the frame tool on the left. a frame is a screen — the button we're making lives inside one.", circle([0.004, 0.07, 0.04, 0.06], "frame")),
+      say("drag on the empty canvas. a small box is enough. that box is the screen.", drag([0.32, 0.3], [0.56, 0.58], "drag a frame")),
+      say("press R and drag a rectangle inside the frame. that's the body of the button.", circle([0.004, 0.15, 0.04, 0.06], "rectangle")),
+      say("it's selected, so the right panel is describing it. click the fill and pick a color. that panel only shows the current selection.", region([0.75, 0.1, 0.23, 0.14], "fill")),
+      say("press T, click the rectangle, and type the label. the words are their own object.", circle([0.004, 0.26, 0.04, 0.06], "text")),
+      say("click the rectangle, shift-click the text, then press shift A. the frame takes over the spacing. that's auto layout.", region([0.75, 0.16, 0.23, 0.14], "auto layout")),
     ];
   }
   if (t.includes("git")) {
     return [
-      "open terminal in a project folder and run `git status` — read what git thinks is going on.",
-      "run `git init` once per project, then `git add -A` to stage everything.",
-      "run `git commit -m \"first commit\"` — that's your first save point.",
-      "make a branch with `git switch -c experiment`, change a file, and commit again.",
-      "run `git switch main` to jump back. the files change with you.",
-      "run `git merge experiment` — this is how the two lines come back together.",
+      say("run git status. it tells you what changed and what git is already tracking.", prompt("git status")),
+      say("git add -A means these changes count. nothing is saved until you commit.", prompt("git add")),
+      say("git commit -m \"first commit\" saves a snapshot you can come back to.", prompt("commit")),
+      say("git switch -c experiment starts a second line of work. the files you see belong to the branch you're on.", prompt("new branch")),
+      say("git switch main jumps back, and the files change with you.", prompt("switch")),
+      say("git merge experiment brings that line back into main.", prompt("merge")),
     ];
   }
   if (t.includes("terminal") || t.includes("shell") || t.includes("bash") || t.includes("zsh")) {
     return [
-      "`pwd` prints where you are. try it.",
-      "`ls` lists what's here; `ls -la` includes hidden files.",
-      "`cd folder` walks in; `cd ..` walks back out. tab completes names.",
-      "`mkdir new-folder` makes one; `touch note.txt` makes an empty file.",
-      "`cat note.txt` prints a file. `man ls` opens the manual — press q to leave.",
-      "that's the loop: look, move, make, read.",
+      say("pwd prints where you are. every command happens in a folder, and this is that folder.", prompt("pwd")),
+      say("ls lists what's here. ls -la includes the hidden files.", prompt("ls")),
+      say("cd folder walks in. cd .. walks out. tab completes the name.", prompt("cd")),
+      say("mkdir makes a folder. touch makes an empty file.", prompt("make")),
+      say("cat prints a file. man ls opens the manual — press q to leave.", prompt("read")),
     ];
   }
+  const name = topic || "this app";
   return [
-    `open ${topic} and find the main canvas or window.`,
-    "find the one control that creates something new — a plus, a button, or a menu item.",
-    "make the smallest possible version. don't perfect it yet.",
-    "change one property and watch what moves. that's the mental model.",
-    "undo once. if you can get back, you're safe to explore.",
-    "tell me what confused you and we'll go one level deeper.",
+    say(`look at ${name}. the control that makes something new is usually a plus, or a tool on the left. click it. that's the verb this app is built around.`, circle([0.02, 0.08, 0.08, 0.08], "new")),
+    say("make the smallest version. one object. don't decorate it yet.", drag([0.34, 0.36], [0.58, 0.56], "make one")),
+    say("whatever you selected, its settings live in a side panel. change one number and watch it respond. that panel only describes the selection.", region([0.72, 0.08, 0.26, 0.34], "settings")),
+    say("undo. if you can get the last move back, you're safe to try the next thing."),
   ];
+}
+
+export function teachSteps(topic: string): string[] {
+  return teachPlan(topic).map((step) => step.say);
 }
 
 export function summarize(text: string, name: string): string {
@@ -179,6 +225,8 @@ const MESSENGER_APPS: Record<string, string> = {
 };
 
 export function localRouter(request: ThinkRequest): Decision {
+  const terminal = terminalDecision(request.text);
+  if (terminal) return terminal;
   const raw = request.text.trim();
   const t = raw.toLowerCase();
   const installed = request.installedTools ?? [];
@@ -241,7 +289,7 @@ export function localRouter(request: ThinkRequest): Decision {
     return {
       kind: "computer_use",
       title: `open ${appName.toLowerCase()}`,
-      answer: `i'll open ${appName} and take it from there. approve once, then i drive — you'll see every move and can stop me anytime.`,
+      answer: `opening ${appName}.`,
       speak: `Opening ${appName}.`,
       risk: "medium",
       previewSummary: `open ${appName} and do the rest if needed`,
@@ -252,12 +300,12 @@ export function localRouter(request: ThinkRequest): Decision {
   }
 
   for (const [needle, appName] of Object.entries(MESSENGER_APPS)) {
-    if (t.includes(needle)) {
+    if (t.includes(needle) && !/compress|convert|resize|install/.test(t)) {
       return {
         kind: "computer_use",
         title: `${needle} it`,
-        answer: `i can do that end to end — open ${appName}, find the chat, write the message, press send. one approval, then i drive it live and you can stop me anytime.`,
-        speak: "I can message them for you. Want me to drive?",
+        answer: `opening ${appName} and sending it.`,
+        speak: "Sending it.",
         risk: "medium",
         previewSummary: `drive ${appName} end to end`,
         previewSteps: ["open " + appName, "open the right chat", "type the message", "send it"],
@@ -271,8 +319,8 @@ export function localRouter(request: ThinkRequest): Decision {
     return {
       kind: "computer_use",
       title: "send the message",
-      answer: "i'll drive the messaging app end to end — find the person, write it, press send. one approval, then i take over live; move your mouse and i stop.",
-      speak: "I can send that for you. Want me to drive?",
+      answer: "sending it.",
+      speak: "Sending it.",
       risk: "medium",
       previewSummary: "drive the messaging app end to end",
       previewSteps: ["open the messaging app", "open the right chat", "type the message", "send it"],
@@ -281,12 +329,12 @@ export function localRouter(request: ThinkRequest): Decision {
     };
   }
 
-  if (t.includes("notion") || t.includes("blender") || t.includes("figma") || t.includes("freecad") || t.includes("sketch") || t.includes("autocad")) {
+  if (!isLesson(t) && (t.includes("notion") || t.includes("blender") || t.includes("figma") || t.includes("freecad") || t.includes("sketch") || t.includes("autocad"))) {
     return {
       kind: "computer_use",
       title: shortTitle(raw),
-      answer: "i can drive that app end to end — menus, buttons, typing, the whole flow. approve once, then i take over live; move your mouse and i stop.",
-      speak: "I can do that in the app. Want me to drive?",
+      answer: "doing it in the app.",
+      speak: "On it.",
       risk: "medium",
       previewSummary: shortTitle(raw),
       previewSteps: ["open the app", "look at the screen", "click and type through it", "hand control back"],
@@ -376,7 +424,7 @@ export function localRouter(request: ThinkRequest): Decision {
     return {
       kind: "borrow",
       title: `click ${target}`,
-      answer: "i'll find it in the frontmost app, move a ghost cursor, click once, and give control right back. moving your mouse cancels instantly.",
+      answer: "i'll find it in the frontmost app, move a ghost cursor, click once, and give control right back. esc cancels.",
       speak: "Can I take over for ten seconds?",
       risk: "medium",
       previewSummary: `click “${target}” with a ghost cursor`,
@@ -534,10 +582,11 @@ export function localRouter(request: ThinkRequest): Decision {
     return { kind: "answer", title: "show me", answer: "circle the error — press the pencil when you summon me — or copy it and ask again. i'll read the whole thing.", actions: ["circle it"] };
   }
 
-  if (t.includes("teach me") || t.startsWith("how do i") || t.startsWith("how to") || t.includes("walk me through") || t.includes("show me how") || t.includes("learn ")) {
-    let topic = raw.toLowerCase().replace(/^(teach me |how do i |how to |walk me through |show me how to |learn )/, "").replace(/\?/g, "");
+  if (isLesson(t)) {
+    let topic = raw.toLowerCase().replace(/^(teach me |how do i |how to |walk me through |show me how to |show me how |learn |explain |what is |what's a )/, "").replace(/\?/g, "");
     topic = sentence(topic.slice(0, 48));
-    return { kind: "teach", title: `teach: ${topic}`, answer: `alright — ${topic}. i'll mark each step on screen and wait for you. take your time; i'll only move when you do.`, speak: `Let's learn ${topic}.`, teachSteps: teachSteps(topic) };
+    const plan = teachPlan(topic);
+    return { kind: "teach", title: `teach: ${topic}`, answer: `alright — ${topic}. i'll play it on your screen. pause if you want to linger on a step.`, teachSteps: plan.map((step) => step.say), teachPlan: plan };
   }
 
   if (t.includes("build me") || t.includes("write a script") || t.includes("make a script") || t.includes("fix this bug") || t.includes("fix the bug") || t.includes("refactor") || t.includes("set up this repo") || t.includes("set up this github") || t.includes("run it")) {
@@ -555,40 +604,29 @@ export function localRouter(request: ThinkRequest): Decision {
     };
   }
 
+  if (/install|terminal|command|open.source|repository|download|convert|ffmpeg|brew|python|npm/.test(t)) {
+    return { kind: "answer", title: "connect a model", answer: "I need an Anthropic key to plan this request. Add one in Keys, then ask again. You can already ask me to compress a video, resize photos, zip a folder, check storage, or install a tool from the toolbox.", actions: ["add key"] };
+  }
+
   if (request.screenshotBase64) {
     return { kind: "answer", title: "what i see", answer: "i have the screen area, but reading it needs an Anthropic key. paste the text here, or add a key in keys and ask again.", actions: ["add key"] };
   }
 
-  return {
-    kind: "answer",
-    title: "okidoki",
-    answer: `i heard “${shortTitle(raw)}”. i can answer it, do the small version now, or teach you how. which one?`,
-    speak: "Want me to show you, or do it?",
-    clarification: "want me to show you, or do it?",
-    actions: ["show me", "do it"],
-  };
-}
-
-export function findDecision(query: string, request: ThinkRequest): Decision {
-  const results = findTools(query);
-  if (!results.length) {
-    return {
-      kind: "answer",
-      title: "find a tool",
-      answer: `nothing in the open-source catalog matches “${query}”. tell me what the job is and i'll compare a few options by upkeep, popularity and license.`,
-    };
+  const app = request.appName ?? "";
+  if (prefersShowing(raw, app)) {
+    let topic = raw.toLowerCase().replace(/^(teach me |how do i |how to |walk me through |show me how to |show me how |learn |explain |what is |what's a |what does |how does )/, "").replace(/\?/g, "").trim();
+    topic = sentence((topic || raw).slice(0, 48));
+    const plan = teachPlan(topic);
+    return { kind: "teach", title: `teach: ${topic}`, answer: `alright — ${topic}. i'll play it on your screen. pause if you want to linger on a step.`, teachSteps: plan.map((step) => step.say), teachPlan: plan };
   }
-  const tool = results[0];
+  const title = shortTitle(raw);
   return {
-    kind: "terminal",
-    title: `install ${tool.name}`,
-    answer: `${tool.name} replaces ${tool.replaces}: ${tool.blurb}\n\nit's ${tool.license}, and one homebrew command away. install it?`,
+    kind: "computer_use",
+    title,
+    answer: "doing it.",
     risk: "medium",
-    previewSummary: `install ${tool.name} with homebrew`,
-    previewSteps: [`run ${tool.installCommand}`, `verify ${tool.command} is on your path`],
-    commands: [tool.installCommand],
-    apps: ["Terminal"],
-    builtin: "tool-search",
-    actions: ["install"],
+    previewSummary: title,
+    previewSteps: ["open the app", "look at the screen", "click and type through it", "hand control back"],
+    apps: app ? [app] : [],
   };
 }

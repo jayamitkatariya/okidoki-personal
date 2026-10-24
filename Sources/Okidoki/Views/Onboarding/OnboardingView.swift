@@ -115,6 +115,8 @@ struct OnboardingView: View {
             Button(primaryTitle) { primaryAction() }
                 .buttonStyle(OKButtonStyle(kind: .primary))
                 .keyboardShortcut(.defaultAction)
+                .disabled(step == .brain && !keyReady)
+                .opacity(step == .brain && !keyReady ? 0.45 : 1)
         }
     }
 
@@ -184,7 +186,7 @@ struct OnboardingView: View {
     private var brainStep: some View {
         VStack(alignment: .leading, spacing: 0) {
             title("Bring your own key")
-            subtitle("An Anthropic key gives the smartest answers. Without one, Apple apps and quick actions still work on-device.")
+            subtitle("An Anthropic key is required. Answers, lessons, and actions all go through it.")
             HStack(spacing: 8) {
                 Image(systemName: keySaved ? "checkmark.seal.fill" : "key")
                     .font(.system(size: 14, weight: .medium))
@@ -300,7 +302,7 @@ struct OnboardingView: View {
     private var primaryTitle: String {
         switch step {
         case .welcome: return "Get started"
-        case .brain: return (keySaved || !anthropicKey.isEmpty) ? "Continue" : "Skip for now"
+        case .brain: return "Continue"
         case .tour: return (didShake && didCircle) ? "Continue" : "Skip"
         case .done: return "Start using okidoki"
         default: return "Continue"
@@ -317,6 +319,7 @@ struct OnboardingView: View {
             store.saveNow()
         case .brain:
             saveKeyIfNeeded()
+            guard env.hasKey("anthropic") else { return }
             store.settings.defaultInput = inputMode
             store.saveNow()
         case .about:
@@ -334,6 +337,10 @@ struct OnboardingView: View {
     private func go(to next: OnboardStep) {
         forward = next.rawValue > step.rawValue
         withAnimation(OKMotion.spring) { step = next }
+    }
+
+    private var keyReady: Bool {
+        keySaved || !anthropicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func saveKeyIfNeeded() {

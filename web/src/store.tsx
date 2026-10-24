@@ -79,9 +79,9 @@ function fromCloud(cloud: CloudState, accountId: string): NativeState {
 }
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
-  const { state: nativeState, connected } = useNativeState();
-  // `connected` means a real Mac app is on the other end; nativeState alone may be the demo fallback.
-  const native = connected && Boolean(nativeState);
+  const { state: nativeState, connected, native: bridged } = useNativeState();
+  // A real Mac app is on the other end (not the demo fallback) and has sent its state.
+  const native = bridged && Boolean(nativeState);
   const hostedUrl = native ? "" : hostedConvexUrl();
   const hosted = Boolean(hostedUrl);
   const cloudUrl = native ? nativeConvexUrl(nativeState) : hostedUrl;
@@ -98,7 +98,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const hostedState = useMemo(() => (hosted ? fromCloud(cloud, hostedAccount?.id ?? "") : null), [hosted, cloud, hostedAccount?.id]);
   const state: NativeState = native ? nativeState! : (hostedState ?? nativeState ?? demoState);
   const base = native || hosted ? state : demoState;
-
   const [settings, setSettings] = useState<Settings>(state.settings);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const pendingUntil = useRef(0);

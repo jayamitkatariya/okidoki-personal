@@ -57,7 +57,7 @@ final class SummonPanel: OverlayPanel {}
 @MainActor
 final class SummonController {
     static let width: CGFloat = 400
-    static let rowHeight: CGFloat = 46
+    static let rowHeight: CGFloat = 52
 
     let model = SummonModel()
     private weak var env: AppEnvironment?
@@ -118,9 +118,6 @@ final class SummonController {
             .store(in: &cancellables)
     }
 
-    /// Where the capsule currently is (used to anchor the answer card in its place).
-    var panelFrame: NSRect? { model.isVisible ? overlay?.frame : nil }
-
     // MARK: - Show
 
     func start() {
@@ -153,13 +150,15 @@ final class SummonController {
         guard let env else { return nil }
         let panel = SummonPanel()
         let overlay = OverlayWindow(panel: panel, width: Self.width,
-                                    estimatedHeight: Self.rowHeight, radius: Self.rowHeight / 2)
-        let root = OverlayRoot(radius: overlay.radius, onHeight: { [weak overlay] height in
+                                    estimatedHeight: Self.rowHeight, radius: Self.rowHeight / 2,
+                                    surface: .liquid)
+        let root = OverlayRoot(radius: overlay.radius, veil: 0.30, bare: false, onHeight: { [weak overlay] height in
             overlay?.setContentHeight(height)
         }) {
             InputCapsuleView(model: model)
         }
         .environmentObject(env)
+        .environment(\.colorScheme, .dark)
         overlay.setContent(root)
         overlay.onFocused = { [weak self] in
             guard let self, self.model.phase == .typing else { return }
@@ -245,18 +244,13 @@ final class SummonController {
 
     // MARK: - Submit
 
-    func submitText() {
-        let text = model.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        submit(text: text)
-    }
-
     private func submit(text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !submitted, model.phase == .listening || model.phase == .typing else { return }
         // Nothing to ask: stay put instead of spinning forever.
         guard !text.isEmpty || model.screenshotPNG != nil else { return }
         submitted = true
+        env?.noteSpokenInput(model.mode == .voice)
         speech.stop(keepTranscript: true)
         glow.setListening(false)
         env?.draw.disarm()
@@ -268,10 +262,6 @@ final class SummonController {
         removeClickMonitor()
         env?.submitSummon(text: text, screenshot: model.screenshotPNG, selection: model.selection,
                           attachmentName: model.attachmentName)
-    }
-
-    func showThinking() {
-        model.phase = .thinking
     }
 
     func showError(_ message: String) {
@@ -383,7 +373,8 @@ final class SummonController {
 // MARK: - Capsule view
 
 /// One airy row: the question, and a send arrow once there's something to send.
-/// Tab flips voice/typing, dragging on the screen circles something, esc closes.
+/// The brand mark leads the row; send and close trail it. Tab flips voice/typing,
+/// dragging on the screen circles something, esc closes.
 struct InputCapsuleView: View {
     @ObservedObject var model: SummonModel
     @Environment(\.colorScheme) private var scheme
@@ -400,19 +391,16 @@ struct InputCapsuleView: View {
 
             if model.hasAttachment && model.phase != .thinking {
                 attachmentChip
-                    .padding(.horizontal, 18)
+                    .padding(.horizontal, 14)
                     .padding(.bottom, 12)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
 
             if let error = model.error, model.phase != .thinking {
-                Text(error.overlaySentenceCased)
-                    .font(.okBody(12))
-                    .foregroundStyle(palette.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 20)
+                errorRow(error)
+                    .padding(.horizontal, 14)
                     .padding(.bottom, 12)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .animation(OKMotion.snappy, value: model.phase)
@@ -422,25 +410,24 @@ struct InputCapsuleView: View {
 
     @ViewBuilder private var mainRow: some View {
         HStack(spacing: 10) {
+            leading
+                .frame(width: 18, height: 18)
+
+            Rectangle()
+                .fill(palette.divider)
+                .frame(width: 1, height: 16)
+
             switch model.phase {
             case .typing, .hidden:
                 OverlayTextField(text: $model.text,
-                                 placeholder: model.hasAttachment ? "Ask about this" : "Ask anything",
+                                 placeholder: model.hasAttachment ? "About this" : "Ask anything",
                                  fontSize: 15,
                                  focusTick: model.focusTick,
                                  onSubmit: { model.onSubmit?(model.text, model.screenshotPNG, model.selection) },
                                  onTab: { model.onSwitch?(.voice) })
                     .frame(maxWidth: .infinity)
-                if canSend {
-                    OverlaySendButton(enabled: true, help: "Ask") {
-                        model.onSubmit?(model.text, model.screenshotPNG, model.selection)
-                    }
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-                }
             case .listening:
-                SummonLevelDot(meter: model.meter, color: palette.accent)
-                    .frame(width: 14, height: 14)
-                Text(model.transcript.isEmpty ? "Listening…" : model.transcript)
+                Text(model.transcript.isEmpty ? "Listening" : model.transcript)
                     .font(.okBody(15))
                     .foregroundStyle(model.transcript.isEmpty ? palette.tertiary : palette.ink)
                     .lineLimit(1)
@@ -449,16 +436,58 @@ struct InputCapsuleView: View {
                     .contentTransition(.opacity)
             case .thinking:
                 OverlaySpinner(size: 14, color: palette.accent)
-                Text(model.transcript.isEmpty ? "Thinking…" : model.transcript)
+                Text(model.transcript.isEmpty ? "Thinking" : model.transcript)
                     .font(.okBody(15))
                     .foregroundStyle(palette.secondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            trailing
         }
-        .padding(.leading, 20)
+        .padding(.leading, 14)
         .padding(.trailing, 10)
         .animation(OKMotion.snappy, value: canSend)
+        .animation(OKMotion.snappy, value: model.phase)
+    }
+
+    /// The mark sits at rest and becomes a live mic orb while listening.
+    @ViewBuilder private var leading: some View {
+        if model.phase == .listening {
+            SummonLevelDot(meter: model.meter, color: palette.accent)
+                .transition(.scale(scale: 0.5).combined(with: .opacity))
+        } else {
+            Image(nsImage: OKBrandMark.overlayMark)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 18, height: 18)
+                .opacity(0.92)
+                .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        HStack(spacing: 4) {
+            switch model.phase {
+            case .listening:
+                OverlayIconButton(symbol: "stop.fill", help: "Stop listening", size: 22) {
+                    model.onStopListening?()
+                }
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+            case .typing, .hidden:
+                if canSend {
+                    OverlaySendButton(enabled: true, help: "Ask") {
+                        model.onSubmit?(model.text, model.screenshotPNG, model.selection)
+                    }
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            case .thinking:
+                EmptyView()
+            }
+            OverlayIconButton(symbol: "xmark", help: "Close", size: 22) {
+                model.onCancel?()
+            }
+        }
     }
 
     private var attachmentChip: some View {
@@ -467,25 +496,60 @@ struct InputCapsuleView: View {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 28, height: 20)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .frame(width: 30, height: 21)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5)
+                    }
             }
             Text(model.attachmentName.isEmpty ? "Selection" : model.attachmentName.overlaySentenceCased)
                 .font(.okBody(12))
                 .foregroundStyle(palette.secondary)
                 .lineLimit(1)
+            Spacer(minLength: 4)
             OverlayIconButton(symbol: "xmark", help: "Remove", size: 18) {
                 model.clearAttachment()
             }
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 2)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(palette.fill))
+        .padding(.leading, 6)
+        .padding(.trailing, 3)
+        .padding(.vertical, 4)
+        .background {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(palette.fill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(palette.hairline, lineWidth: 1)
+                }
+        }
+    }
+
+    private func errorRow(_ error: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(palette.danger)
+            Text(error.overlaySentenceCased)
+                .font(.okBody(12))
+                .foregroundStyle(palette.danger)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(palette.danger.opacity(0.10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(palette.danger.opacity(0.22), lineWidth: 1)
+                }
+        }
     }
 }
 
-/// A small dot that breathes with your voice.
+/// A small orb that breathes with your voice.
 private struct SummonLevelDot: View {
     @ObservedObject var meter: SummonLevelMeter
     var color: Color
@@ -493,13 +557,17 @@ private struct SummonLevelDot: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(color.opacity(0.18))
-                .scaleEffect(1 + min(1, meter.level) * 0.9)
+                .fill(color.opacity(0.20))
+                .frame(width: 18, height: 18)
+                .scaleEffect(0.55 + min(1, meter.level) * 0.62)
+                .blur(radius: 2)
             Circle()
-                .fill(color)
+                .fill(color.opacity(0.55 + min(1, meter.level) * 0.45))
                 .frame(width: 7, height: 7)
+                .shadow(color: color.opacity(0.5), radius: 4, y: 0)
         }
-        .animation(.easeOut(duration: 0.12), value: meter.level)
+        .frame(width: 18, height: 18)
+        .animation(.easeOut(duration: 0.14), value: meter.level)
         .accessibilityLabel("Listening")
     }
 }

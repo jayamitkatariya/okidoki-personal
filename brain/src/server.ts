@@ -1,20 +1,18 @@
-import { think } from "./llm";
-import { execute, pause, resume, stop, isBlocked } from "./executor";
+import { groundTeach, think } from "./llm";
+import { execute, pause, resume, stop, stopAll, validateExecution } from "./executor";
 import { tools, findTools } from "./catalog";
 import { computerAct } from "./computer";
+import { refineTeach, teachStep } from "./teach";
 import { checkToken } from "./apify";
 import { closeAll, forget } from "./mcp";
 import { mcpCatalog, runConnector } from "./connectors";
 import { memoryStatus, syncMemory } from "./memory";
-import type { ComputerRequest, ConnectorRunRequest, ExecuteRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
+import type { ComputerRequest, ConnectorRunRequest, ExecuteRequest, McpServerConfig, MemorySyncRequest, TeachRefineRequest, TeachStepRequest, ThinkRequest } from "./types";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4319);
 
-const corsHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-anthropic-key, authorization",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-};
+const token = process.env.OKIDOKI_BRAIN_TOKEN || crypto.randomUUID();
+const corsHeaders: Record<string, string> = {};
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -31,14 +29,11 @@ function installedTools(): string[] {
   return tools.filter((tool) => Bun.which(tool.command) !== null).map((tool) => tool.id);
 }
 
-const server = Bun.serve({
-  port,
-  hostname: "127.0.0.1",
-  maxRequestBodySize: 64 * 1024 * 1024,
-
-  async fetch(request) {
+export async function handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
+    if (request.headers.has("origin") || request.headers.get("authorization") !== `Bearer ${token}`) {
+      return json({ error: "unauthorized" }, 401);
+    }
 
     if (url.pathname === "/health") {
       return json({
@@ -75,11 +70,94 @@ const server = Bun.serve({
       }
     }
 
+    if (url.pathname === "/teach/ground" && request.method === "POST") {
+      try {
+        const payload = await body<{
+          screenshotBase64?: string;
+          appName?: string;
+          topic?: string;
+          say?: string;
+          stepIndex?: number;
+          stepCount?: number;
+          space?: "window" | "screen";
+          model?: string;
+        }>(request);
+        const key = request.headers.get("x-anthropic-key") ?? undefined;
+        const result = await groundTeach(
+          {
+            screenshotBase64: payload.screenshotBase64,
+            appName: payload.appName,
+            topic: payload.topic || "",
+            say: payload.say || "",
+            stepIndex: payload.stepIndex ?? 0,
+            stepCount: payload.stepCount ?? 1,
+            space: payload.space === "window" ? "window" : "screen",
+          },
+          key,
+          payload.model || "claude-haiku-5-5",
+        );
+        return json(result);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    if (url.pathname === "/teach/step" && request.method === "POST") {
+      try {
+        const payload = await body<Partial<TeachStepRequest>>(request);
+        if (!payload.topic) {
+          return json({ error: "topic required" }, 400);
+        }
+        const key = request.headers.get("x-anthropic-key") ?? undefined;
+        const result = await teachStep(
+          {
+            topic: payload.topic,
+            app: payload.app,
+            outline: Array.isArray(payload.outline) ? payload.outline.filter((s) => typeof s === "string").slice(0, 12) : [],
+            log: Array.isArray(payload.log) ? payload.log.slice(-14) : [],
+            stepNumber: payload.stepNumber ?? 1,
+            imageWidth: payload.imageWidth ?? 0,
+            imageHeight: payload.imageHeight ?? 0,
+            screenshotBase64: payload.screenshotBase64,
+            controls: Array.isArray(payload.controls) ? payload.controls.slice(0, 90) : [],
+            model: payload.model,
+          },
+          key,
+        );
+        return json(result);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    if (url.pathname === "/teach/refine" && request.method === "POST") {
+      try {
+        const payload = await body<Partial<TeachRefineRequest>>(request);
+        if (!payload.cropBase64 || !payload.describe) {
+          return json({ error: "crop and describe required" }, 400);
+        }
+        const key = request.headers.get("x-anthropic-key") ?? undefined;
+        const result = await refineTeach(
+          {
+            cropBase64: payload.cropBase64,
+            cropWidth: payload.cropWidth ?? 0,
+            cropHeight: payload.cropHeight ?? 0,
+            describe: payload.describe,
+            model: payload.model,
+          },
+          key,
+        );
+        return json(result);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
     if (url.pathname === "/computer" && request.method === "POST") {
       try {
         const payload = await body<ComputerRequest>(request);
-        if (!payload.goal || !payload.screenshotBase64) {
-          return json({ error: "goal and screenshot required" }, 400);
+        if (!payload.goal) {
+          return json({ error: "goal required" }, 400);
         }
         const key = request.headers.get("x-anthropic-key") ?? undefined;
         const result = await computerAct(payload, key);
@@ -96,9 +174,8 @@ const server = Bun.serve({
       } catch {
         return json({ error: "bad request" }, 400);
       }
-      const commands = payload.commands ?? [];
-      const bad = commands.find((command) => isBlocked(command));
-      if (bad) return json({ error: "blocked command" }, 403);
+      const invalid = validateExecution(payload);
+      if (invalid) return json({ error: invalid }, 400);
 
       const stream = new ReadableStream({
         start(controller) {
@@ -204,8 +281,23 @@ const server = Bun.serve({
     }
 
     return json({ error: "not found" }, 404);
-  },
-});
+}
+
+if (import.meta.main) {
+  const server = Bun.serve({ port, hostname: "127.0.0.1", maxRequestBodySize: 64 * 1024 * 1024, fetch: handleRequest });
+
+
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  stopAll();
+  closeAll(); // don't leave MCP server processes behind
+  server.stop(true);
+  setTimeout(() => process.exit(0), 850);
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 console.log(`okidoki brain listening on http://127.0.0.1:${server.port}`);
 console.log(`bun ${Bun.version} · ${tools.length} tools in the catalog`);
@@ -216,7 +308,8 @@ setInterval(() => {
   const ppid = process.ppid;
   if (!ppid || ppid === 1) {
     console.log(`parent gone (ppid=${ppid}) — exiting`);
-    closeAll(); // don't leave MCP server processes behind
-    process.exit(0);
+    shutdown();
   }
 }, 3000);
+
+}

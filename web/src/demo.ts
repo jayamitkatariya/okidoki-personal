@@ -278,6 +278,7 @@ const runs: Run[] = [
 ];
 
 export const demoState: NativeState = {
+  watching: { recording: false, startedAt: null, name: "", steps: [], replaying: false },
   accounts: [
     {
       id: "acct-jay",
@@ -335,7 +336,7 @@ export const demoState: NativeState = {
     onboardingComplete: true,
     tourComplete: true,
     showedWelcome: true,
-    claudeModel: "claude-sonnet-4-5",
+    claudeModel: "claude-haiku-5-5",
     agentExtraArgs: {},
     lastWorkingDirectory: "/Users/jay/Desktop",
     mcpServers: [
@@ -442,9 +443,12 @@ export const demoState: NativeState = {
       name: "friday cleanup",
       summary: "empty downloads, screenshots and old installers",
       steps: [
-        { id: "ss1", text: "open Downloads", app: "Finder", x: 660, y: 420 },
-        { id: "ss2", text: "select installers older than 30 days", app: "Finder", x: 540, y: 510 },
-        { id: "ss3", text: "move to trash and empty", app: "Finder", x: 900, y: 760 },
+        { id: "ss1", text: "switch to Finder", app: "Finder", action: "switch", delay: 0.4 },
+        { id: "ss2", text: "in Finder, click “Downloads”", app: "Finder", x: 660, y: 420, action: "click", label: "Downloads", delay: 1.1 },
+        { id: "ss3", text: "in Finder, press ⌘A", app: "Finder", action: "key", input: "cmd+a", delay: 0.8 },
+        { id: "ss4", text: "in Finder, press ⌘⌫", app: "Finder", action: "key", input: "cmd+delete", delay: 0.6 },
+        { id: "ss5", text: "in Finder, press ⇧⌘⌫", app: "Finder", action: "key", input: "shift+cmd+delete", delay: 0.9 },
+        { id: "ss6", text: "in Finder, click “Empty Trash”", app: "Finder", x: 900, y: 760, action: "click", label: "Empty Trash", delay: 1.2 },
       ],
       createdAt: iso(-10000),
       source: "watch me",
@@ -456,8 +460,10 @@ export const demoState: NativeState = {
       name: "weekly backup",
       summary: "copy Desktop and Documents to the cloud",
       steps: [
-        { id: "ss4", text: "run rclone copy", app: "Terminal", x: 420, y: 500 },
-        { id: "ss5", text: "check the log", app: "Terminal", x: 420, y: 560 },
+        { id: "ss7", text: "switch to Terminal", app: "Terminal", action: "switch", delay: 0.5 },
+        { id: "ss8", text: "in Terminal, type “rclone copy ~/Desktop gdrive:backup”", app: "Terminal", action: "type", input: "rclone copy ~/Desktop gdrive:backup", delay: 1.4 },
+        { id: "ss9", text: "in Terminal, press ↩", app: "Terminal", action: "key", input: "return", delay: 0.3 },
+        { id: "ss10", text: "in Terminal, scroll down", app: "Terminal", x: 420, y: 560, action: "scroll", toX: 0, toY: -240, delay: 2.1 },
       ],
       createdAt: iso(-20000),
       source: "taught",

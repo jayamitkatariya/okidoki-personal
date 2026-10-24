@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import CoreText
-import OkidokiCore
 
 // MARK: - Color
 
@@ -37,17 +36,14 @@ extension NSColor {
 
 // MARK: - Brand
 
-/// The okidoki greens. `mat` is the deep panel green (shared with Bucket's Mat skin);
-/// `green` is the neon ring-arrow green used for interactive accents;
+/// The okidoki greens. `green` is the neon ring-arrow green used for interactive accents;
 /// `mint` reads on dark surfaces like the notch.
 enum OKBrand {
-    static let matDeep = Color(hex: 0x00372C)
-    static let mat = Color(hex: 0x00483C)
-    static let matCard = Color(hex: 0x003228)
     static let green = Color(hex: 0x44E45E)
+    /// The lit state of `green` — hover and press brighten rather than darken.
+    static let greenBright = Color(hex: 0x6BF583)
     static let greenInk = Color(hex: 0x0B7A45)
     static let mint = Color(hex: 0x4CFB6A)
-    static let paper = Color(hex: 0xF6F8F6)
     static let ink = Color(hex: 0x0E1512)
     static let muted = Color(hex: 0x5E6963)
     static let faint = Color(hex: 0x929C96)
@@ -60,6 +56,11 @@ enum OKBrandMark {
         return NSImage(contentsOf: URL(fileURLWithPath: "Resources/BrandMark.png"))
     }()
     static var bundleImage: NSImage? { cached }
+
+    /// Cached 18pt render for the overlay chrome. Drawn once — `image(pointSize:)`
+    /// locks focus on a fresh bitmap, which is far too expensive to repeat on
+    /// every frame of a SwiftUI body.
+    static let overlayMark: NSImage = image(pointSize: 18)
 
     /// The mark at a fixed pixel size, ready for cursors and overlays.
     static func image(pointSize: CGFloat, scale: CGFloat = 2) -> NSImage {
@@ -120,33 +121,12 @@ struct OKTheme {
 
     init(_ scheme: ColorScheme) { self.dark = scheme == .dark }
 
-    var bg: Color { dark ? Color(hex: 0x0A0C0B) : Color(hex: 0xF3F6F3) }
-    var bgDeep: Color { dark ? Color(hex: 0x070908) : Color(hex: 0xE9EEEA) }
-    var sidebar: Color { dark ? Color(hex: 0x0E1110) : Color(hex: 0xF6F8F6) }
-    var surface: Color { dark ? Color(hex: 0x141716) : Color(hex: 0xFAFBFA) }
     var card: Color { dark ? Color(hex: 0x171A19) : Color(hex: 0xFFFFFF) }
-    var cardHover: Color { dark ? Color(hex: 0x1C1C20) : Color(hex: 0xFFFFFF) }
     var ink: Color { dark ? Color(hex: 0xF2F5F3) : Color(hex: 0x0E1512) }
     var secondary: Color { dark ? Color(hex: 0xA3ACA7) : Color(hex: 0x5E6963) }
     var tertiary: Color { dark ? Color(hex: 0x6E7772) : Color(hex: 0x929C96) }
-    var faint: Color { dark ? Color(hex: 0x3F4542) : Color(hex: 0xC3CBC6) }
     var line: Color { dark ? Color.white.opacity(0.075) : Color.black.opacity(0.085) }
     var lineStrong: Color { dark ? Color.white.opacity(0.14) : Color.black.opacity(0.16) }
-    var coral: Color { OKBrand.green }
-    var coralSoft: Color { OKBrand.green.opacity(dark ? 0.16 : 0.1) }
-    var lime: Color { Color(hex: 0xB8F26B) }
-    var sky: Color { Color(hex: 0x8FB7FF) }
-    var lavender: Color { Color(hex: 0xC9A7FF) }
-    var amber: Color { Color(hex: 0xFFC95C) }
-    var danger: Color { Color(hex: 0xFF453A) }
-    var success: Color { Color(hex: 0x4CD97B) }
-    var codeBg: Color { dark ? Color(hex: 0x0C0C0E) : Color(hex: 0x201F1D) }
-    var codeText: Color { dark ? Color(hex: 0xD8D2C7) : Color(hex: 0xEDE8DE) }
-    var notch: Color { Color(hex: 0x080808) }
-    var notchText: Color { Color(hex: 0xF2F5F3) }
-    var notchMuted: Color { Color.white.opacity(0.48) }
-
-    var shadow: Color { Color.black.opacity(dark ? 0.45 : 0.14) }
 }
 
 // MARK: - Fonts
@@ -154,9 +134,6 @@ struct OKTheme {
 extension Font {
     static func okDisplay(_ size: CGFloat) -> Font {
         .custom("PPNeueBit-Bold", size: size)
-    }
-    static func okSerif(_ size: CGFloat) -> Font {
-        .custom("PPMondwest-Regular", size: size)
     }
     static func okBody(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         let name: String
@@ -184,31 +161,9 @@ extension Font {
 // MARK: - Motion
 
 enum OKMotion {
-    static let soft = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.55)
     static let quick = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.22)
     static let spring = Animation.spring(response: 0.44, dampingFraction: 0.84)
-    static let bouncy = Animation.spring(response: 0.5, dampingFraction: 0.7)
     static let snappy = Animation.spring(response: 0.3, dampingFraction: 0.86)
-}
-
-// MARK: - Appearance helper
-
-extension View {
-    /// Always the same modifier, only the value changes — branching here would swap the view's
-    /// identity on every appearance change and tear down whatever it wraps (state, web views).
-    func okPreferredScheme(_ appearance: AppAppearance) -> some View {
-        preferredColorScheme(appearance.okColorScheme)
-    }
-}
-
-extension AppAppearance {
-    var okColorScheme: ColorScheme? {
-        switch self {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
-    }
 }
 
 extension NSColor {
@@ -267,8 +222,4 @@ enum OKRegistry {
             }
         }
     }
-}
-
-extension Color {
-    static var tertiary: Color { Color.secondary.opacity(0.72) }
 }

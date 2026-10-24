@@ -7,7 +7,7 @@ const PROVIDERS = [
   {
     id: "anthropic",
     name: "Anthropic",
-    blurb: "The brain. Reads your screen, writes answers, plans actions.",
+    blurb: "Required. Reads the screen, teaches, and plans every action.",
     placeholder: "sk-ant-…",
     url: "https://console.anthropic.com/settings/keys",
     required: true,
@@ -71,7 +71,7 @@ export function KeysPage() {
     <div className="keys-page">
       <PageTitle
         title="Keys"
-        subtitle="Bring your own API keys. They live in your Mac's Keychain and nowhere else."
+        subtitle="An Anthropic key is required. Everything else is optional, and every key stays in the Keychain."
         trailing={
           <span className="keys-badge">
             <PixelIcon name="lock" size={14} />

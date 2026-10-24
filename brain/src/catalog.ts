@@ -15,7 +15,9 @@ mo clean --dry-run  preview what would be removed
 mo analyze          visual disk explorer
 mo status           live system health
 mo purge            remove project build artifacts
-Always dry-run first. Never pass --force without approval. Summarise freed space in plain English.`,
+Always dry-run first. Never pass --force without approval. Summarise freed space in plain English.
+Run "sudo -v" before "mo clean" so system caches are included; okidoki shows a native password dialog.
+"mo analyze" and "mo status" are full-screen tools; okidoki opens them in a Terminal window.`,
     license: "MIT",
     category: "system",
   },

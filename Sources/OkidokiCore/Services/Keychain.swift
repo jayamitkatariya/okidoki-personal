@@ -19,6 +19,7 @@ public enum Keychain {
     }
 
     public static func get(_ key: String) -> String? {
+        if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" { return nil }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -64,7 +65,7 @@ public struct KeyProviderSpec: Identifiable, Sendable {
 public enum KeyProviders {
     public static let all: [KeyProviderSpec] = [
         KeyProviderSpec(id: "anthropic", name: "Anthropic",
-                        blurb: "The brain. Reads your screen, writes answers, plans actions.",
+                        blurb: "Required. Reads the screen, teaches, and plans every action.",
                         placeholder: "sk-ant-…", url: "https://console.anthropic.com/settings/keys"),
         KeyProviderSpec(id: "cartesia", name: "Cartesia",
                         blurb: "Fast, warm voices for spoken answers.",
@@ -79,8 +80,6 @@ public enum KeyProviders {
                         blurb: "Private sync of threads, memory and runs across Macs.",
                         placeholder: "sync secret", url: "https://convex.dev", optional: true),
     ]
-
-    public static func spec(_ id: String) -> KeyProviderSpec? { all.first { $0.id == id } }
 }
 
 public struct VoiceOption: Identifiable, Sendable {

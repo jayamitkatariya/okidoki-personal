@@ -32,8 +32,6 @@ final class DrawingController {
 
     init(environment: AppEnvironment) { self.env = environment }
 
-    var isArmed: Bool { panel != nil }
-
     func arm() {
         guard let env else { return }
         model.colorHex = env.store.settings.drawingColorHex

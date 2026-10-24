@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { MotionConfig } from "motion/react";
 import { DashboardProvider, useDashboard } from "./store";
 import { AppShell, AuthGate, type Page } from "./components/Layout";
 import { HomePage } from "./pages/HomePage";
@@ -17,9 +18,11 @@ export default function App() {
   const shareToken = window.location.hash.match(/^#\/share\/(.+)$/)?.[1];
   if (shareToken) return <SharePage token={shareToken} />;
   return (
-    <DashboardProvider>
-      <Root />
-    </DashboardProvider>
+    <MotionConfig reducedMotion="user">
+      <DashboardProvider>
+        <Root />
+      </DashboardProvider>
+    </MotionConfig>
   );
 }
 

@@ -23,6 +23,8 @@ public enum ToolCatalog {
               mo status           live system health
               mo purge            remove project build artifacts
             Always run a dry run first. Never pass --force without the person's explicit approval.
+            Run `sudo -v` before `mo clean` so system caches are included; okidoki shows a native password dialog.
+            `mo analyze` and `mo status` are full-screen tools; they open in a Terminal window.
             Summarise the freed space in plain English; never dump raw terminal output into a card.
             """,
             license: "MIT",
@@ -226,36 +228,4 @@ public enum ToolCatalog {
                   installCommand: "",
                   docs: "Add servers in Toolbox › MCP servers; their secrets stay in the Keychain. Always show which server a tool belongs to."),
     ]
-
-    /// Words that say nothing about the job. Mirrors FILLER in web/src/lib.ts.
-    static let filler: Set<String> = [
-        "the", "and", "for", "this", "that", "these", "those", "with", "from", "into", "onto", "your", "mine",
-        "make", "want", "need", "can", "how", "what", "please", "help", "some", "all", "any", "out", "get", "just", "mac",
-    ]
-
-    /// Whole words, with a trailing "s" dropped so "videos" matches "video" but "edit" doesn't match "editors".
-    static func singular(_ word: String) -> String {
-        word.count > 3 && word.hasSuffix("s") ? String(word.dropLast()) : word
-    }
-
-    static func words(_ text: String) -> [String] {
-        text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-    }
-
-    public static func findTools(for query: String) -> [ToolSpec] {
-        let q = query.lowercased()
-        let tokens = words(query).filter { $0.count > 2 && !filler.contains($0) }.map(singular)
-        return tools
-            .map { tool -> (ToolSpec, Int) in
-                var score = 0
-                let haystack = (tool.name + " " + tool.replaces + " " + tool.blurb + " " + tool.examples.joined(separator: " ") + " " + tool.category).lowercased()
-                let vocabulary = Set(words(haystack).map(singular))
-                for token in tokens where vocabulary.contains(token) { score += 3 }
-                if haystack.contains(q) { score += 8 }
-                score += tool.popularity / 20
-                return (tool, score)
-            }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
-    }
 }

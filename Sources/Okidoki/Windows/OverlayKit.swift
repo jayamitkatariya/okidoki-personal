@@ -15,6 +15,9 @@ class OverlayPanel: NSPanel {
     var onKeyDown: ((NSEvent) -> Bool)?
     /// ⌘-shortcuts. Return true to swallow.
     var onKeyEquivalent: ((NSEvent) -> Bool)?
+    /// The panel's corner radius. The window shadow is shaped with it — a borderless
+    /// transparent window otherwise wears a square halo around a rounded panel.
+    var cornerRadius: CGFloat = 0
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 320, height: 60),
@@ -26,7 +29,7 @@ class OverlayPanel: NSPanel {
         level = .statusBar + 4
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
-        sharingType = .none
+        sharingType = ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" ? .readOnly : .none
         animationBehavior = .none
         isMovable = false
         isFloatingPanel = true
@@ -107,6 +110,9 @@ final class OverlayFrameAnimator: NSObject {
 
     var response: CGFloat = 0.36
     var dampingFraction: CGFloat = 0.9
+    /// The panel's corner radius. The window shadow is shaped with it, so the
+    /// overlay never wears a square halo around a rounded body.
+    var cornerRadius: CGFloat = 0
 
     init(window: NSWindow) {
         self.window = window
@@ -123,6 +129,7 @@ final class OverlayFrameAnimator: NSObject {
             value = target
             velocity = [0, 0, 0, 0]
             if window.frame != frame { window.setFrame(frame, display: true) }
+            shapeShadow()
             return
         }
         if link == nil {
@@ -139,6 +146,23 @@ final class OverlayFrameAnimator: NSObject {
     func stop() {
         link?.invalidate()
         link = nil
+    }
+
+    /// AppKit draws a borderless transparent window's shadow from its frame, which
+    /// leaves a square halo around a rounded panel. Point the shadow at the
+    /// panel's own rounded outline so the halo follows the shape.
+    private func shapeShadow() {
+        guard let window, cornerRadius > 0, let view = window.contentView else { return }
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        view.layer?.masksToBounds = false
+        view.layer?.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: size),
+                                        cornerWidth: cornerRadius, cornerHeight: cornerRadius,
+                                        transform: nil)
+        view.layer?.shadowColor = NSColor.black.cgColor
+        view.layer?.shadowOpacity = 0.42
+        view.layer?.shadowRadius = 14
+        view.layer?.shadowOffset = CGSize(width: 0, height: -5)
     }
 
     @objc private func step(_ link: CADisplayLink) {
@@ -173,11 +197,20 @@ final class OverlayFrameAnimator: NSObject {
             stop()
         }
         window.setFrame(NSRect(x: value[0], y: value[1], width: value[2], height: value[3]), display: true)
+        shapeShadow()
         if settled { window.invalidateShadow() }
     }
 }
 
 // MARK: - Window controller
+
+/// What the panel is made of. Liquid glass is the macOS 26+ material; clear is the
+/// more transparent of the two. Older systems fall back to a light blur.
+enum OverlaySurface {
+    case blur(NSVisualEffectView.Material)
+    case liquid
+    case liquidClear
+}
 
 /// Owns one overlay panel: frosted-glass container, content-hugging height,
 /// top-left anchoring, flash-free show/hide.
@@ -185,8 +218,10 @@ final class OverlayFrameAnimator: NSObject {
 final class OverlayWindow {
     let panel: OverlayPanel
     let radius: CGFloat
+    /// True when the panel itself is system liquid glass, so SwiftUI should not paint a wash over it.
+    let isLiquidGlass: Bool
     private let animator: OverlayFrameAnimator
-    private let effect = NSVisualEffectView()
+    private let backdrop: NSView
     private var hosting: NSView?
 
     private(set) var isShown = false
@@ -200,32 +235,75 @@ final class OverlayWindow {
     /// Called once the panel is key after a show (focus the text field here).
     var onFocused: (() -> Void)?
 
-    init(panel: OverlayPanel, width: CGFloat, estimatedHeight: CGFloat, radius: CGFloat) {
+    init(panel: OverlayPanel, width: CGFloat, estimatedHeight: CGFloat, radius: CGFloat,
+         surface: OverlaySurface = .blur(.popover)) {
         self.panel = panel
         self.width = width
         self.contentHeight = estimatedHeight
         self.radius = radius
         self.animator = OverlayFrameAnimator(window: panel)
+        self.animator.cornerRadius = radius
+        panel.cornerRadius = radius
 
-        effect.material = .hudWindow
+        switch surface {
+        case .liquid, .liquidClear:
+            if #available(macOS 26.0, *) {
+                let glass = NSGlassEffectView()
+                // Regular is the frosted material. Clear lets the page through and the type disappears.
+                glass.style = .regular
+                glass.cornerRadius = radius
+                // Light enough that the material's own highlights survive the SwiftUI wash
+                // on top — a heavy tint turns the whole panel into a flat dark sheet.
+                glass.tintColor = NSColor(srgbRed: 0.05, green: 0.06, blue: 0.06, alpha: 0.34)
+                if #available(macOS 27.0, *) {
+                    glass.effectIsInteractive = true
+                }
+                glass.autoresizingMask = [.width, .height]
+                backdrop = glass
+                isLiquidGlass = true
+                panel.appearance = NSAppearance(named: .darkAqua)
+                panel.hasShadow = true
+                panel.contentView = glass
+            } else {
+                backdrop = Self.blurView(material: .popover, radius: radius)
+                isLiquidGlass = false
+                panel.contentView = backdrop
+            }
+        case .blur(let material):
+            backdrop = Self.blurView(material: material, radius: radius)
+            isLiquidGlass = false
+            panel.contentView = backdrop
+        }
+    }
+
+    private static func blurView(material: NSVisualEffectView.Material, radius: CGFloat) -> NSVisualEffectView {
+        let effect = NSVisualEffectView()
+        effect.material = material
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.isEmphasized = false
-        effect.maskImage = OverlayWindow.maskImage(radius: radius)
+        effect.maskImage = maskImage(radius: radius)
         effect.autoresizingMask = [.width, .height]
-        panel.contentView = effect
+        return effect
     }
 
     func setContent<Content: View>(_ view: Content) {
         let host = OverlayHostingView(rootView: view)
-        host.frame = effect.bounds
+        host.frame = backdrop.bounds
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
-        host.layer?.cornerRadius = radius
-        host.layer?.cornerCurve = .continuous
-        host.layer?.masksToBounds = true
+        host.layer?.backgroundColor = NSColor.clear.cgColor
+        if !isLiquidGlass {
+            host.layer?.cornerRadius = radius
+            host.layer?.cornerCurve = .continuous
+            host.layer?.masksToBounds = true
+        }
         hosting?.removeFromSuperview()
-        effect.addSubview(host)
+        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
+            glass.contentView = host
+        } else {
+            backdrop.addSubview(host)
+        }
         hosting = host
     }
 
@@ -331,13 +409,6 @@ final class OverlayWindow {
         } else {
             animator.set(targetFrame().offsetBy(dx: 0, dy: -8), animated: false)
         }
-    }
-
-    func move(topLeft: CGPoint, on screen: NSScreen) {
-        anchor = topLeft
-        self.screen = screen
-        guard isShown else { return }
-        animator.set(targetFrame(), animated: revealed)
     }
 
     private func targetFrame() -> NSRect {
@@ -452,19 +523,40 @@ struct OverlayPalette {
     var hairline: Color { dark ? Color.white.opacity(0.11) : Color.black.opacity(0.10) }
     var divider: Color { dark ? Color.white.opacity(0.07) : Color.black.opacity(0.06) }
     var fill: Color { dark ? Color.white.opacity(0.06) : Color.black.opacity(0.045) }
-    var fillHover: Color { dark ? Color.white.opacity(0.10) : Color.black.opacity(0.07) }
     var accent: Color { dark ? OKBrand.mint : OKBrand.greenInk }
     var danger: Color { dark ? Color(hex: 0xFF7A6B) : Color(hex: 0xD4372A) }
+
+    // MARK: Hover
+
+    /// Hover reads as *light*, not as a gray box: a faint wash plus a hairline edge.
+    var hoverFill: Color { dark ? Color.white.opacity(0.11) : Color.black.opacity(0.055) }
+    /// The edge that appears when a control is live.
+    var hoverEdge: Color { dark ? Color.white.opacity(0.17) : Color.black.opacity(0.10) }
+    /// Glyph colour on hover — full-strength ink instead of the resting grey.
+    var hoverInk: Color { dark ? Color(hex: 0xFFFFFF) : OKBrand.ink }
+    /// Light catching the top edge of the glass.
+    var edgeLight: Color { dark ? Color.white.opacity(0.18) : Color.white.opacity(0.55) }
 }
 
-/// Root wrapper: lays the content out at its natural height, reports it, and paints
-/// the tint + hairline over the window's frosted glass.
+/// Root wrapper: natural height, reported upward, over the panel's blur.
+///
+/// The surface is *graded*, never one flat sheet of black. A flat wash paints
+/// over every highlight the material has and leaves a dead rectangle behind —
+/// that was what made the overlays read as dull. Instead the panel gets a
+/// top-to-bottom falloff, a specular bloom where light catches the top-left
+/// corner, and a hairline of light along the top edge.
 struct OverlayRoot<Content: View>: View {
     var radius: CGFloat
+    var veil: Double = 0.1
+    /// The window is already liquid glass. Don't paint a wash over it.
+    var bare: Bool = false
+    /// A colour that bleeds into the panel from the bottom-right.
+    var accent: Color? = nil
     var onHeight: (CGFloat) -> Void
     @ViewBuilder var content: Content
     @Environment(\.colorScheme) private var scheme
     @Environment(\.displayScale) private var displayScale
+    @State private var hovering = false
 
     var body: some View {
         let palette = OverlayPalette(scheme)
@@ -478,29 +570,117 @@ struct OverlayRoot<Content: View>: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background {
-                ZStack {
-                    if palette.dark {
-                        Color(hex: 0x08100D).opacity(0.5)
-                        LinearGradient(colors: [OKBrand.matDeep.opacity(0.32), .clear],
-                                       startPoint: .top, endPoint: .bottom)
-                    } else {
-                        Color.white.opacity(0.58)
-                        LinearGradient(colors: [OKBrand.mint.opacity(0.05), .clear],
-                                       startPoint: .top, endPoint: .bottom)
-                    }
+                if !bare {
+                    surface(palette: palette)
                 }
             }
             .overlay {
-                shape.strokeBorder(palette.hairline, lineWidth: max(0.5, 1 / max(displayScale, 1)))
-            }
-            .overlay {
-                if palette.dark {
-                    shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(0.07), .clear],
-                                                      startPoint: .top, endPoint: .center),
-                                       lineWidth: 1)
+                if !bare {
+                    shape.strokeBorder(
+                        LinearGradient(stops: [
+                            .init(color: palette.edgeLight.opacity(hovering ? 1.25 : 1), location: 0),
+                            .init(color: palette.hairline, location: 0.42),
+                            .init(color: palette.hairline.opacity(0.55), location: 1),
+                        ], startPoint: .top, endPoint: .bottom),
+                        lineWidth: max(0.5, 1 / max(displayScale, 1))
+                    )
                 }
             }
             .clipShape(shape)
+            .onHover { hovering = $0 }
+            .animation(OKMotion.quick, value: hovering)
+    }
+
+    /// Three layers: a graded wash, a specular bloom, and an optional accent bleed.
+    @ViewBuilder
+    private func surface(palette: OverlayPalette) -> some View {
+        let base = palette.dark ? Color.black : Color.white
+        let top = min(0.46, veil * 1.2)
+        let bottom = max(0.10, veil * 0.72)
+        ZStack {
+            LinearGradient(colors: [base.opacity(top), base.opacity(bottom)],
+                           startPoint: .top, endPoint: .bottom)
+            // The room light catching the top-left corner of the glass.
+            RadialGradient(colors: [Color.white.opacity(palette.dark ? 0.085 : 0.5), Color.white.opacity(0)],
+                           center: .topLeading, startRadius: 0, endRadius: radius * 3.4)
+            if let accent {
+                RadialGradient(colors: [accent.opacity(0.15), accent.opacity(0)],
+                               center: .bottomTrailing, startRadius: 0, endRadius: radius * 4.4)
+            }
+        }
+    }
+}
+
+// MARK: - Glass surface for panels that aren't already an NSVisualEffectView
+
+enum OverlayGlassTone {
+    /// Follows light / dark. Text should use the overlay palette.
+    case adaptive
+    /// Dark frost with white text. Still translucent — the blur shows the screen through.
+    case dark
+}
+
+extension View {
+    /// Frosted, see-through surface. The hosting panel has to be non-opaque.
+    func overlayGlass(cornerRadius: CGFloat, veil: Double = 0.2, tone: OverlayGlassTone = .adaptive) -> some View {
+        modifier(OverlayGlassModifier(cornerRadius: cornerRadius, veil: veil, tone: tone))
+    }
+}
+
+private struct OverlayGlassModifier: ViewModifier {
+    var cornerRadius: CGFloat
+    var veil: Double
+    var tone: OverlayGlassTone
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let dark = tone == .dark || scheme == .dark
+        let material: NSVisualEffectView.Material = tone == .dark ? .hudWindow : .popover
+        let base = dark ? Color.black : Color.white
+        content
+            .background {
+                ZStack {
+                    VisualEffectBlur(material: material, blending: .behindWindow)
+                    // Graded, never flat: the bottom of the panel is lighter than the top.
+                    LinearGradient(colors: [base.opacity(min(0.78, veil * 1.15)),
+                                            base.opacity(max(0.14, veil * 0.66))],
+                                   startPoint: .top, endPoint: .bottom)
+                    RadialGradient(colors: [Color.white.opacity(dark ? 0.075 : 0.4), Color.white.opacity(0)],
+                                   center: .topLeading, startRadius: 0, endRadius: cornerRadius * 3.2)
+                }
+                .clipShape(shape)
+            }
+            .overlay {
+                shape.strokeBorder(
+                    LinearGradient(colors: [Color.white.opacity(dark ? 0.24 : 0.5),
+                                            Color.white.opacity(dark ? 0.05 : 0.14)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 0.5)
+            }
+            .clipShape(shape)
+            .shadow(color: .black.opacity(0.2), radius: 18, y: 8)
+            .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+    }
+}
+
+/// Single-line field that keeps its type optically centered in a tall capsule.
+private final class OverlayTextCell: NSTextFieldCell {
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        let bounds = super.drawingRect(forBounds: rect)
+        let font = self.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let textHeight = ceil(font.boundingRectForFont.height)
+        let delta = bounds.height - textHeight
+        guard delta > 1 else { return bounds }
+        return NSRect(x: bounds.minX, y: bounds.minY + delta / 2, width: bounds.width, height: textHeight)
+    }
+
+    override func titleRect(forBounds rect: NSRect) -> NSRect { drawingRect(forBounds: rect) }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText,
+                         delegate: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj,
+                     delegate: delegate, start: selStart, length: selLength)
     }
 }
 
@@ -512,21 +692,34 @@ struct OverlayTextField: NSViewRepresentable {
     var focusTick: Int
     var onSubmit: () -> Void
     var onTab: (() -> Void)?
+    /// Reports when the field takes and loses focus, so the composer can light up.
+    var onFocusChange: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(string: text)
+        let cell = OverlayTextCell(textCell: text)
+        cell.isEditable = true
+        cell.isSelectable = true
+        cell.isBordered = false
+        cell.isBezeled = false
+        cell.drawsBackground = false
+        cell.usesSingleLineMode = true
+        cell.wraps = false
+        cell.isScrollable = true
+        cell.lineBreakMode = .byClipping
+        cell.font = NSFont(name: "Inter-Regular", size: fontSize) ?? .systemFont(ofSize: fontSize)
+        field.cell = cell
         field.isBordered = false
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = NSFont(name: "Inter-Regular", size: fontSize) ?? .systemFont(ofSize: fontSize)
-        field.textColor = .labelColor
+        field.font = cell.font
+        field.textColor = NSColor(calibratedWhite: 0.97, alpha: 1)
+        field.appearance = NSAppearance(named: .darkAqua)
         field.usesSingleLineMode = true
         field.lineBreakMode = .byClipping
-        field.cell?.wraps = false
-        field.cell?.isScrollable = true
         field.delegate = context.coordinator
         applyPlaceholder(to: field)
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -537,12 +730,13 @@ struct OverlayTextField: NSViewRepresentable {
     private func applyPlaceholder(to field: NSTextField) {
         field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
             .font: field.font as Any,
-            .foregroundColor: NSColor.placeholderTextColor,
+            .foregroundColor: NSColor(calibratedWhite: 1, alpha: 0.48),
         ])
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
+        field.textColor = NSColor(calibratedWhite: 0.97, alpha: 1)
         if field.stringValue != text {
             field.stringValue = text
         }
@@ -557,7 +751,8 @@ struct OverlayTextField: NSViewRepresentable {
                 if window.firstResponder !== field.currentEditor() {
                     window.makeFirstResponder(field)
                 }
-                if let editor = field.currentEditor() {
+                if let editor = field.currentEditor() as? NSTextView {
+                    editor.insertionPointColor = NSColor(calibratedWhite: 0.97, alpha: 1)
                     editor.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
                 }
             }
@@ -570,6 +765,23 @@ struct OverlayTextField: NSViewRepresentable {
         var lastFocusTick = Int.min
 
         init(_ parent: OverlayTextField) { self.parent = parent }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField,
+                  let editor = field.currentEditor() as? NSTextView else { return }
+            let ink = NSColor(calibratedWhite: 0.97, alpha: 1)
+            editor.textColor = ink
+            editor.insertionPointColor = ink
+            editor.selectedTextAttributes = [
+                .backgroundColor: NSColor.white.withAlphaComponent(0.22),
+                .foregroundColor: NSColor.white,
+            ]
+            parent.onFocusChange?(true)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            parent.onFocusChange?(false)
+        }
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
@@ -593,10 +805,30 @@ struct OverlayTextField: NSViewRepresentable {
     }
 }
 
+/// Press feedback for the overlay's flat controls: a small, quick squeeze.
+struct OverlayPressStyle: ButtonStyle {
+    var pressedScale: CGFloat = 0.96
+    var pressedOpacity: Double = 1
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressedScale : 1)
+            .opacity(configuration.isPressed ? pressedOpacity : 1)
+            .animation(OKMotion.snappy, value: configuration.isPressed)
+    }
+}
+
+/// A square icon control that wakes up on hover.
+///
+/// Resting state is a quiet glyph; hover lights a soft plate behind it, brings
+/// the glyph to full ink and lets the whole thing breathe up a touch. The
+/// spring (not a linear fade) is what makes it feel alive rather than blinked.
 struct OverlayIconButton: View {
     let symbol: String
     var help: String
     var size: CGFloat = 26
+    /// Colour of the hover plate and the lit glyph. `nil` uses plain white.
+    var tint: Color? = nil
     var action: () -> Void
     @Environment(\.colorScheme) private var scheme
     @State private var hovering = false
@@ -605,44 +837,72 @@ struct OverlayIconButton: View {
         let palette = OverlayPalette(scheme)
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size * 0.46, weight: .medium))
-                .foregroundStyle(hovering ? palette.ink : palette.secondary)
+                .font(.system(size: size * 0.44, weight: .medium))
+                .foregroundStyle(hovering ? (tint ?? palette.hoverInk) : palette.secondary)
                 .frame(width: size, height: size)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(hovering ? palette.fillHover : .clear)
-                )
+                .background { plate(palette) }
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OverlayPressStyle(pressedScale: 0.88))
+        .scaleEffect(hovering ? 1.08 : 1)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(OKMotion.snappy, value: hovering)
         .help(help)
         .accessibilityLabel(help)
     }
+
+    @ViewBuilder
+    private func plate(_ palette: OverlayPalette) -> some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+        let tone = tint ?? .white
+        ZStack {
+            shape.fill(hovering ? tone.opacity(0.13) : .clear)
+            shape.strokeBorder(hovering ? tone.opacity(0.16) : .clear, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(hovering ? 0.16 : 0), radius: 6, y: 2)
+    }
 }
 
+/// The primary action: a green disc that lifts and glows when you reach for it.
 struct OverlaySendButton: View {
     var enabled: Bool
     var help: String = "Send"
+    var size: CGFloat = 26
     var action: () -> Void
     @Environment(\.colorScheme) private var scheme
+    @State private var hovering = false
 
     var body: some View {
         let palette = OverlayPalette(scheme)
         Button(action: action) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: size * 0.46, weight: .semibold))
                 .foregroundStyle(enabled ? OKBrand.ink : palette.tertiary)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(enabled ? OKBrand.green : palette.fill))
+                .offset(y: hovering && enabled ? -0.5 : 0)
+                .frame(width: size, height: size)
+                .background { disc(palette) }
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OverlayPressStyle(pressedScale: 0.86))
+        .scaleEffect(hovering && enabled ? 1.08 : 1)
         .disabled(!enabled)
+        .onHover { hovering = $0 }
+        .animation(OKMotion.snappy, value: hovering)
         .animation(OKMotion.snappy, value: enabled)
         .help(help)
         .accessibilityLabel(help)
+    }
+
+    @ViewBuilder
+    private func disc(_ palette: OverlayPalette) -> some View {
+        if enabled {
+            Circle()
+                .fill(hovering ? OKBrand.greenBright : OKBrand.green)
+                .shadow(color: OKBrand.green.opacity(hovering ? 0.55 : 0.28),
+                        radius: hovering ? 11 : 6, y: hovering ? 3 : 1)
+        } else {
+            Circle().fill(palette.fill)
+        }
     }
 }
 
@@ -664,66 +924,87 @@ struct OverlaySpinner: View {
     }
 }
 
-/// "↵ Ask" style hint: key in secondary, word in tertiary.
-struct OverlayKeyHint: View {
-    var key: String
-    var label: String
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let palette = OverlayPalette(scheme)
-        HStack(spacing: 4) {
-            Text(key).font(.okBody(11, .medium)).foregroundStyle(palette.secondary)
-            Text(label).font(.okBody(11)).foregroundStyle(palette.tertiary)
-        }
-        .fixedSize()
-    }
-}
-
+/// A labelled action button for the answer card.
+///
+/// Hover is the whole point: a ghost button grows a surface, a secondary
+/// button's edge lights up, a primary button brightens and throws a soft
+/// green glow. All of them lift by a pixel so the panel feels tactile.
 struct OverlayButtonStyle: ButtonStyle {
     enum Kind { case primary, secondary, ghost, danger }
     var kind: Kind
-    @Environment(\.colorScheme) private var scheme
 
     func makeBody(configuration: Configuration) -> some View {
-        let palette = OverlayPalette(scheme)
-        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-        configuration.label
-            .font(.okBody(12.5, .medium))
-            .foregroundStyle(foreground(palette))
-            .padding(.horizontal, kind == .ghost ? 8 : 12)
-            .frame(height: 28)
-            .background(shape.fill(background(palette)))
-            .overlay(shape.strokeBorder(border(palette), lineWidth: 1))
-            .contentShape(shape)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+        OverlayHoverSurface(kind: kind) { configuration.label }
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(OKMotion.snappy, value: configuration.isPressed)
+    }
+}
+
+/// Owns the hover state for `OverlayButtonStyle` — a `ButtonStyle` can't hold
+/// `@State` itself, so the surface is a view that does.
+private struct OverlayHoverSurface<Content: View>: View {
+    let kind: OverlayButtonStyle.Kind
+    @ViewBuilder var content: Content
+    @Environment(\.colorScheme) private var scheme
+    @State private var hovering = false
+
+    private var palette: OverlayPalette { OverlayPalette(scheme) }
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+    }
+
+    var body: some View {
+        let p = palette
+        content
+            .font(.okBody(12.5, .medium))
+            .foregroundStyle(foreground(p))
+            .padding(.horizontal, kind == .ghost ? 9 : 13)
+            .frame(height: 28)
+            .background {
+                ZStack {
+                    shape.fill(background(p))
+                    shape.strokeBorder(border(p), lineWidth: 1)
+                }
+            }
+            .contentShape(shape)
+            .offset(y: hovering ? -1 : 0)
+            .shadow(color: shadow(p), radius: hovering ? 10 : 0, y: hovering ? 4 : 0)
+            .onHover { hovering = $0 }
+            .animation(OKMotion.snappy, value: hovering)
     }
 
     private func foreground(_ p: OverlayPalette) -> Color {
         switch kind {
         case .primary: return OKBrand.ink
         case .secondary: return p.ink
-        case .ghost: return p.secondary
-        case .danger: return p.danger
+        case .ghost: return hovering ? p.ink : p.secondary
+        case .danger: return hovering ? p.danger : p.danger.opacity(0.85)
         }
     }
 
     private func background(_ p: OverlayPalette) -> Color {
         switch kind {
-        case .primary: return OKBrand.green
-        case .secondary: return p.fill
-        case .ghost, .danger: return .clear
+        case .primary: return hovering ? OKBrand.greenBright : OKBrand.green
+        case .secondary: return hovering ? p.hoverFill : p.fill
+        case .ghost: return hovering ? p.fill : .clear
+        case .danger: return hovering ? p.danger.opacity(0.13) : .clear
         }
     }
 
     private func border(_ p: OverlayPalette) -> Color {
         switch kind {
-        case .primary: return Color.white.opacity(0.12)
-        case .secondary: return p.hairline
-        case .ghost: return .clear
-        case .danger: return p.danger.opacity(0.35)
+        case .primary: return Color.white.opacity(0.18)
+        case .secondary: return hovering ? p.hoverEdge : p.hairline
+        case .ghost: return hovering ? p.hairline : .clear
+        case .danger: return p.danger.opacity(hovering ? 0.5 : 0.3)
+        }
+    }
+
+    private func shadow(_ p: OverlayPalette) -> Color {
+        switch kind {
+        case .primary: return OKBrand.green.opacity(hovering ? 0.4 : 0.18)
+        case .danger: return p.danger.opacity(hovering ? 0.18 : 0)
+        default: return .clear
         }
     }
 }

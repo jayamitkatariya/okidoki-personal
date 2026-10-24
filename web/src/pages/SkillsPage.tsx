@@ -1,15 +1,56 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDashboard } from "../store";
 import { clamp, cx, futureTime, relativeTime, scheduleLabel } from "../lib";
-import type { Cadence, Routine, Skill } from "../types";
-import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
+import type { Cadence, Routine, Skill, SkillStep, Watching } from "../types";
+import { Button, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const REPEAT_PICKS = [1, 5, 10, 50, 100, 1000];
+const IDLE_WATCHING: Watching = { recording: false, startedAt: null, name: "", steps: [], replaying: false };
+
+function stepIcon(step: SkillStep): string {
+  switch (step.action) {
+    case "type":
+      return "keyboard";
+    case "key":
+      return "bolt";
+    case "scroll":
+      return "scroll";
+    case "drag":
+      return "hand";
+    case "switch":
+      return "switch";
+    default:
+      return "cursor";
+  }
+}
+
+function elapsedLabel(startedAt: string | null | undefined, now: number): string {
+  if (!startedAt) return "0:00";
+  const total = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
 
 export function SkillsPage() {
   const { state, invoke, notify } = useDashboard();
-  const [modalOpen, setModalOpen] = useState(false);
+  const watching = state.watching ?? IDLE_WATCHING;
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+
+  // teach
+  const [teachOpen, setTeachOpen] = useState(false);
+  const [teachName, setTeachName] = useState("");
+
+  // replay × N
+  const [repeatFor, setRepeatFor] = useState<Skill | null>(null);
+  const [repeatCount, setRepeatCount] = useState(10);
+
+  // rename
+  const [renaming, setRenaming] = useState<Skill | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  // routines (secondary)
+  const [routineOpen, setRoutineOpen] = useState(false);
   const [editing, setEditing] = useState<Routine | null>(null);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -18,10 +59,34 @@ export function SkillsPage() {
   const [hour, setHour] = useState(17);
   const [minute, setMinute] = useState(0);
   const [natural, setNatural] = useState("");
-  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
-  // Reset here, not in an effect on open: an effect would also wipe what scheduleSkill fills in.
-  const openNew = () => {
+  // ticks the elapsed clock while recording
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!watching.recording) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [watching.recording]);
+
+  const startRecording = () => {
+    invoke("startWatching", { name: teachName.trim() });
+    setTeachOpen(false);
+    notify("Recording", "Do the task once. Stop from the pill at the top of your screen, or come back here.", "info");
+  };
+
+  const stopRecording = () => {
+    invoke("stopWatching");
+    const count = watching.steps.length;
+    if (count) notify("Saving skill", `${count} ${count === 1 ? "step" : "steps"} learned`);
+    else notify("Stopped", "Nothing was captured yet", "info");
+  };
+
+  const replay = (skill: Skill, times: number) => {
+    invoke("replaySkill", { id: skill.id, times });
+    notify(times > 1 ? `Replay ×${times} queued` : "Ready to replay", "Approve the preview to run it");
+  };
+
+  const openNewRoutine = () => {
     setEditing(null);
     setName("");
     setPrompt("");
@@ -30,10 +95,10 @@ export function SkillsPage() {
     setHour(17);
     setMinute(0);
     setNatural("");
-    setModalOpen(true);
+    setRoutineOpen(true);
   };
 
-  const openEdit = (routine: Routine) => {
+  const openEditRoutine = (routine: Routine) => {
     setEditing(routine);
     setName(routine.name);
     setPrompt(routine.prompt);
@@ -41,19 +106,19 @@ export function SkillsPage() {
     setWeekday(routine.weekday);
     setHour(routine.hour);
     setMinute(routine.minute);
-    setModalOpen(true);
+    setRoutineOpen(true);
   };
 
   const scheduleSkill = (skill: Skill) => {
     setEditing(null);
     setName(skill.name);
-    setPrompt(`run the “${skill.name}” skill: ${skill.steps.map((step) => step.text).join(" → ")}`);
+    setPrompt(`replay the “${skill.name}” skill`);
     setCadence("weekly");
     setWeekday(6);
     setHour(17);
     setMinute(0);
     setNatural("");
-    setModalOpen(true);
+    setRoutineOpen(true);
   };
 
   const parseNatural = () => {
@@ -82,37 +147,100 @@ export function SkillsPage() {
     setNatural("");
   };
 
-  const save = () => {
+  const saveRoutine = () => {
     const title = name.trim() || "routine";
     // enabled is left out: the snapshot from when the modal opened would undo a pause made since
     if (editing) {
       invoke("updateRoutine", { id: editing.id, name: title, prompt: prompt.trim(), cadence, weekday, hour, minute });
-      notify("Routine updated", title);
+      notify("Schedule updated", title);
     } else {
       invoke("addRoutine", { name: title, prompt: prompt.trim(), cadence, weekday, hour, minute });
-      notify("Routine saved", scheduleLabel({ cadence, weekday, hour, minute }));
+      notify("Schedule saved", scheduleLabel({ cadence, weekday, hour, minute }));
     }
-    setModalOpen(false);
+    setRoutineOpen(false);
   };
 
-  const active = state.routines.filter((routine) => routine.enabled).length;
+  const liveSteps = watching.steps.slice(-6);
+  const totalRuns = state.skills.reduce((sum, skill) => sum + skill.runCount, 0);
 
   return (
     <div className="skills-page">
       <PageTitle
-        title="Skills & routines"
-        subtitle="Replay what you've shown okidoki, or put a task on a schedule."
+        title="Skills"
+        subtitle="Show okidoki once. It records every click, keystroke and scroll, then does it again — exactly, as many times as you need."
         trailing={
-          <Button variant="primary" icon="plus" onClick={openNew}>
-            New routine
-          </Button>
+          watching.recording ? (
+            <Button variant="danger" icon="stop" onClick={stopRecording}>
+              Stop & save
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+             
+              onClick={() => {
+                setTeachName("");
+                setTeachOpen(true);
+              }}
+            >
+              <span className="rec-dot" />
+              Record a skill
+            </Button>
+          )
         }
       />
 
+      {watching.recording ? (
+        <section className="tile recording-tile reveal">
+          <header className="recording-head">
+            <span className="rec-dot is-live" />
+            <div className="recording-copy">
+              <strong>Recording{watching.name ? ` · ${watching.name}` : ""}</strong>
+              <span>
+                {elapsedLabel(watching.startedAt, now)} · {watching.steps.length} {watching.steps.length === 1 ? "step" : "steps"} captured
+              </span>
+            </div>
+            <div className="recording-actions">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  invoke("discardWatching");
+                  notify("Discarded", "Nothing was saved", "info");
+                }}
+              >
+                Discard
+              </Button>
+              <Button variant="danger" size="sm" icon="stop" onClick={stopRecording}>
+                Stop & save
+              </Button>
+            </div>
+          </header>
+          {liveSteps.length ? (
+            <ol className="recording-steps">
+              {liveSteps.map((step, index) => (
+                <li key={step.id} className={cx(index === liveSteps.length - 1 && "is-latest")}>
+                  <PixelIcon name={stepIcon(step)} size={13} />
+                  <span>{step.text}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="recording-hint">Go do the task at a normal pace. Every click, keystroke, drag and scroll shows up here as it happens.</p>
+          )}
+          <p className="recording-foot">Stop from the pill at the top of your screen, shake your mouse, or click Stop & save.</p>
+        </section>
+      ) : null}
+
       <section className="skills-section">
         <div className="section-head">
-          <h2 className="skills-heading">Skills</h2>
+          <h2 className="skills-heading">Learned skills</h2>
           {state.skills.length ? <span className="tile-count">{state.skills.length}</span> : null}
+          <span className="spacer" />
+          {totalRuns ? (
+            <span className="section-note">
+              {totalRuns.toLocaleString("en-US")} {totalRuns === 1 ? "replay" : "replays"} so far
+            </span>
+          ) : null}
         </div>
         {state.skills.length ? (
           <div className="skills-grid">
@@ -120,53 +248,70 @@ export function SkillsPage() {
               <article className="tile skill-tile reveal" key={skill.id}>
                 <header className="skill-head">
                   <span className="kind-icon">
-                    <PixelIcon name={skill.source === "watch me" ? "eye" : "wand"} size={16} />
+                    <PixelIcon name={skill.source === "watch me" ? "record" : "wand"} size={16} />
                   </span>
                   <div className="skill-title">
                     <h3>{skill.name}</h3>
                     <span>
-                      <span className="skill-source">{skill.source}</span> · {skill.runCount} {skill.runCount === 1 ? "run" : "runs"}
+                      {skill.steps.length} {skill.steps.length === 1 ? "step" : "steps"} · {skill.runCount.toLocaleString("en-US")} {skill.runCount === 1 ? "replay" : "replays"} · learned{" "}
+                      {relativeTime(skill.createdAt)}
                     </span>
                   </div>
-                  <IconButton
-                    icon="trash"
-                    label="Delete skill"
-                    size={14}
-                    className="skill-delete"
-                    onClick={() =>
-                      setConfirm({
-                        title: "Delete this skill?",
-                        detail: `“${skill.name}” and its recorded steps will be gone.`,
-                        action: "Delete skill",
-                        onConfirm: () => {
-                          invoke("deleteSkill", { id: skill.id });
-                          notify("Skill removed", skill.name, "info");
-                        },
-                      })
-                    }
-                  />
+                  <div className="skill-tools">
+                    <IconButton
+                      icon="edit"
+                      label="Rename skill"
+                      size={14}
+                      onClick={() => {
+                        setRenaming(skill);
+                        setRenameValue(skill.name);
+                      }}
+                    />
+                    <IconButton icon="clock" label="Replay on a schedule" size={14} onClick={() => scheduleSkill(skill)} />
+                    <IconButton
+                      icon="trash"
+                      label="Delete skill"
+                      size={14}
+                      onClick={() =>
+                        setConfirm({
+                          title: "Delete this skill?",
+                          detail: `“${skill.name}” and its recorded steps will be gone.`,
+                          action: "Delete skill",
+                          onConfirm: () => {
+                            invoke("deleteSkill", { id: skill.id });
+                            notify("Skill removed", skill.name, "info");
+                          },
+                        })
+                      }
+                    />
+                  </div>
                 </header>
                 {skill.summary ? <p className="skill-summary">{skill.summary}</p> : null}
                 <ol className="skill-steps">
-                  {skill.steps.slice(0, 3).map((step, index) => (
+                  {skill.steps.slice(0, 4).map((step, index) => (
                     <li key={step.id}>
                       <em>{index + 1}</em>
+                      <PixelIcon name={stepIcon(step)} size={12} className="step-glyph" />
                       <span>{step.text}</span>
                     </li>
                   ))}
-                  {skill.steps.length > 3 ? <li className="skill-more">+{skill.steps.length - 3} more {skill.steps.length - 3 === 1 ? "step" : "steps"}</li> : null}
+                  {skill.steps.length > 4 ? <li className="skill-more">+{skill.steps.length - 4} more {skill.steps.length - 4 === 1 ? "step" : "steps"}</li> : null}
                 </ol>
                 <footer className="skill-actions">
+                  <Button variant="primary" size="sm" icon="play" disabled={watching.recording || watching.replaying} onClick={() => replay(skill, 1)}>
+                    Replay
+                  </Button>
                   <Button
-                    variant="primary"
+                    variant="secondary"
                     size="sm"
-                    icon="play"
+                    icon="repeat"
+                    disabled={watching.recording || watching.replaying}
                     onClick={() => {
-                      invoke("replaySkill", { id: skill.id });
-                      notify("Ready to replay", "Approve the preview to run it");
+                      setRepeatFor(skill);
+                      setRepeatCount(10);
                     }}
                   >
-                    Replay
+                    Repeat…
                   </Button>
                   <Button
                     variant="ghost"
@@ -178,32 +323,64 @@ export function SkillsPage() {
                   >
                     Walk me through
                   </Button>
-                  <Button variant="ghost" size="sm" icon="clock" onClick={() => scheduleSkill(skill)}>
-                    Schedule
-                  </Button>
                 </footer>
               </article>
             ))}
           </div>
-        ) : (
-          <div className="tile skills-empty">
-            <span className="kind-icon">
-              <PixelIcon name="wand" size={16} />
-            </span>
-            <div>
-              <strong>No skills yet</strong>
-              <span>Say “watch me do this” and do the task once. okidoki saves it as steps you can replay.</span>
+        ) : !watching.recording ? (
+          <div className="tile skills-empty skills-howto">
+            <div className="howto-steps">
+              <div className="howto-step">
+                <span className="kind-icon">
+                  <PixelIcon name="record" size={16} />
+                </span>
+                <div>
+                  <strong>1. Hit record</strong>
+                  <span>Give it a name if you like. okidoki starts watching your whole Mac.</span>
+                </div>
+              </div>
+              <div className="howto-step">
+                <span className="kind-icon">
+                  <PixelIcon name="cursor" size={16} />
+                </span>
+                <div>
+                  <strong>2. Do it once</strong>
+                  <span>Every click, keystroke, shortcut, drag and scroll is captured — with what you clicked, not just where.</span>
+                </div>
+              </div>
+              <div className="howto-step">
+                <span className="kind-icon">
+                  <PixelIcon name="repeat" size={16} />
+                </span>
+                <div>
+                  <strong>3. Replay it</strong>
+                  <span>Once, ten times, a thousand times. A ghost cursor does it exactly the way you did. Esc stops it.</span>
+                </div>
+              </div>
             </div>
+            <Button
+              variant="primary"
+             
+              onClick={() => {
+                setTeachName("");
+                setTeachOpen(true);
+              }}
+            >
+              <span className="rec-dot" />
+              Record your first skill
+            </Button>
           </div>
-        )}
+        ) : null}
       </section>
 
-      <section className="skills-section">
+      <section className="skills-section routines-section">
         <div className="section-head">
-          <h2 className="skills-heading">Routines</h2>
+          <h2 className="skills-heading">On a schedule</h2>
           {state.routines.length ? <span className="tile-count">{state.routines.length}</span> : null}
           <span className="spacer" />
-          {state.routines.length ? <span className="section-note">{active} active</span> : null}
+          <Button variant="ghost" size="sm" icon="plus" onClick={openNewRoutine}>
+            New schedule
+          </Button>
         </div>
         {state.routines.length ? (
           <div className="tile routine-list reveal reveal-2">
@@ -212,7 +389,7 @@ export function SkillsPage() {
                 <span className="kind-icon small">
                   <PixelIcon name="clock" size={14} />
                 </span>
-                <button className="routine-copy" onClick={() => openEdit(routine)} title="Edit routine">
+                <button className="routine-copy" onClick={() => openEditRoutine(routine)} title="Edit schedule">
                   <strong>{routine.name}</strong>
                   <em>{routine.prompt}</em>
                 </button>
@@ -227,20 +404,20 @@ export function SkillsPage() {
                   </span>
                 </span>
                 <div className="routine-actions">
-                  <IconButton icon="edit" label="Edit routine" size={14} className="routine-hover" onClick={() => openEdit(routine)} />
+                  <IconButton icon="edit" label="Edit schedule" size={14} className="routine-hover" onClick={() => openEditRoutine(routine)} />
                   <IconButton
                     icon="trash"
-                    label="Delete routine"
+                    label="Delete schedule"
                     size={14}
                     className="routine-hover"
                     onClick={() =>
                       setConfirm({
-                        title: "Delete this routine?",
+                        title: "Delete this schedule?",
                         detail: `“${routine.name}” won't run again.`,
-                        action: "Delete routine",
+                        action: "Delete schedule",
                         onConfirm: () => {
                           invoke("deleteRoutine", { id: routine.id });
-                          notify("Routine removed", routine.name, "info");
+                          notify("Schedule removed", routine.name, "info");
                         },
                       })
                     }
@@ -252,15 +429,15 @@ export function SkillsPage() {
                     className="routine-run"
                     onClick={() => {
                       invoke("runRoutine", { id: routine.id });
-                      notify("Routine running", routine.name);
+                      notify("Running", routine.name);
                     }}
                   />
                   <Switch
-                    label={routine.enabled ? "Pause routine" : "Resume routine"}
+                    label={routine.enabled ? "Pause schedule" : "Resume schedule"}
                     checked={routine.enabled}
                     onChange={() => {
                       invoke("toggleRoutine", { id: routine.id });
-                      notify(routine.enabled ? "Routine paused" : "Routine resumed", routine.name, "info");
+                      notify(routine.enabled ? "Schedule paused" : "Schedule resumed", routine.name, "info");
                     }}
                   />
                 </div>
@@ -268,38 +445,142 @@ export function SkillsPage() {
             ))}
           </div>
         ) : (
-          <div className="tile skills-empty">
-            <span className="kind-icon">
-              <PixelIcon name="clock" size={16} />
-            </span>
-            <div>
-              <strong>Nothing on repeat</strong>
-              <span>Try “every Friday at 5, clean my Downloads folder.”</span>
-            </div>
-            <Button variant="secondary" size="sm" icon="plus" onClick={openNew}>
-              New routine
-            </Button>
-          </div>
+          <p className="section-note routines-empty">Optional. Use the clock on a skill to replay it at set times, or put any request on repeat.</p>
         )}
       </section>
 
+      <Modal open={teachOpen} onClose={() => setTeachOpen(false)} title="Record a skill" subtitle="You'll do the task once. okidoki learns it move by move." width={480}>
+        <div className="routine-form">
+          <label className="routine-field">
+            <span className="form-label">Name (optional)</span>
+            <TextField value={teachName} onChange={setTeachName} placeholder="Export the weekly report" autoFocus onEnter={startRecording} />
+          </label>
+          <ul className="teach-tips">
+            <li>
+              <PixelIcon name="cursor" size={13} />
+              <span>Go at a normal pace. Clicks are remembered by what you clicked, so a moved window still works.</span>
+            </li>
+            <li>
+              <PixelIcon name="keyboard" size={13} />
+              <span>Typing and shortcuts like ⌘S are captured too, as plain text — don't type secrets while recording.</span>
+            </li>
+            <li>
+              <PixelIcon name="stop" size={13} />
+              <span>Stop from the pill at the top of your screen, shake your mouse, or come back to this page.</span>
+            </li>
+          </ul>
+        </div>
+        <footer className="modal-actions">
+          <Button variant="ghost" onClick={() => setTeachOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={startRecording}>
+            <span className="rec-dot" />
+            Start recording
+          </Button>
+        </footer>
+      </Modal>
+
       <Modal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={editing ? "Edit routine" : "New routine"}
+        open={Boolean(repeatFor)}
+        onClose={() => setRepeatFor(null)}
+        title={repeatFor ? `Repeat “${repeatFor.name}”` : "Repeat"}
+        subtitle="Runs the whole skill back to back. Press Esc or shake at any time to stop."
+        width={460}
+      >
+        <div className="routine-form">
+          <div className="repeat-picks">
+            {REPEAT_PICKS.map((count) => (
+              <button key={count} type="button" className={cx("repeat-pick", repeatCount === count && "is-selected")} onClick={() => setRepeatCount(count)}>
+                ×{count.toLocaleString("en-US")}
+              </button>
+            ))}
+          </div>
+          <div className="routine-field">
+            <span className="form-label">Or exactly</span>
+            <div className="routine-time">
+              <label className="routine-cell">
+                <input
+                  type="number"
+                  min={1}
+                  max={10000}
+                  aria-label="Number of replays"
+                  value={repeatCount}
+                  onChange={(event) => setRepeatCount(clamp(Math.round(Number(event.target.value) || 1), 1, 10000))}
+                />
+              </label>
+              <span className="repeat-note">
+                {repeatFor ? `${(repeatFor.steps.length * repeatCount).toLocaleString("en-US")} moves in total` : ""}
+              </span>
+            </div>
+          </div>
+        </div>
+        <footer className="modal-actions">
+          <Button variant="ghost" onClick={() => setRepeatFor(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="repeat"
+            onClick={() => {
+              if (repeatFor) replay(repeatFor, repeatCount);
+              setRepeatFor(null);
+            }}
+          >
+            Replay ×{repeatCount.toLocaleString("en-US")}
+          </Button>
+        </footer>
+      </Modal>
+
+      <Modal open={Boolean(renaming)} onClose={() => setRenaming(null)} title="Rename skill" width={420}>
+        <div className="routine-form">
+          <label className="routine-field">
+            <span className="form-label">Name</span>
+            <TextField
+              value={renameValue}
+              onChange={setRenameValue}
+              placeholder="Friday cleanup"
+              autoFocus
+              onEnter={() => {
+                if (renaming && renameValue.trim()) {
+                  invoke("renameSkill", { id: renaming.id, name: renameValue.trim() });
+                  setRenaming(null);
+                }
+              }}
+            />
+          </label>
+        </div>
+        <footer className="modal-actions">
+          <Button variant="ghost" onClick={() => setRenaming(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!renameValue.trim()}
+            onClick={() => {
+              if (renaming) {
+                invoke("renameSkill", { id: renaming.id, name: renameValue.trim() });
+                notify("Renamed", renameValue.trim());
+              }
+              setRenaming(null);
+            }}
+          >
+            Save
+          </Button>
+        </footer>
+      </Modal>
+
+      <Modal
+        open={routineOpen}
+        onClose={() => setRoutineOpen(false)}
+        title={editing ? "Edit schedule" : "New schedule"}
         subtitle={editing ? undefined : "Describe it in plain words, or set it up by hand."}
         width={540}
       >
         <div className="routine-form">
           {!editing ? (
             <div className="routine-natural">
-              <TextField
-                value={natural}
-                onChange={setNatural}
-                placeholder="Every Friday at 5, clean my Downloads folder"
-                icon="spark"
-                onEnter={parseNatural}
-              />
+              <TextField value={natural} onChange={setNatural} placeholder="Every Friday at 5, clean my Downloads folder" icon="spark" onEnter={parseNatural} />
               <Button variant="secondary" onClick={parseNatural} disabled={!natural.trim()}>
                 Fill in
               </Button>
@@ -359,11 +640,11 @@ export function SkillsPage() {
           </p>
         </div>
         <footer className="modal-actions">
-          <Button variant="ghost" onClick={() => setModalOpen(false)}>
+          <Button variant="ghost" onClick={() => setRoutineOpen(false)}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={save} disabled={!prompt.trim()}>
-            {editing ? "Save routine" : "Add routine"}
+          <Button variant="primary" onClick={saveRoutine} disabled={!prompt.trim()}>
+            {editing ? "Save schedule" : "Add schedule"}
           </Button>
         </footer>
       </Modal>

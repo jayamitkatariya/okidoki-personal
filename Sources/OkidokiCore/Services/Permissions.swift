@@ -19,22 +19,6 @@ public enum PermissionState: String, Sendable {
 public enum PermissionKind: String, CaseIterable, Identifiable, Sendable {
     case screen, microphone, accessibility, automation
     public var id: String { rawValue }
-    public var title: String {
-        switch self {
-        case .screen: return "screen"
-        case .microphone: return "microphone"
-        case .accessibility: return "accessibility"
-        case .automation: return "automation"
-        }
-    }
-    public var blurb: String {
-        switch self {
-        case .screen: return "so I can see what you're looking at when you ask"
-        case .microphone: return "so you can talk instead of type"
-        case .accessibility: return "so I can click and type when you let me borrow the screen"
-        case .automation: return "so reminders, calendar and notes happen without opening apps"
-        }
-    }
     public var settingsURL: String {
         switch self {
         case .screen: return "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
@@ -93,9 +77,5 @@ public final class PermissionsService {
 
     public func markAutomationGranted(_ granted: Bool) {
         UserDefaults.standard.set(granted, forKey: "okidoki.automationGranted")
-    }
-
-    public var allGranted: Bool {
-        PermissionKind.allCases.allSatisfy { state($0) == .granted }
     }
 }

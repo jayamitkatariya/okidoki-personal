@@ -104,14 +104,6 @@ export function scheduleLabel(routine: {
   }
 }
 
-export function riskLabel(risk: string | undefined): string {
-  return risk ?? "low";
-}
-
-export function greetingName(name: string): string {
-  return name.split(" ")[0] || name;
-}
-
 // Rough yearly price of the paid app each free tool stands in for. Mirrors ToolCatalog.paidAlternatives.
 const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59 };
 
@@ -140,7 +132,7 @@ export function jobWords(query: string): string[] {
     .map(singular);
 }
 
-// Ranks the catalog for a job description. Mirrors ToolCatalog.findTools: word hits first, popularity breaks ties.
+// Ranks the catalog for a job description: word hits first, popularity breaks ties.
 export function findTools(tools: Tool[], query: string, limit = 3): Tool[] {
   const wanted = jobWords(query);
   if (!wanted.length) return [];

@@ -119,7 +119,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var tourComplete: Bool = false
     public var showedWelcome: Bool = false
 
-    public var claudeModel: String = "claude-sonnet-4-5"
+    public var claudeModel: String = "claude-haiku-5-5"
     public var agentExtraArgs: [String: String] = [:]
     public var lastWorkingDirectory: String = ""
 
@@ -183,7 +183,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         onboardingComplete = bool(.onboardingComplete, false)
         tourComplete = bool(.tourComplete, false)
         showedWelcome = bool(.showedWelcome, false)
-        claudeModel = string(.claudeModel, "claude-sonnet-4-5")
+        claudeModel = string(.claudeModel, "claude-haiku-5-5")
         agentExtraArgs = (try? c.decodeIfPresent([String: String].self, forKey: .agentExtraArgs)).flatMap { $0 } ?? [:]
         lastWorkingDirectory = string(.lastWorkingDirectory, "")
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
@@ -516,15 +516,32 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     public var isActive: Bool { status.isActive }
 }
 
+/// One recorded movement. `text` is the human line shown in the dashboard; the rest is what
+/// the replayer needs to do it again. Older skills only have `text`/`app`/`x`/`y`.
 public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     public var id: String
     public var text: String
     public var app: String
+    /// Quartz-space point (top-left origin) for new recordings; AppKit-space for legacy steps (`action == nil`).
     public var x: Double?
     public var y: Double?
+    /// click · double-click · right-click · drag · type · key · scroll · switch
+    public var action: String?
+    /// Accessibility label of what was clicked, so replay can re-find it if the window moved.
+    public var label: String?
+    /// Typed text for `type`, key combo like "cmd+s" for `key`.
+    public var input: String?
+    /// Drag end point, or scroll delta (dy in `toY`).
+    public var toX: Double?
+    public var toY: Double?
+    /// Seconds after the previous step; replay keeps the same pacing (clamped).
+    public var delay: Double?
     public init(id: String = UUID().uuidString, text: String, app: String = "",
-                x: Double? = nil, y: Double? = nil) {
+                x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,
+                input: String? = nil, toX: Double? = nil, toY: Double? = nil, delay: Double? = nil) {
         self.id = id; self.text = text; self.app = app; self.x = x; self.y = y
+        self.action = action; self.label = label; self.input = input
+        self.toX = toX; self.toY = toY; self.delay = delay
     }
 }
 
@@ -630,10 +647,11 @@ public struct Routine: Identifiable, Codable, Equatable, Sendable {
 
 // MARK: - Brain
 
-/// One drawing instruction for the teach overlay. The model describes what to draw
-/// ("circle", "arrow", "cursor" motion, "label", spotlight-"dim", "ink" scribble, "box")
-/// and either names a UI element by its accessibility label or gives a fallback position
-/// relative to the app window (0.0-1.0).
+/// One drawing instruction for the teach overlay.
+/// `circle` hugs a control, `box` hugs a region, `arrow` shows a drag (`point` → `to`).
+/// `text` is the short gold label drawn with the mark.
+/// Fractions are 0–1, origin top-left. `space` "window" (default) is the app window;
+/// "screen" is the whole display the overlay covers.
 public struct TeachMark: Codable, Equatable, Sendable {
     public var kind: String
     public var target: String?
@@ -642,14 +660,16 @@ public struct TeachMark: Codable, Equatable, Sendable {
     public var to: [Double]?
     public var text: String?
     public var seconds: Double?
+    public var space: String?
 
     public init(kind: String, target: String? = nil, point: [Double]? = nil,
-                rect: [Double]? = nil, to: [Double]? = nil, text: String? = nil, seconds: Double? = nil) {
+                rect: [Double]? = nil, to: [Double]? = nil, text: String? = nil,
+                seconds: Double? = nil, space: String? = nil) {
         self.kind = kind; self.target = target; self.point = point; self.rect = rect
-        self.to = to; self.text = text; self.seconds = seconds
+        self.to = to; self.text = text; self.seconds = seconds; self.space = space
     }
 
-    enum CodingKeys: String, CodingKey { case kind, target, point, rect, to, text, seconds }
+    enum CodingKeys: String, CodingKey { case kind, target, point, rect, to, text, seconds, space }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -660,6 +680,19 @@ public struct TeachMark: Codable, Equatable, Sendable {
         to = try? c.decodeIfPresent([Double].self, forKey: .to)
         text = try? c.decodeIfPresent(String.self, forKey: .text)
         seconds = try? c.decodeIfPresent(Double.self, forKey: .seconds)
+        space = try? c.decodeIfPresent(String.self, forKey: .space)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(target, forKey: .target)
+        try c.encodeIfPresent(point, forKey: .point)
+        try c.encodeIfPresent(rect, forKey: .rect)
+        try c.encodeIfPresent(to, forKey: .to)
+        try c.encodeIfPresent(text, forKey: .text)
+        try c.encodeIfPresent(seconds, forKey: .seconds)
+        try c.encodeIfPresent(space, forKey: .space)
     }
 }
 
@@ -678,6 +711,150 @@ public struct TeachPlanStep: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         say = (try? c.decode(String.self, forKey: .say)) ?? ""
         marks = (try? c.decode([TeachMark].self, forKey: .marks)) ?? []
+    }
+}
+
+/// What happened on one live tutoring step: what was taught and what the learner did.
+public struct TeachLogEntry: Codable, Equatable, Sendable {
+    public var say: String
+    public var action: String
+    public var label: String?
+    public var outcome: String
+
+    public init(say: String, action: String, label: String? = nil, outcome: String) {
+        self.say = say; self.action = action; self.label = label; self.outcome = outcome
+    }
+}
+
+/// One live tutoring step from the model. Coordinates are pixels in the screenshot it saw, origin top-left.
+public struct TeachLiveStep: Codable, Equatable, Sendable {
+    public var previousDone: Bool
+    public var action: String
+    public var say: String
+    public var why: String?
+    public var label: String?
+    public var x: Double?
+    public var y: Double?
+    public var w: Double?
+    public var h: Double?
+    public var fromX: Double?
+    public var fromY: Double?
+    public var toX: Double?
+    public var toY: Double?
+    public var target: String?
+    public var key: String?
+    public var text: String?
+    public var app: String?
+    public var summary: String?
+    public var remaining: Int?
+    public var alsoX: Double?
+    public var alsoY: Double?
+    public var alsoW: Double?
+    public var alsoH: Double?
+    public var alsoLabel: String?
+
+    enum CodingKeys: String, CodingKey {
+        case previousDone = "previous_done", action, say, why, label, x, y, w, h
+        case fromX = "from_x", fromY = "from_y", toX = "to_x", toY = "to_y"
+        case target, key, text, app, summary, remaining
+        case alsoX = "also_x", alsoY = "also_y", alsoW = "also_w", alsoH = "also_h", alsoLabel = "also_label"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        previousDone = (try? c.decodeIfPresent(Bool.self, forKey: .previousDone)) ?? true
+        action = (try? c.decode(String.self, forKey: .action)) ?? "look"
+        say = (try? c.decode(String.self, forKey: .say)) ?? ""
+        why = try? c.decodeIfPresent(String.self, forKey: .why)
+        label = (try? c.decodeIfPresent(String.self, forKey: .label))?.lowercased()
+        x = try? c.decodeIfPresent(Double.self, forKey: .x)
+        y = try? c.decodeIfPresent(Double.self, forKey: .y)
+        w = try? c.decodeIfPresent(Double.self, forKey: .w)
+        h = try? c.decodeIfPresent(Double.self, forKey: .h)
+        fromX = try? c.decodeIfPresent(Double.self, forKey: .fromX)
+        fromY = try? c.decodeIfPresent(Double.self, forKey: .fromY)
+        toX = try? c.decodeIfPresent(Double.self, forKey: .toX)
+        toY = try? c.decodeIfPresent(Double.self, forKey: .toY)
+        target = try? c.decodeIfPresent(String.self, forKey: .target)
+        key = try? c.decodeIfPresent(String.self, forKey: .key)
+        text = try? c.decodeIfPresent(String.self, forKey: .text)
+        app = try? c.decodeIfPresent(String.self, forKey: .app)
+        summary = try? c.decodeIfPresent(String.self, forKey: .summary)
+        remaining = try? c.decodeIfPresent(Int.self, forKey: .remaining)
+        alsoX = try? c.decodeIfPresent(Double.self, forKey: .alsoX)
+        alsoY = try? c.decodeIfPresent(Double.self, forKey: .alsoY)
+        alsoW = try? c.decodeIfPresent(Double.self, forKey: .alsoW)
+        alsoH = try? c.decodeIfPresent(Double.self, forKey: .alsoH)
+        alsoLabel = (try? c.decodeIfPresent(String.self, forKey: .alsoLabel))?.lowercased()
+    }
+
+    /// Steps the learner performs with the pointer, so a click on the ring counts as done.
+    public var isPointerStep: Bool {
+        ["click", "double_click", "right_click", "type", "scroll"].contains(action)
+    }
+
+    public var hasPoint: Bool { x != nil && y != nil }
+}
+
+/// A control the Mac can see through accessibility, with its center in screenshot pixels.
+public struct TeachControlHint: Codable, Equatable, Sendable {
+    public var label: String
+    public var role: String
+    public var x: Double
+    public var y: Double
+    public var w: Double
+    public var h: Double
+
+    public init(label: String, role: String, x: Double, y: Double, w: Double, h: Double) {
+        self.label = label; self.role = role; self.x = x; self.y = y; self.w = w; self.h = h
+    }
+}
+
+/// Everything the tutor needs to pick the next step.
+public struct TeachStepRequest: Codable, Sendable {
+    public var topic: String
+    public var app: String
+    public var outline: [String]
+    public var log: [TeachLogEntry]
+    public var stepNumber: Int
+    public var imageWidth: Double
+    public var imageHeight: Double
+    public var screenshotBase64: String?
+    public var controls: [TeachControlHint]
+    public var model: String?
+
+    public init(topic: String, app: String, outline: [String], log: [TeachLogEntry], stepNumber: Int,
+                imageWidth: Double, imageHeight: Double, screenshotBase64: String?,
+                controls: [TeachControlHint] = [], model: String?) {
+        self.topic = topic; self.app = app; self.outline = outline; self.log = log; self.stepNumber = stepNumber
+        self.imageWidth = imageWidth; self.imageHeight = imageHeight
+        self.screenshotBase64 = screenshotBase64; self.controls = controls; self.model = model
+    }
+}
+
+/// A zoomed second look at one control so the ring lands on the exact pixels.
+public struct TeachRefineRequest: Codable, Sendable {
+    public var cropBase64: String
+    public var cropWidth: Double
+    public var cropHeight: Double
+    public var describe: String
+    public var model: String?
+
+    public init(cropBase64: String, cropWidth: Double, cropHeight: Double, describe: String, model: String?) {
+        self.cropBase64 = cropBase64; self.cropWidth = cropWidth; self.cropHeight = cropHeight
+        self.describe = describe; self.model = model
+    }
+}
+
+public struct TeachRefineResult: Codable, Equatable, Sendable {
+    public var found: Bool
+    public var x: Double?
+    public var y: Double?
+    public var w: Double?
+    public var h: Double?
+
+    public init(found: Bool, x: Double? = nil, y: Double? = nil, w: Double? = nil, h: Double? = nil) {
+        self.found = found; self.x = x; self.y = y; self.w = w; self.h = h
     }
 }
 
@@ -714,11 +891,6 @@ public struct QuickActionPayload: Codable, Equatable, Sendable {
     public var hour: Int?
     public var weekday: Int?
 
-    public init(type: String, title: String, body: String = "", date: String? = nil,
-                hour: Int? = nil, weekday: Int? = nil) {
-        self.type = type; self.title = title; self.body = body
-        self.date = date; self.hour = hour; self.weekday = weekday
-    }
 }
 
 public struct BrainDecision: Codable, Equatable, Sendable {
@@ -889,22 +1061,6 @@ public struct BrainResult: Sendable {
 
 public enum ToastKind: String, Sendable {
     case success, info, warning, approval
-}
-
-public struct ApprovalRequest: Identifiable, Equatable, Sendable {
-    public var id: String
-    public var runID: String
-    public var title: String
-    public var summary: String
-    public var risk: RiskLevel
-    public var commands: [String]
-    public var app: String?
-    public var isBorrow: Bool
-    public init(id: String = UUID().uuidString, runID: String, title: String, summary: String,
-                risk: RiskLevel, commands: [String] = [], app: String? = nil, isBorrow: Bool = false) {
-        self.id = id; self.runID = runID; self.title = title; self.summary = summary
-        self.risk = risk; self.commands = commands; self.app = app; self.isBorrow = isBorrow
-    }
 }
 
 // MARK: - State container

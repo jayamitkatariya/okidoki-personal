@@ -155,12 +155,29 @@ export interface Memory {
   updatedAt: string;
 }
 
+export type StepAction = "click" | "double-click" | "right-click" | "middle-click" | "drag" | "type" | "key" | "scroll" | "switch";
+
 export interface SkillStep {
   id: string;
   text: string;
   app: string;
   x?: number | null;
   y?: number | null;
+  action?: StepAction | null;
+  label?: string | null;
+  input?: string | null;
+  toX?: number | null;
+  toY?: number | null;
+  delay?: number | null;
+}
+
+/** Live recorder state while okidoki is learning a skill. */
+export interface Watching {
+  recording: boolean;
+  startedAt?: string | null;
+  name: string;
+  steps: SkillStep[];
+  replaying: boolean;
 }
 
 export interface Skill {
@@ -218,6 +235,8 @@ export interface Tool {
 }
 
 export interface NativeState {
+  /** Missing on Convex snapshots, which don't carry live recorder state. */
+  watching?: Watching;
   accounts: Account[];
   currentAccountID: string;
   settings: Settings;
@@ -241,13 +260,6 @@ export interface NativeState {
   convexConfigured: boolean;
   mcpStatus?: Record<string, McpStatus>;
   mcpSecretNames?: Record<string, string[]>;
-}
-
-export interface NavItem {
-  id: string;
-  title: string;
-  glyph: string;
-  subtitle: string;
 }
 
 export interface Toast {

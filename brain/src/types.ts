@@ -23,11 +23,82 @@ export interface TeachMark {
   to?: [number, number];
   text?: string;
   seconds?: number;
+  /** "window" (default) is the app window. "screen" is the whole display. */
+  space?: "window" | "screen";
 }
 
 export interface TeachPlanStep {
   say: string;
   marks: TeachMark[];
+}
+
+/** What happened on one live tutoring step: what was taught and what the learner did. */
+export interface TeachLogEntry {
+  say: string;
+  action: string;
+  label?: string;
+  outcome: string;
+}
+
+/** A control the Mac can see through accessibility, with its center in screenshot pixels. */
+export interface TeachControlHint {
+  label: string;
+  role: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface TeachStepRequest {
+  topic: string;
+  app?: string;
+  outline?: string[];
+  log: TeachLogEntry[];
+  stepNumber: number;
+  imageWidth: number;
+  imageHeight: number;
+  screenshotBase64?: string;
+  controls?: TeachControlHint[];
+  model?: string;
+}
+
+/** Zoomed second look at one control, to land the ring on the exact pixels. */
+export interface TeachRefineRequest {
+  cropBase64: string;
+  cropWidth: number;
+  cropHeight: number;
+  describe: string;
+  model?: string;
+}
+
+/** One live tutoring step. Coordinates are pixels in the screenshot, origin top-left. */
+export interface TeachStep {
+  previous_done: boolean;
+  action: "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "look" | "open_app" | "done";
+  say: string;
+  why?: string;
+  label?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  from_x?: number;
+  from_y?: number;
+  to_x?: number;
+  to_y?: number;
+  target?: string;
+  key?: string;
+  text?: string;
+  app?: string;
+  summary?: string;
+  remaining?: number;
+  /** An optional second region worth a glance, e.g. where the result will appear. */
+  also_x?: number;
+  also_y?: number;
+  also_w?: number;
+  also_h?: number;
+  also_label?: string;
 }
 
 export interface QuickAction {
@@ -177,12 +248,6 @@ export interface RecalledItem {
   score: number;
 }
 
-export interface ThinkResponse {
-  decision: Decision;
-  usedModel: boolean;
-  error?: string;
-}
-
 export interface ExecuteRequest {
   runId: string;
   kind: "terminal" | "background" | "coding";
@@ -202,25 +267,63 @@ export interface ComputerHistoryEntry {
   app?: string;
   text?: string;
   key?: string;
+  script?: string;
+  target?: string;
   result: string;
+}
+
+export interface ComputerControl {
+  role: string;
+  label: string;
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
 }
 
 export interface ComputerRequest {
   goal: string;
   step: number;
   app?: string;
+  windowTitle?: string;
   screen: { x: number; y: number; width: number; height: number };
   imageWidth: number;
   imageHeight: number;
   history: ComputerHistoryEntry[];
+  /** Clickable controls of the frontmost app, centers in screenshot pixels. */
+  controls?: ComputerControl[];
+  /** The screen as it was before the last action. */
+  previousScreenshotBase64?: string;
+  /** A magnified crop requested by the last zoom action. */
+  zoomBase64?: string;
+  zoom?: { x: number; y: number; width: number; height: number; imageWidth: number; imageHeight: number };
   screenshotBase64?: string;
+  canClick?: boolean;
+  canSee?: boolean;
   settings?: {
     claudeModel?: string;
   };
 }
 
 export type ComputerAct = {
-  type: "open_app" | "activate" | "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "wait" | "done" | "fail" | string;
+  type:
+    | "open_app"
+    | "activate"
+    | "open_url"
+    | "script"
+    | "click"
+    | "double_click"
+    | "right_click"
+    | "middle_click"
+    | "move"
+    | "drag"
+    | "type"
+    | "key"
+    | "scroll"
+    | "wait"
+    | "done"
+    | "fail"
+    | string;
   x?: number;
   y?: number;
   from_x?: number;
@@ -230,6 +333,13 @@ export type ComputerAct = {
   app?: string;
   text?: string;
   key?: string;
+  script?: string;
+  lang?: string;
+  target?: string;
+  width?: number;
+  height?: number;
+  times?: number;
+  modifiers?: string;
   dx?: number;
   dy?: number;
   seconds?: number;

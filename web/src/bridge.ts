@@ -20,10 +20,12 @@ declare global {
 let previewState: NativeState | null = null;
 
 function previewInvoke(type: string, payload: Record<string, unknown>): boolean {
-  if (!previewState) previewState = structuredClone(demoState);
-  const state = previewState;
+  // Publish a new snapshot each time: mutating the last event's object causes
+  // React to ignore later account changes because its identity hasn't changed.
+  const state = structuredClone(previewState ?? demoState);
   switch (type) {
-    case "signIn": {
+    case "signIn":
+    case "switchAccount": {
       const id = payload.id as string | undefined;
       if (!id || !state.accounts.some((account) => account.id === id)) return false;
       state.currentAccountID = id;
@@ -78,9 +80,57 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.settings = { ...state.settings, mcpServers: state.settings.mcpServers.filter((item) => item.id !== payload.id) };
       break;
     }
+    case "startWatching": {
+      state.watching = {
+        recording: true,
+        startedAt: new Date().toISOString(),
+        name: (payload.name as string) ?? "",
+        steps: [
+          { id: "live-1", text: "switch to Safari", app: "Safari", action: "switch", delay: 0.3 },
+          { id: "live-2", text: "in Safari, click “Address and Search”", app: "Safari", action: "click", label: "Address and Search", x: 640, y: 60, delay: 1.2 },
+          { id: "live-3", text: "in Safari, type “weather”", app: "Safari", action: "type", input: "weather", delay: 0.9 },
+          { id: "live-4", text: "in Safari, press ↩", app: "Safari", action: "key", input: "return", delay: 0.4 },
+        ],
+        replaying: false,
+      };
+      break;
+    }
+    case "stopWatching": {
+      const live = state.watching;
+      if (live?.recording) {
+        state.skills = [
+          {
+            id: `skill-${Math.random().toString(16).slice(2, 8)}`,
+            accountID: state.currentAccountID,
+            name: live.name || "safari flow",
+            summary: `${live.steps.length} steps in Safari`,
+            steps: live.steps,
+            createdAt: new Date().toISOString(),
+            source: "watch me",
+            runCount: 0,
+          },
+          ...state.skills,
+        ];
+      }
+      state.watching = { recording: false, startedAt: null, name: "", steps: [], replaying: false };
+      break;
+    }
+    case "discardWatching": {
+      state.watching = { recording: false, startedAt: null, name: "", steps: [], replaying: false };
+      break;
+    }
+    case "renameSkill": {
+      state.skills = state.skills.map((skill) => (skill.id === payload.id ? { ...skill, name: (payload.name as string) || skill.name } : skill));
+      break;
+    }
+    case "deleteSkill": {
+      state.skills = state.skills.filter((skill) => skill.id !== payload.id);
+      break;
+    }
     default:
       return false;
   }
+  previewState = state;
   window.dispatchEvent(new CustomEvent<NativeState>("okidoki-native", { detail: state }));
   return true;
 }
@@ -98,16 +148,21 @@ export function invoke(type: string, payload: Record<string, unknown> = {}): voi
   console.info("[okidoki]", type, payload);
 }
 
-export function useNativeState(): { state: NativeState | null; connected: boolean } {
+export function hasNativeBridge(): boolean {
+  return Boolean(window.okidokiInvoke || window.webkit?.messageHandlers?.okidoki);
+}
+
+export function useNativeState(): { state: NativeState | null; connected: boolean; native: boolean } {
   const [state, setState] = useState<NativeState | null>(window.__okidokiState ?? null);
-  const [connected, setConnected] = useState(Boolean(window.okidokiInvoke || window.webkit?.messageHandlers?.okidoki));
+  const native = hasNativeBridge();
+  const [connected, setConnected] = useState(native);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<NativeState>).detail;
       if (detail) {
         setState(detail);
-        setConnected(true);
+        setConnected(hasNativeBridge());
       }
     };
     window.addEventListener("okidoki-native", handler);
@@ -126,5 +181,5 @@ export function useNativeState(): { state: NativeState | null; connected: boolea
     };
   }, []);
 
-  return { state, connected };
+  return { state, connected, native };
 }

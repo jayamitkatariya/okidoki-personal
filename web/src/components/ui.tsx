@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import type { Account, Risk, RunStatus, Toast } from "../types";
 import { cx } from "../lib";
+import { useDialog } from "./useDialog";
 
 // 24px line icons, drawn on a 1.75 stroke so they sit with SF Pro text.
 const ICONS: Record<string, string[]> = {
@@ -58,6 +59,11 @@ const ICONS: Record<string, string[]> = {
   spinner: ["M12 3a9 9 0 1 0 9 9"],
   inbox: ["M3 13h5l1.5 3h5l1.5-3h5", "M5.5 5h13L21 13v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5z"],
   logout: ["M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3", "m10 8-4 4 4 4", "M6 12h10"],
+  keyboard: ["M4 6h16a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 20 18H4a1.5 1.5 0 0 1-1.5-1.5v-9A1.5 1.5 0 0 1 4 6z", "M7 10h.01", "M11 10h.01", "M15 10h.01", "M7 13.5h.01", "M8.5 15h7"],
+  scroll: ["M12 3v18", "m8 7 4-4 4 4", "m8 17 4 4 4-4"],
+  record: ["M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z", "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
+  repeat: ["M4 10a7 7 0 0 1 12-4.9", "M16 2.5v3h-3", "M20 14a7 7 0 0 1-12 4.9", "M8 21.5v-3h3"],
+  switch: ["M4 7h12", "m12 3 4 4-4 4", "M20 17H8", "m12 13-4 4 4 4"],
 };
 
 export function PixelIcon({
@@ -108,29 +114,9 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 export function Button({ variant = "secondary", size = "md", icon, className, children, ...props }: ButtonProps) {
   return (
     <button className={cx("btn", `btn-${variant}`, `btn-${size}`, className)} {...props}>
-      {variant === "primary" ? <PixelFill /> : null}
       {icon ? <PixelIcon name={icon} size={size === "sm" ? 13 : 15} /> : null}
       {children}
     </button>
-  );
-}
-
-/** Squares that step in on hover, filling a primary button pixel by pixel. */
-export function PixelFill({ cols = 10, rows = 3 }: { cols?: number; rows?: number }) {
-  const delays = useMemo(
-    () => Array.from({ length: cols * rows }, (_, i) => (i % cols) * 9 + Math.random() * 120),
-    [cols, rows],
-  );
-  return (
-    <span
-      aria-hidden="true"
-      className="pixel-fill"
-      style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}
-    >
-      {delays.map((delay, i) => (
-        <span key={i} style={{ transitionDelay: `${delay}ms` }} />
-      ))}
-    </span>
   );
 }
 
@@ -298,15 +284,6 @@ export function Avatar({ account, size = 30 }: { account: Account; size?: number
   );
 }
 
-export function SectionLabel({ children, color }: { children: React.ReactNode; color?: string }) {
-  return (
-    <span className="section-label" style={color ? { color } : undefined}>
-      <i />
-      {children}
-    </span>
-  );
-}
-
 export function PageTitle({
   icon,
   title,
@@ -452,6 +429,7 @@ export function TextField({
         type={type}
         autoFocus={autoFocus}
         placeholder={placeholder}
+        aria-label={placeholder || "Text field"}
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
         onKeyDown={(event) => {
@@ -474,7 +452,7 @@ export function TextArea({
   rows?: number;
 }) {
   return (
-    <textarea className="textarea" value={value} rows={rows} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    <textarea className="textarea" aria-label={placeholder || "Text"} value={value} rows={rows} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
   );
 }
 
@@ -495,6 +473,7 @@ export function Segmented<T extends string>({
         <button
           key={option.value}
           className={cx("segment", value === option.value && "segment-active")}
+          aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           type="button"
         >
@@ -520,15 +499,9 @@ export function Modal({
   children: React.ReactNode;
   width?: number;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const handler = (event: KeyboardEvent) => {
-      // skip an Escape that cancels IME composition or was already handled by a layer above (the palette)
-      if (event.key === "Escape" && !event.defaultPrevented && !isComposing(event)) onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  const dialogRef = useDialog(open, onClose);
+  const titleId = useId();
+  const descriptionId = useId();
 
   // portal to <body> so the scrim covers the whole window, not just the panel the page lives in
   return createPortal(
@@ -544,7 +517,13 @@ export function Modal({
           }}
         >
           <motion.div
+            ref={dialogRef}
             className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            aria-describedby={subtitle ? descriptionId : undefined}
+            tabIndex={-1}
             style={{ width }}
             initial={{ opacity: 0, y: 18, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -553,8 +532,8 @@ export function Modal({
           >
             <header className="modal-head">
               <div>
-                <h2>{title}</h2>
-                {subtitle ? <p>{subtitle}</p> : null}
+                <h2 id={titleId}>{title}</h2>
+                {subtitle ? <p id={descriptionId}>{subtitle}</p> : null}
               </div>
               <IconButton icon="x" label="close" onClick={onClose} />
             </header>
@@ -647,9 +626,10 @@ export function Empty({
 }
 
 export function Progress({ value, tint }: { value: number; tint?: string }) {
+  const percent = Number.isFinite(value) ? Math.max(0, Math.min(100, value * 100)) : 0;
   return (
-    <div className="progress">
-      <span style={{ width: `${Math.max(2, Math.min(100, value * 100))}%`, background: tint }} />
+    <div className="progress" role="progressbar" aria-label="Task progress" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100}>
+      <span style={{ width: `${percent}%`, background: tint }} />
     </div>
   );
 }
@@ -658,11 +638,17 @@ export function KeyHint({ children }: { children: React.ReactNode }) {
   return <kbd className="kbd">{children}</kbd>;
 }
 
-/** Sun/moon toggle. The new theme opens as a circle from the button, as on the portfolio. */
+function subscribeTheme(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return () => observer.disconnect();
+}
+
+/** Follow native, system and local theme changes, including reduced-motion toggles. */
 export function ThemeToggle({ onToggle }: { onToggle: (next: "light" | "dark") => void }) {
   const ref = useRef<HTMLButtonElement>(null);
   const root = document.documentElement;
-  const dark = root.dataset.theme === "dark";
+  const dark = useSyncExternalStore(subscribeTheme, () => root.dataset.theme === "dark", () => false);
   const next = dark ? "light" : "dark";
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -687,11 +673,4 @@ export function ThemeToggle({ onToggle }: { onToggle: (next: "light" | "dark") =
       <PixelIcon name={dark ? "sun" : "moon"} size={14} />
     </button>
   );
-}
-
-export function useCopyToast(notify: (title: string, detail?: string) => void) {
-  return (text: string, title = "copied") => {
-    void navigator.clipboard?.writeText(text);
-    notify(title, "on your clipboard");
-  };
 }

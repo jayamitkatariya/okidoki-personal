@@ -76,7 +76,7 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
         webView.loadHTMLString(html, baseURL: nil)
 
         let controlWidth: CGFloat = 320
-        let controlHeight: CGFloat = 40
+        let controlHeight: CGFloat = 46
         let control = SimControlPanel(contentRect: NSRect(x: screen.frame.midX - controlWidth / 2,
                                                          y: screen.visibleFrame.minY + 16,
                                                          width: controlWidth, height: controlHeight),
@@ -84,7 +84,7 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
                                       backing: .buffered, defer: false)
         control.isOpaque = false
         control.backgroundColor = .clear
-        control.hasShadow = true
+        control.hasShadow = false
         control.level = .statusBar + 4
         control.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         control.isMovableByWindowBackground = true
@@ -168,43 +168,22 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
 
 struct SimControlView: View {
     @ObservedObject var model: SimModel
-    @EnvironmentObject private var env: AppEnvironment
     var onClose: () -> Void
-    @State private var pulse = false
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(Color(hex: 0x1FB57A).opacity(0.2)).frame(width: 20, height: 20)
-                    .scaleEffect(pulse ? 1.16 : 0.9)
-                    .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
-                PixelGlyph(name: "wand", size: 10, color: Color(hex: 0x1FB57A))
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                Text("overlay · \(model.title)")
-                    .font(.okBody(11, .medium))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                Text("drawn on your screen · esc closes · drag to move")
-                    .font(.okMono(8))
-                    .foregroundStyle(Color.white.opacity(0.42))
-            }
+            Text(model.title)
+                .font(.okBody(12, .medium))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
             Spacer(minLength: 0)
-            Button("close") { onClose() }
+            Button("Close", action: onClose)
                 .buttonStyle(.plain)
-                .font(.okMono(9, .semibold))
-                .foregroundStyle(Color(hex: 0x1A120E))
-                .padding(.horizontal, 10)
-                .frame(height: 24)
-                .background(Capsule().fill(Color(hex: 0x0F7A5C)))
+                .font(.okBody(12, .medium))
+                .foregroundStyle(Color.white.opacity(0.72))
         }
-        .padding(.horizontal, 11)
-        .frame(width: 320, height: 38)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(hex: 0x0B0B0C).opacity(0.96))
-                .shadow(color: .black.opacity(0.3), radius: 18, y: 7)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 0.7))
-        .onAppear { pulse = true }
+        .padding(.horizontal, 16)
+        .frame(width: 320, height: 46)
+        .overlayGlass(cornerRadius: 23, veil: 0.42, tone: .dark)
     }
 }

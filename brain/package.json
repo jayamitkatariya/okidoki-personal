@@ -7,7 +7,9 @@
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "build": "bun build src/server.ts --outfile dist/server.js --target=bun",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests",
+    "smoke:api": "bun scripts/smoke-api.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
