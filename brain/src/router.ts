@@ -1,5 +1,6 @@
 import type { Decision, NativeContext, TeachMark, TeachPlanStep, ThinkRequest } from "./types";
 import { terminalDecision } from "./terminal";
+import { clipboardFor } from "./llm";
 
 const weekdays: Record<string, number> = {
   sunday: 1,
@@ -231,6 +232,8 @@ export function localRouter(request: ThinkRequest): Decision {
   const t = raw.toLowerCase();
   const installed = request.installedTools ?? [];
   const native = request.nativeContext;
+  // Only when the request names the clipboard; same rule as the model path.
+  const clipboard = clipboardFor(request);
 
   if (!raw) {
     return {
@@ -280,7 +283,7 @@ export function localRouter(request: ThinkRequest): Decision {
   }
 
   if (t.startsWith("watch me") || t.includes("record what i do")) {
-    return { kind: "watch", title: "watching you", answer: "go ahead — do it once, slowly. i'll watch app changes and clicks, then repeat it back as plain steps. click stop or shake again when you're done.", speak: "I'm watching. Do it once." };
+    return { kind: "watch", title: "watching you", answer: "go ahead — do it once, slowly. i'll watch app changes and clicks, then repeat it back as plain steps. click stop in the notch when you're done.", speak: "I'm watching. Do it once." };
   }
 
   const openMatch = raw.match(/^(?:please\s+)?(?:open|launch|start)\s+(?:the\s+)?([\w .+]+?)(?:\s+app)?[.!?]*$/i);
@@ -391,7 +394,7 @@ export function localRouter(request: ThinkRequest): Decision {
   }
 
   if (t.startsWith("note ") || t === "note this" || t === "note that" || t.includes("make a note")) {
-    const body = t === "note this" || t === "note that" || t.includes("clipboard") ? request.clipboardText ?? "" : raw.replace(/^(make a note|note)( that| this)?[ :]*/i, "");
+    const body = t === "note this" || t === "note that" || t.includes("clipboard") ? clipboard : raw.replace(/^(make a note|note)( that| this)?[ :]*/i, "");
     return {
       kind: "quick_action",
       title: "note saved",
@@ -569,12 +572,12 @@ export function localRouter(request: ThinkRequest): Decision {
     if (request.documentText) {
       return { kind: "answer", title: "summary", answer: summarize(request.documentText, request.documentName ?? ""), speak: "Here's the short version." };
     }
-    if (request.clipboardText) return { kind: "answer", title: "summary", answer: summarize(request.clipboardText, "clipboard") };
+    if (clipboard) return { kind: "answer", title: "summary", answer: summarize(clipboard, "clipboard") };
     return { kind: "answer", title: "summarize", answer: "pick the PDF and ask again — i'll read the whole thing, not just the page you're on.", actions: ["choose pdf"], pickFile: "pdf" };
   }
 
   if (t.includes("error") || t.includes("not working") || t.includes("broken") || t.includes("what's this")) {
-    const clip = request.clipboardText ?? "";
+    const clip = clipboard;
     if (clip) return { kind: "answer", title: "looks like", answer: explainError(clip), actions: ["explain more", "fix it"] };
     if (request.screenshotBase64) {
       return { kind: "answer", title: "what i see", answer: "i have the screen area but no model key to read it. paste the error and i can still walk you through common fixes.", actions: [] };

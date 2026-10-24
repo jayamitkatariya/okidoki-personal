@@ -128,7 +128,8 @@ export function PixelWordmark({ text = "okidoki", className = "", maxCell = 12 }
     };
 
     const build = () => {
-      const width = canvas.getBoundingClientRect().width;
+      // The canvas is sized by its container; its own box is only ever its last drawn size.
+      const width = (canvas.parentElement ?? canvas).getBoundingClientRect().width;
       if (!width) return;
       cell = Math.max(4, Math.min(maxCell, Math.floor(width / cols)));
       size = cell * cols;
@@ -144,7 +145,7 @@ export function PixelWordmark({ text = "okidoki", className = "", maxCell = 12 }
     };
 
     const resize = new ResizeObserver(build);
-    resize.observe(canvas);
+    resize.observe(canvas.parentElement ?? canvas);
     const intersection = new IntersectionObserver(([entry]) => {
       visible = entry.isIntersecting;
       start();

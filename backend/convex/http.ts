@@ -129,7 +129,8 @@ http.route({
       if (!(await ctx.runMutation(internal.sync.stillCurrent, { accountId, sentAt }))) {
         return json({ error: "stale", detail: "superseded by a newer sync", written, removed }, 409);
       }
-      const keep = items.map((item: any) => String(item.id));
+      // One string, not an array: Convex caps array arguments at 8,192 elements.
+      const keep = items.map((item: any) => String(item.id)).join("\n");
       let cursor: string | null = null;
       for (;;) {
         const page: { cursor: string; isDone: boolean; removed: number } = await ctx.runMutation(internal.sync.removeMissingPage, {
@@ -224,8 +225,10 @@ http.route({
       runId: body.runId,
       run: body.run,
     });
-    const base = (process.env.OKIDOKI_SHARE_BASE_URL ?? "https://okidoki.app").replace(/\/$/, "");
-    return json({ token: result.token, url: `${base}/#/share/${result.token}` });
+    // No hosted share page yet: without OKIDOKI_SHARE_BASE_URL there is no link to hand out,
+    // and the Mac falls back to copying the run itself.
+    const base = (process.env.OKIDOKI_SHARE_BASE_URL ?? "").replace(/\/$/, "");
+    return json({ token: result.token, url: base ? `${base}/#/share/${result.token}` : null });
   }),
 });
 

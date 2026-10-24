@@ -73,10 +73,13 @@ const conceptTool = {
 function conceptSystem(request: ConceptRequest): string {
   return [
     `You are Okidoki's tutor, explaining "${request.topic}" with a small animated 2D/3D model that floats beside what the learner is looking at.`,
-    `Build the model from the parts kit, then teach it in 4-8 beats. Each beat changes the model (parts appear, something moves or spins, the camera comes closer, a part lights up) while you narrate one idea. The learner can drag to orbit and click any named part to ask about it, so give parts real names and descriptions.`,
-    `Style: short, warm, concrete, lowercase labels, no emoji. Narration is spoken aloud: one or two sentences per beat.`,
+    `First decide the ONE mental model that makes this click, then build only that. Teach it in 4-7 beats. Each beat must change the model visibly (parts appear, something moves or spins, the camera comes closer, a part lights up) while you narrate one idea. The learner can drag to orbit and click any named part to ask about it, so give parts real names and one-sentence descriptions in the words a learner would use.`,
+    `Pick the mode deliberately: 3d for physical things (machines, anatomy, molecules, planets, buildings, devices); 2d for ideas and processes (flows, algorithms, data structures, networks, timelines, graphs, finance, physics diagrams). In 2d lay things out left-to-right or top-to-bottom like a clean diagram, with arrows and labels.`,
+    `If they pointed at something on screen ("this chart", "this code", "this video", "this diagram"), model THAT thing from the screenshot, with the same names and numbers they can see, and add points so the matching spot on their screen gets circled.`,
+    `Style: short, warm, concrete, lowercase labels, no emoji. Narration is spoken aloud: one or two sentences per beat. Fill title and intro first — they are spoken while the model is still being drawn.`,
     `Make it mechanically plausible: an engine has a crank, rods and pistons that oscillate; a cell has a membrane and organelles; a neural net has layers of spheres with tubes between them and particles flowing; the solar system has orbit rings and spinning planets. Prefer assembly beats (parts arriving one by one) over a static model. Use explode, cutaway, xray and camera moves where they explain something.`,
-    `Keep coordinates small (within ±6), part count under 40, and reveal parts with show actions.`,
+    `Give functional groups distinct colors and anchor labels to parts. No walls of text: at most one text part per beat.`,
+    `Keep the whole model within about ±4 units of the origin so the default camera frames it, part count under 24, and reveal parts with show actions.`,
     request.language ? `Write everything in ${request.language}.` : ``,
     SPEC_REFERENCE,
     request.pageTitle || request.pageURL ? `They are looking at: ${request.pageTitle ?? ""} ${request.pageURL ?? ""}`.trim() : ``,
@@ -255,10 +258,78 @@ function toBeats(scene: JSONObject): ConceptBeat[] {
   }));
 }
 
+/** Pull a top-level string field out of a partially streamed JSON object, once its closing quote has arrived. */
+export function partialField(partial: string, field: string): string | undefined {
+  const match = partial.match(new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+  if (!match) return undefined;
+  try { return JSON.parse(`"${match[1]}"`) as string; } catch { return undefined; }
+}
+
+/**
+ * Streams one tool call and resolves with the final tool input. `onPartial` sees the accumulated
+ * JSON text as it grows, so callers can act on early fields (title, intro) while the rest streams.
+ */
+export async function callAnthropicStreaming(
+  body: Record<string, unknown>,
+  apiKey: string,
+  timeout: number,
+  onPartial: (partial: string) => void,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Record<string, unknown> | null> {
+  const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ ...body, stream: true }),
+    signal: AbortSignal.timeout(timeout),
+  });
+  if (!response.ok || !response.body) {
+    const detail = (await response.text()).slice(0, 160);
+    throw new Error(`model ${response.status}: ${detail}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let toolIndex: number | null = null;
+  let partial = "";
+  let done = false;
+  while (!done) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+      if (!line.startsWith("data:")) continue;
+      let event: { type?: string; index?: number; content_block?: { type?: string }; delta?: { type?: string; partial_json?: string } };
+      try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (event.type === "content_block_start" && event.content_block?.type === "tool_use" && toolIndex === null) {
+        toolIndex = event.index ?? 0;
+      } else if (event.type === "content_block_delta" && event.index === toolIndex && event.delta?.type === "input_json_delta") {
+        partial += event.delta.partial_json ?? "";
+        onPartial(partial);
+      } else if (event.type === "content_block_stop" && event.index === toolIndex) {
+        done = true;
+      } else if (event.type === "message_stop") {
+        done = true;
+      }
+    }
+  }
+  if (toolIndex === null || !partial.trim()) return null;
+  try { return JSON.parse(partial) as Record<string, unknown>; } catch { return null; }
+}
+
+export interface ConceptProgress {
+  /** Fired once, as soon as the title and intro have streamed in. */
+  intro?: (title: string, intro: string) => void;
+}
+
 export async function conceptLesson(
   request: ConceptRequest,
   apiKey: string | undefined,
   fetchImpl: typeof fetch = fetch,
+  progress: ConceptProgress = {},
 ): Promise<{ lesson: ConceptLesson | null; usedModel: boolean; error?: string; warnings?: string[] }> {
   if (!apiKey) return { lesson: null, usedModel: false, error: "anthropic key required" };
   const model = request.model || "claude-sonnet-4-5";
@@ -268,14 +339,23 @@ export async function conceptLesson(
   }
   content.push({ type: "text", text: `Teach: ${request.topic}` });
   try {
-    const input = await callAnthropic({
+    let introSent = false;
+    const input = await callAnthropicStreaming({
       model,
-      max_tokens: 6000,
+      max_tokens: 5000,
       system: conceptSystem(request),
       messages: [{ role: "user", content }],
       tools: [conceptTool],
       tool_choice: { type: "auto" },
-    }, apiKey, 110_000, fetchImpl);
+    }, apiKey, 110_000, (partial) => {
+      if (introSent || !progress.intro) return;
+      const title = partialField(partial, "title");
+      const intro = partialField(partial, "intro");
+      if (title !== undefined && intro !== undefined) {
+        introSent = true;
+        progress.intro(title.slice(0, 60), intro.slice(0, 240));
+      }
+    }, fetchImpl);
     if (!input) return { lesson: null, usedModel: false, error: "empty model response" };
     const { scene, parts, warnings } = sanitizeScene(input);
     if ((scene.parts as unknown[]).length === 0 || (scene.beats as unknown[]).length === 0) {

@@ -9,6 +9,7 @@ public final class TerminalOutputBuffer: @unchecked Sendable {
     private var frames = ""
     private var scanTail = ""
     private var output = ""
+    private var refreshPending = false
 
     public init(marker: String, commandCount: Int) {
         self.marker = marker
@@ -32,8 +33,18 @@ public final class TerminalOutputBuffer: @unchecked Sendable {
         scanTail = String(scanTail.suffix(512))
     }
 
+    /// True for the first chunk since the page last read `progress`, so a burst of output
+    /// becomes one refresh instead of one per chunk.
+    public func needsRefresh() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if refreshPending { return false }
+        refreshPending = true
+        return true
+    }
+
     public var progress: TerminalActions.Progress {
         lock.lock(); defer { lock.unlock() }
+        refreshPending = false
         return TerminalActions.progress(in: frames + output, marker: marker, commandCount: commandCount)
     }
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { conceptFollowUp, conceptLesson, sanitizeScene } from "../src/concept";
+import { conceptFollowUp, conceptLesson, partialField, sanitizeScene } from "../src/concept";
 
 test("a scene keeps only well-formed parts and actions", () => {
   const { scene, parts, warnings } = sanitizeScene({
@@ -34,24 +34,51 @@ test("a scene keeps only well-formed parts and actions", () => {
   expect(beats[1].actions[0].factor).toBe(3);
 });
 
-test("a concept lesson is built from the tool reply and carries beats and parts", async () => {
+/** The Anthropic streaming shape: a tool_use block whose JSON arrives in input_json_delta pieces. */
+function sseToolStream(input: unknown, pieces = 6): Response {
+  const text = JSON.stringify(input);
+  const size = Math.ceil(text.length / pieces);
+  const lines: string[] = [
+    `event: message_start\ndata: ${JSON.stringify({ type: "message_start" })}\n\n`,
+    `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "t", name: "okidoki_concept", input: {} } })}\n\n`,
+  ];
+  for (let i = 0; i < text.length; i += size) {
+    lines.push(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: text.slice(i, i + size) } })}\n\n`);
+  }
+  lines.push(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
+  lines.push(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
+  const encoder = new TextEncoder();
+  let i = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < lines.length) controller.enqueue(encoder.encode(lines[i++]));
+      else controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+const engineInput = {
+  title: "four-stroke engine",
+  intro: "an engine is a pump that runs on tiny explosions.",
+  mode: "3d",
+  parts: [
+    { id: "block", type: "box", name: "engine block", description: "the housing", size: [3, 2, 2] },
+    { id: "label", type: "label", text: "block", anchor: "block" },
+  ],
+  beats: [
+    { say: "this is the block.", actions: [{ type: "show", ids: ["block"], effect: "grow" }] },
+    { say: "now we look inside.", caption: "cutaway", actions: [{ type: "cutaway", axis: "x", at: 0, on: true }], duration: 3 },
+  ],
+};
+
+test("a concept lesson is built from the streamed tool reply and carries beats and parts", async () => {
   const api = (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body));
+    expect(body.stream).toBe(true);
     expect(body.tool_choice).toEqual({ type: "auto" });
     expect(body.tools[0].name).toBe("okidoki_concept");
-    return Response.json({ content: [{ type: "tool_use", id: "t", name: "okidoki_concept", input: {
-      title: "four-stroke engine",
-      intro: "an engine is a pump that runs on tiny explosions.",
-      mode: "3d",
-      parts: [
-        { id: "block", type: "box", name: "engine block", description: "the housing", size: [3, 2, 2] },
-        { id: "label", type: "label", text: "block", anchor: "block" },
-      ],
-      beats: [
-        { say: "this is the block.", actions: [{ type: "show", ids: ["block"], effect: "grow" }] },
-        { say: "now we look inside.", caption: "cutaway", actions: [{ type: "cutaway", axis: "x", at: 0, on: true }], duration: 3 },
-      ],
-    } }] });
+    return sseToolStream(engineInput);
   }) as unknown as typeof fetch;
   const result = await conceptLesson({ topic: "how an engine works" }, "test-key", api);
   expect(result.usedModel).toBe(true);
@@ -62,6 +89,23 @@ test("a concept lesson is built from the tool reply and carries beats and parts"
   const scene = JSON.parse(result.lesson!.sceneJSON);
   expect(scene.parts).toHaveLength(2);
   expect(scene.camera.position).toEqual([6, 4, 8]);
+});
+
+test("the title and intro are reported before the lesson finishes streaming", async () => {
+  const api = (async () => sseToolStream(engineInput, 40)) as unknown as typeof fetch;
+  const order: string[] = [];
+  const result = await conceptLesson({ topic: "engine" }, "test-key", api, {
+    intro: (title, intro) => order.push(`intro:${title}|${intro}`),
+  });
+  order.push("lesson");
+  expect(order).toEqual(["intro:four-stroke engine|an engine is a pump that runs on tiny explosions.", "lesson"]);
+  expect(result.lesson?.intro).toBe("an engine is a pump that runs on tiny explosions.");
+});
+
+test("partialField waits for the closing quote and unescapes", () => {
+  expect(partialField('{"title": "four-str', "title")).toBeUndefined();
+  expect(partialField('{"title": "four-stroke engine", "intro": "say \\"hi\\"', "title")).toBe("four-stroke engine");
+  expect(partialField('{"title": "x", "intro": "say \\"hi\\" now"}', "intro")).toBe('say "hi" now');
 });
 
 test("a follow-up answers and appends beats that reference existing parts", async () => {

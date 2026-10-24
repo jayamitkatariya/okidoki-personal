@@ -80,8 +80,10 @@ struct NotchMetrics: Equatable {
 
     var maxWidth: CGFloat { max(280, screenWidth - 48) }
     var maxBodyHeight: CGFloat { min(420, max(220, screenHeight * 0.5)) }
-    var maxIslandHeight: CGFloat { bandHeight + maxBodyHeight + 40 }
-    var expandedWidth: CGFloat { clampWidth(392 + shoulder * 2) }
+    /// Room for the body plus the expanded footer row under it.
+    var maxIslandHeight: CGFloat { bandHeight + maxBodyHeight + 84 }
+    /// Wide enough that the controls either side of the camera have real room.
+    var expandedWidth: CGFloat { clampWidth(520 + shoulder * 2) }
 
     static func even(_ value: CGFloat) -> CGFloat { (value / 2).rounded(.up) * 2 }
 
@@ -94,6 +96,8 @@ final class NotchModel: ObservableObject {
     @Published var expanded = false
     @Published var listening = false
     @Published var quiet = false
+    /// Mirrors `settings.defaultInput` so the mode switch can render without observing the store.
+    @Published var inputMode: InputMode = .typing
     /// What okidoki is saying right now, while captions are on.
     @Published var caption: String?
 
@@ -111,6 +115,8 @@ final class NotchModel: ObservableObject {
     var hoverHold = false
     /// Measured island size (presented target), reported by the view.
     var onIslandSize: ((CGSize) -> Void)?
+    /// Folds the expanded island back up, e.g. after one of its actions opens something else.
+    var onClose: (() -> Void)?
     private var expiryWork: [String: DispatchWorkItem] = [:]
 
     static let maxToasts = 3
@@ -205,8 +211,10 @@ final class NotchModel: ObservableObject {
 
 // MARK: - AppKit plumbing
 
+/// Never key: a click on Pause or Dismiss must not pull typing away from the app you're in.
+/// HoverHostingView accepts first mouse, so its buttons still work on the first click.
 final class NotchPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
 
@@ -317,10 +325,24 @@ final class NotchController {
 
     func install() {
         model.onIslandSize = { [weak self] size in self?.islandSizeChanged(size) }
+        model.onClose = { [weak self] in
+            self?.lastManualClose = Date()
+            self?.setExpanded(false)
+        }
         buildPanel()
         buildHotZone()
         observe()
         refresh()
+        // Dev-only: hold the island open so its expanded layout can be reviewed without hovering.
+        if ProcessInfo.processInfo.environment["OKIDOKI_NOTCH_PREVIEW"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.setExpanded(true) }
+        }
+        if let directory = ProcessInfo.processInfo.environment["OKIDOKI_NOTCH_SNAPSHOT"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self else { return }
+                NotchSnapshots.run(env: self.env, metrics: self.model.metrics, into: directory)
+            }
+        }
     }
 
     private func buildPanel() {
@@ -340,7 +362,8 @@ final class NotchController {
         panel.isMovableByWindowBackground = false
         panel.animationBehavior = .none
         panel.isReleasedWhenClosed = false
-        panel.sharingType = ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" ? .readOnly : .none
+        let preview = ["OKIDOKI_OVERLAY_PREVIEW", "OKIDOKI_NOTCH_PREVIEW"].contains { ProcessInfo.processInfo.environment[$0] == "1" }
+        panel.sharingType = preview ? .readOnly : .none
         panel.acceptsMouseMovedEvents = true
 
         let host = HoverHostingView(rootView: NotchRootView(model: model, env: env))
@@ -399,6 +422,7 @@ final class NotchController {
                 guard let self else { return }
                 let quiet = settings.quietMode || self.env.inCall
                 if self.model.quiet != quiet { self.model.quiet = quiet }
+                if self.model.inputMode != settings.defaultInput { self.model.inputMode = settings.defaultInput }
                 self.scheduleRefresh()
             }
             .store(in: &cancellables)
@@ -435,6 +459,8 @@ final class NotchController {
         if !enabled, model.expanded { setExpanded(false, refreshAfter: false) }
         let shouldShow = enabled && (model.expanded || (!model.quiet && model.hasContent))
         if shouldShow { present() } else { dismiss() }
+        // The hover strip sits over the menu bar; with the notch off it must not eat clicks there.
+        if enabled { hotZone?.orderFrontRegardless() } else { hotZone?.orderOut(nil) }
         reconcileRecordingHUD()
     }
 
@@ -630,6 +656,7 @@ final class NotchController {
     }
 
     private func screensChanged() {
+        guard !NSScreen.screens.isEmpty else { return }
         let next = NSScreen.okidokiPrimary
         screen = next
         let metrics = NotchMetrics(screen: next)

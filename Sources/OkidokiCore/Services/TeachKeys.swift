@@ -38,11 +38,8 @@ public enum TeachKeys {
             "arrowup": "up", "arrowdown": "down", "arrowleft": "left", "arrowright": "right",
             "spacebar": "space",
         ]
-        let pieces = expected.lowercased()
-            .replacingOccurrences(of: " ", with: "+")
-            .split { $0 == "+" || $0 == "-" }
-            .map(String.init)
-            .filter { !$0.isEmpty }
+        // The same parser the key actuator uses, so "cmd+-" and "cmd++" keep their key.
+        let pieces = EventActuator.keyPieces(expected)
         return pieces.map { aliases[$0] ?? $0 }
     }
 
@@ -66,21 +63,5 @@ public enum TeachKeys {
             "delete": "⌫", "esc": "esc", "space": "space", "up": "↑", "down": "↓", "left": "←", "right": "→",
         ]
         return normalize(expected).map { glyphs[$0] ?? $0.uppercased() }
-    }
-}
-
-// MARK: - Mode
-
-/// Which way a lesson starts: wording first, then the saved choice.
-public enum TeachModePicker {
-    public static func infer(text: String, saved: String) -> String {
-        let lower = text.lowercased()
-        if lower.contains("let me try") || lower.contains("teach me") || lower.contains("guide me") || lower.contains("walk me through") {
-            return "guide"
-        }
-        if lower.hasPrefix("show me") || lower.contains("just show me") || lower.contains("do it while") || lower.contains("show me how") || lower.contains("demo ") || lower.hasSuffix("demo") {
-            return "show"
-        }
-        return ["guide", "show"].contains(saved) ? saved : "guide"
     }
 }

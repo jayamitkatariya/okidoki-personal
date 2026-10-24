@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { AccountKind } from "../types";
+import type { AccountKind, AgentStatus, CodingAgentID, PrivateMacPhase, PrivateMacState, Toast } from "../types";
 import { SyncLogin } from "../components/CloudAuth";
-import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
+import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
   { id: "sarah", name: "Sarah", blurb: "Soothing and calm · American" },
@@ -26,12 +26,14 @@ const PERMISSIONS = [
 ];
 
 // Brand-green family first; the setting key stays cursorGlowHex / drawingColorHex.
-const COLORS = ["1FB57A", "3DDC97", "9BE8C6", "0B8A5E", "B8F26B", "8FB7FF", "F7F2E9"];
+const COLORS = ["44E45E", "1FB57A", "3DDC97", "9BE8C6", "0B8A5E", "B8F26B", "8FB7FF", "F7F2E9"];
 
 const SECTIONS = [
   { id: "instructions", label: "Instructions", icon: "pencil" },
+  { id: "agents", label: "Agents", icon: "code" },
   { id: "voice", label: "Voice & input", icon: "mic" },
   { id: "permissions", label: "Permissions", icon: "lock" },
+  { id: "private-mac", label: "Private Mac", icon: "screen" },
   { id: "safety", label: "Safety", icon: "hand" },
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
@@ -144,6 +146,19 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
+          <SettingsSection id="agents" title="Agents" description="Coding agents on this Mac. okidoki reads each CLI's own login files to see who's signed in; nothing is copied and the Keychain is never opened.">
+            <AgentsSettings
+              agents={state.agents}
+              selected={settings.selectedAgent}
+              autoConnect={settings.autoConnectAgents ?? true}
+              native={native}
+              onSelect={(id) => updateSettings({ selectedAgent: id })}
+              onAutoConnect={(value) => updateSettings({ autoConnectAgents: value })}
+              invoke={invoke}
+              notify={notify}
+            />
+          </SettingsSection>
+
           <SettingsSection id="voice" title="Voice & input" description="Your default for every summon. You can switch for a single request.">
             <div className="pref-group">
               <PrefRow title="Default input" detail={settings.defaultInput === "voice" ? "Starts listening right away" : "A small box opens at your cursor"}>
@@ -229,17 +244,19 @@ export function SettingsPage() {
                         </span>
                       ) : (
                         <>
-                          <span className="pref-status is-warn">{status}</span>
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={() => {
-                              invoke("requestPermission", { kind: permission.id });
-                              notify("Asking macOS", permission.title, "info");
-                            }}
-                          >
-                            Grant
-                          </Button>
+                          <span className="pref-status is-warn">{native ? status : "on your Mac"}</span>
+                          {native ? (
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => {
+                                invoke("requestPermission", { kind: permission.id });
+                                notify("Asking macOS", permission.title, "info");
+                              }}
+                            >
+                              Grant
+                            </Button>
+                          ) : null}
                         </>
                       )}
                       <IconButton icon="external" label={`Open ${permission.title} in System Settings`} onClick={() => invoke("openPermissionSettings", { kind: permission.id })} />
@@ -248,6 +265,18 @@ export function SettingsPage() {
                 );
               })}
             </div>
+          </SettingsSection>
+
+          <SettingsSection id="private-mac" title="Private Mac" description="Give okidoki its own macOS, in a window. Runs that drive apps happen there while you keep working here.">
+            <PrivateMacSettings
+              privateMac={state.privateMac ?? null}
+              target={settings.computerTarget}
+              native={native}
+              onTarget={(value) => updateSettings({ computerTarget: value })}
+              invoke={invoke}
+              notify={notify}
+              confirm={setConfirm}
+            />
           </SettingsSection>
 
           <SettingsSection id="safety" title="Safety" description="okidoki always asks before sending, buying, deleting, installing or running risky commands.">
@@ -576,6 +605,298 @@ function SettingsSection({ id, title, description, children }: { id: string; tit
       </header>
       {children}
     </section>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 MB";
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1e6)} MB`;
+}
+
+function agentDetail(agent: AgentStatus): string {
+  const ready = agent.installed && agent.signedIn;
+  const who = agent.account ? `Signed in as ${agent.account}` : agent.providers.length ? `Signed in to ${agent.providers.join(", ")}` : "Signed in";
+  if (ready) return agent.source ? `${who} · ${agent.source}` : who;
+  if (agent.installed) return `Installed, not signed in · run ${agent.loginHint}`;
+  if (agent.signedIn) return `${who}, but the CLI isn't on your PATH · ${agent.installHint}`;
+  return `Not installed · ${agent.installHint}`;
+}
+
+function AgentsSettings({
+  agents,
+  selected,
+  autoConnect,
+  native,
+  onSelect,
+  onAutoConnect,
+  invoke,
+  notify,
+}: {
+  agents: AgentStatus[] | undefined;
+  selected: CodingAgentID;
+  autoConnect: boolean;
+  native: boolean;
+  onSelect: (id: CodingAgentID) => void;
+  onAutoConnect: (value: boolean) => void;
+  invoke: (type: string, payload?: Record<string, unknown>) => void;
+  notify: (title: string, detail?: string, kind?: Toast["kind"]) => void;
+}) {
+  if (!native || !agents) {
+    return (
+      <div className="pref-group">
+        <PrefRow title="Default coding agent" detail="Open this in the okidoki app on your Mac to see which agents are installed and signed in.">
+          <span className="pref-status">{selected}</span>
+        </PrefRow>
+      </div>
+    );
+  }
+
+  const ready = agents.filter((agent) => agent.installed && agent.signedIn);
+  return (
+    <>
+      <div className="pref-group">
+        <PrefRow
+          title="Auto-connect"
+          detail={autoConnect ? "If the default agent is missing or logged out, okidoki switches to one that's ready" : "The default agent stays put even when it can't answer"}
+        >
+          <Switch label="Auto-connect agents" checked={autoConnect} onChange={onAutoConnect} />
+        </PrefRow>
+        <PrefRow title="Detected" detail={ready.length ? `${ready.length} of ${agents.length} ready: ${ready.map((agent) => agent.name).join(", ")}` : "No agent is both installed and signed in yet"}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="refresh"
+            onClick={() => {
+              invoke("refreshTools");
+              notify("Checking agents", "Reading your PATH and each CLI's login files", "info");
+            }}
+          >
+            Rescan
+          </Button>
+        </PrefRow>
+      </div>
+
+      <div className="pref-group">
+        {agents.map((agent) => {
+          const isReady = agent.installed && agent.signedIn;
+          const isDefault = agent.id === selected;
+          return (
+            <div className="pref-row" key={agent.id}>
+              <span className={cx("kind-icon small", !isReady && "is-warn")}>
+                <PixelIcon name="code" size={14} />
+              </span>
+              <span className="pref-copy">
+                <strong>{agent.name}</strong>
+                <em>{agentDetail(agent)}</em>
+              </span>
+              <span className="pref-control">
+                {isDefault ? (
+                  <span className={cx("pref-status", isReady ? "is-on" : "is-warn")}>
+                    <PixelIcon name="check" size={13} /> Default
+                  </span>
+                ) : isReady ? (
+                  <>
+                    <span className="pref-status is-on">Ready</span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        onSelect(agent.id);
+                        notify("Default agent", agent.name);
+                      }}
+                    >
+                      Use
+                    </Button>
+                  </>
+                ) : (
+                  <span className="pref-status is-warn">{agent.installed ? "Logged out" : agent.signedIn ? "Not on PATH" : "Not installed"}</span>
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function PrivateMacSettings({
+  privateMac,
+  target,
+  native,
+  onTarget,
+  invoke,
+  notify,
+  confirm,
+}: {
+  privateMac: PrivateMacState | null;
+  target: "mac" | "vm";
+  native: boolean;
+  onTarget: (value: "mac" | "vm") => void;
+  invoke: (type: string, payload?: Record<string, unknown>) => void;
+  notify: (title: string, detail?: string, kind?: Toast["kind"]) => void;
+  confirm: (request: ConfirmRequest) => void;
+}) {
+  const vm = privateMac;
+  const supported = Boolean(vm?.supported);
+  const phase: PrivateMacPhase = vm?.phase ?? "unsupported";
+  const busy = phase === "downloading" || phase === "installing";
+  const ready = phase === "stopped" || phase === "running" || phase === "starting" || phase === "stopping";
+  const act = (action: string) => invoke("privateMac", { action });
+
+  if (!native || !vm) {
+    return (
+      <div className="pref-group">
+        <PrefRow title="Where okidoki works" detail="Open this in the okidoki app on your Mac to set up a private Mac.">
+          <span className="pref-status">{target === "vm" ? "Private Mac" : "This Mac"}</span>
+        </PrefRow>
+      </div>
+    );
+  }
+
+  const statusTone = phase === "failed" ? "is-warn" : ready ? "is-on" : "";
+  const statusLabel =
+    phase === "running" ? "Running" : phase === "stopped" ? "Off" : phase === "starting" ? "Starting" : phase === "stopping" ? "Stopping"
+    : phase === "downloading" ? "Downloading" : phase === "installing" ? "Installing" : phase === "failed" ? "Failed"
+    : phase === "unsupported" ? "Unavailable" : "Not set up";
+
+  return (
+    <>
+      <div className="pref-group">
+        <PrefRow
+          title="Where okidoki works"
+          detail={
+            !supported
+              ? "A private Mac needs Apple silicon. Runs happen on this Mac."
+              : target === "vm"
+                ? "Runs drive the private Mac. Your screen and cursor stay yours."
+                : "Runs share your screen. Press Esc to take over anytime."
+          }
+        >
+          <Segmented<"mac" | "vm">
+            compact
+            options={[
+              { value: "mac", label: "This Mac" },
+              { value: "vm", label: "Private Mac" },
+            ]}
+            value={supported ? target : "mac"}
+            onChange={(value) => {
+              if (value === "vm" && !supported) {
+                notify("Not on this Mac", "A private Mac needs Apple silicon.", "warning");
+                return;
+              }
+              onTarget(value);
+              if (value === "vm" && (phase === "notSetUp" || phase === "failed")) {
+                act("setUp");
+                notify("Setting up your private Mac", `About ${vm.downloadGB} GB to download. It runs in the background.`, "info");
+              }
+            }}
+          />
+        </PrefRow>
+      </div>
+
+      {supported ? (
+        <div className="pref-group">
+          <div className={cx("pref-row", busy && "is-stack")}>
+            <span className="pref-copy">
+              <strong>
+                {ready || busy ? `macOS ${vm.macOSVersion || ""}`.trim() : "Your private Mac"}
+                {ready ? ` · ${vm.cpuCount} cores · ${vm.memoryGB} GB` : ""}
+              </strong>
+              <em>{vm.status}</em>
+            </span>
+            {busy ? (
+              <div className="pref-row-foot">
+                <div style={{ flex: 1 }}>
+                  <Progress value={vm.progress} />
+                </div>
+                <span className="pref-hint">{Math.round(vm.progress * 100)}%</span>
+                {phase === "downloading" ? (
+                  <Button size="sm" onClick={() => act("cancelSetup")}>
+                    Cancel
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              <span className="pref-control">
+                <span className={cx("pref-status", statusTone)}>{statusLabel}</span>
+                {phase === "notSetUp" || phase === "failed" ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      act("setUp");
+                      notify("Setting up your private Mac", `About ${vm.downloadGB} GB to download. It runs in the background.`, "info");
+                    }}
+                  >
+                    {phase === "failed" ? "Try again" : "Set up"}
+                  </Button>
+                ) : null}
+                {phase === "stopped" ? (
+                  <Button variant="primary" size="sm" onClick={() => act("start")}>
+                    Start
+                  </Button>
+                ) : null}
+                {phase === "running" ? (
+                  <>
+                    <Button size="sm" onClick={() => act("show")}>
+                      Show
+                    </Button>
+                    <Button size="sm" onClick={() => act("stop")}>
+                      Shut down
+                    </Button>
+                  </>
+                ) : null}
+              </span>
+            )}
+          </div>
+
+          {ready && vm.needsFirstBoot ? (
+            <PrefRow title="Finish macOS setup" detail="The first boot shows Setup Assistant. Click through it in the private Mac's window, then tell okidoki it's done.">
+              {phase === "running" ? (
+                <Button size="sm" onClick={() => act("show")}>
+                  Open window
+                </Button>
+              ) : null}
+              <Button variant="primary" size="sm" onClick={() => act("firstBootDone")}>
+                It's done
+              </Button>
+            </PrefRow>
+          ) : null}
+
+          {phase === "failed" && vm.error ? (
+            <PrefRow title="What went wrong" detail={vm.error}>
+              <span />
+            </PrefRow>
+          ) : null}
+
+          {ready || phase === "notSetUp" ? (
+            <PrefRow
+              title="On disk"
+              detail={vm.bytesOnDisk > 0 ? `${formatBytes(vm.bytesOnDisk)} in Application Support. Deleting removes macOS, its apps and files.` : "Nothing yet."}
+            >
+              {vm.bytesOnDisk > 0 ? (
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    confirm({
+                      title: "Delete your private Mac?",
+                      detail: `Removes ${formatBytes(vm.bytesOnDisk)}: macOS, every app installed there and every file saved there. Runs go back to this Mac. This can't be undone.`,
+                      action: "Delete private Mac",
+                      onConfirm: () => act("delete"),
+                    })
+                  }
+                >
+                  <PixelIcon name="trash" size={14} />
+                  Delete
+                </Button>
+              ) : null}
+            </PrefRow>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
 }
 

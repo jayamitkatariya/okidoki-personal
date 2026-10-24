@@ -2,7 +2,7 @@ import AppKit
 import OkidokiCore
 
 /// A scripted lesson for checking the visuals: it cycles every drawing kind over whatever is on
-/// screen, no model calls. Start with `OKIDOKI_TEACH_LAB=1`; ⌥⌥ moves to the next scene.
+/// screen, no model calls. Start with `OKIDOKI_TEACH_LAB=1`; scenes advance every few seconds.
 @MainActor
 final class TeachLab {
     private var index = Int(ProcessInfo.processInfo.environment["OKIDOKI_TEACH_LAB_START"] ?? "") ?? 0
@@ -68,10 +68,10 @@ final class TeachLab {
                                  x: w * 0.5, y: h * 0.55, remaining: 3,
                                  annotations: [TeachAnnotation(kind: "scroll", text: "down", x: w * 0.5, y: h * 0.75), TeachAnnotation(kind: "ghost")], milestone: 4)
         case 9:
-            return TeachLiveStep(previousDone: false, action: "click", say: "a retry: same step, different words, and the stuck offer after a while.",
+            return TeachLiveStep(previousDone: false, action: "click", say: "a retry: same step, different words, and the ghost walk-through after a while.",
                                  label: "try here", x: w * 0.6, y: h * 0.4, remaining: 2, milestone: 4)
         case 10:
-            return TeachLiveStep(action: "click", say: "a risky one: in show me this asks before doing it.", label: "send",
+            return TeachLiveStep(action: "click", say: "a risky one: okidoki asks before doing it for you.", label: "send",
                                  x: w * 0.85, y: h * 0.85, remaining: 1, risky: true, milestone: 4)
         default:
             return TeachLiveStep(action: "done", say: "that's every drawing. looked good?", summary: "the lab ran through all twelve scenes.")

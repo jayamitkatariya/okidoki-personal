@@ -501,6 +501,39 @@ public enum EventActuator {
     /// True while a password field (or anything else using secure input) owns the keyboard.
     public nonisolated static var secureInputActive: Bool { IsSecureEventInputEnabled() }
 
+    /// One physical key with the modifiers held for it, resolved on the live keyboard layout.
+    /// For targets that take key codes rather than `CGEvent`s, like a virtual machine's view.
+    public struct Keystroke: Equatable, Sendable {
+        public var code: CGKeyCode
+        public var flags: CGEventFlags
+        /// The characters this stroke produces, empty for named keys and shortcuts.
+        public var characters: String
+    }
+
+    /// "cmd+shift+a" → the A key with command and shift held. Nil for an unknown key name.
+    public static func keystroke(for combo: String) -> Keystroke? {
+        guard let resolved = resolveCombo(combo, layout: KeyLayout.currentMap()) else { return nil }
+        var flags = resolved.extraFlags
+        for modifier in resolved.mods { flags.insert(modifier.flag) }
+        return Keystroke(code: resolved.code, flags: flags, characters: "")
+    }
+
+    /// Text as key presses on the live layout. Characters the layout has no key for (emoji,
+    /// other scripts) are counted in `skipped`, since a key-only target can't produce them.
+    public static func keystrokes(typing text: String) -> (strokes: [Keystroke], skipped: Int) {
+        var strokes: [Keystroke] = []
+        var skipped = 0
+        for step in typeSteps(text, layout: KeyLayout.currentMap()) {
+            switch step {
+            case .key(let code, let flags, let unicode):
+                strokes.append(Keystroke(code: code, flags: flags, characters: String(utf16CodeUnits: unicode, count: unicode.count)))
+            case .unicode(let buffer):
+                skipped += String(utf16CodeUnits: buffer, count: buffer.count).count
+            }
+        }
+        return (strokes, skipped)
+    }
+
     public static func drag(from origin: CGPoint, to target: CGPoint, duration: Double = 0.55) async {
         guard canPost else { return }
         let pace = pace
@@ -748,6 +781,7 @@ public enum AXSearch {
     /// accessibility tree empty until a client asks for it. Harmless for everything else.
     public static func enableTree(pid: pid_t) {
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
@@ -778,6 +812,7 @@ public enum AXSearch {
         guard AXIsProcessTrusted(), !target.isEmpty else { return nil }
         enableTree(pid: pid)
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         var queue: [AXUIElement] = [app] + roots(of: app)
         var visited = 0
         let needle = target.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -853,6 +888,7 @@ public enum AXSearch {
     static func focusedWindow(pid: pid_t) -> AXUIElement? {
         guard AXIsProcessTrusted() else { return nil }
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &raw) == .success,
               let raw else { return nil }
@@ -889,6 +925,7 @@ public enum AXSearch {
         guard AXIsProcessTrusted() else { return [] }
         enableTree(pid: pid)
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         var queue: [(element: AXUIElement, clip: CGRect)] = roots(of: app).map { ($0, visible) }
         var interactive: [AXControl] = []
         var text: [AXControl] = []
@@ -1134,6 +1171,15 @@ public enum AppResolver {
 // MARK: - Scripts
 
 public enum ScriptActuator {
+    /// The script running right now, so Stop/Esc can end it instead of letting it drive on for up to 30 s.
+    nonisolated(unsafe) private static var running: Process?
+    private static let runningLock = NSLock()
+
+    public static func cancelRunning() {
+        runningLock.lock(); defer { runningLock.unlock() }
+        if let process = running, process.isRunning { process.terminate() }
+    }
+
     /// Catastrophic commands only. Ordinary file and app work is allowed; the user already approved the run.
     public static func isBlocked(_ source: String) -> Bool {
         let c = source.lowercased()
@@ -1223,6 +1269,12 @@ public enum ScriptActuator {
             try? stdout.close()
             return "couldn't start the script"
         }
+        runningLock.lock(); running = process; runningLock.unlock()
+        defer {
+            runningLock.lock()
+            if running === process { running = nil }
+            runningLock.unlock()
+        }
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
@@ -1233,7 +1285,10 @@ public enum ScriptActuator {
             return "script timed out after \(Int(timeout))s — if a dialog or permission prompt is showing, the user has to answer it; otherwise try a smaller step or drive the app directly"
         }
         try? stdout.close()
-        let output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+        var output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+        // osascript prefixes errors with the temp file's path; the line:column is all that helps.
+        output = output.replacingOccurrences(of: directory.path + "/script.[a-z]+:", with: "line ",
+                                             options: .regularExpression)
         let clipped = output.count > 4000 ? String(output.prefix(4000)) + "…" : output
         let text = clipped.trimmingCharacters(in: .whitespacesAndNewlines)
         if process.terminationStatus != 0 {
@@ -1241,6 +1296,12 @@ public enum ScriptActuator {
             return text.isEmpty ? "script failed (\(process.terminationStatus))" : "script failed: \(text)"
         }
         return text.isEmpty ? "script ok" : text
+    }
+
+    /// True when osascript was refused permission to send Apple events to an app.
+    public static func isAutomationDenied(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        return lower.contains("-1743") || lower.contains("not authorized to send apple events")
     }
 
     /// Turns the usual osascript failures into something the model can act on.
@@ -1315,6 +1376,10 @@ public final class ComputerUseService {
         public var imageWidth: Double
         public var imageHeight: Double
         public var full: CGImage
+
+        public init(png: Data, box: ScreenBox, imageWidth: Double, imageHeight: Double, full: CGImage) {
+            self.png = png; self.box = box; self.imageWidth = imageWidth; self.imageHeight = imageHeight; self.full = full
+        }
     }
 
     /// A magnified crop of a screenshot. `rect` is the region in screenshot pixels.
@@ -1372,7 +1437,7 @@ public final class ComputerUseService {
         return context.makeImage()
     }
 
-    nonisolated static func encodeForModel(_ image: CGImage, pointWidth: Double, pointHeight: Double) -> (png: Data, width: Double, height: Double)? {
+    public nonisolated static func encodeForModel(_ image: CGImage, pointWidth: Double, pointHeight: Double) -> (png: Data, width: Double, height: Double)? {
         let size = sendSize(pixelWidth: Double(image.width), pixelHeight: Double(image.height),
                             pointWidth: pointWidth, pointHeight: pointHeight)
         guard let scaled = resized(image, to: size), let png = pngData(scaled) else { return nil }
@@ -1500,10 +1565,15 @@ public final class ComputerUseService {
     public func openApp(named name: String) async throws -> String {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if let running = runningMatch(named: cleaned) {
+            let label = running.name.isEmpty ? cleaned : running.name
+            if frontmost()?.pid == running.pid {
+                let title = AXSearch.focusedWindowTitle(pid: running.pid)
+                return "\(label) is already frontmost\(title.isEmpty ? "" : " (window “\(title.prefix(60))”)") — go straight to the next step"
+            }
             let app = NSWorkspace.shared.runningApplications.first { $0.processIdentifier == running.pid }
             app?.activate()
             await waitForFrontmost(bundleID: running.bundleID, name: running.name, timeout: 4)
-            return "focused \(running.name.isEmpty ? cleaned : running.name)"
+            return "focused \(label) — it's frontmost now, go straight to the next step"
         }
         let resolved = await Task.detached(priority: .userInitiated) { AppResolver.resolve(name: cleaned) }.value
         if let resolved {
@@ -1534,10 +1604,15 @@ public final class ComputerUseService {
     public func activateApp(named name: String) async -> String {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if let running = runningMatch(named: cleaned) {
+            let label = running.name.isEmpty ? cleaned : running.name
+            if frontmost()?.pid == running.pid {
+                let title = AXSearch.focusedWindowTitle(pid: running.pid)
+                return "\(label) is already frontmost\(title.isEmpty ? "" : " (window “\(title.prefix(60))”)") — go straight to the next step"
+            }
             let app = NSWorkspace.shared.runningApplications.first { $0.processIdentifier == running.pid }
             app?.activate()
             await waitForFrontmost(bundleID: running.bundleID, name: running.name, timeout: 3)
-            return "focused \(running.name.isEmpty ? cleaned : running.name)"
+            return "focused \(label) — it's frontmost now, go straight to the next step"
         }
         let resolved = await Task.detached(priority: .userInitiated) { AppResolver.resolve(name: cleaned) }.value
         if let resolved {
@@ -1643,9 +1718,21 @@ public final class ComputerUseService {
                                             : action.type == "jxa" ? "javascript"
                                             : action.type == "applescript" ? "applescript" : nil)
             let source = action.script ?? action.text ?? ""
-            return await ScriptActuator.run(language: language ?? "applescript", source: source)
+            let result = await ScriptActuator.run(language: language ?? "applescript", source: source)
+            // A denied Apple event with no prompt is usually a grant left over from an older build.
+            // Clear it once so macOS asks the user again, and let the model retry the same script.
+            if ScriptActuator.isAutomationDenied(result), PermissionsService.shared.repairStaleGrant(.automation) {
+                return "script failed: okidoki's permission to control apps was stale and has been reset — "
+                    + "run the exact same script once more; macOS will now ask the user to allow it"
+            }
+            return result
         case "click", "double_click", "triple_click", "right_click", "middle_click", "move", "drag", "type", "key", "scroll":
-            guard EventActuator.canPost else { throw ComputerUseError.accessibility }
+            // Without accessibility the event can't be posted. Tell the model rather than ending the
+            // run: scripts, open_app, and open_url still work, and the user may be granting it right now.
+            guard EventActuator.canPost else {
+                return "couldn't \(action.type.replacingOccurrences(of: "_", with: " ")) — accessibility is off, so clicks and keys can't be delivered. "
+                    + "use script, open_app, or open_url for this instead, or fail and tell the user to grant accessibility in system settings › privacy & security › accessibility"
+            }
             await focusIfAsked(action)
             return await performPointer(action, box: box, imageWidth: imageWidth, imageHeight: imageHeight)
         case "wait":

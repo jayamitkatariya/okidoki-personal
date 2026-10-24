@@ -30,6 +30,24 @@ const AGENTS = [
     blurb: "Tool-heavy workflows and MCP.",
     install: "pipx install hermes-agent",
   },
+  {
+    id: "codex",
+    name: "Codex",
+    blurb: "OpenAI's agent. Sandboxed edits, ChatGPT login.",
+    install: "npm install -g @openai/codex",
+  },
+  {
+    id: "gemini",
+    name: "Gemini CLI",
+    blurb: "Google's agent. Big context, free tier.",
+    install: "npm install -g @google/gemini-cli",
+  },
+  {
+    id: "cursor",
+    name: "Cursor Agent",
+    blurb: "Cursor's models from the terminal.",
+    install: "curl https://cursor.com/install -fsS | bash",
+  },
 ] as const;
 
 const CONNECTOR_ICON: Record<string, string> = {
@@ -41,8 +59,8 @@ const CONNECTOR_ICON: Record<string, string> = {
 };
 
 export function ToolboxPage() {
-  const { state, settings, updateSettings, invoke, notify } = useDashboard();
-  useEffect(() => { invoke("refreshTools"); }, [invoke]);
+  const { state, settings, updateSettings, invoke, notify, native } = useDashboard();
+  useEffect(() => { if (native) invoke("refreshTools"); }, [invoke, native]);
   const [query, setQuery] = useState("");
   const [findQuery, setFindQuery] = useState("");
   const [docs, setDocs] = useState<Tool | null>(null);
@@ -263,6 +281,11 @@ export function ToolboxPage() {
               );
             })}
           </div>
+        ) : state.tools.length === 0 ? (
+          <div className="tile tb-empty">
+            <strong>Tools live on your Mac</strong>
+            <span>Open okidoki there to see the catalog.</span>
+          </div>
         ) : (
           <div className="tile tb-empty">
             <strong>No tools match “{query}”</strong>
@@ -350,14 +373,15 @@ function ConnectorRow({ connector }: { connector: Connector }) {
 }
 
 function McpServers() {
-  const { state, settings, updateSettings, invoke, notify } = useDashboard();
+  const { state, settings, updateSettings, invoke, notify, native } = useDashboard();
   const [editing, setEditing] = useState<McpServer | "new" | null>(null);
   const servers = settings.mcpServers ?? [];
   return (
     <div className="tb-mcp">
       {servers.map((server) => {
         const status = state.mcpStatus?.[server.id];
-        const tone = !server.enabled ? "is-off" : !status ? "is-pending" : status.ok ? "is-ok" : "is-error";
+        // Status only reaches the panel on the Mac; elsewhere there's nothing to wait for.
+        const tone = !server.enabled || !native ? "is-off" : !status ? "is-pending" : status.ok ? "is-ok" : "is-error";
         return (
           <div className="tb-mcp-row" key={server.id}>
             <span className={cx("tb-mcp-dot", tone)} aria-hidden />
@@ -367,6 +391,8 @@ function McpServers() {
               <em className={cx(tone === "is-error" && "tb-mcp-error")}>
                 {!server.enabled
                   ? "Off"
+                  : !native
+                    ? "Status on your Mac"
                   : !status
                     ? "Connecting…"
                     : status.ok
@@ -496,10 +522,10 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
       width={560}
     >
       <div className="form-stack tb-mcp-form">
-        <label className="tb-field">
+        <div className="tb-field">
           <span className="form-label">Name</span>
           <TextField value={name} onChange={setName} placeholder="GitHub" autoFocus={!existing} />
-        </label>
+        </div>
         <div className="tb-field">
           <span className="form-label">How it runs</span>
           <Segmented
@@ -511,7 +537,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
             onChange={setTransport}
           />
         </div>
-        <label className="tb-field">
+        <div className="tb-field">
           <span className="form-label">{transport === "http" ? "Server URL" : "Command"}</span>
           <TextField
             value={target}
@@ -520,8 +546,8 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
             icon={transport === "http" ? "link" : "terminal"}
           />
           <span className="tb-mcp-hint">{transport === "http" ? "A streamable HTTP endpoint." : "Or paste the JSON from the server's README."}</span>
-        </label>
-        <label className="tb-field">
+        </div>
+        <div className="tb-field">
           <span className="form-label">{transport === "http" ? "Headers" : "Environment variables"}</span>
           <TextArea
             value={secretText}
@@ -543,7 +569,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
               "Saved values will be removed."
             ) : null}
           </span>
-        </label>
+        </div>
       </div>
       <footer className="modal-actions">
         {existing ? (

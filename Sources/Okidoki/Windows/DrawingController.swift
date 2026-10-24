@@ -48,7 +48,7 @@ final class DrawingController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar + 3 // just under the summon box
+        panel.level = .floating // above app windows, below the Dock and menu bar so those stay clickable
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .none
         panel.isReleasedWhenClosed = false

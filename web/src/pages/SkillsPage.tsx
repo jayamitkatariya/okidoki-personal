@@ -227,7 +227,7 @@ export function SkillsPage() {
           ) : (
             <p className="recording-hint">Go do the task at a normal pace. Every click, keystroke, drag and scroll shows up here as it happens.</p>
           )}
-          <p className="recording-foot">Press Save in the notch at the top of your screen, shake your mouse, or click Stop & save here.</p>
+          <p className="recording-foot">Press Save in the notch at the top of your screen, or click Stop & save here.</p>
         </section>
       ) : null}
 
@@ -451,10 +451,10 @@ export function SkillsPage() {
 
       <Modal open={teachOpen} onClose={() => setTeachOpen(false)} title="Record a skill" subtitle="You'll do the task once. okidoki learns it move by move." width={480}>
         <div className="routine-form">
-          <label className="routine-field">
+          <div className="routine-field">
             <span className="form-label">Name (optional)</span>
             <TextField value={teachName} onChange={setTeachName} placeholder="Export the weekly report" autoFocus onEnter={startRecording} />
-          </label>
+          </div>
           <ul className="teach-tips">
             <li>
               <PixelIcon name="cursor" size={13} />
@@ -534,7 +534,7 @@ export function SkillsPage() {
 
       <Modal open={Boolean(renaming)} onClose={() => setRenaming(null)} title="Rename skill" width={420}>
         <div className="routine-form">
-          <label className="routine-field">
+          <div className="routine-field">
             <span className="form-label">Name</span>
             <TextField
               value={renameValue}
@@ -548,7 +548,7 @@ export function SkillsPage() {
                 }
               }}
             />
-          </label>
+          </div>
         </div>
         <footer className="modal-actions">
           <Button variant="ghost" onClick={() => setRenaming(null)}>
@@ -586,14 +586,14 @@ export function SkillsPage() {
               </Button>
             </div>
           ) : null}
-          <label className="routine-field">
+          <div className="routine-field">
             <span className="form-label">Name</span>
             <TextField value={name} onChange={setName} placeholder="Friday cleanup" />
-          </label>
-          <label className="routine-field">
+          </div>
+          <div className="routine-field">
             <span className="form-label">What should okidoki do?</span>
             <TextField value={prompt} onChange={setPrompt} placeholder="Clean my Downloads folder" />
-          </label>
+          </div>
           <div className="routine-field">
             <span className="form-label">Repeats</span>
             <Segmented

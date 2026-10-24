@@ -155,6 +155,10 @@ export function normalize(input: Record<string, unknown>): Decision {
   mapped.answer = stripMacSuffix(typeof mapped.answer === "string" ? mapped.answer : "");
   if (typeof mapped.speak === "string") mapped.speak = stripMacSuffix(mapped.speak);
   mapped.risk = mapped.risk ?? "low";
+  if (mapped.quickAction && typeof mapped.quickAction === "object") {
+    const action = mapped.quickAction as Record<string, unknown>;
+    if (typeof action.body !== "string") action.body = "";
+  }
   if (Array.isArray(mapped.memory)) {
     mapped.memory = mapped.memory.filter((fact): fact is string => typeof fact === "string" && isDurableFact(fact));
   }
@@ -169,18 +173,22 @@ export function isDurableFact(fact: string): boolean {
   return text.length > 2 && text.length <= 240 && !NOT_A_FACT.test(text);
 }
 
-const CLIPBOARD_CUES = /\b(clipboard|copied|copy|paste|pasted|pasting|summari[sz]e|translate|proofread|rewrite|reword|shorten|what(?:'s| is| does) this|explain this|fix this|this (?:text|error|code|snippet|email|message|link|url|json|log|output|paragraph|quote|stack ?trace))\b/i;
+// The request has to name the clipboard. Anything looser ("this", "fix this", "summarize") made whatever
+// happened to be on the clipboard ride along with ordinary questions, and the model answered that instead.
+const CLIPBOARD_CUES = /\b(clipboard|copied|pasted|paste|note (?:this|that))\b/i;
 
-/** The clipboard, only when the request is plausibly about it, and never when it's just a copy of the chat. */
+/** True when the request itself refers to the clipboard. Mirrors the Mac's `mentionsClipboard`. */
+export function mentionsClipboard(text: string): boolean {
+  return CLIPBOARD_CUES.test(text);
+}
+
+/** The clipboard, only when the request names it, and never when it's just a copy of the chat. */
 export function clipboardFor(request: ThinkRequest): string {
   const text = (request.clipboardText ?? "").trim();
-  if (!text) return "";
+  if (!text || !mentionsClipboard(request.text ?? "")) return "";
   const norm = text.replace(/\s+/g, " ").toLowerCase();
   const echoes = [request.text ?? "", ...(request.history ?? []).map((m) => m.text)].map((t) => String(t ?? "").replace(/\s+/g, " ").trim().toLowerCase());
   if (echoes.some((t) => t && (t === norm || (norm.length > 40 && t.includes(norm)) || (t.length > 40 && norm.includes(t))))) return "";
-  const asked = request.text ?? "";
-  const deictic = !request.screenshotBase64 && !request.documentText && /\bthis\b/i.test(asked);
-  if (!CLIPBOARD_CUES.test(asked) && !deictic) return "";
   return text.slice(0, 6000);
 }
 
@@ -303,7 +311,7 @@ export function historyMessages(request: ThinkRequest): { role: "user" | "assist
 const needsKey: Decision = {
   kind: "answer",
   title: "model unavailable",
-  answer: "okidoki needs an anthropic key before it can answer, teach, or do anything.",
+  answer: "the model isn't available right now, so i can't answer, teach, or do anything yet. try again in a moment.",
   speak: "",
   actions: [],
 };
@@ -332,7 +340,11 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
   // Cached after the first listing, so this is usually instant; a slow server is left out rather than stalling.
   // Both are quick (cached servers, in-process index) and run side by side; either can come back empty.
   const [catalog, recalled, suggested] = await Promise.all([
-    request.connectors?.mcpServers?.length ? mcpCatalog(request.connectors.mcpServers, 4_000) : Promise.resolve([]),
+    // A cold server gets the full budget to come up and cache; this request just stops waiting after 4 s.
+    request.connectors?.mcpServers?.length
+      ? Promise.race([mcpCatalog(request.connectors.mcpServers, 30_000),
+                      new Promise<McpCatalogEntry[]>((resolve) => setTimeout(() => resolve([]), 4_000))])
+      : Promise.resolve([]),
     recall(request.text, request.accountId, { threadId: request.threadID }),
     recallTools(request.text),
   ]);
@@ -352,7 +364,8 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
 
   const body = {
     model,
-    max_tokens: 1600,
+    // An overlay answer carries a whole HTML document; 1600 cut every one of them off mid-tool-input.
+    max_tokens: 4000,
     system: systemPrompt(request, catalog, recallPrompt(recalled), suggested),
     messages,
     tools: [responseTool],

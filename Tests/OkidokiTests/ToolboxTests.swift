@@ -140,4 +140,27 @@ extension ToolboxTests {
         XCTAssertFalse(buffer.progress.output.contains(marker))
         XCTAssertLessThanOrEqual(buffer.progress.output.count, 80_000)
     }
+
+    func testOutputReadsLikeATerminalWithoutColourCodesOrRedrawnProgressLines() {
+        let buffer = TerminalOutputBuffer(marker: "fixture", commandCount: 1)
+        buffer.append("\u{1e}fixture:start:0\u{1f}\n\u{1b}[1;32m==>\u{1b}[0m Downloading\n")
+        buffer.append("  10%\r  55%\r 100%\r\n\u{1b}]8;;https://example.com\u{7}link\u{1b}]8;;\u{7}\n")
+        buffer.append("step\u{1b}[")
+        buffer.append("31m red\u{1b}[0m done\r\n\u{1e}fixture:end:0:0\u{1f}\n")
+        let progress = buffer.progress
+        XCTAssertEqual(progress.output, "==> Downloading\n 100%\nlink\nstep red done\n")
+        XCTAssertEqual(progress.completed, [0])
+        XCTAssertEqual(TerminalActions.cleanOutput("plain\n"), "plain\n")
+    }
+
+    func testBurstsOfOutputCoalesceIntoOneRefresh() {
+        let buffer = TerminalOutputBuffer(marker: "fixture", commandCount: 1)
+        buffer.append("a")
+        XCTAssertTrue(buffer.needsRefresh())
+        buffer.append("b")
+        XCTAssertFalse(buffer.needsRefresh())
+        XCTAssertEqual(buffer.progress.output, "ab")
+        buffer.append("c")
+        XCTAssertTrue(buffer.needsRefresh())
+    }
 }

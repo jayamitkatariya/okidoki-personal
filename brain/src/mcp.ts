@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { delimiter } from "node:path";
 import type { McpServerConfig, McpToolInfo } from "./types";
+import { hostEnvironment } from "./executor";
 
 // A small Model Context Protocol client: stdio servers (a command we spawn) and streamable HTTP servers.
 // Only what okidoki needs: initialize, list tools, call a tool.
@@ -29,7 +30,7 @@ class StdioTransport implements Transport {
     const home = process.env.HOME ?? "";
     const extraPath = ["/opt/homebrew/bin", "/usr/local/bin", `${home}/.local/bin`, `${home}/.opencode/bin`, `${home}/.hermes/bin`, `${home}/.bun/bin`, `${home}/.cargo/bin`, `${home}/bin`];
     this.proc = spawn((server.command ?? "").replace(/^~(?=\/)/, home), server.args ?? [], {
-      env: { ...process.env, PATH: [...extraPath, process.env.PATH ?? ""].join(delimiter), ...(server.env ?? {}) },
+      env: { ...hostEnvironment(), PATH: [...extraPath, process.env.PATH ?? ""].join(delimiter), ...(server.env ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });

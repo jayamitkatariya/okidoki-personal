@@ -14,6 +14,25 @@ export type Appearance = "system" | "light" | "dark";
 export type NotificationStyle = "everything" | "approvalsAndDone" | "silent";
 export type DrawingStyle = "ink" | "marker" | "pencil";
 
+/** Mirrors CodingAgentID in Sources/OkidokiCore/Models/Models.swift. */
+export type CodingAgentID = "claude" | "opencode" | "omp" | "hermes" | "codex" | "gemini" | "cursor";
+
+/** A coding agent on the Mac: on the PATH, and signed in to something that can answer. */
+export interface AgentStatus {
+  id: CodingAgentID;
+  name: string;
+  installed: boolean;
+  signedIn: boolean;
+  /** Who the CLI is signed in as, when it writes that down. Empty when unknown. */
+  account: string;
+  /** Providers the CLI holds credentials for, e.g. ["anthropic", "openrouter"]. */
+  providers: string[];
+  /** Where okidoki looked, e.g. "~/.claude/.credentials.json". */
+  source: string;
+  installHint: string;
+  loginHint: string;
+}
+
 export interface Settings {
   okidokiEnabled: boolean;
   defaultInput: InputMode;
@@ -22,7 +41,7 @@ export interface Settings {
   voiceEnabled: boolean;
   captions: boolean;
   confirmOK: boolean;
-  selectedAgent: "claude" | "opencode" | "omp" | "hermes";
+  selectedAgent: CodingAgentID;
   customInstructions: string;
   backgroundMode: boolean;
   screenBorrowing: boolean;
@@ -55,9 +74,32 @@ export interface Settings {
   showedWelcome: boolean;
   claudeModel: string;
   agentExtraArgs: Record<string, string>;
+  /** Switch the default agent to one that's installed and signed in when the chosen one can't answer. */
+  autoConnectAgents: boolean;
   lastWorkingDirectory: string;
   mcpServers: McpServer[];
   drivePace: "calm" | "fast";
+  /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
+  computerTarget: "mac" | "vm";
+}
+
+export type PrivateMacPhase = "unsupported" | "notSetUp" | "downloading" | "installing" | "stopped" | "starting" | "running" | "stopping" | "failed";
+
+export interface PrivateMacState {
+  supported: boolean;
+  phase: PrivateMacPhase;
+  /** 0–1 while downloading or installing. */
+  progress: number;
+  /** One human line for the current phase. */
+  status: string;
+  error?: string | null;
+  /** True until the user has clicked through macOS Setup Assistant once. */
+  needsFirstBoot: boolean;
+  macOSVersion: string;
+  cpuCount: number;
+  memoryGB: number;
+  bytesOnDisk: number;
+  downloadGB: number;
 }
 
 export interface McpServer {
@@ -77,7 +119,7 @@ export interface McpStatus {
   tools: { name: string; description: string }[];
 }
 
-export type RunKind = "answer" | "quickAction" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine" | "connector";
+export type RunKind = "answer" | "quick_action" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine" | "connector";
 export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled";
 export type Risk = "low" | "medium" | "high";
 
@@ -156,6 +198,14 @@ export interface Memory {
   updatedAt: string;
 }
 
+/** Another assistant whose memory can be brought in. `files` are the memory files it keeps on this Mac; empty for hosted ones. */
+export interface MemorySource {
+  id: string;
+  name: string;
+  blurb: string;
+  files: string[];
+}
+
 export type StepAction = "click" | "double-click" | "right-click" | "middle-click" | "drag" | "type" | "key" | "scroll" | "switch";
 
 export interface SkillStep {
@@ -170,6 +220,15 @@ export interface SkillStep {
   toX?: number | null;
   toY?: number | null;
   delay?: number | null;
+  /** App that owns the control when it isn't `app` (Dock, menu bar extras). */
+  owner?: string | null;
+  /** Accessibility role of the control, e.g. AXButton. */
+  role?: string | null;
+  /** Frame of the control's window when recorded, so replay can follow a moved window. */
+  winX?: number | null;
+  winY?: number | null;
+  winW?: number | null;
+  winH?: number | null;
 }
 
 /** Live recorder state while okidoki is learning a skill. */
@@ -270,11 +329,15 @@ export interface NativeState {
   runs: Run[];
   threads: Thread[];
   memories: Memory[];
+  /** Missing on Convex snapshots and older builds. */
+  memorySources?: MemorySource[];
   skills: Skill[];
   routines: Routine[];
   connectors: Connector[];
   tools: Tool[];
   installedAgents: string[];
+  /** Missing on Convex snapshots and older builds; only the Mac can read its own login files. */
+  agents?: AgentStatus[];
   keys: Record<string, boolean>;
   permissions: Record<string, string>;
   signedOut: boolean;
@@ -287,6 +350,8 @@ export interface NativeState {
   convexConfigured: boolean;
   mcpStatus?: Record<string, McpStatus>;
   mcpSecretNames?: Record<string, string[]>;
+  /** Missing on Convex snapshots and in the demo, where there is no VM to report on. */
+  privateMac?: PrivateMacState | null;
 }
 
 export interface Toast {

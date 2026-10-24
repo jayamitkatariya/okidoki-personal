@@ -29,6 +29,8 @@ final class AppEnvironment: ObservableObject {
     private(set) var watchHUD: WatchHUDController!
     private(set) var notch: NotchController!
     private(set) var driver: ComputerUseDriver!
+    /// The macOS VM computer-use runs drive when settings say so; this Mac otherwise.
+    let privateMac = PrivateMacService()
     private(set) var simOverlay: SimOverlayController!
     private(set) var statusBar: StatusBarController!
     private(set) var dashboard: DashboardWindowController!
@@ -46,10 +48,14 @@ final class AppEnvironment: ObservableObject {
     @Published var shakePulse = 0
     @Published var inCall = false
     @Published var installedAgents: [CodingAgentID] = []
+    /// Every coding agent okidoki knows, with whether it's on the PATH and signed in. Refreshed with the tools.
+    @Published var agentStatus: [AgentStatus] = []
     @Published var keysVersion = 0
     /// Last connection result per MCP server id, for the Toolbox.
     @Published var mcpStatus: [String: MCPServerStatus] = [:]
     @Published var isBusy = false
+    /// Requests in flight; a routine finishing must not mark a summon request idle.
+    private var busyCount = 0 { didSet { isBusy = busyCount > 0 } }
     @Published var suspendSummonForTour = false
 
     private var summonAppName = "mac"
@@ -57,6 +63,8 @@ final class AppEnvironment: ObservableObject {
     private var watchRunID: String?
     /// How many passes a queued skill replay should make, by run id.
     private var pendingReplays: [String: Int] = [:]
+    /// What "again" means in the chat.
+    private var lastReplayedSkillID: String?
     private var pendingStarts: [String: DispatchWorkItem] = [:]
     private var pausedStarts: Set<String> = []
     private var mcpRefreshGeneration = 0
@@ -103,6 +111,11 @@ final class AppEnvironment: ObservableObject {
             self.notch.model.caption = self.store.settings.captions ? text : nil
         }
         speaker.onCartesiaFailure = { [weak self] reason in self?.cartesiaFailed(reason) }
+        // Download/install progress and VM state reach the dashboard and onboarding through the environment.
+        privateMac.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
 
         store.$settings
             .receive(on: RunLoop.main)
@@ -195,7 +208,8 @@ final class AppEnvironment: ObservableObject {
                 if let remote = await convex.pull(store: store), remote.accounts.count > 0,
                    let account = remote.accounts.first(where: { $0.id == store.currentAccountID }) {
                     // Only restore when there is nothing local worth keeping.
-                    if store.threads.isEmpty && store.memories.isEmpty {
+                    if store.threads.isEmpty && store.memories.isEmpty && store.runs.isEmpty
+                        && store.skills.isEmpty && store.routines.isEmpty {
                         store.threads = remote.threads
                         store.memories = remote.memories
                         store.runs = remote.runs.map { $0.recoveredAfterRestart() }
@@ -209,6 +223,55 @@ final class AppEnvironment: ObservableObject {
                 }
             }
         }
+
+        if ProcessInfo.processInfo.environment["OKIDOKI_DEV_HOOKS"] == "1" { installDevHooks() }
+    }
+
+    // MARK: - Dev hooks (OKIDOKI_DEV_HOOKS=1)
+
+    /// Scripted testing: `scripts/dev-drive.sh` posts distributed notifications that start a
+    /// computer-use run straight away, send text through the normal pipeline, or stop the run.
+    /// Off unless the app is launched with OKIDOKI_DEV_HOOKS=1, since any local process could post them.
+    private func installDevHooks() {
+        let center = DistributedNotificationCenter.default()
+        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.drive"), object: nil, queue: .main) { [weak self] note in
+            guard let goal = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { return }
+            Task { @MainActor in await self?.devDrive(goal: goal) }
+        }
+        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.ask"), object: nil, queue: .main) { [weak self] note in
+            guard let text = note.object as? String else { return }
+            Task { @MainActor in self?.askFromDashboard(text) }
+        }
+        // "x,y" in global Quartz points: a click as the learner, so a scripted run can follow a lesson.
+        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.click"), object: nil, queue: .main) { note in
+            let parts = ((note.object as? String) ?? "").split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 2 else { return }
+            Task { await EventActuator.click(at: CGPoint(x: parts[0], y: parts[1])) }
+        }
+        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.stop"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.driver.isActive { self.driver.cancel(reason: "stopped by the test script") }
+            }
+        }
+    }
+
+    private func devDrive(goal: String) async {
+        guard !driver.isActive else { return }
+        if !EventActuator.canPost { _ = await PermissionsService.shared.request(.accessibility) }
+        if !CGPreflightScreenCaptureAccess() { _ = await PermissionsService.shared.request(.screen) }
+        let title = String(goal.prefix(54))
+        let preview = ActionPreview(summary: title, risk: .medium,
+                                    steps: [PreviewStep("look at the screen"), PreviewStep("click and type through it"),
+                                            PreviewStep("hand control back")],
+                                    commands: [], apps: ["your apps"], files: [])
+        let thread = store.threadForContext(app: "mac", topic: inferTopic(goal), text: goal)
+        store.appendMessage(threadID: thread.id, role: .user, text: goal)
+        let run = store.createRun(kind: .computerUse, title: title, prompt: goal, threadID: thread.id, preview: preview,
+                                  steps: preview.steps.map { RunStep(title: $0.text) },
+                                  status: .waiting, builtin: "computer-use")
+        store.saveNow()
+        approveRun(run.id)
     }
 
     func stop() {
@@ -240,22 +303,27 @@ final class AppEnvironment: ObservableObject {
         guard store.settings.okidokiEnabled else { return }
         if driver.stopsOnUserEscape { driver.cancel(reason: "you shook — control is yours"); return }
         if simOverlay.isVisible { simOverlay.dismiss(); return }
-        if watch.isRecording { stopWatching(); return }
+        // The pointer is doing real work while a recording runs, so a wiggle must never count as a
+        // shake. A recording is ended only by its own controls: Save / Discard in the notch, the
+        // HUD pill, the Skills page, or a chat command.
+        if watch.isRecording { return }
         if replayer.isActive { replayer.cancel(reason: "you shook — control is yours"); return }
         if ghost.model.visible { ghost.cancel(); return }
         if drawActive { draw.dismissAll(); dismissSummon(); return }
-        if teach.model.isActive || concept.isActive {
-            // Mid-lesson, a shake asks a question; the lesson holds and resumes after the answer. Esc stops it.
-            if summon.model.isVisible || answerControllerVisible {
-                summon.dismiss()
-                answerController.close(restoreApp: false)
-                notch.noteListening(false)
-                notch.collapse()
-                teach.resumeAfterQuestion()
-                return
-            }
-            teach.pauseForQuestion()
-            startSummon()
+        // A shake means "control is yours" everywhere else, so a live lesson ends the same way.
+        // Questions mid-lesson still work by voice; esc also stops.
+        if teach.model.isActive {
+            teach.stop(completed: false)
+            if summon.model.isVisible || answerControllerVisible { dismissSummon() }
+            toast(title: "lesson stopped", detail: "you shook — control is yours", kind: .info,
+                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            return
+        }
+        if concept.isActive {
+            concept.dismiss(completed: concept.model.phase == .done)
+            if summon.model.isVisible || answerControllerVisible { dismissSummon() }
+            toast(title: "lesson closed", detail: "you shook — control is yours", kind: .info,
+                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
             return
         }
         if summon.model.isVisible || answerControllerVisible {
@@ -365,8 +433,9 @@ final class AppEnvironment: ObservableObject {
         let threadID = card.threadID
         let runID = card.runID
         answerController.close(restoreApp: false)
-        if text.lowercased().contains("do it"), let runID,
-           store.run(runID)?.status == .waiting {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if let runID, store.run(runID)?.status == .waiting,
+           lower.contains("do it") || lower.contains("go ahead") || ["yes", "yep", "yeah", "ok", "okay", "sure", "allow", "allow once", "approve", "run it"].contains(lower) {
             approveRun(runID)
             return
         }
@@ -418,6 +487,16 @@ final class AppEnvironment: ObservableObject {
     private func handleRequest(text: String, appName: String, bundleID: String, threadID: String?,
                                screenshot: Data?, selection: CGRect?, attachmentName: String,
                                documentText: String, source: String) async {
+        // Skills and recordings are driven straight from the chat: "replay invoice flow", "stop",
+        // "save as …", "my skills". No brain round trip, no key needed, no variance.
+        if screenshot == nil, documentText.isEmpty, source != "repair",
+           let command = ChatCommands.parse(text, context: ChatCommands.Context(skills: store.activeSkills,
+                                                                                recording: watch.isRecording,
+                                                                                replaying: replayer.isActive,
+                                                                                hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil)) {
+            handleChatCommand(command, text: text, appName: appName, threadID: threadID, source: source)
+            return
+        }
         // Built-in terminal jobs (installs, updates, opening tools, common conversions) are
         // planned on the Mac itself, so they work without a model key and never vary.
         let builtin = screenshot == nil && documentText.isEmpty && source != "repair" ? TerminalActions.decide(text) : nil
@@ -425,12 +504,13 @@ final class AppEnvironment: ObservableObject {
             presentNeedsKey(prompt: text, threadID: threadID, source: source)
             return
         }
-        isBusy = true
-        defer { isBusy = false }
+        busyCount += 1
+        defer { busyCount -= 1 }
         var document = documentText
         var docName = attachmentName
         let lower = text.lowercased()
-        if builtin == nil, document.isEmpty, (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
+        // A circled region is the thing to summarise; only ask for a file when there's nothing attached.
+        if builtin == nil, document.isEmpty, screenshot == nil, (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
             if let url = await pickFile(kind: "pdf", prompt: "choose a PDF to read") {
                 document = DocumentReader.read(url: url) ?? ""
                 docName = url.lastPathComponent
@@ -452,12 +532,17 @@ final class AppEnvironment: ObservableObject {
             await handleDecision(builtin, request: request, threadID: thread.id, source: source)
             return
         }
-        // Whatever is on the clipboard is sent only when the request is about it. Otherwise a copied
-        // answer or an unrelated command would ride along with every question and confuse the model.
-        let priorTurns = (store.thread(thread.id)?.messages ?? []).map(\.text)
-        let clipboard = BrainService.relevantClipboard(NSPasteboard.general.string(forType: .string) ?? "",
+        // The clipboard is read and sent only when the request names it. Otherwise a copied answer
+        // or an unrelated snippet would ride along with every question and the model would answer
+        // the clipboard instead of what was typed. Not reading it also keeps macOS from flagging
+        // a pasteboard access on every request.
+        var clipboard = ""
+        if BrainService.mentionsClipboard(text) {
+            let priorTurns = (store.thread(thread.id)?.messages ?? []).map(\.text)
+            clipboard = BrainService.relevantClipboard(NSPasteboard.general.string(forType: .string) ?? "",
                                                        request: text, history: priorTurns,
                                                        hasScreenshot: screenshot != nil, hasDocument: !document.isEmpty)
+        }
         let request = BrainRequest(text: text, appName: appName, bundleID: bundleID,
                                    threadID: thread.id, screenshotPNG: screenshot,
                                    selection: selection, source: source,
@@ -570,11 +655,7 @@ final class AppEnvironment: ObservableObject {
                 let outline = decision.teachPlan.isEmpty ? decision.teachSteps : decision.teachPlan.map(\.say)
                 teach.start(topic: topic, outline: outline, appBundleID: request.bundleID, requestText: request.text,
                             runID: run.id, threadID: threadID)
-                let gesture = TeachGesture.Kind(setting: store.settings.teachGesture)
-                let detail = teach.model.mode == .show
-                    ? "i'll do each step and explain · \(gesture.caps.isEmpty ? "" : "\(gesture.caps) skips ahead · ")esc stops"
-                    : "i'll point, you do it · \(gesture.caps.isEmpty ? "" : "\(gesture.caps) does a step for you · ")esc stops"
-                toast(title: "teaching · \(topic)", detail: detail,
+                toast(title: "teaching · \(topic)", detail: "i'll point, you do it · it moves on as you go · esc stops",
                       kind: .info, undoLabel: "stop", onUndo: { [weak self] in self?.teach.stop(completed: false) },
                       editLabel: nil, onEdit: nil, runID: run.id)
             }
@@ -612,7 +693,10 @@ final class AppEnvironment: ObservableObject {
             }
         }
         let cursor = summon.model.isVisible ? NSEvent.mouseLocation : nil
-        answerController.show(card, near: cursor)
+        // Only an answer the user is waiting on at the capsule takes the keyboard; one that arrives
+        // from the dashboard, a lesson or a repair must not pull typing away from the app they're in.
+        let takesFocus = ["summon", "followup", "onboarding"].contains(source) || summon.model.isVisible
+        answerController.show(card, near: cursor, makeKey: takesFocus)
     }
 
     private func makeAnswerCard(decision: BrainDecision, request: BrainRequest,
@@ -700,18 +784,18 @@ final class AppEnvironment: ObservableObject {
             var toastDetail = decision.previewSummary
             switch action.type {
             case "reminder":
-                let date = action.date.flatMap { ISO8601DateFormatter().date(from: $0) }
+                let date = action.date.flatMap(DateParsing.iso8601)
                 let id = try await AppleBridge.shared.addReminder(title: action.title, due: date)
                 undo = { Task { try? await AppleBridge.shared.deleteReminder(id: id) } }
                 if toastDetail.isEmpty {
                     toastDetail = date.map { "for \(relativeTime($0))" } ?? "no date"
                 }
             case "note":
-                let id = try await AppleBridge.shared.addNote(title: action.title, body: action.body)
+                let id = try await AppleBridge.shared.addNote(title: action.title, body: action.body ?? "")
                 undo = { Task { try? await AppleBridge.shared.deleteNote(id: id) } }
                 if toastDetail.isEmpty { toastDetail = "saved in notes" }
             case "event":
-                let start = action.date.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date().addingTimeInterval(3600)
+                let start = action.date.flatMap(DateParsing.iso8601) ?? Date().addingTimeInterval(3600)
                 let id = try await AppleBridge.shared.addEvent(title: action.title, start: start,
                                                                end: start.addingTimeInterval(3600))
                 undo = { Task { try? await AppleBridge.shared.deleteEvent(uid: id) } }
@@ -1023,7 +1107,7 @@ final class AppEnvironment: ObservableObject {
         }
         if !store.settings.screenBorrowing { store.settings.screenBorrowing = true }
         if !EventActuator.canPost { _ = await PermissionsService.shared.request(.accessibility) }
-        if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
+        if !CGPreflightScreenCaptureAccess() { _ = await PermissionsService.shared.request(.screen) }
         let goal = request.text.isEmpty ? decision.title : request.text
         let apps = decision.apps
         let preview = ActionPreview(summary: decision.previewSummary.isEmpty ? "drive it end to end" : decision.previewSummary,
@@ -1261,7 +1345,7 @@ final class AppEnvironment: ObservableObject {
             let target = run.pickedPath ?? run.prompt
             ghost.begin(target: target, appName: run.preview?.apps.first ?? "app", runID: run.id)
         case .computerUse:
-            driver.begin(run: run)
+            beginDriving(run)
         case .connector:
             Task { await executeConnector(run) }
         case .teach:
@@ -1273,6 +1357,58 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// Computer-use runs go to the private Mac when the setting says so. A VM that is set up but
+    /// off is booted first; one that isn't set up fails the run rather than quietly driving this Mac.
+    private func beginDriving(_ run: AgentRun) {
+        guard store.settings.computerTarget == "vm" else {
+            driver.begin(run: run)
+            return
+        }
+        switch privateMac.phase {
+        case .running, .stopped, .starting:
+            let booting = privateMac.phase != .running
+            if booting {
+                toast(title: "starting your private Mac", detail: "the run begins once it's up",
+                      kind: .info, undoLabel: nil, onUndo: nil, editLabel: "show", onEdit: { [weak self] in
+                          self?.privateMac.show()
+                      }, runID: run.id)
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                let ok = await privateMac.start()
+                guard store.run(run.id)?.status == .running else { return }
+                guard ok else {
+                    failDriving(run, reason: privateMac.error ?? "the private Mac didn't start")
+                    return
+                }
+                let wait = privateMac.secondsUntilUsable
+                if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                guard store.run(run.id)?.status == .running else { return }
+                driver.begin(run: run, target: PrivateMacComputer(service: privateMac))
+            }
+        case .downloading, .installing:
+            failDriving(run, reason: "your private Mac is still being set up — \(privateMac.detail.lowercased())")
+        case .stopping:
+            failDriving(run, reason: "your private Mac is shutting down — try again in a moment")
+        case .unsupported:
+            failDriving(run, reason: "a private Mac needs Apple silicon — switch to this Mac in Settings")
+        case .notSetUp, .failed:
+            failDriving(run, reason: privateMac.error ?? "your private Mac isn't set up yet — finish it in Settings, or switch to this Mac")
+        }
+    }
+
+    private func failDriving(_ run: AgentRun, reason: String) {
+        store.finishRun(run.id, status: .failed, summary: reason)
+        if let threadID = run.threadID {
+            store.appendMessage(threadID: threadID, role: .assistant, text: "i couldn't start — \(reason)", runID: run.id)
+        }
+        toast(title: "couldn't start", detail: reason, kind: .warning,
+              undoLabel: nil, onUndo: nil, editLabel: "settings", onEdit: { [weak self] in
+                  self?.openDashboard(.settings)
+              }, runID: run.id)
+        store.saveNow()
+    }
+
     private func executeShell(_ run: AgentRun) async {
         let card = AnswerCardModel(title: run.title, text: "Working on your request…", actions: [
             CardAction(title: "stop", kind: .danger) { [weak self] in self?.stopRun(run.id) },
@@ -1282,81 +1418,9 @@ final class AppEnvironment: ObservableObject {
         card.footnote = "running · you can keep working"
         terminalCards[run.id] = card
         present(card, source: "summon")
-        if run.builtin != nil || !sidecar.status.isReady {
-            await executeShellLocal(run)
-            return
-        }
-        let commands = run.preview?.commands ?? []
-        guard !commands.isEmpty else {
-            store.finishRun(run.id, status: .failed, summary: "No commands were prepared. Ask again with the job you want to do.")
-            finishTerminalCard(run.id)
-            return
-        }
-        let result = await BrainClient.shared.execute(
-            runID: run.id, kind: run.kind, commands: commands, agent: nil,
-            prompt: run.prompt, workingDirectory: run.workingDirectory,
-            extraArgs: "", onEvent: { [weak self] event in
-                guard let self, let current = self.store.run(run.id), current.status != .cancelled else { return }
-                switch event {
-                case .output(let text):
-                    self.store.updateRun(run.id) { run in
-                        run.output += text
-                        if run.output.count > 90_000 { run.output = String(run.output.suffix(80_000)) }
-                        self.terminalCards[run.id]?.terminalOutput = String(run.output.suffix(6000))
-                    }
-                case .step(let index, let status, _):
-                    self.store.updateRun(run.id) { run in
-                        if run.steps.indices.contains(index) {
-                            run.steps[index].status = status == "done" ? .done : (status == "failed" ? .failed : .running)
-                            if run.steps[index].startedAt == nil { run.steps[index].startedAt = Date() }
-                            if status == "done" || status == "failed" { run.steps[index].endedAt = Date() }
-                            self.terminalCards[run.id]?.text = status == "running" ? run.steps[index].title : "Finishing this step…"
-                        }
-                    }
-                case .error(let message):
-                    self.store.updateRun(run.id) { $0.summary = message }
-                default:
-                    break
-                }
-            })
-        guard store.run(run.id)?.status != .cancelled else { return }
-        guard let result else {
-            store.finishRun(run.id, status: .failed, summary: "No result received. Check the run before retrying.")
-            finishTerminalCard(run.id)
-            return
-        }
-        if result.success {
-            let summary = result.summary.isEmpty ? "done — \(run.title)" : result.summary
-            self.store.finishRun(run.id, status: .done, summary: summary, freedBytes: result.freedBytes)
-            noteInstallFinished(run)
-            self.toast(title: result.freedBytes != nil ? "freed \(Bytes.human(result.freedBytes!))" : "done",
-                       detail: summary, kind: .success, undoLabel: nil, onUndo: nil,
-                       editLabel: "details", onEdit: { [weak self] in self?.openDashboard(.runs, runID: run.id) },
-                       runID: run.id)
-            self.speak(summary)
-        } else if result.summary == "stopped by you" {
-            self.store.finishRun(run.id, status: .cancelled, summary: result.summary)
-        } else {
-            let current = store.run(run.id) ?? run
-            let failedIndex = current.steps.lastIndex { $0.status == .failed }
-                ?? current.steps.lastIndex { $0.status == .running }
-                ?? max(0, commands.count - 1)
-            await recover(run: current, commands: commands, failedIndex: min(failedIndex, commands.count - 1),
-                          output: current.output.isEmpty ? result.summary : current.output)
-            return
-        }
-        finishTerminalCard(run.id)
-        self.store.saveNow()
-    }
 
-    /// After a successful install, the toolbox and the agent picker reflect it right away.
-    private func noteInstallFinished(_ run: AgentRun) {
-        repairAttempts[run.threadID ?? run.id] = nil
-        pendingToolInstalls[run.id] = nil
-        refreshInstalled()
-    }
-
-    private func executeShellLocal(_ run: AgentRun) async {
+        // Shell jobs always run in the app itself, never through the brain sidecar: the same progress
+        // frames, password helper, Mole follow-up and repair path whether or not Bun is up.
         if run.builtin == "export-keynote", let folder = run.pickedPath {
             let output = folder + "-pdf"
             try? FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
@@ -1413,9 +1477,10 @@ final class AppEnvironment: ObservableObject {
             ShellRunner.shared.stream(id: run.id, command: TerminalActions.script(commands, progressMarker: marker), cwd: run.workingDirectory,
                 onOutput: { text in
                     box.append(text)
+                    guard box.needsRefresh() else { return }
                     Task { @MainActor in
-                        guard let status = self.store.run(run.id)?.status, status == .running || status == .paused else { return }
                         let progress = box.progress
+                        guard let status = self.store.run(run.id)?.status, status == .running || status == .paused else { return }
                         self.store.updateRun(run.id) { current in
                             current.output = String(progress.output.suffix(80_000))
                             self.terminalCards[run.id]?.terminalOutput = String(current.output.suffix(6000))
@@ -1439,6 +1504,15 @@ final class AppEnvironment: ObservableObject {
         store.updateRun(run.id) { $0.output = String(allOutput.suffix(80_000)) }
 
         if exitCode == 0 && progress.completed.count == commands.count {
+            if run.builtin == MemoryImport.builtin {
+                store.updateRun(run.id) { current in
+                    for index in current.steps.indices { current.steps[index].status = .done; current.steps[index].endedAt = current.steps[index].endedAt ?? Date() }
+                }
+                finishMemoryImport(run, output: allOutput)
+                finishTerminalCard(run.id)
+                store.saveNow()
+                return
+            }
             let cleaned = commands.contains { $0.hasPrefix("mo clean") && !$0.contains("dry-run") }
             let freed: Int64? = cleaned ? OutputInsights.freedBytes(in: allOutput) : nil
             let summary = freed.map { "freed \(Bytes.human($0))" }
@@ -1474,6 +1548,41 @@ final class AppEnvironment: ObservableObject {
         }
         finishTerminalCard(run.id)
         store.saveNow()
+    }
+
+    /// After a successful install, the toolbox and the agent picker reflect it right away.
+    private func noteInstallFinished(_ run: AgentRun) {
+        repairAttempts[run.threadID ?? run.id] = nil
+        pendingToolInstalls[run.id] = nil
+        refreshInstalled()
+    }
+
+    /// The memory files the job printed become memories. Only additions: nothing already remembered is
+    /// touched, and the other assistant's files aren't either. Everything lands on the Memory page to edit or forget.
+    private func finishMemoryImport(_ run: AgentRun, output: String) {
+        let found = MemoryImport.parse(output)
+        let asked = MemoryImport.source(in: run.prompt)
+        var added = 0
+        for item in found {
+            let name = (MemoryImport.source(forFile: item.file) ?? asked)?.name ?? "another assistant"
+            if store.addMemory(item.text, section: item.section, source: "from \(name)") != nil { added += 1 }
+        }
+        let skipped = found.count - added
+        let summary: String
+        if found.isEmpty {
+            summary = "I read it but found nothing to remember. Exports work best as a plain list, one memory per line."
+        } else if added == 0 {
+            summary = "All \(found.count) of those were already in Memory, so nothing was added."
+        } else {
+            summary = "Added \(added) \(added == 1 ? "memory" : "memories")"
+                + (skipped > 0 ? " and skipped \(skipped) already remembered." : ".")
+                + " They're on the Memory page to edit or forget."
+        }
+        store.finishRun(run.id, status: .done, summary: summary)
+        toast(title: added > 0 ? "\(added) remembered" : "nothing new", detail: summary, kind: added > 0 ? .success : .info,
+              undoLabel: nil, onUndo: nil, editLabel: "memory", onEdit: { [weak self] in self?.openDashboard(.memory) },
+              runID: run.id)
+        speak(added > 0 ? "Done. I remembered \(added) things." : summary)
     }
 
     /// The second half of "free up space": prepare the real clean, which waits for its own okay.
@@ -1547,7 +1656,7 @@ final class AppEnvironment: ObservableObject {
             return
         }
         let card = AnswerCardModel(title: "that didn't work",
-                                   text: diagnosis.message + (hasKey("anthropic") ? "" : "\n\nAdd an Anthropic key in Keys and I can work out fixes for problems like this."),
+                                   text: diagnosis.message + (hasKey("anthropic") ? "" : "\n\nOnce the model is reachable again I can work out fixes for problems like this."),
                                    actions: [CardAction(title: "details", kind: .secondary) { [weak self] in self?.openDashboard(.runs, runID: run.id) }],
                                    threadTitle: run.threadID.flatMap { store.thread($0)?.title }, runID: run.id, threadID: run.threadID)
         card.terminalOutput = String(output.suffix(6000))
@@ -1807,7 +1916,7 @@ final class AppEnvironment: ObservableObject {
             notch.refresh()
         } else {
             watchHUD.show()
-            toast(title: "recording", detail: "do it once. click stop or shake when you're done.",
+            toast(title: "recording", detail: "do it once. click stop when you're done.",
                   kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: run.id)
         }
         speak(speakLine.isEmpty ? "Recording. Do it once, then stop." : speakLine)
@@ -1853,6 +1962,7 @@ final class AppEnvironment: ObservableObject {
         if let n = kinds["scroll"], n > 0 { bits.append("\(n) \(n == 1 ? "scroll" : "scrolls")") }
         let summary = "\(bits.isEmpty ? "\(meaningful.count) steps" : bits.joined(separator: ", ")) in \(apps.joined(separator: ", "))"
         let skill = store.createSkill(name: name, summary: summary, steps: meaningful.map(\.step), source: "watch me")
+        let finishedRunID = watchRunID
         if let watchRunID {
             store.finishRun(watchRunID, status: .done, summary: "saved as a skill: \(skill.name)")
             store.updateRun(watchRunID) { $0.prompt = skill.steps.map(\.text).joined(separator: " → ") }
@@ -1874,7 +1984,7 @@ final class AppEnvironment: ObservableObject {
                                            self?.openDashboard(.skills)
                                        }
                                    ],
-                                   threadTitle: nil, runID: watchRunID, threadID: nil)
+                                   threadTitle: nil, runID: finishedRunID, threadID: nil)
         present(card, source: "summon")
         toast(title: "saved as a skill", detail: "\(meaningful.count) steps · \(skill.name)", kind: .success,
               undoLabel: nil, onUndo: nil, editLabel: "open", onEdit: { [weak self] in
@@ -1884,7 +1994,16 @@ final class AppEnvironment: ObservableObject {
         store.saveNow()
     }
 
+    /// Queues a replay behind the usual approval (dashboard buttons, the "got it" card).
     func replaySkill(_ skill: Skill, times: Int = 1) {
+        let run = makeReplayRun(skill, times: times, threadID: nil)
+        toast(title: "ready to replay", detail: "approve the preview to run it", kind: .approval,
+              undoLabel: nil, onUndo: nil, editLabel: "review", onEdit: { [weak self] in
+                  self?.openDashboard(.runs, runID: run.id)
+              }, runID: run.id)
+    }
+
+    private func makeReplayRun(_ skill: Skill, times: Int, threadID: String?) -> AgentRun {
         let passes = max(1, min(times, 10_000))
         let steps = skill.steps
         let apps = steps.map(\.app).reduce(into: [String]()) { if !$1.isEmpty, !$0.contains($1) { $0.append($1) } }
@@ -1894,13 +2013,150 @@ final class AppEnvironment: ObservableObject {
                                     steps: steps.map { PreviewStep($0.text) },
                                     commands: [], apps: apps.isEmpty ? ["app"] : apps, files: [])
         let run = store.createRun(kind: .borrow, title: "replay · \(skill.name)\(passes > 1 ? " ×\(passes)" : "")", prompt: skill.name,
-                                  preview: preview, steps: steps.map { RunStep(title: $0.text) },
+                                  threadID: threadID, preview: preview, steps: steps.map { RunStep(title: $0.text) },
                                   status: .waiting, builtin: "skill", pickedPath: skill.id)
         pendingReplays[run.id] = passes
-        toast(title: "ready to replay", detail: "approve the preview to run it", kind: .approval,
-              undoLabel: nil, onUndo: nil, editLabel: "review", onEdit: { [weak self] in
-                  self?.openDashboard(.runs, runID: run.id)
-              }, runID: run.id)
+        lastReplayedSkillID = skill.id
+        return run
+    }
+
+    // MARK: - Chat commands (skills and recordings, no brain)
+
+    private func handleChatCommand(_ command: ChatCommand, text: String, appName: String, threadID: String?, source: String) {
+        let thread = threadID.flatMap { store.thread($0) } ?? store.threadForContext(app: appName, topic: "skills", text: text)
+        store.appendMessage(threadID: thread.id, role: .user, text: text)
+        func reply(_ title: String, _ body: String, actions: [CardAction] = [], say: String? = nil, runID: String? = nil) {
+            let run = store.createRun(kind: .answer, title: title, prompt: text, threadID: thread.id, status: .done)
+            store.appendMessage(threadID: thread.id, role: .assistant, text: body, runID: runID ?? run.id)
+            let card = AnswerCardModel(title: title, text: body, actions: Array(actions.prefix(3)),
+                                       threadTitle: store.thread(thread.id)?.title, runID: runID ?? run.id, threadID: thread.id)
+            present(card, source: source)
+            if let say, !say.isEmpty { speak(say) }
+        }
+        func skillLine(_ skill: Skill) -> String {
+            "· \(skill.name) — \(skill.summary)\(skill.runCount > 0 ? " · run \(skill.runCount)×" : "")"
+        }
+        let skills = store.activeSkills
+
+        switch command {
+        case .replay(let id, let times):
+            guard let skill = store.skill(id) else { return reply("hm", "that skill isn't here anymore.") }
+            startReplayFromChat(skill, times: times, threadID: thread.id, source: source)
+
+        case .replayLast(let times):
+            guard let id = lastReplayedSkillID, let skill = store.skill(id) else {
+                return reply("which one?", skills.isEmpty ? "nothing's been recorded yet. say “watch me” and do it once."
+                             : "tell me which skill:\n\n" + skills.prefix(8).map { "· \($0.name)" }.joined(separator: "\n"))
+            }
+            startReplayFromChat(skill, times: times, threadID: thread.id, source: source)
+
+        case .ambiguousSkill(let query, let ids):
+            let options = ids.compactMap { store.skill($0) }
+            let actions = options.prefix(3).map { skill in
+                CardAction(title: skill.name, kind: .secondary, glyph: "play") { [weak self] in
+                    guard let self else { return }
+                    self.answerController.close(restoreApp: false)
+                    self.startReplayFromChat(skill, times: 1, threadID: thread.id, source: source)
+                }
+            }
+            reply("which “\(query)”?", "a few skills match:\n\n" + options.map(skillLine).joined(separator: "\n"),
+                  actions: actions, say: "Which one?")
+
+        case .noSuchSkill(let query):
+            let actions = [
+                CardAction(title: "record it now", kind: .primary, glyph: "record") { [weak self] in
+                    self?.answerController.close(restoreApp: false)
+                    self?.startTeaching(name: query)
+                },
+                CardAction(title: "open skills", kind: .secondary, glyph: "wand") { [weak self] in self?.openDashboard(.skills) },
+            ]
+            let body = skills.isEmpty
+                ? "i don't have a skill called “\(query)” — nothing's recorded yet. i can watch you do it once."
+                : "no skill called “\(query)”. here's what i know:\n\n" + skills.prefix(8).map { "· \($0.name)" }.joined(separator: "\n")
+            reply("not yet", body, actions: actions, say: "I don't know that one yet.")
+
+        case .listSkills:
+            var actions: [CardAction] = []
+            if let first = skills.first {
+                actions.append(CardAction(title: "replay \(first.name)", kind: .primary, glyph: "play") { [weak self] in
+                    self?.answerController.close(restoreApp: false)
+                    self?.startReplayFromChat(first, times: 1, threadID: thread.id, source: source)
+                })
+            }
+            actions.append(CardAction(title: "open skills", kind: .secondary, glyph: "wand") { [weak self] in self?.openDashboard(.skills) })
+            let body = skills.isEmpty
+                ? "nothing yet. say “watch me” and do something once — i'll turn it into a skill you can replay."
+                : skills.prefix(12).map(skillLine).joined(separator: "\n") + (skills.count > 12 ? "\n…and \(skills.count - 12) more" : "")
+                  + "\n\nsay “replay <name>” to run one, or “replay <name> 3 times”."
+            reply(skills.isEmpty ? "no skills yet" : "\(skills.count) \(skills.count == 1 ? "skill" : "skills")", body, actions: actions)
+
+        case .startRecording(let name):
+            guard !watch.isRecording else { return }
+            summon.hideInput()
+            answerController.close(restoreApp: false)
+            startTeaching(name: name)
+
+        case .saveRecording(let name):
+            if !name.isEmpty { watch.pendingName = name }
+            summon.hideInput()
+            answerController.close(restoreApp: false)
+            stopWatching()
+
+        case .discardRecording:
+            summon.hideInput()
+            discardWatching()
+
+        case .restartRecording:
+            let name = watch.pendingName
+            summon.hideInput()
+            answerController.close(restoreApp: false)
+            discardWatching()
+            startTeaching(name: name)
+
+        case .stopReplay:
+            summon.hideInput()
+            replayer.cancel(reason: "you said stop")
+
+        case .deleteSkill(let id):
+            guard let skill = store.skill(id) else { return }
+            store.deleteSkill(id)
+            store.saveNow()
+            summon.hideInput()
+            toast(title: "deleted “\(skill.name)”", detail: "undo to bring it back", kind: .info,
+                  undoLabel: "undo", onUndo: { [weak self] in
+                      guard let self else { return }
+                      self.store.skills.insert(skill, at: 0)
+                      self.store.saveNow()
+                  }, editLabel: nil, onEdit: nil, runID: nil)
+            store.appendMessage(threadID: thread.id, role: .assistant, text: "deleted “\(skill.name)”.")
+
+        case .renameSkill(let id, let name):
+            guard let skill = store.skill(id) else { return }
+            store.updateSkill(id, name: name)
+            store.saveNow()
+            summon.hideInput()
+            toast(title: "renamed", detail: "“\(skill.name)” is now “\(name)”", kind: .success,
+                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            store.appendMessage(threadID: thread.id, role: .assistant, text: "renamed “\(skill.name)” to “\(name)”.")
+        }
+    }
+
+    /// A replay asked for in the chat starts straight away, like any other job asked for there:
+    /// the same approval rules apply (always-ask apps still ask), nothing extra.
+    private func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String) {
+        if replayer.isActive { replayer.cancel(reason: "replaying \(skill.name) instead") }
+        if watch.isRecording {
+            toast(title: "still recording", detail: "save or discard the recording first", kind: .warning,
+                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            return
+        }
+        let passes = max(1, min(times, 10_000))
+        let run = makeReplayRun(skill, times: passes, threadID: threadID)
+        let count = passes == 1 ? "once" : "\(passes) times"
+        store.appendMessage(threadID: threadID, role: .assistant,
+                            text: "replaying “\(skill.name)” \(count) — \(skill.steps.count) steps. esc stops me.", runID: run.id)
+        let decision = BrainDecision(kind: .borrow, title: "replay · \(skill.name)", answer: "", risk: run.preview?.risk ?? .medium)
+        startOrAsk(run, decision: decision, threadID: threadID, source: source)
     }
 
     func finishReplay(runID: String, passes: Int) {
@@ -1964,15 +2220,26 @@ final class AppEnvironment: ObservableObject {
     }
 
     /// A narrated 2D/3D lesson. Needs the sidecar: it also fetches real molecule data and a photo card.
-    func teachConcept(topic: String, context: String, pageTitle: String?, pageURL: String?,
-                      screenshotBase64: String?, imageWidth: Double, imageHeight: Double) async -> (lesson: ConceptLesson?, error: String?) {
-        guard let key = KeyStore.get("anthropic"), !key.isEmpty else { return (nil, "add an anthropic key in keys first") }
-        guard sidecar.status.isReady else { return (nil, "the brain isn't running — install bun to draw lessons") }
+    /// The title and intro stream first so the stage can start talking before the model is drawn.
+    func teachConceptStream(topic: String, context: String, pageTitle: String?, pageURL: String?,
+                            screenshotBase64: String?, imageWidth: Double, imageHeight: Double) async -> AsyncStream<BrainClient.ConceptStreamEvent> {
+        guard let key = KeyStore.get("anthropic"), !key.isEmpty else {
+            return AsyncStream { $0.yield(.error("the model isn't available right now")); $0.finish() }
+        }
+        // The brain comes up a few seconds after launch; a lesson asked for right away waits for it.
+        var waited = 0.0
+        while !sidecar.status.isReady, waited < 12, sidecar.status == .starting || sidecar.status == .idle {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            waited += 0.3
+        }
+        guard sidecar.status.isReady else {
+            return AsyncStream { $0.yield(.error("the brain isn't running — install bun to draw lessons")); $0.finish() }
+        }
         let language = Locale.preferredLanguages.first.flatMap { code -> String? in
             guard !code.hasPrefix("en") else { return nil }
             return Locale.current.localizedString(forLanguageCode: String(code.prefix(2))) ?? code
         }
-        return await BrainClient.shared.teachConcept(topic: topic, context: context, pageTitle: pageTitle, pageURL: pageURL,
+        return BrainClient.shared.teachConceptStream(topic: topic, context: context, pageTitle: pageTitle, pageURL: pageURL,
                                                      screenshotBase64: screenshotBase64, imageWidth: imageWidth, imageHeight: imageHeight,
                                                      language: language, model: store.settings.claudeModel)
     }
@@ -2061,10 +2328,10 @@ final class AppEnvironment: ObservableObject {
     }
 
     /// Points this Mac at the Convex deployment and a Cartesia voice. Credentials come from env.
+    /// Sync itself stays the user's choice: the Settings switch is the only thing that turns it on.
     private func applyBuiltinServices() {
         var settings = store.settings
-        settings.convexSiteURL = ServiceSecrets.convexSiteURL
-        settings.syncEnabled = true
+        if settings.convexSiteURL.isEmpty { settings.convexSiteURL = ServiceSecrets.convexSiteURL }
         if settings.voiceID.isEmpty { settings.voiceID = "sarah" }
         store.settings = settings
         store.saveNow()
@@ -2198,9 +2465,9 @@ final class AppEnvironment: ObservableObject {
         let ids = Set(servers.map(\.id))
         mcpStatus = mcpStatus.filter { ids.contains($0.key) }
         guard sidecar.status.isReady else {
-            mcpStatus = Dictionary(uniqueKeysWithValues: servers.map {
+            mcpStatus = Dictionary(servers.map {
                 ($0.id, MCPServerStatus(id: $0.id, ok: false, error: "The brain isn't running. Reconnect when it's ready.", tools: []))
-            })
+            }, uniquingKeysWith: { first, _ in first })
             return
         }
         if reconnect { mcpStatus = [:] }
@@ -2208,9 +2475,9 @@ final class AppEnvironment: ObservableObject {
         Task { [weak self] in
             let statuses = await BrainClient.shared.mcpTools(servers: servers, reconnect: reconnect)
             guard let self, self.mcpRefreshGeneration == generation else { return }
-            self.mcpStatus = Dictionary(uniqueKeysWithValues: (statuses ?? servers.map {
+            self.mcpStatus = Dictionary((statuses ?? servers.map {
                 MCPServerStatus(id: $0.id, ok: false, error: "Couldn't reach the brain. Try Reconnect.", tools: [])
-            }).map { ($0.id, $0) })
+            }).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         }
     }
 
@@ -2284,6 +2551,7 @@ final class AppEnvironment: ObservableObject {
             return
         }
         guard sidecar.status.isReady else {
+            pendingConnectorCalls[run.id] = nil
             store.finishRun(run.id, status: .failed, summary: "the brain isn't running, so connectors can't either. try again in a moment.")
             return
         }
@@ -2345,6 +2613,27 @@ final class AppEnvironment: ObservableObject {
         }
         store.toolInstalled = installed
         installedAgents = CodingAgentCommand.installedAgents()
+        let status = AgentDetection.detect()
+        if status != agentStatus { agentStatus = status }
+        autoConnectAgent()
+    }
+
+    /// When the default agent can't answer (missing, or installed but logged out), move to the first
+    /// one that's installed and signed in. Runs on every rescan, but only changes anything once:
+    /// after the switch the default is ready, so later rescans leave it alone.
+    func autoConnectAgent() {
+        guard store.settings.autoConnectAgents else { return }
+        let current = store.settings.selectedAgent
+        guard !agentStatus.contains(where: { $0.id == current.rawValue && $0.ready }),
+              let pick = agentStatus.first(where: \.ready),
+              let agent = CodingAgentID(rawValue: pick.id), agent != current else { return }
+        store.settings.selectedAgent = agent
+        store.saveNow()
+        let who = pick.account.isEmpty
+            ? (pick.providers.isEmpty ? "signed in" : "signed in to \(pick.providers.joined(separator: ", "))")
+            : "signed in as \(pick.account)"
+        toast(title: "\(agent.displayName) connected", detail: "\(who) · now the default coding agent",
+              kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
     }
 
     func installTool(_ tool: ToolSpec) {
@@ -2393,10 +2682,8 @@ final class AppEnvironment: ObservableObject {
                 let text = "\(run.title)\n\n\(run.prompt)\n\n\(run.summary)\n\n\(run.output.suffix(3000))"
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
-                toast(title: "run copied", detail: "convex didn't return a share link, so the run is on the clipboard",
-                      kind: .info, undoLabel: nil, onUndo: nil, editLabel: "settings", onEdit: {
-                          self.openDashboard(.settings)
-                      }, runID: id)
+                toast(title: "run copied", detail: "share pages aren't up yet, so the run itself is on the clipboard",
+                      kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: id)
             }
         }
     }

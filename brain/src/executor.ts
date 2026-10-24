@@ -1,4 +1,4 @@
-import type { ExecuteRequest } from "./types";
+import { CODING_AGENTS, type CodingAgent, type ExecuteRequest } from "./types";
 import { splitCommand } from "../../shared/commandLine";
 
 export type Emit = (event: string, data: Record<string, unknown>) => void;
@@ -13,10 +13,20 @@ export function isBlocked(command: string): boolean {
 }
 export function shellQuote(value: string): string { return "'" + value.replace(/'/g, "'\\''") + "'"; }
 
+/** The brain's own credentials stay with the brain: jobs, coding agents and MCP servers don't inherit them. */
+const PRIVATE_ENV = ["ANTHROPIC_API_KEY", "APIFY_API_KEY", "CARTESIA_API_KEY", "MOSS_PROJECT_ID", "MOSS_PROJECT_KEY",
+  "OKIDOKI_SYNC_SECRET", "OKIDOKI_BRAIN_TOKEN", "OKIDOKI_BRAIN_PORT", "CONVEX_DEPLOY_KEY"];
+
+export function hostEnvironment(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const name of PRIVATE_ENV) delete env[name];
+  return env;
+}
+
 /** Tools on the path, no interactive prompts, and a native password dialog when sudo needs one. */
 export function jobEnvironment(): Record<string, string | undefined> {
   const home = process.env.HOME ?? "";
-  const env: Record<string, string | undefined> = { ...process.env,
+  const env: Record<string, string | undefined> = { ...hostEnvironment(),
     PATH: ["/opt/homebrew/bin", "/usr/local/bin", `${home}/.local/bin`, `${home}/.opencode/bin`, `${home}/.hermes/bin`, `${home}/.bun/bin`, `${home}/.cargo/bin`, `${home}/bin`, process.env.PATH ?? ""].join(":"),
     TERM: "dumb", NO_COLOR: "1", NONINTERACTIVE: "1", CI: "1", HOMEBREW_NO_AUTO_UPDATE: "1", HOMEBREW_NO_ENV_HINTS: "1",
     HOMEBREW_NO_INSTALL_CLEANUP: "1", GIT_TERMINAL_PROMPT: "0", PIP_DISABLE_PIP_VERSION_CHECK: "1" };
@@ -37,7 +47,7 @@ export function validateExecution(value: unknown): string | undefined {
   if (r.commands !== undefined && (!Array.isArray(r.commands) || r.commands.some(c => typeof c !== "string"))) return "commands must be an array of strings";
   if (r.kind === "coding") {
     if (typeof r.prompt !== "string" || !r.prompt.trim()) return "coding prompt required";
-    if (r.agent && !["claude", "opencode", "omp", "hermes"].includes(r.agent)) return "unknown coding agent";
+    if (r.agent && !(CODING_AGENTS as readonly string[]).includes(r.agent)) return "unknown coding agent";
     if (r.extraArgs !== undefined && (typeof r.extraArgs !== "string" || r.extraArgs.includes("\0") || splitCommand(r.extraArgs) === null)) return "coding agent options contain an incomplete quote or escape";
   } else if (!Array.isArray(r.commands) || !r.commands.length || r.commands.length > 50 ||
     r.commands.some(c => typeof c !== "string" || !c.trim() || c.includes("\0") || /\{\{[^}]+\}\}/.test(c))) {
@@ -48,11 +58,15 @@ export function validateExecution(value: unknown): string | undefined {
 
 export function agentCommand(request: ExecuteRequest): string[] {
   const prompt = request.prompt!;
-  const commands = {
+  // Keep in step with CodingAgentID.defaultArguments in Sources/OkidokiCore/Models/Models.swift.
+  const commands: Record<CodingAgent, string[]> = {
     opencode: ["opencode", "run", "--auto", prompt],
     omp: ["omp", "-p", "--auto-approve", prompt],
     hermes: ["hermes", "-z", prompt],
     claude: ["claude", "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits"],
+    codex: ["codex", "exec", "--skip-git-repo-check", "-s", "workspace-write", prompt],
+    gemini: ["gemini", "-p", prompt, "--yolo"],
+    cursor: ["cursor-agent", "-p", prompt, "--output-format", "text", "--force"],
   };
   const extra = splitCommand(request.extraArgs ?? "");
   if (!extra) throw new Error("coding agent options contain an incomplete quote or escape");

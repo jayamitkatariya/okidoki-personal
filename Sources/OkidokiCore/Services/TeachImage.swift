@@ -188,7 +188,11 @@ public enum TeachImage {
     /// On-device text recognition so apps without accessibility still have exact text targets.
     public static func recognizeText(in image: CGImage, fast: Bool = true) async -> [Word] {
         await withCheckedContinuation { continuation in
+            // Vision may call the completion with an error and then throw from perform(); resume once.
+            var resumed = false
             let request = VNRecognizeTextRequest { request, _ in
+                guard !resumed else { return }
+                resumed = true
                 let width = CGFloat(image.width)
                 let height = CGFloat(image.height)
                 let words: [Word] = (request.results as? [VNRecognizedTextObservation] ?? []).compactMap { observation in
@@ -209,7 +213,10 @@ public enum TeachImage {
             do {
                 try handler.perform([request])
             } catch {
-                continuation.resume(returning: [])
+                if !resumed {
+                    resumed = true
+                    continuation.resume(returning: [])
+                }
             }
         }
     }

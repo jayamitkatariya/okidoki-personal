@@ -109,6 +109,10 @@
 .sidebar.is-collapsed .sidebar-bottom { padding-top: 12px; margin-top: 12px; }
 .sidebar.is-collapsed .sidebar-foot { position: relative; justify-content: center; height: 28px; padding: 0; }
 .sidebar.is-collapsed .sidebar-foot i { width: 7px; height: 7px; flex-basis: 7px; }
+/* Short windows: the icon column scrolls (tooltips clip) rather than spilling over the footer. */
+@media (max-height: 720px) {
+  .sidebar.is-collapsed .nav { overflow-y: auto; }
+}
 
 /* hover tips: only while collapsed, only for pointers, and only after a beat */
 @media (hover: hover) {

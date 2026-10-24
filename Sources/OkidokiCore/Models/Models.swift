@@ -121,14 +121,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public var claudeModel: String = "claude-haiku-5-5"
     public var agentExtraArgs: [String: String] = [:]
+    /// When the chosen coding agent is missing or logged out, switch to one that's installed and signed in.
+    public var autoConnectAgents: Bool = true
     public var lastWorkingDirectory: String = ""
     /// How visibly the pointer moves while okidoki drives: "calm" glides, "fast" is quicker.
     public var drivePace: String = "calm"
+    /// Where computer-use runs happen: "mac" is this Mac, "vm" is okidoki's private Mac (a macOS VM).
+    public var computerTarget: String = "mac"
 
-    /// Lessons: "guide" points and you do it, "show" does each step for you while explaining.
-    public var teachMode: String = "guide"
-    /// The next/fast-forward gesture in a lesson: "option" (double-tap ⌥), "control", "rightCommand", or "off".
-    public var teachGesture: String = "option"
     /// Voice during lessons, remembered separately from the app-wide voice switch.
     public var teachVoice: Bool = true
 
@@ -145,8 +145,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
         case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
         case convexSiteURL, syncEnabled, lastSyncAt, onboardingComplete, tourComplete, showedWelcome
-        case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace
-        case teachMode, teachGesture, teachVoice
+        case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace, computerTarget
+        case teachVoice, autoConnectAgents
     }
 
     public init(from decoder: Decoder) throws {
@@ -195,11 +195,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showedWelcome = bool(.showedWelcome, false)
         claudeModel = string(.claudeModel, "claude-haiku-5-5")
         agentExtraArgs = (try? c.decodeIfPresent([String: String].self, forKey: .agentExtraArgs)).flatMap { $0 } ?? [:]
+        autoConnectAgents = bool(.autoConnectAgents, true)
         lastWorkingDirectory = string(.lastWorkingDirectory, "")
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
         drivePace = string(.drivePace, "calm")
-        teachMode = string(.teachMode, "guide")
-        teachGesture = string(.teachGesture, "option")
+        computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
         teachVoice = bool(.teachVoice, true)
     }
 }
@@ -243,7 +243,8 @@ public struct MCPServer: Identifiable, Codable, Equatable, Sendable {
 // MARK: - Coding agents
 
 public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable {
-    case claude, opencode, omp, hermes
+    /// Order is preference: when auto-connect picks a default, the first signed-in agent wins.
+    case claude, opencode, omp, hermes, codex, gemini, cursor
 
     public var id: String { rawValue }
 
@@ -253,6 +254,9 @@ public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable
         case .opencode: return "OpenCode"
         case .omp: return "omp"
         case .hermes: return "Hermes"
+        case .codex: return "Codex"
+        case .gemini: return "Gemini CLI"
+        case .cursor: return "Cursor Agent"
         }
     }
 
@@ -262,6 +266,9 @@ public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable
         case .opencode: return "opencode"
         case .omp: return "omp"
         case .hermes: return "hermes"
+        case .codex: return "codex"
+        case .gemini: return "gemini"
+        case .cursor: return "cursor-agent"
         }
     }
 
@@ -271,6 +278,9 @@ public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable
         case .opencode: return "open source, provider agnostic, runs anywhere"
         case .omp: return "long-running autonomous work, model mix"
         case .hermes: return "tool-heavy workflows and MCP"
+        case .codex: return "OpenAI's agent; sandboxed edits, ChatGPT login"
+        case .gemini: return "Google's agent; big context, free tier"
+        case .cursor: return "Cursor's models from the terminal"
         }
     }
 
@@ -280,6 +290,9 @@ public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable
         case .opencode: return "7A8CFF"
         case .omp: return "B8F26B"
         case .hermes: return "C9A7FF"
+        case .codex: return "10A37F"
+        case .gemini: return "4E8CFF"
+        case .cursor: return "9A9A9A"
         }
     }
 
@@ -289,6 +302,9 @@ public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable
         case .opencode: return ["run", "--auto", "{prompt}"]
         case .omp: return ["-p", "--auto-approve", "{prompt}"]
         case .hermes: return ["-z", "{prompt}"]
+        case .codex: return ["exec", "--skip-git-repo-check", "-s", "workspace-write", "{prompt}"]
+        case .gemini: return ["-p", "{prompt}", "--yolo"]
+        case .cursor: return ["-p", "{prompt}", "--output-format", "text", "--force"]
         }
     }
 
@@ -298,6 +314,22 @@ public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable
         case .opencode: return "curl -fsSL https://opencode.ai/install | bash"
         case .omp: return "https://omp.sh"
         case .hermes: return "pipx install hermes-agent"
+        case .codex: return "npm install -g @openai/codex"
+        case .gemini: return "npm install -g @google/gemini-cli"
+        case .cursor: return "curl https://cursor.com/install -fsS | bash"
+        }
+    }
+
+    /// The command that signs the CLI in, for the row's hint when it's installed but logged out.
+    public var loginHint: String {
+        switch self {
+        case .claude: return "claude login"
+        case .opencode: return "opencode auth login"
+        case .omp: return "omp auth-broker login"
+        case .hermes: return "hermes auth"
+        case .codex: return "codex login"
+        case .gemini: return "gemini (sign in on first run)"
+        case .cursor: return "cursor-agent login"
         }
     }
 }
@@ -551,12 +583,34 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     public var toY: Double?
     /// Seconds after the previous step; replay keeps the same pacing (clamped).
     public var delay: Double?
+    /// The app that owns the clicked control when it isn't the front app: the Dock, a menu bar
+    /// extra, Control Center. Replay looks the control up there instead of in `app`.
+    public var owner: String?
+    /// Accessibility role of the clicked control (AXButton, AXDockItem…). Lets a label-less
+    /// control be checked before it's clicked again.
+    public var role: String?
+    /// Frame of the control's window when it was recorded (Quartz space). When the window has
+    /// moved or been resized since, the point is carried along with it.
+    public var winX: Double?
+    public var winY: Double?
+    public var winW: Double?
+    public var winH: Double?
     public init(id: String = UUID().uuidString, text: String, app: String = "",
                 x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,
-                input: String? = nil, toX: Double? = nil, toY: Double? = nil, delay: Double? = nil) {
+                input: String? = nil, toX: Double? = nil, toY: Double? = nil, delay: Double? = nil,
+                owner: String? = nil, role: String? = nil, window: CGRect? = nil) {
         self.id = id; self.text = text; self.app = app; self.x = x; self.y = y
         self.action = action; self.label = label; self.input = input
         self.toX = toX; self.toY = toY; self.delay = delay
+        self.owner = owner; self.role = role
+        if let window {
+            winX = window.minX; winY = window.minY; winW = window.width; winH = window.height
+        }
+    }
+
+    public var windowFrame: CGRect? {
+        guard let winX, let winY, let winW, let winH, winW > 0, winH > 0 else { return nil }
+        return CGRect(x: winX, y: winY, width: winW, height: winH)
     }
 }
 
@@ -1063,7 +1117,7 @@ public struct BrainRequest: Sendable {
 public struct QuickActionPayload: Codable, Equatable, Sendable {
     public var type: String
     public var title: String
-    public var body: String
+    public var body: String?
     public var date: String?
     public var hour: Int?
     public var weekday: Int?
@@ -1273,17 +1327,28 @@ public struct AppState: Codable, Sendable {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
     }
 
+    /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
+    /// the whole collection with it.
+    private struct Lossy<T: Decodable>: Decodable {
+        let value: T?
+        init(from decoder: Decoder) { value = try? T(from: decoder) }
+    }
+
+    private static func items<T: Decodable>(_ type: T.Type, _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> [T]? {
+        (try? c.decodeIfPresent([Lossy<T>].self, forKey: key))?.compactMap(\.value)
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = (try? c.decodeIfPresent(Int.self, forKey: .version)).flatMap { $0 } ?? 1
-        accounts = (try? c.decodeIfPresent([Account].self, forKey: .accounts)).flatMap { $0 } ?? []
+        accounts = Self.items(Account.self, c, .accounts) ?? []
         currentAccountID = (try? c.decodeIfPresent(String.self, forKey: .currentAccountID)).flatMap { $0 } ?? ""
         settings = (try? c.decodeIfPresent(AppSettings.self, forKey: .settings)).flatMap { $0 } ?? AppSettings()
-        threads = (try? c.decodeIfPresent([ChatThread].self, forKey: .threads)).flatMap { $0 } ?? []
-        memories = (try? c.decodeIfPresent([MemoryItem].self, forKey: .memories)).flatMap { $0 } ?? []
-        runs = (try? c.decodeIfPresent([AgentRun].self, forKey: .runs)).flatMap { $0 } ?? []
-        skills = (try? c.decodeIfPresent([Skill].self, forKey: .skills)).flatMap { $0 } ?? []
-        routines = (try? c.decodeIfPresent([Routine].self, forKey: .routines)).flatMap { $0 } ?? []
-        connectors = (try? c.decodeIfPresent([Connector].self, forKey: .connectors)).flatMap { $0 } ?? ToolCatalog.defaultConnectors
+        threads = Self.items(ChatThread.self, c, .threads) ?? []
+        memories = Self.items(MemoryItem.self, c, .memories) ?? []
+        runs = Self.items(AgentRun.self, c, .runs) ?? []
+        skills = Self.items(Skill.self, c, .skills) ?? []
+        routines = Self.items(Routine.self, c, .routines) ?? []
+        connectors = Self.items(Connector.self, c, .connectors) ?? ToolCatalog.defaultConnectors
     }
 }

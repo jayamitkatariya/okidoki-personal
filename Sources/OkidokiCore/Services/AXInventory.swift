@@ -24,6 +24,7 @@ public enum AXInventory {
     public static func controls(pid: pid_t, within bounds: CGRect, limit: Int = 90) -> [AXSeenControl] {
         guard AXIsProcessTrusted() else { return [] }
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         var queue: [AXUIElement] = []
         for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
             var raw: CFTypeRef?

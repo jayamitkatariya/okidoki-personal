@@ -16,13 +16,6 @@ final class TeachToolkitTests: XCTestCase {
         XCTAssertEqual(TeachKeys.combo(keyCode: 36, characters: "\r", flags: []), "return")
     }
 
-    func testModeFollowsWordingThenSavedChoice() {
-        XCTAssertEqual(TeachModePicker.infer(text: "show me how to make a beat", saved: "guide"), "show")
-        XCTAssertEqual(TeachModePicker.infer(text: "teach me auto layout", saved: "show"), "guide")
-        XCTAssertEqual(TeachModePicker.infer(text: "auto layout in figma", saved: "show"), "show")
-        XCTAssertEqual(TeachModePicker.infer(text: "auto layout in figma", saved: "nonsense"), "guide")
-    }
-
     private func image(width: Int, height: Int, draw: (CGContext) -> Void) -> CGImage {
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!

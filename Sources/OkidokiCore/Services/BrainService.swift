@@ -34,7 +34,7 @@ public final class BrainService {
 
     public static func needsKeyDecision() -> BrainDecision {
         BrainDecision(kind: .answer, title: "model unavailable",
-                      answer: "okidoki needs an anthropic key before it can answer, teach, or do anything.",
+                      answer: "the model isn't available right now, so i can't answer, teach, or do anything yet. try again in a moment.",
                       actions: [])
     }
 
@@ -88,18 +88,20 @@ public final class BrainService {
                 messages.append(["role": role, "content": message.text])
             }
         }
+        // The thread already holds this request as its last user turn; either way the final user
+        // message must carry the screenshot, not just the words.
+        var content: [[String: Any]] = []
+        if let png = request.screenshotPNG {
+            content.append([
+                "type": "image",
+                "source": ["type": "base64", "media_type": "image/png", "data": png.base64EncodedString()],
+            ])
+        }
+        content.append(["type": "text", "text": userText(request)])
         if messages.isEmpty || messages.last?["role"] as? String != "user" {
-            var content: [[String: Any]] = []
-            if let png = request.screenshotPNG {
-                content.append([
-                    "type": "image",
-                    "source": ["type": "base64", "media_type": "image/png", "data": png.base64EncodedString()],
-                ])
-            }
-            content.append(["type": "text", "text": userText(request)])
             messages.append(["role": "user", "content": content])
         } else {
-            messages[messages.count - 1] = ["role": "user", "content": userText(request)]
+            messages[messages.count - 1] = ["role": "user", "content": content]
         }
         // Anthropic requires alternating roles. Collapse adjacent turns.
         var normalized: [[String: Any]] = []
@@ -154,7 +156,7 @@ public final class BrainService {
         let schema: [String: Any] = [
             "type": "object",
             "properties": [
-                "kind": ["type": "string", "enum": ["answer", "quick_action", "terminal", "coding", "background", "teach", "borrow", "watch", "memory", "routine"]],
+                "kind": ["type": "string", "enum": ["answer", "quick_action", "terminal", "coding", "background", "teach", "borrow", "computer_use", "watch", "memory", "routine"]],
                 "title": ["type": "string", "description": "short lowercase title, max 6 words"],
                 "answer": ["type": "string", "description": "the response to show in the card; short, warm, concrete, markdown allowed"],
                 "speak": ["type": "string", "description": "what to say aloud; 1-2 sentences, or empty"],
@@ -193,7 +195,7 @@ public final class BrainService {
         ]
         return [
             "name": "okidoki_respond",
-            "description": "Always respond with this. Decide how to help: answer, quick_action, terminal, coding, background, teach, borrow, watch, memory, or routine.",
+            "description": "Always respond with this. Decide how to help: answer, quick_action, terminal, coding, background, teach, borrow, computer_use, watch, memory, or routine.",
             "input_schema": schema,
         ]
     }
@@ -228,12 +230,15 @@ public final class BrainService {
         return text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) == nil
     }
 
-    /// The clipboard, only when the request is plausibly about it, and never when it's a copy of the chat
-    /// (they pressed copy on a card, then asked a follow-up). Mirrors the brain's `clipboardFor`.
+    /// The clipboard, only when the request names it ("what i copied", "paste this", "my clipboard"),
+    /// and never when it's a copy of the chat (they pressed copy on a card, then asked a follow-up).
+    /// Anything looser — "this", "fix this", "summarize" — made whatever happened to be on the
+    /// clipboard ride along with ordinary questions, so the model answered the clipboard instead
+    /// of what was typed. Mirrors the brain's `clipboardFor`.
     public static func relevantClipboard(_ clipboard: String, request text: String, history: [String],
                                          hasScreenshot: Bool, hasDocument: Bool) -> String {
         let trimmed = clipboard.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
+        guard !trimmed.isEmpty, mentionsClipboard(text) else { return "" }
         func squash(_ s: String) -> String {
             s.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
         }
@@ -245,15 +250,13 @@ public final class BrainService {
             if norm.count > 40, other.contains(norm) { return "" }
             if other.count > 40, norm.contains(other) { return "" }
         }
-        let asked = text.lowercased()
-        let cues = ["clipboard", "copied", "copy", "paste", "summarize", "summarise", "translate", "proofread",
-                    "rewrite", "reword", "shorten", "what's this", "what is this", "what does this", "explain this",
-                    "fix this", "this text", "this error", "this code", "this snippet", "this email", "this message",
-                    "this link", "this url", "this json", "this log", "this output", "this paragraph", "this quote"]
-        let cued = cues.contains { asked.range(of: "\\b\(NSRegularExpression.escapedPattern(for: $0))\\b", options: .regularExpression) != nil }
-        let deictic = !hasScreenshot && !hasDocument && asked.range(of: "\\bthis\\b", options: .regularExpression) != nil
-        guard cued || deictic else { return "" }
         return String(trimmed.prefix(6000))
+    }
+
+    /// True when the request itself refers to the clipboard.
+    public static func mentionsClipboard(_ text: String) -> Bool {
+        let pattern = "\\b(clipboard|copied|pasted|paste|note (this|that))\\b"
+        return text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private func userText(_ request: BrainRequest) -> String {
@@ -289,7 +292,8 @@ public final class BrainService {
         - writing or fixing code → coding (the app runs their chosen coding agent)
         - a long batch job → background
         - learning a piece of software, "teach me", "how do I", "walk me through", or a concept that lives in the app they're using → teach, with a teach_plan outline. a live tutor starts immediately on their screen. never ask them to approve a lesson, and never send teach through computer_use.
-        - something that needs their screen → borrow, with a clear preview
+        - a single click on something already on their screen → borrow, with a clear preview
+        - a result that takes several steps in one or more apps ("send …", "open … and …", "make a …", "export …", "search for …") → computer_use. okidoki then looks at the screen and drives the Mac itself, step by step. list the apps involved in `apps`.
         - "watch me" → watch
         - a durable fact → memory
         - a recurring job → routine

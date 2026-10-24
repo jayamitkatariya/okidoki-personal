@@ -99,25 +99,22 @@ struct DriveCursorView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear
-            ZStack {
-                Circle().stroke(Color(hex: 0x1FB57A).opacity(0.9), lineWidth: 2)
-                    .frame(width: 34, height: 34)
-                Circle().fill(Color(hex: 0x1FB57A).opacity(0.10))
-                    .frame(width: 34, height: 34)
-                RippleRing(key: model.ripple)
-            }
-            .position(x: model.point.x + 4, y: model.point.y + 6)
+            // No halo on the pointer: the screen edge already says okidoki is driving.
+            // Only a click leaves a mark, and it's gone in half a second.
+            RippleRing(key: model.ripple)
+                .position(x: model.point.x + 2, y: model.point.y + 3)
             if !model.label.isEmpty {
                 Text(model.label)
-                    .font(.okBody(12, .medium))
-                    .foregroundStyle(Color.white.opacity(0.92))
+                    .font(.okBody(11.5, .medium))
+                    .foregroundStyle(Color.white.opacity(0.9))
                     .lineLimit(1)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.black.opacity(0.6)))
-                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4.5)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
                     .fixedSize()
-                    .position(x: model.point.x + 24, y: model.point.y + 44)
+                    // Hangs off the pointer's lower-right with its leading edge pinned, so it never slides as the text changes.
+                    .offset(x: model.point.x + 16, y: model.point.y + 22)
             }
             if !model.keyText.isEmpty {
                 Text(model.keyText)
@@ -128,7 +125,7 @@ struct DriveCursorView: View {
                     .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(hex: 0xF7F2E9)))
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.black.opacity(0.2), lineWidth: 0.6))
                     .fixedSize()
-                    .position(x: model.point.x + 24, y: model.point.y + 76)
+                    .offset(x: model.point.x + 16, y: model.point.y + 48)
                     .transition(.opacity)
             }
         }
@@ -148,15 +145,15 @@ private struct RippleRing: View {
     @State private var opacity: Double = 0
 
     var body: some View {
-        Circle().stroke(Color(hex: 0x1FB57A), lineWidth: 2)
-            .frame(width: 34, height: 34)
+        Circle().stroke(Color.white, lineWidth: 1)
+            .frame(width: 22, height: 22)
             .scaleEffect(scale)
             .opacity(opacity)
             .onChange(of: key) { _, _ in
-                scale = 0.4
-                opacity = 0.9
-                withAnimation(.easeOut(duration: 0.55)) {
-                    scale = 2.4
+                scale = 0.5
+                opacity = 0.55
+                withAnimation(.easeOut(duration: 0.5)) {
+                    scale = 1.8
                     opacity = 0
                 }
             }

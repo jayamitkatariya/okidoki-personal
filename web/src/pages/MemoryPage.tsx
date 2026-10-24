@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { Memory } from "../types";
+import type { Memory, MemorySource } from "../types";
 import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, type ConfirmRequest } from "../components/ui";
 
 type Section = "aboutYou" | "rightNow";
@@ -31,6 +31,15 @@ export function MemoryPage() {
   const about = state.memories.filter((memory) => memory.section === "aboutYou");
   const now = state.memories.filter((memory) => memory.section === "rightNow");
   const calendar = state.connectors.find((connector) => connector.id === "calendar");
+  const sources = state.memorySources ?? [];
+  const onThisMac = sources.filter((source) => source.files.length > 0);
+  const needExport = sources.filter((source) => source.files.length === 0);
+
+  const importFrom = (source?: MemorySource) => {
+    const text = source ? `import my memory from ${source.name}` : "import my memory from other assistants";
+    invoke("ask", { text });
+    notify("Preparing the import", source ? `Reading what ${source.name} remembers` : "Reading every assistant on this Mac", "info");
+  };
 
   const add = () => {
     // mirror the native rules (OkidokiStore.addMemory) so the toast only claims what gets saved
@@ -148,6 +157,52 @@ export function MemoryPage() {
           </div>
         </section>
       </div>
+
+      <section className="tile memory-import reveal reveal-2">
+        <header className="tile-head">
+          <h2>Bring memories from another assistant</h2>
+          <span className="spacer" />
+          {onThisMac.length > 1 ? (
+            <Button variant="secondary" size="sm" icon="download" onClick={() => importFrom()}>
+              Import all on this Mac
+            </Button>
+          ) : null}
+        </header>
+        <p className="memory-import-copy">
+          Reads the notes other assistants keep about you and adds them here. You approve before anything is read, their files aren't changed, and
+          nothing leaves your Mac.
+        </p>
+        {onThisMac.length ? (
+          <div className="memory-import-list">
+            {onThisMac.map((source) => (
+              <div className="memory-setting" key={source.id}>
+                <span className="kind-icon small">
+                  <PixelIcon name="terminal" size={14} />
+                </span>
+                <span className="row-copy">
+                  <strong>{source.name}</strong>
+                  <em>
+                    {source.files.length} {source.files.length === 1 ? "file" : "files"} on this Mac
+                  </em>
+                </span>
+                <Button variant="secondary" size="sm" onClick={() => importFrom(source)}>
+                  Import
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {needExport.length ? (
+          <div className="memory-import-foot">
+            <span>From an export:</span>
+            {needExport.map((source) => (
+              <Button key={source.id} variant="ghost" size="sm" onClick={() => importFrom(source)} title={source.blurb}>
+                {source.name}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+      </section>
 
       <div className="memory-lists">
         <MemoryList section="aboutYou" memories={about} onEdit={startEdit} onDelete={remove} onExample={fillExample} />

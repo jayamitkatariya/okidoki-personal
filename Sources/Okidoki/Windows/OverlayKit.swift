@@ -348,6 +348,8 @@ final class OverlayWindow {
                 clip.addSubview(glass)
                 panel.contentView = clip
             } else {
+                // The content is drawn for a dark surface; keep the material dark in light mode too.
+                panel.appearance = NSAppearance(named: .darkAqua)
                 backdrop = Self.blurView(material: .popover, radius: radius)
                 isLiquidGlass = false
                 panel.contentView = backdrop

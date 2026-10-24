@@ -1,4 +1,5 @@
 import { KNOWN_ACTORS, runActor } from "./apify";
+import { apifyToken } from "./keys";
 import { callTool, listTools } from "./mcp";
 import type { ConnectorCall, ConnectorRunRequest, ConnectorRunResult, ConnectorsContext, Decision, McpServerConfig, McpToolInfo } from "./types";
 
@@ -125,9 +126,10 @@ async function executeConnector(request: ConnectorRunRequest, apiKey: string | u
   let source: string;
   try {
     if (call.connector === "apify") {
-      if (!request.apifyToken) throw new Error("Add an Apify key in Keys first.");
+      const token = apifyToken(request.apifyToken);
+      if (!token) throw new Error("No Apify key in this build.");
       source = call.actor;
-      const run = await runActor(request.apifyToken, call.actor, call.input ?? {}, { maxChargeUsd: request.spendingLimit, signal });
+      const run = await runActor(token, call.actor, call.input ?? {}, { maxChargeUsd: request.spendingLimit, signal });
       count = run.items.length;
       data = JSON.stringify(run.items, null, 2);
     } else {
@@ -158,7 +160,7 @@ async function writeUp(request: ConnectorRunRequest, data: string, source: strin
       method: "POST",
       headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({
-        model: request.settings?.claudeModel || "claude-sonnet-4-5",
+        model: request.settings?.claudeModel || "claude-haiku-5-5",
         max_tokens: 900,
         system:
           "You are Okidoki. You just ran a tool for the person. Answer their request from the results only: short, warm, concrete, markdown allowed, under 150 words unless they asked for a list. Link sources when the results have URLs. If the results don't answer it, say so plainly. Never invent data.",

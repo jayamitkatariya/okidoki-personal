@@ -114,7 +114,7 @@ Prefer copy over sync unless deletions are explicitly wanted.`,
     replaces: "paid video converters",
     blurb: "Batch-friendly video transcoding with presets.",
     examples: ["batch convert these videos to 1080p", "make these videos smaller"],
-    installCommand: "brew install --cask handbrake",
+    installCommand: "brew install handbrake",
     docs: `HandBrakeCLI -i input.mov -o output.mp4 --preset "Fast 1080p30"
 Never delete originals.`,
     license: "GPL",

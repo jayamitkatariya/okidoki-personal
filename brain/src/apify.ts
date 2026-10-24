@@ -48,7 +48,7 @@ export async function runActor(
     body: JSON.stringify(input ?? {}),
     signal: AbortSignal.any([AbortSignal.timeout((timeoutSecs + 30) * 1000), ...(options.signal ? [options.signal] : [])]),
   });
-  if (response.status === 401) throw new Error("Apify rejected the key. Check it in Keys.");
+  if (response.status === 401) throw new Error("Apify rejected the key this build ships.");
   if (response.status === 404) throw new Error(`Apify has no actor called ${actor}.`);
   if (response.status === 408) throw new Error(`${actor} didn't finish in ${timeoutSecs}s. Try a smaller job.`);
   if (response.status === 402) throw new Error("Your Apify account is out of credits.");

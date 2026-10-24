@@ -9,6 +9,7 @@ enum AccessibilityLocator {
     static func find(target: String, pid: pid_t) -> (point: CGPoint, label: String)? {
         guard AXIsProcessTrusted(), !target.isEmpty else { return nil }
         let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         var queue: [AXUIElement] = [app]
         var visited = 0
         let needle = target.lowercased()

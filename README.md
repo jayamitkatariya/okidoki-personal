@@ -21,14 +21,17 @@ make test     # Swift tests
 ```
 
 Copy `backend/.env.local.example` to `backend/.env.local` only if you run the sync backend.
-Keys are kept in a private file on your Mac (`~/Library/Application Support/Okidoki/keys.json`), not in the repository or the Keychain.
-Okidoki never reads, writes, or migrates Keychain credentials. On a new installation,
-add keys in the app's Keys page; the local key file is readable only by its owner.
+There is no bring-your-own-key: the app ships with its service credentials. Anything it stores
+locally lives in a private file on your Mac (`~/Library/Application Support/Okidoki/keys.json`,
+readable only by its owner), never in the repository or the Keychain.
 
-Built-in service credentials (Anthropic, Cartesia, Moss, the Convex sync secret) are never
-compiled in. Put them in a gitignored `.env` at the repo root (`ANTHROPIC_API_KEY=…` and so on);
-`make app` copies it into the bundle as `service.env`. The launch environment, `OKIDOKI_ENV_FILE`,
-or `~/Library/Application Support/Okidoki/service.env` override it.
+Service credentials (Anthropic, Cartesia, Moss, Apify, the Convex sync secret) are never
+compiled in. Put them in a gitignored `.env` at the repo root (`ANTHROPIC_API_KEY=…`, `APIFY_API_KEY=…`
+and so on); `make app` copies it into the bundle as `service.env`, leaving out `CONVEX_DEPLOY_KEY`
+and `VITE_*`, which are build-only. The launch environment, `OKIDOKI_ENV_FILE`,
+or `~/Library/Application Support/Okidoki/service.env` override it. When `APIFY_API_KEY` is set, the
+Apify connector in Toolbox starts switched on and the brain uses that key for actor runs.
+Cloud sync stays off until it's switched on in Settings.
 
 ## License
 
@@ -51,8 +54,23 @@ work without a model key:
 - “clean up my mac” · “check free disk space” · “what tools do I have”
 - “compress this video for Discord” · “make this PDF searchable” · “resize my photos”
 - “zip a folder” · “download https://github.com/owner/project” · “show git status”
+- “import my memory from claude code” · “bring over what chatgpt knows about me”
 
-Add an Anthropic key in **Keys** for broader requests and custom plans.
+Broader requests and custom plans go through the model.
+
+## Memory from other assistants
+
+Okidoki can read what other assistants already know about you and add it to Memory. Ask by name
+(“import my memory from hermes”) or use the **Memory** page, which lists what it found on this Mac.
+Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Hermes, Grok, MiniMax and OpenClaw keep their
+notes in files under your home folder; the job reads those files with the terminal and nothing else.
+ChatGPT, Gemini and Claude have no files here, so ask them to export what they remember, save the
+reply as a text file, and pick it when asked.
+
+Every import is a reviewable plan you approve first. It only adds: nothing already in Memory is
+rewritten, the other assistant's files are never changed, and nothing leaves your Mac. Headings,
+code, links, secrets and lines addressed to an assistant (“ignore previous instructions…”) are left
+out. Each imported memory is tagged with where it came from, so you can edit or forget it afterwards.
 
 How it stays end to end:
 
@@ -86,6 +104,24 @@ and command argument round trips. MCP tests use local fixture processes and in-m
 HTTP endpoints; they do not spend API credits or install software. GUI permissions and
 live provider credentials still need a smoke check in the running app.
 
+## Skills (watch me, replay)
+
+Say “watch me” (optionally “watch me do the expense report”) and do the task once. The
+recording is ended only by its own controls — **Save** / **Discard** in the notch, the HUD
+pill, the Skills page, or typing “stop”, “done”, “save as …” or “discard” in the chat.
+Shaking the pointer is ignored while a recording runs, so hovering and nudging never cut
+it short.
+
+Everything about skills can be driven from the chat, instantly and without a model key:
+“replay invoice flow”, “replay invoice flow 3 times”, “again”, “my skills”,
+“rename invoice flow to billing”, “delete the invoice flow skill”. A replay starts right
+away under the ghost cursor; **Esc** or “stop” hands control back.
+
+Replays stay fast: every click is re-found by its accessibility label and posted straight
+away. Only when a recorded control is nowhere on screen (a dialog in the way, a moved
+window, a different page) does the replayer ask the brain to look at the screen and do
+that one step, then carries on at full speed. Without a key the replay behaves as before.
+
 ## Computer use
 
 Ask for a result (“send mom a message on WhatsApp”, “export this as PDF”) and okidoki
@@ -108,7 +144,7 @@ while a password field has the keyboard. Apps are found in the usual folders, th
 subfolders, by bundle id, or through Spotlight. On more than one display, the one with
 the frontmost window is used. A step repeated three times with no effect gets a nudge;
 five times stops the run. Transient model errors are retried; driving uses Sonnet unless
-you picked another non-Haiku model in Keys.
+the saved settings name another non-Haiku model.
 
 While it drives, the pointer glides to each target (Settings › Appearance › Driving pace),
 a green ring and label follow it, clicks ripple, and key presses show beside it. The pill
@@ -121,11 +157,55 @@ scripts use the app's real commands.
 Needs Accessibility and Screen Recording. Checks: `swift test --filter ComputerUseTests`
 and `bun test brain/tests`.
 
+**Run the installed copy, started by launchd.** Two macOS rules decide whether clicks and keys
+work at all:
+
+- Grants are tied to the app's location as well as its signature. Launching build copies from
+  several folders (`build/Okidoki.app`, a lab build, a temp build) leaves a pile of Accessibility
+  entries for the same bundle id; System Settings shows one of them as on while every other copy
+  is silently denied, with no prompt.
+- An app opened from a terminal — `open`, or Finder/AppleScript driven from that terminal — is
+  attributed to the terminal as its "responsible process". The grants land under Terminal or
+  Ghostty and the permission dialogs name the terminal, so okidoki never becomes trusted itself.
+
+`make run` therefore installs to `/Applications/Okidoki.app` and starts it with
+`scripts/launch-app.sh`, a launchd job (how login items start). Only one copy runs at a time: a
+new launch asks any running copy to quit first. When okidoki finds itself untrusted it clears its
+own stale entry (`tccutil reset … com.jaykatariya.okidoki`) and asks again, so one click on the
+toggle makes it good.
+
+End-to-end scenarios: `OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh`, then `scripts/dev-drive.sh
+"open notes and …"` starts a run, waits for it, prints its step log and saves a screenshot under
+`build/scenarios/`; `--ask` sends the text through the router instead. `scripts/dev-scenarios.sh`
+runs the standard batch. The hooks are distributed notifications and are off unless that variable is set.
+
+### Private Mac
+
+Onboarding asks where okidoki should work, and Settings › Private Mac changes it later:
+**This Mac** (the default, above) or **a private Mac** — its own macOS in a window, so
+runs happen there while you keep using your Mac. It's a Virtualization.framework VM
+(Apple silicon only, needs the `com.apple.security.virtualization` entitlement in
+`Resources/Okidoki.entitlements`). Setup downloads the latest macOS restore image
+(~15 GB) into `~/Library/Application Support/Okidoki/PrivateMac`, installs it onto a
+64 GB sparse disk, and boots into Setup Assistant, which you click through once in the
+VM window and then press **It's done**. The VM is sized by `PrivateMacSpec` (up to 4
+cores, 4–8 GB, a 1440×900 Retina display) and starts on demand the first time a run
+needs it; closing its window hides it, the VM keeps running, and quitting okidoki shuts
+it down cleanly.
+
+Inside the VM there is no accessibility tree and no scripting, so the model works from
+the picture alone: screenshots come from a window capture of the VM view, and clicks,
+drags, scrolls and keys are AppKit events handed straight to that view, which forwards
+them to the guest. `open_app` and `open_url` become Spotlight sequences; `script` is
+refused with guidance. The brain gets `remote: true` and a prompt that knows all this.
+A run that picks the private Mac while it isn't set up fails with a pointer to Settings
+rather than silently driving your own Mac. Checks: `swift test --filter PrivateMacSpecTests`.
+
 Model requests use `tool_choice: auto` with an explicit tool instruction: Sonnet
 and Opus 5.5 reject forced tool calls. Routing can use Haiku while computer use
 switches to Sonnet, so both paths must support the same request format.
 
 For a live API smoke check, run `cd brain && bun run smoke:api`. It tests answers
 and computer-use planning with Haiku, Sonnet, and Opus 5.5 using the key saved
-in Keys or `ANTHROPIC_API_KEY`. It makes six billed API requests without capturing
+in the service `.env` or `ANTHROPIC_API_KEY`. It makes six billed API requests without capturing
 the screen or executing the returned actions.

@@ -837,7 +837,13 @@ kbd {
 :root[data-theme="dark"] .btn-primary,
 :root[data-theme="dark"] .nav-badge-hot,
 :root[data-theme="dark"] .tile-count.is-hot,
-:root[data-theme="dark"] .control.is-on .control-icon {
+:root[data-theme="dark"] .control.is-on .control-icon,
+:root[data-theme="dark"] .thread-message.is-user .bubble,
+:root[data-theme="dark"] .thread-message.is-user .bubble time,
+:root[data-theme="dark"] .thread-send,
+:root[data-theme="dark"] .run-approve-icon,
+:root[data-theme="dark"] .voice-radio.is-on,
+:root[data-theme="dark"] .tb-radio.is-on {
   color: #03170f;
 }
 .btn-secondary {

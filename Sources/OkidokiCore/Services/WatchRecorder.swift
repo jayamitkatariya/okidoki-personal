@@ -3,6 +3,20 @@ import ApplicationServices
 import Carbon.HIToolbox
 import Foundation
 
+/// What was under the pointer when it was clicked: enough to find the same control again
+/// even after its window moves or the Dock reorders.
+public struct WatchedTarget: Equatable, Sendable {
+    public var label: String
+    /// App that owns the control (may differ from the front app: Dock, menu bar extras).
+    public var owner: String
+    public var role: String
+    /// The control's window, Quartz space. Nil for things without one (Dock items).
+    public var window: CGRect?
+    public init(label: String = "", owner: String = "", role: String = "", window: CGRect? = nil) {
+        self.label = label; self.owner = owner; self.role = role; self.window = window
+    }
+}
+
 public struct WatchedStep: Identifiable, Sendable {
     public var id = UUID()
     public var app: String
@@ -16,17 +30,22 @@ public struct WatchedStep: Identifiable, Sendable {
     public var toY: Double?
     public var delay: Double
     public var at: Date
+    public var owner: String
+    public var role: String
+    public var window: CGRect?
     public init(app: String, action: String, detail: String, label: String = "", input: String = "",
                 x: Double? = nil, y: Double? = nil, toX: Double? = nil, toY: Double? = nil,
-                delay: Double = 0, at: Date = Date()) {
+                delay: Double = 0, at: Date = Date(), owner: String = "", role: String = "", window: CGRect? = nil) {
         self.app = app; self.action = action; self.detail = detail; self.label = label; self.input = input
         self.x = x; self.y = y; self.toX = toX; self.toY = toY; self.delay = delay; self.at = at
+        self.owner = owner; self.role = role; self.window = window
     }
 
     public var step: SkillStep {
         SkillStep(id: id.uuidString, text: detail.isEmpty ? action : detail, app: app, x: x, y: y, action: action,
                   label: label.isEmpty ? nil : label, input: input.isEmpty ? nil : input,
-                  toX: toX, toY: toY, delay: delay)
+                  toX: toX, toY: toY, delay: delay,
+                  owner: owner.isEmpty || owner == app ? nil : owner, role: role.isEmpty ? nil : role, window: window)
     }
 }
 
@@ -62,11 +81,17 @@ public final class WatchRecorder: ObservableObject {
     private var scrollShown: Double = 0
     private var scrollPoint: CGPoint?
     private var scrollApp = ""
+    private var scrollWindow: CGRect?
     private var scrollFlush: DispatchWorkItem?
 
     /// Overridable so the event pipeline can be driven in tests without a real screen.
     var frontAppProvider: () -> String = { NSWorkspace.shared.frontmostApplication?.localizedName ?? "mac" }
-    var labelProvider: (CGPoint) -> String = WatchRecorder.systemLabel(at:)
+    var targetProvider: (CGPoint) -> WatchedTarget = WatchRecorder.systemTarget(at:)
+    /// Label-only shorthand for tests that don't care about owner, role or window.
+    var labelProvider: (CGPoint) -> String {
+        get { { [targetProvider] in targetProvider($0).label } }
+        set { targetProvider = { WatchedTarget(label: newValue($0)) } }
+    }
     /// Typing idle gap before the buffered text becomes a step.
     var typingIdle: TimeInterval = 2.5
     /// Idle gap that ends a scroll gesture.
@@ -84,6 +109,7 @@ public final class WatchRecorder: ObservableObject {
         scrollDevice = 0
         scrollShown = 0
         scrollPoint = nil
+        scrollWindow = nil
         mouseDownPoint = nil
         mouseDownIndex = nil
         pendingName = name
@@ -193,7 +219,8 @@ public final class WatchRecorder: ObservableObject {
             return
         }
 
-        let label = labelProvider(point)
+        let target = targetProvider(point)
+        let label = target.label
         let where_ = label.isEmpty ? "at \(Int(point.x)), \(Int(point.y))" : "“\(label)”"
         let action: String
         switch type {
@@ -201,8 +228,11 @@ public final class WatchRecorder: ObservableObject {
         case .otherMouseDown: action = "middle-click"
         default: action = "click"
         }
-        append(WatchedStep(app: app, action: action, detail: "in \(app), \(action) \(where_)",
-                           label: label, x: point.x, y: point.y))
+        // A click on the Dock or a menu bar extra belongs to that surface, not to whichever app
+        // happened to be in front; the sentence says so and replay won't try to activate it.
+        let shown = SkillReplayGeometry.isSystemSurface(target.owner) ? target.owner : app
+        append(WatchedStep(app: shown, action: action, detail: "in \(shown), \(action) \(where_)",
+                           label: label, x: point.x, y: point.y, owner: target.owner, role: target.role, window: target.window))
         if type == .leftMouseDown {
             mouseDownPoint = point
             mouseDownIndex = steps.indices.last
@@ -261,6 +291,7 @@ public final class WatchRecorder: ObservableObject {
         if scrollPoint == nil {
             scrollPoint = point
             scrollApp = frontApp
+            scrollWindow = targetProvider(point).window
             scrollDevice = 0
             scrollShown = 0
         }
@@ -299,13 +330,15 @@ public final class WatchRecorder: ObservableObject {
         guard let point = scrollPoint else { return }
         let device = scrollDevice
         let shown = scrollShown
+        let window = scrollWindow
         scrollPoint = nil
+        scrollWindow = nil
         scrollDevice = 0
         scrollShown = 0
         guard abs(device) >= 4 else { return }
         let direction = shown > 0 ? "up" : "down"
         append(WatchedStep(app: scrollApp, action: "scroll", detail: "in \(scrollApp), scroll \(direction)",
-                           x: point.x, y: point.y, toX: 0, toY: device))
+                           x: point.x, y: point.y, toX: 0, toY: device, window: window))
     }
 
     private func append(_ step: WatchedStep) {
@@ -329,13 +362,23 @@ public final class WatchRecorder: ObservableObject {
         return CGPoint(x: p.x, y: height - p.y)
     }
 
-    nonisolated private static func systemLabel(at point: CGPoint) -> String {
-        guard AXIsProcessTrusted() else { return "" }
+    nonisolated private static func systemTarget(at point: CGPoint) -> WatchedTarget {
+        guard AXIsProcessTrusted() else { return WatchedTarget() }
         let system = AXUIElementCreateSystemWide()
         var element: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element)
-        guard result == .success, let element else { return "" }
-        return AccessibilityLabel.of(element)
+        guard result == .success, let element else { return WatchedTarget() }
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        let owner = pid > 0 ? NSRunningApplication(processIdentifier: pid)?.localizedName ?? "" : ""
+        var windowRef: CFTypeRef?
+        var window: CGRect?
+        if AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &windowRef) == .success,
+           let windowRef, let windowElement = AXSearch.axElement(windowRef) {
+            window = AXSearch.frame(of: windowElement)
+        }
+        return WatchedTarget(label: AccessibilityLabel.of(element), owner: owner,
+                             role: AXSearch.stringAttribute(kAXRoleAttribute, of: element), window: window)
     }
 
     nonisolated static func specialKeyName(_ keyCode: UInt16) -> String? {

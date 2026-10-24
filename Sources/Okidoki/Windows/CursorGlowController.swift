@@ -215,8 +215,14 @@ extension NSScreen {
     /// The notched screen, else the menu-bar screen. Not `NSScreen.main` (the screen with the
     /// key window), which changes with focus and made the notch pill hop between displays.
     static var okidokiPrimary: NSScreen {
-        NSScreen.screens.first(where: { $0.okidokiHasNotch }) ?? NSScreen.screens.first ?? NSScreen.main!
+        // Mid-reconfiguration (clamshell, display sleep) the list can be empty for a moment.
+        if let screen = NSScreen.screens.first(where: { $0.okidokiHasNotch }) ?? NSScreen.screens.first ?? NSScreen.main {
+            lastPrimary = screen
+            return screen
+        }
+        return lastPrimary ?? NSScreen.screens[0]
     }
+    private nonisolated(unsafe) static var lastPrimary: NSScreen?
 
     var okidokiHasNotch: Bool {
         if #available(macOS 12.0, *) {

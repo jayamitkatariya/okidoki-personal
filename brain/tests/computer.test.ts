@@ -48,6 +48,20 @@ test("without a screenshot or accessibility the prompt forbids pointer actions",
   expect(blind).toContain("reports no accessible controls");
 });
 
+test("on the private Mac the prompt drops scripts and accessibility and keeps the picture", () => {
+  const remote = systemPrompt({ ...base, remote: true, app: "", windowTitle: "", controls: [], scripting: "" });
+  expect(remote).toContain("PRIVATE MAC");
+  expect(remote).toContain("Do not emit script");
+  expect(remote).toContain("1331×864 pixels");
+  expect(remote).toContain("Setup Assistant");
+  expect(remote).toContain("· open_app WhatsApp → opened WhatsApp");
+  expect(remote).not.toContain("AppleScript by default");
+  expect(remote).not.toContain("reports no accessible controls");
+  expect(remote).not.toContain("Frontmost app:");
+  // The user didn't watch, so the summary has to say where the result lives.
+  expect(remote).toContain("without having seen the screen");
+});
+
 import { computerAct, drivingModel, messageContent } from "../src/computer";
 
 test("driving swaps a small routing model for sonnet but keeps an explicit choice", () => {

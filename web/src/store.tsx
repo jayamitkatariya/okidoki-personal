@@ -60,12 +60,16 @@ function fromCloud(cloud: CloudState, accountId: string): NativeState {
     connectors: [],
     tools: [],
     installedAgents: [],
+    agents: [],
     keys: {},
     permissions: {},
     mcpStatus: {},
     mcpSecretNames: {},
     savings: 0,
     ...snapshot,
+    // The snapshot's version is the Mac's schema number, not an app version; the other assistants' files aren't here.
+    version: typeof snapshot.version === "string" ? snapshot.version : "",
+    memorySources: [],
     settings: { ...demoState.settings, ...(snapshot.settings ?? {}) },
     accounts: cloud.accounts,
     currentAccountID: accountId,
@@ -164,21 +168,34 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       const next = { ...latestSettings.current, ...patch };
       latestSettings.current = next;
       pendingUntil.current = Date.now() + 900;
-      setSettings(next);
       // only the changed keys: native merges them, so settings it changed meanwhile aren't overwritten
-      if (!hosted) nativeInvoke("updateSettings", { patch });
+      if (hosted) {
+        // Appearance is the one setting the hosted panel keeps for itself; the rest live on the Mac.
+        if (!("appearance" in patch)) {
+          pushToast("Do this on your Mac", "This panel shows what your Mac synced. It can't act from here yet.", "info");
+          return;
+        }
+        setSettings(next);
+        return;
+      }
+      setSettings(next);
+      nativeInvoke("updateSettings", { patch });
     },
-    [hosted],
+    [hosted, pushToast],
   );
 
   const updateManySettings = useCallback(
     (next: Settings) => {
       latestSettings.current = next;
       pendingUntil.current = Date.now() + 900;
+      if (hosted) {
+        pushToast("Do this on your Mac", "This panel shows what your Mac synced. It can't act from here yet.", "info");
+        return;
+      }
       setSettings(next);
-      if (!hosted) nativeInvoke("updateSettings", { settings: next });
+      nativeInvoke("updateSettings", { settings: next });
     },
-    [hosted],
+    [hosted, pushToast],
   );
 
   const dismissToast = useCallback((id: string) => {

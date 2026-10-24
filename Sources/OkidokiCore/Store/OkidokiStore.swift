@@ -26,7 +26,8 @@ public final class OkidokiStore: ObservableObject {
         let support = stateURL?.deletingLastPathComponent() ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Okidoki", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        self.stateURL = stateURL ?? support.appendingPathComponent("state.json")
+        // The demo never touches the real state file; it would otherwise be saved over on first launch.
+        self.stateURL = stateURL ?? support.appendingPathComponent(seedDemo ? "state-demo.json" : "state.json")
 
         var loaded: AppState?
         if !seedDemo, let data = try? Data(contentsOf: self.stateURL) {
@@ -42,7 +43,13 @@ public final class OkidokiStore: ObservableObject {
                 throw DecodingError.dataCorruptedError(in: value, debugDescription: "Invalid saved date")
             }
             do { loaded = try decoder.decode(AppState.self, from: data) }
-            catch { loadError = "couldn't read saved state: \(error.localizedDescription)" }
+            catch {
+                loadError = "couldn't read saved state: \(error.localizedDescription)"
+                // Keep the unreadable file: the first save would otherwise replace it with an empty state.
+                let aside = self.stateURL.deletingPathExtension()
+                    .appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
+                try? FileManager.default.moveItem(at: self.stateURL, to: aside)
+            }
         }
 
         let state = loaded ?? AppState()
@@ -62,7 +69,7 @@ public final class OkidokiStore: ObservableObject {
         self.currentAccountID = current
         self.settings = state.settings
         self.threads = state.threads
-        self.memories = state.memories
+        self.memories = Self.pruneModelNoise(state.memories)
         self.runs = state.runs.map { $0.recoveredAfterRestart() }
         self.skills = state.skills
         self.routines = state.routines
@@ -248,6 +255,17 @@ public final class OkidokiStore: ObservableObject {
         memories.removeAll { $0.id == id }
     }
 
+    /// Sources that mean the model wrote the memory itself. Anything the person typed, answered
+    /// in onboarding or imported from another assistant is theirs to keep.
+    private static let modelSources: Set<String> = ["said", "followup", "dashboard", "routine", "repair", "lesson"]
+
+    /// Memories the model saved before `isDurableFact` existed — notes about the clipboard, a
+    /// screenshot or its own limits — were fed back with every request and kept the model stuck on
+    /// them. They are dropped once at load; the person's own notes are never touched.
+    static func pruneModelNoise(_ memories: [MemoryItem]) -> [MemoryItem] {
+        memories.filter { !modelSources.contains($0.source) || BrainService.isDurableFact($0.text) }
+    }
+
     public var memoryContext: String {
         let about = memories(.aboutYou).prefix(12).map(\.text)
         let now = memories(.rightNow).prefix(6).map(\.text)
@@ -345,7 +363,8 @@ public final class OkidokiStore: ObservableObject {
     public func updateRoutine(_ routine: Routine) {
         guard let index = routines.firstIndex(where: { $0.id == routine.id }) else { return }
         var updated = routine
-        updated.nextRunAt = routine.nextDate(after: routine.lastRunAt ?? Date())
+        // From now, like toggleRoutine: a slot missed since lastRunAt would otherwise fire on save.
+        updated.nextRunAt = routine.nextDate()
         routines[index] = updated
     }
 
@@ -407,7 +426,10 @@ public final class OkidokiStore: ObservableObject {
             lastSavedAt = Date()
             isWriting = false
         } catch {
+            // Published inside the writing window so the failure doesn't schedule another save.
+            isWriting = true
             loadError = "couldn't save: \(error.localizedDescription)"
+            isWriting = false
         }
     }
 

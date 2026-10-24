@@ -123,7 +123,8 @@ function CloudBridge({ accountId, claimAccounts, onChange }: { accountId: string
     }
   }, [boot]);
 
-  const status: CloudStatus = isLoading || (isAuthenticated && me === undefined) ? "loading" : isAuthenticated ? "signedIn" : "signedOut";
+  // Both queries must land before "signed in", or the shell briefly says no Mac is linked.
+  const status: CloudStatus = isLoading || (isAuthenticated && (me === undefined || mine === undefined)) ? "loading" : isAuthenticated ? "signedIn" : "signedOut";
   useEffect(() => {
     onChange({ status, email: me?.email ?? null, accounts: mine ?? [], snapshot, taken, signIn, signOut });
   }, [status, me, mine, snapshot, taken, signIn, signOut, onChange]);
@@ -137,6 +138,7 @@ function friendlyError(error: unknown, flow: CloudFlow): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/already exists/i.test(message)) return "There's already a login with that email. Sign in instead.";
   if (/InvalidAccountId|InvalidSecret|Invalid credentials/i.test(message)) return "That email and password don't match.";
+  if (/TooManyFailedAttempts/i.test(message)) return "Too many attempts. Wait a minute and try again.";
   if (/password/i.test(message) && flow === "signUp") return "Use a password of at least 8 characters.";
   return "Couldn't reach your Convex deployment. Check that it's running and try again.";
 }

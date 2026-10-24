@@ -17,7 +17,7 @@ function focusRun(id: string) {
 
 export const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
-  quickAction: "bolt",
+  quick_action: "bolt",
   computer_use: "hand",
   terminal: "terminal",
   coding: "code",
@@ -31,7 +31,7 @@ export const kindGlyph: Record<RunKind, string> = {
 
 const KIND_LABEL: Record<RunKind, string> = {
   answer: "answers",
-  quickAction: "quick actions",
+  quick_action: "quick actions",
   computer_use: "screen work",
   terminal: "terminal work",
   coding: "coding",
@@ -634,7 +634,7 @@ function weekSummary(runs: Run[]) {
     ? `okidoki put in ${spent} of work for you this week.`
     : "You're all caught up. Nothing needs you right now.";
   const detail = done.length
-    ? `${done.length} ${done.length === 1 ? "task" : "tasks"} finished without you${top ? ` — mostly ${KIND_LABEL[top[0]]}` : ""}.`
+    ? `${done.length} ${done.length === 1 ? "task" : "tasks"} finished without you${top ? ` — mostly ${KIND_LABEL[top[0]] ?? top[0]}` : ""}.`
     : "Ask okidoki to take the next thing off your plate, or just look around.";
 
   return { done: done.length, spent, headline, detail };
@@ -649,7 +649,7 @@ function LiveItem({ run, onOpen, onPause, onStop }: { run: Run; onOpen: () => vo
       <div className="live-top">
         <span className="kind-label">
           <PixelIcon name={kindGlyph[run.kind] ?? "spark"} size={13} />{" "}
-          {run.kind === "quickAction" ? "Quick action" : run.kind === "computer_use" ? "Computer use" : run.kind}
+          {run.kind === "quick_action" ? "Quick action" : run.kind === "computer_use" ? "Computer use" : run.kind}
         </span>
         <span className="spacer" />
         <StatusBadge status={run.status} />
@@ -665,9 +665,11 @@ function LiveItem({ run, onOpen, onPause, onStop }: { run: Run; onOpen: () => vo
           {run.startedAt ? ` · ${relativeTime(run.startedAt)}` : ""}
         </span>
         <span className="spacer" />
-        <button className="icon-btn" aria-label={run.status === "paused" ? "Resume" : "Pause"} title={run.status === "paused" ? "Resume" : "Pause"} onClick={onPause}>
-          <PixelIcon name={run.status === "paused" ? "play" : "pause"} size={14} />
-        </button>
+        {run.kind !== "watch" && run.kind !== "connector" ? (
+          <button className="icon-btn" aria-label={run.status === "paused" ? "Resume" : "Pause"} title={run.status === "paused" ? "Resume" : "Pause"} onClick={onPause}>
+            <PixelIcon name={run.status === "paused" ? "play" : "pause"} size={14} />
+          </button>
+        ) : null}
         <button className="icon-btn" aria-label="Stop" title="Stop" onClick={onStop}>
           <PixelIcon name="stop" size={14} />
         </button>

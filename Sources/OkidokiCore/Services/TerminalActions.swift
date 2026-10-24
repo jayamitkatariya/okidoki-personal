@@ -69,6 +69,18 @@ public enum SetupRecipes {
                     install: [script("https://hermes-agent.nousresearch.com/install.sh", "hermes")],
                     update: ["hermes update"], launch: "hermes", launchInFolder: false,
                     blurb: "Nous Research's self-improving agent with tools, memory and messaging."),
+        SetupRecipe(id: "codex", name: "Codex", aliases: ["codex", "openai codex", "codex cli"], binary: "codex",
+                    install: ["npm install -g @openai/codex"], needs: ["node"],
+                    update: ["npm install -g @openai/codex@latest"], launch: "codex", launchInFolder: true,
+                    blurb: "OpenAI's coding agent for the terminal."),
+        SetupRecipe(id: "gemini", name: "Gemini CLI", aliases: ["gemini cli", "gemini-cli", "gemini"], binary: "gemini",
+                    install: ["npm install -g @google/gemini-cli"], needs: ["node"],
+                    update: ["npm install -g @google/gemini-cli@latest"], launch: "gemini", launchInFolder: true,
+                    blurb: "Google's coding agent for the terminal."),
+        SetupRecipe(id: "cursor-agent", name: "Cursor Agent", aliases: ["cursor agent", "cursor-agent", "cursor cli"], binary: "cursor-agent",
+                    install: [script("https://cursor.com/install", "cursor-agent")],
+                    launch: "cursor-agent", launchInFolder: true,
+                    blurb: "Cursor's agent for the terminal."),
         SetupRecipe(id: "ollama", name: "Ollama", aliases: ["ollama"], binary: "ollama",
                     install: ["brew install --cask ollama"], needs: ["homebrew"], update: ["brew upgrade --cask ollama"],
                     blurb: "Runs open models locally on your Mac."),
@@ -80,7 +92,7 @@ public enum SetupRecipes {
                     install: ["brew install ffmpeg"], needs: ["homebrew"], update: ["brew upgrade ffmpeg"],
                     blurb: "Compress, trim, convert and stitch video."),
         SetupRecipe(id: "handbrake", name: "HandBrake", aliases: ["handbrake", "handbrakecli"], binary: "HandBrakeCLI",
-                    install: ["brew install --cask handbrake"], needs: ["homebrew"],
+                    install: ["brew install handbrake"], needs: ["homebrew"],
                     blurb: "Batch-friendly video transcoding."),
         SetupRecipe(id: "pandoc", name: "Pandoc", aliases: ["pandoc"], binary: "pandoc",
                     install: ["brew install pandoc"], needs: ["homebrew"], update: ["brew upgrade pandoc"],
@@ -230,7 +242,13 @@ public enum TerminalActions {
     public static func decide(_ text: String, installed: (String) -> Bool = { ShellRunner.which($0) != nil }) -> BrainDecision? {
         let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let t = raw.lowercased()
-        if t.hasPrefix("teach") || t.hasPrefix("how ") || t.hasPrefix("what ") || t.hasPrefix("why ") || t.contains("?") { return nil }
+        // Bringing memories over: "import my memory from claude code", "what does chatgpt know about me, pull it in".
+        // Checked before installs, since the other assistant's name would otherwise read as a setup request,
+        // and before the question guard below, since these are often phrased as questions.
+        if let decision = MemoryImport.decide(t) { return decision }
+        let listsTools = t.range(of: #"\b(what|which)('s| is| are)? (tools?|agents?) (do i have|are installed|is installed)\b"#, options: .regularExpression) != nil
+            || t == "list my tools" || t == "list installed tools"
+        if !listsTools, t.hasPrefix("teach") || t.hasPrefix("how ") || t.hasPrefix("what ") || t.hasPrefix("why ") || t.contains("?") { return nil }
         func plan(_ title: String, _ summary: String, _ commands: [String], pick: String? = nil,
                   steps: [String] = [], risk: RiskLevel = .low, builtin: String? = nil) -> BrainDecision {
             let labels = steps.isEmpty ? commands.map { command -> String in
@@ -293,8 +311,7 @@ public enum TerminalActions {
             }
         }
 
-        if t.range(of: #"\b(what|which)('s| is| are)? (tools?|agents?) (do i have|are installed|is installed)\b"#, options: .regularExpression) != nil
-            || t == "list my tools" || t == "list installed tools" {
+        if listsTools {
             let have = SetupRecipes.all.filter { installed($0.binary) }.map(\.name)
             let missing = SetupRecipes.all.filter { !installed($0.binary) }.map(\.name)
             return BrainDecision(kind: .answer, title: "your tools",
@@ -306,7 +323,7 @@ public enum TerminalActions {
             return plan("make video smaller", "Choose a video. I'll save a smaller MP4 beside it and keep the original.",
                         ["test ! -e {{outputDir}}/{{basename}}-small.mp4", #"ffmpeg -nostdin -n -i {{file}} -vf "scale='min(1280,iw)':-2" -c:v libx264 -crf 28 -preset medium -c:a aac -b:a 128k -movflags +faststart {{outputDir}}/{{basename}}-small.mp4"#], pick: "video")
         }
-        if t.contains("ocr") || t.contains("searchable") || t.contains("scanned pdf") {
+        if t.range(of: #"\bocr\b"#, options: .regularExpression) != nil || t.contains("searchable") || t.contains("scanned pdf") {
             return plan("make PDF searchable", "Choose a PDF. I'll save a searchable copy beside the original.",
                         ["ocrmypdf --skip-text {{file}} {{outputDir}}/{{basename}}-searchable.pdf"], pick: "pdf")
         }
@@ -322,7 +339,7 @@ public enum TerminalActions {
             return plan("zip a folder", "Choose a folder. I'll make a ZIP beside it.",
                         ["test ! -e {{dir}}.zip", "ditto -c -k --sequesterRsrc --keepParent {{dir}} {{dir}}.zip"], pick: "folder")
         }
-        if (t.contains("disk") || t.contains("storage") || t.contains("space")) &&
+        if t.range(of: #"\b(disk|storage|space)\b"#, options: .regularExpression) != nil &&
             ["check", "show", "how much", "available", "left", "free space"].contains(where: t.contains) &&
             !["clean", "free up", "out of"].contains(where: t.contains) {
             return plan("check storage", "Check how much storage is available on your Mac.", ["df -h \"$HOME\""])
@@ -430,7 +447,23 @@ public enum TerminalActions {
         if let partial = progress.output.range(of: "\u{1e}" + marker, options: .backwards) {
             progress.output.removeSubrange(partial.lowerBound...)
         }
+        progress.output = cleanOutput(progress.output)
         return progress
+    }
+
+    private static let ansiEscape = try! NSRegularExpression(pattern: "\u{1b}\\[[0-9;?]*[ -/]*[@-~]|\u{1b}\\][^\u{07}\u{1b}]*(?:\u{07}|\u{1b}\\\\)?|\u{1b}[@-Z\\\\-_]")
+
+    /// Output as a person would see it in a terminal: colour codes gone, and progress bars that
+    /// redraw a line with carriage returns reduced to the last thing drawn.
+    public static func cleanOutput(_ output: String) -> String {
+        guard output.contains("\u{1b}") || output.contains("\r") else { return output }
+        var text = ansiEscape.stringByReplacingMatches(in: output, range: NSRange(output.startIndex..., in: output), withTemplate: "")
+        guard text.contains("\r") else { return text }
+        text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        return text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> Substring in
+            guard let last = line.lastIndex(of: "\r") else { return line }
+            return line[line.index(after: last)...]
+        }.joined(separator: "\n")
     }
 
     // MARK: - Interactive tools
@@ -484,7 +517,8 @@ public enum TerminalActions {
         #!/bin/zsh
         # okidoki · \(title)
         export PATH=\(shellQuote(ShellRunner.shared.pathEnvironment))":$PATH"
-        export HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        export SUDO_ASKPASS=\(shellQuote(AskPass.path ?? ""))
         cd \(shellQuote(workingDirectory)) || exit 1
         clear
         printf 'okidoki · %s\\n' \(shellQuote(title))

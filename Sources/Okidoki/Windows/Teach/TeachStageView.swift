@@ -64,6 +64,8 @@ final class TeachStageView: NSView {
     private let leader = CAShapeLayer()
     private var alsoTag: CALayer?
     private var tagLayer: CALayer?
+    /// Where the tag sits, in overlay-local points, so the bubble can stay out of its way.
+    private var tagRect: CGRect?
     private var drawingLayers: [CALayer] = []
     private var ghost: CALayer?
     private var transient: [CALayer] = []
@@ -114,14 +116,14 @@ final class TeachStageView: NSView {
         spotlight.opacity = 0
         spotlight.isHidden = false
 
-        halo.lineWidth = 7
-        glow.lineWidth = 10
+        halo.lineWidth = 5
+        glow.lineWidth = 6
         fill.lineWidth = 0
-        ring.lineWidth = 2.6
-        orbit.lineWidth = 3
-        arrowGlow.lineWidth = 12
-        arrow.lineWidth = 3.2
-        comet.lineWidth = 2.2
+        ring.lineWidth = 2
+        orbit.lineWidth = 2.4
+        arrowGlow.lineWidth = 7
+        arrow.lineWidth = 2.6
+        comet.lineWidth = 1.8
         dropTarget.lineWidth = 2
         dropTarget.lineDashPattern = [7, 5]
         alsoBox.lineWidth = 1.6
@@ -134,20 +136,20 @@ final class TeachStageView: NSView {
     private func restyle() {
         let color = accent.cgColor
         halo.strokeColor = NSColor.black.withAlphaComponent(increaseContrast ? 0.7 : 0.35).cgColor
-        glow.strokeColor = accent.withAlphaComponent(0.42).cgColor
+        glow.strokeColor = accent.withAlphaComponent(0.2).cgColor
         glow.shadowColor = color
-        glow.shadowOpacity = 0.8
-        glow.shadowRadius = 12
+        glow.shadowOpacity = 0.3
+        glow.shadowRadius = 7
         glow.shadowOffset = .zero
-        fill.fillColor = accent.withAlphaComponent(0.09).cgColor
+        fill.fillColor = accent.withAlphaComponent(0.05).cgColor
         ring.strokeColor = color
         orbit.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
-        arrowGlow.strokeColor = accent.withAlphaComponent(0.28).cgColor
-        arrow.strokeColor = accent.withAlphaComponent(0.9).cgColor
+        arrowGlow.strokeColor = accent.withAlphaComponent(0.14).cgColor
+        arrow.strokeColor = accent.withAlphaComponent(0.85).cgColor
         arrowHead.fillColor = color
         comet.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
         dropTarget.strokeColor = accent.withAlphaComponent(0.9).cgColor
-        dropTarget.fillColor = accent.withAlphaComponent(0.07).cgColor
+        dropTarget.fillColor = accent.withAlphaComponent(0.04).cgColor
         alsoBox.strokeColor = accent.withAlphaComponent(0.6).cgColor
         leader.strokeColor = accent.withAlphaComponent(0.55).cgColor
     }
@@ -181,7 +183,7 @@ final class TeachStageView: NSView {
             hideArrow()
             alsoBox.isHidden = true
             alsoTag?.removeFromSuperlayer(); alsoTag = nil
-            tagLayer?.removeFromSuperlayer(); tagLayer = nil
+            tagLayer?.removeFromSuperlayer(); tagLayer = nil; tagRect = nil
             setSpotlight(nil)
             return
         }
@@ -272,17 +274,17 @@ final class TeachStageView: NSView {
         ring.removeAnimation(forKey: "pulse")
         guard motionScale > 0 else { return }
         let breathe = CABasicAnimation(keyPath: "lineWidth")
-        breathe.fromValue = 8
-        breathe.toValue = 13
-        breathe.duration = 1.3
+        breathe.fromValue = 5
+        breathe.toValue = 8
+        breathe.duration = 1.8
         breathe.autoreverses = true
         breathe.repeatCount = .infinity
         breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         glow.add(breathe, forKey: "pulse")
         let shimmer = CABasicAnimation(keyPath: "shadowOpacity")
-        shimmer.fromValue = 0.45
-        shimmer.toValue = 0.95
-        shimmer.duration = 1.3
+        shimmer.fromValue = 0.18
+        shimmer.toValue = 0.4
+        shimmer.duration = 1.8
         shimmer.autoreverses = true
         shimmer.repeatCount = .infinity
         shimmer.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -392,6 +394,7 @@ final class TeachStageView: NSView {
     private func presentTag(_ scene: TeachScene) {
         tagLayer?.removeFromSuperlayer()
         tagLayer = nil
+        tagRect = nil
         leader.isHidden = true
         let hasLabel = !(scene.label ?? "").isEmpty
         guard scene.hasTarget, hasLabel || !scene.keys.isEmpty else { return }
@@ -419,6 +422,7 @@ final class TeachStageView: NSView {
         container.frame = flip(frame)
         layer?.addSublayer(container)
         tagLayer = container
+        tagRect = frame
 
         // When the tag had to move away from the ring, a hairline keeps them attached.
         let pivot = scene.kind == "arrow" && scene.to != nil
@@ -578,10 +582,10 @@ final class TeachStageView: NSView {
         badge.bounds = CGRect(x: 0, y: 0, width: size, height: size)
         badge.cornerRadius = size / 2
         badge.backgroundColor = accent.cgColor
-        badge.shadowColor = accent.cgColor
-        badge.shadowOpacity = 0.7
-        badge.shadowRadius = 8
-        badge.shadowOffset = .zero
+        badge.shadowColor = NSColor.black.cgColor
+        badge.shadowOpacity = 0.3
+        badge.shadowRadius = 4
+        badge.shadowOffset = CGSize(width: 0, height: -1)
         let text = makeText("\(n)", fontSize: 13, weight: .bold, color: .black)
         text.frame = CGRect(x: (size - text.bounds.width) / 2, y: (size - text.bounds.height) / 2, width: text.bounds.width, height: text.bounds.height)
         badge.addSublayer(text)
@@ -763,9 +767,9 @@ final class TeachStageView: NSView {
         lens.borderWidth = 2
         let holder = CALayer()
         holder.shadowColor = NSColor.black.cgColor
-        holder.shadowOpacity = 0.5
-        holder.shadowRadius = 14
-        holder.shadowOffset = CGSize(width: 0, height: -4)
+        holder.shadowOpacity = 0.3
+        holder.shadowRadius = 8
+        holder.shadowOffset = CGSize(width: 0, height: -2)
         var origin = CGPoint(x: center.x + 30, y: center.y - size - 30)
         if origin.y < 8 { origin.y = center.y + 30 }
         if origin.x + size > bounds.width - 8 { origin.x = center.x - size - 30 }
@@ -900,7 +904,7 @@ final class TeachStageView: NSView {
         ghost = makeGhost(from: start, to: end, repeats: true, duration: scene.kind == "arrow" ? 1.6 : 1.1)
     }
 
-    /// One pass of the ghost cursor, used in Show me right before okidoki acts.
+    /// One pass of the ghost cursor: the walk-through when they're stuck, and right before okidoki does a step for them.
     func demoGhostOnce(to: CGPoint, from: CGPoint?) {
         removeGhost()
         let start = from ?? CGPoint(x: min(bounds.width - 40, to.x + 150), y: min(bounds.height - 40, to.y + 110))
@@ -920,17 +924,17 @@ final class TeachStageView: NSView {
         cursor.bounds = CGRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
         cursor.anchorPoint = CGPoint(x: 0.2, y: 0.95)
         cursor.shadowColor = NSColor.black.cgColor
-        cursor.shadowOpacity = 0.5
-        cursor.shadowRadius = 4
-        cursor.shadowOffset = CGSize(width: 0, height: -2)
+        cursor.shadowOpacity = 0.35
+        cursor.shadowRadius = 3
+        cursor.shadowOffset = CGSize(width: 0, height: -1)
         cursor.position = flip(from)
         group.addSublayer(cursor)
 
         let ripple = CAShapeLayer()
         ripple.path = CGPath(ellipseIn: CGRect(x: -14, y: -14, width: 28, height: 28), transform: nil)
         ripple.strokeColor = accent.cgColor
-        ripple.fillColor = accent.withAlphaComponent(0.25).cgColor
-        ripple.lineWidth = 2
+        ripple.fillColor = accent.withAlphaComponent(0.14).cgColor
+        ripple.lineWidth = 1.6
         ripple.position = flip(to)
         ripple.opacity = 0
         group.addSublayer(ripple)
@@ -1026,17 +1030,17 @@ final class TeachStageView: NSView {
 
         let trail = CAShapeLayer()
         trail.path = path
-        trail.strokeColor = accent.withAlphaComponent(0.75).cgColor
+        trail.strokeColor = accent.withAlphaComponent(0.6).cgColor
         trail.fillColor = nil
-        trail.lineWidth = 2.2
+        trail.lineWidth = 1.8
         trail.lineCap = .round
         trail.strokeEnd = 0
         let dot = CAShapeLayer()
         dot.path = CGPath(ellipseIn: CGRect(x: -5, y: -5, width: 10, height: 10), transform: nil)
         dot.fillColor = accent.cgColor
         dot.shadowColor = accent.cgColor
-        dot.shadowOpacity = 0.8
-        dot.shadowRadius = 8
+        dot.shadowOpacity = 0.4
+        dot.shadowRadius = 4
         dot.shadowOffset = .zero
         dot.position = a
         layer?.addSublayer(trail)
@@ -1098,9 +1102,9 @@ final class TeachStageView: NSView {
         let near = max(0, min(1, 1 - (distance - 30) / 220))
         CATransaction.begin()
         CATransaction.setAnimationDuration(0.18)
-        fill.fillColor = accent.withAlphaComponent(inside ? 0.22 : 0.09 + 0.06 * near).cgColor
-        ring.lineWidth = 2.6 + 0.8 * near
-        glow.opacity = Float(0.8 + 0.2 * near) * (scene.provisional ? 0.5 : 1)
+        fill.fillColor = accent.withAlphaComponent(inside ? 0.12 : 0.05 + 0.04 * near).cgColor
+        ring.lineWidth = 2 + 0.6 * near
+        glow.opacity = Float(0.75 + 0.25 * near) * (scene.provisional ? 0.5 : 1)
         CATransaction.commit()
     }
 
@@ -1112,8 +1116,8 @@ final class TeachStageView: NSView {
         disc.path = CGPath(ellipseIn: CGRect(x: -size / 2, y: -size / 2, width: size, height: size), transform: nil)
         disc.fillColor = accent.cgColor
         disc.shadowColor = accent.cgColor
-        disc.shadowOpacity = 0.7
-        disc.shadowRadius = big ? 18 : 10
+        disc.shadowOpacity = 0.35
+        disc.shadowRadius = big ? 10 : 6
         disc.shadowOffset = .zero
         disc.position = p
         let check = CAShapeLayer()
@@ -1197,11 +1201,11 @@ final class TeachStageView: NSView {
             let p = flip(point)
             ring.path = CGPath(ellipseIn: CGRect(x: p.x - 28, y: p.y - 28, width: 56, height: 56), transform: nil)
             ring.strokeColor = accent.cgColor
-            ring.fillColor = accent.withAlphaComponent(0.1).cgColor
-            ring.lineWidth = 2.6
+            ring.fillColor = accent.withAlphaComponent(0.06).cgColor
+            ring.lineWidth = 2
             ring.shadowColor = accent.cgColor
-            ring.shadowOpacity = 0.7
-            ring.shadowRadius = 10
+            ring.shadowOpacity = 0.3
+            ring.shadowRadius = 6
             ring.shadowOffset = .zero
             layer?.addSublayer(ring)
             let drawIn = CABasicAnimation(keyPath: "strokeEnd")
@@ -1232,16 +1236,45 @@ final class TeachStageView: NSView {
         let size = view.fittingSize
         var frame: CGRect
         if let scene, scene.hasTarget {
-            let target = scene.kind == "arrow" ? CGRect(x: scene.center.x - 30, y: scene.center.y - 30, width: 60, height: 60) : scene.rect
+            // The thing being pointed at. For a drag that is the whole arrow, not just its tip.
+            let target: CGRect
+            if scene.kind == "arrow", let to = scene.to {
+                target = CGRect(x: min(scene.from.x, to.x), y: min(scene.from.y, to.y),
+                                width: abs(to.x - scene.from.x), height: abs(to.y - scene.from.y)).insetBy(dx: -30, dy: -30)
+            } else {
+                target = scene.rect
+            }
+            // Everything else drawn for this step is in the way too: the second region, callouts, badges, arrows.
+            var obstacles = [target.insetBy(dx: -8, dy: -8)]
+            if let also = scene.also { obstacles.append(also) }
+            if let tagRect { obstacles.append(tagRect.insetBy(dx: -10, dy: -10)) }
+            for drawing in scene.drawings where drawing.kind != "ghost" && drawing.kind != "spotlight" {
+                var rect = drawing.rect
+                if let to = drawing.to { rect = rect.union(CGRect(x: to.x, y: to.y, width: 1, height: 1)) }
+                obstacles.append(rect.insetBy(dx: -12, dy: -12))
+            }
             let gap: CGFloat = 22
             let candidates = [
                 CGRect(x: target.maxX + gap, y: target.midY - size.height / 2, width: size.width, height: size.height),
                 CGRect(x: target.minX - gap - size.width, y: target.midY - size.height / 2, width: size.width, height: size.height),
                 CGRect(x: target.midX - size.width / 2, y: target.maxY + gap + 36, width: size.width, height: size.height),
                 CGRect(x: target.midX - size.width / 2, y: target.minY - gap - 36 - size.height, width: size.width, height: size.height),
+                CGRect(x: target.maxX + gap, y: target.maxY + gap, width: size.width, height: size.height),
+                CGRect(x: target.minX - gap - size.width, y: target.maxY + gap, width: size.width, height: size.height),
+                CGRect(x: target.maxX + gap, y: target.minY - gap - size.height, width: size.width, height: size.height),
+                CGRect(x: target.minX - gap - size.width, y: target.minY - gap - size.height, width: size.width, height: size.height),
             ]
-            let safe = bounds.insetBy(dx: 16, dy: 16).offsetBy(dx: 0, dy: 0)
-            frame = candidates.first(where: { safe.contains($0) && !$0.intersects(target.insetBy(dx: -8, dy: -8)) }) ?? candidates[2]
+            let safe = bounds.insetBy(dx: 16, dy: 16)
+            func overlap(_ candidate: CGRect) -> CGFloat {
+                obstacles.reduce(0) { total, obstacle in
+                    let cut = candidate.intersection(obstacle)
+                    return total + (cut.isNull ? 0 : cut.width * cut.height)
+                }
+            }
+            let onScreen = candidates.filter { safe.contains($0) }
+            frame = onScreen.first(where: { overlap($0) == 0 })
+                ?? onScreen.min(by: { overlap($0) < overlap($1) })
+                ?? candidates[2]
             frame.origin.x = min(max(16, frame.minX), bounds.width - size.width - 16)
             frame.origin.y = min(max(16, frame.minY), bounds.height - size.height - 90)
             // Leader from the bubble's nearest edge to the ring.
@@ -1316,21 +1349,21 @@ final class TeachStageView: NSView {
         let pill = CALayer()
         pill.bounds = CGRect(x: 0, y: 0, width: label.bounds.width + padX * 2 + dotSpace, height: label.bounds.height + padY * 2)
         pill.cornerRadius = pill.bounds.height / 2
-        pill.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        pill.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        pill.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
+        pill.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
         pill.borderWidth = 0.5
         pill.shadowColor = NSColor.black.cgColor
-        pill.shadowOpacity = 0.35
-        pill.shadowRadius = 8
-        pill.shadowOffset = CGSize(width: 0, height: -2)
+        pill.shadowOpacity = 0.22
+        pill.shadowRadius = 5
+        pill.shadowOffset = CGSize(width: 0, height: -1)
         if dot {
             let point = CALayer()
             point.bounds = CGRect(x: 0, y: 0, width: 7, height: 7)
             point.cornerRadius = 3.5
             point.backgroundColor = accent.cgColor
             point.shadowColor = accent.cgColor
-            point.shadowOpacity = 0.9
-            point.shadowRadius = 4
+            point.shadowOpacity = 0.4
+            point.shadowRadius = 2
             point.shadowOffset = .zero
             point.position = CGPoint(x: padX + 3.5, y: pill.bounds.midY)
             pill.addSublayer(point)
@@ -1387,9 +1420,9 @@ final class TeachStageView: NSView {
         card.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
         card.borderWidth = 0.5
         card.shadowColor = NSColor.black.cgColor
-        card.shadowOpacity = 0.4
-        card.shadowRadius = 10
-        card.shadowOffset = CGSize(width: 0, height: -3)
+        card.shadowOpacity = 0.25
+        card.shadowRadius = 6
+        card.shadowOffset = CGSize(width: 0, height: -2)
         let bar = CALayer()
         bar.backgroundColor = accent.cgColor
         bar.frame = CGRect(x: pad, y: pad, width: 3, height: label.bounds.height)

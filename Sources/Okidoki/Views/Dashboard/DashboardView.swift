@@ -62,6 +62,14 @@ struct DashboardWatchPayload: Encodable {
     var replaying: Bool
 }
 
+struct DashboardMemorySourcePayload: Encodable {
+    var id: String
+    var name: String
+    var blurb: String
+    /// Memory files found on this Mac. Empty for hosted assistants, which need a saved export.
+    var files: [String]
+}
+
 struct DashboardPayload: Encodable {
     var watching: DashboardWatchPayload
     var accounts: [Account]
@@ -70,11 +78,15 @@ struct DashboardPayload: Encodable {
     var runs: [AgentRun]
     var threads: [ChatThread]
     var memories: [MemoryItem]
+    /// Other assistants whose memory can be brought in, with the files each keeps on this Mac.
+    var memorySources: [DashboardMemorySourcePayload]
     var skills: [Skill]
     var routines: [Routine]
     var connectors: [Connector]
     var tools: [DashboardToolPayload]
     var installedAgents: [String]
+    /// Each coding agent with whether it's installed and signed in, for the Settings "Agents" section.
+    var agents: [AgentStatus]
     var keys: [String: Bool]
     var permissions: [String: String]
     var signedOut: Bool
@@ -90,6 +102,22 @@ struct DashboardPayload: Encodable {
     var mcpSecretNames: [String: [String]]
     /// The current or last driving run, step by step, for the Live page.
     var live: DashboardLivePayload?
+    /// okidoki's private Mac: whether this Mac can run one, and where setup or the VM is right now.
+    var privateMac: DashboardPrivateMacPayload
+}
+
+struct DashboardPrivateMacPayload: Encodable {
+    var supported: Bool
+    var phase: String
+    var progress: Double
+    var status: String
+    var error: String?
+    var needsFirstBoot: Bool
+    var macOSVersion: String
+    var cpuCount: Int
+    var memoryGB: Int
+    var bytesOnDisk: Int64
+    var downloadGB: Int
 }
 
 // MARK: - Controller
@@ -307,6 +335,19 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         webView.evaluateJavaScript("window.okidokiNative(\(json));", completionHandler: nil)
     }
 
+    private var memorySourcesCache: (at: Date, sources: [DashboardMemorySourcePayload])?
+
+    /// State is pushed often; the other assistants' folders are only re-scanned now and then.
+    private func memorySources() -> [DashboardMemorySourcePayload] {
+        if let cached = memorySourcesCache, Date().timeIntervalSince(cached.at) < 30 { return cached.sources }
+        let sources = MemoryImport.sources.map { source in
+            DashboardMemorySourcePayload(id: source.id, name: source.name, blurb: source.blurb,
+                                         files: source.isLocal ? MemoryImport.files(for: source) : [])
+        }
+        memorySourcesCache = (Date(), sources)
+        return sources
+    }
+
     private func payloadJSON() -> String? {
         guard let env else { return nil }
         let payload = DashboardPayload(
@@ -321,6 +362,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             runs: env.store.activeRuns.sorted { $0.createdAt > $1.createdAt },
             threads: env.store.activeThreads,
             memories: env.store.memories,
+            memorySources: memorySources(),
             skills: env.store.activeSkills,
             routines: env.store.activeRoutines,
             connectors: env.store.connectors,
@@ -333,6 +375,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                                      examples: tool.examples, popularity: tool.popularity)
             },
             installedAgents: env.installedAgents.map(\.rawValue),
+            agents: env.agentStatus,
             keys: Dictionary(uniqueKeysWithValues: KeyProviders.all.map { ($0.id, env.hasKey($0.id)) }),
             permissions: Dictionary(uniqueKeysWithValues: PermissionKind.allCases.map { ($0.rawValue, PermissionsService.shared.state($0).label) }),
             signedOut: env.signedOut,
@@ -344,17 +387,29 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             savings: env.store.savings,
             convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty,
             mcpStatus: env.mcpStatus,
-            mcpSecretNames: Dictionary(uniqueKeysWithValues: env.store.settings.mcpServers.map { server in
+            mcpSecretNames: Dictionary(env.store.settings.mcpServers.map { server in
                 let secrets = env.mcpSecrets(server)
                 return (server.id, (secrets.env.keys.map { $0 } + secrets.headers.keys.map { $0 }).sorted())
-            }),
+            }, uniquingKeysWith: { first, _ in first }),
             live: env.driver.model.runID == nil ? nil : DashboardLivePayload(
                 active: env.driver.isActive,
                 runID: env.driver.model.runID,
                 target: env.driver.model.targetName,
                 goal: env.driver.model.goal,
                 stepIndex: env.driver.model.stepIndex,
-                steps: env.driver.model.steps)
+                steps: env.driver.model.steps),
+            privateMac: DashboardPrivateMacPayload(
+                supported: PrivateMacService.isSupported,
+                phase: env.privateMac.phase.rawValue,
+                progress: env.privateMac.progress,
+                status: env.privateMac.statusLine,
+                error: env.privateMac.error,
+                needsFirstBoot: env.privateMac.needsFirstBoot,
+                macOSVersion: env.privateMac.macOSVersion,
+                cpuCount: env.privateMac.cpuCount,
+                memoryGB: Int(env.privateMac.memoryBytes / (1024 * 1024 * 1024)),
+                bytesOnDisk: env.privateMac.isSetUp || env.privateMac.restoreImageDownloaded ? PrivateMacSpec.bytesOnDisk() : 0,
+                downloadGB: Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000))
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -564,6 +619,25 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         case "openPermissionSettings":
             if let raw = payload["kind"] as? String, let kind = PermissionKind(rawValue: raw) {
                 PermissionsService.shared.openSettings(kind)
+            }
+        case "privateMac":
+            switch payload["action"] as? String {
+            case "setUp": env.privateMac.setUp()
+            case "cancelSetup": env.privateMac.cancelSetup()
+            case "start": Task { await env.privateMac.start(showWindow: true) }
+            case "stop": Task { await env.privateMac.stop() }
+            case "show": env.privateMac.show()
+            case "hide": env.privateMac.hide()
+            case "firstBootDone": env.privateMac.markFirstBootDone()
+            case "delete":
+                Task {
+                    await env.privateMac.delete()
+                    if env.store.settings.computerTarget == "vm" {
+                        env.store.settings.computerTarget = "mac"
+                        env.store.saveNow()
+                    }
+                }
+            default: break
             }
         case "createAccount":
             let name = payload["name"] as? String ?? "you"

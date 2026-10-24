@@ -148,6 +148,13 @@
 .pref-row-button.is-current:hover {
   background: transparent;
 }
+.pref-row-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.pref-row-button:disabled:hover {
+  background: transparent;
+}
 .pref-row-button .pref-copy em {
   text-transform: capitalize;
 }

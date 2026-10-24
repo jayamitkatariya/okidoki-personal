@@ -15,11 +15,13 @@ public struct ComputerContext {
     }
 }
 
-/// A computer the driving loop can look at and act on: this Mac today, a private VM later.
+/// A computer the driving loop can look at and act on: this Mac, or okidoki's private Mac (a VM).
 @MainActor
 public protocol ComputerTarget: AnyObject {
     /// Shown to the user, e.g. "this Mac".
     var displayName: String { get }
+    /// True when this isn't the Mac okidoki runs on: no scripts, no accessibility, only the picture.
+    var isRemote: Bool { get }
     /// Whether the user's own Escape key and shake should stop a run. False when the user keeps
     /// using their Mac while the run happens somewhere else.
     var stopsOnUserEscape: Bool { get }
@@ -42,6 +44,7 @@ public final class LocalComputer: ComputerTarget {
     public init() {}
 
     public var displayName: String { "this Mac" }
+    public var isRemote: Bool { false }
     public var stopsOnUserEscape: Bool { true }
     public var showsPointerOverlay: Bool { true }
     public var canAct: Bool { EventActuator.canPost }

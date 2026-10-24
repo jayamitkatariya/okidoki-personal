@@ -13,16 +13,18 @@ public enum ServiceSecrets {
     public static var cartesia: String { resolved("CARTESIA_API_KEY") }
     public static var mossProjectID: String { resolved("MOSS_PROJECT_ID") }
     public static var mossProjectKey: String { resolved("MOSS_PROJECT_KEY") }
+    public static var apify: String { resolved("APIFY_API_KEY") }
     public static var convexSyncSecret: String { resolved("OKIDOKI_SYNC_SECRET") }
     public static var convexCloudURL: String { resolved("CONVEX_URL", fallback: convexCloudURLDefault) }
     public static var convexSiteURL: String { resolved("CONVEX_SITE_URL", fallback: convexSiteURLDefault) }
 
-    /// Key file ids the app used to ask for. Apify and MCP secrets stay user-supplied.
+    /// Key file ids the app used to ask for. MCP secrets stay user-supplied.
     public static func builtin(_ key: String) -> String? {
         switch key {
         case "anthropic": return anthropic
         case "cartesia": return cartesia
         case "moss": return mossProjectID.isEmpty || mossProjectKey.isEmpty ? nil : "\(mossProjectID):\(mossProjectKey)"
+        case "apify": return apify
         case "convex": return convexSyncSecret
         default: return nil
         }
@@ -35,6 +37,7 @@ public enum ServiceSecrets {
             "CARTESIA_API_KEY": cartesia,
             "MOSS_PROJECT_ID": mossProjectID,
             "MOSS_PROJECT_KEY": mossProjectKey,
+            "APIFY_API_KEY": apify,
             "OKIDOKI_SYNC_SECRET": convexSyncSecret,
             "CONVEX_URL": convexCloudURL,
             "CONVEX_SITE_URL": convexSiteURL,

@@ -21,13 +21,13 @@ test("think and computer use refuse without an anthropic key", async () => {
   const thought = await think.json() as { decision: { kind: string; answer: string }; usedModel: boolean };
   expect(thought.usedModel).toBe(false);
   expect(thought.decision.kind).toBe("answer");
-  expect(thought.decision.answer.toLowerCase()).toContain("anthropic key");
+  expect(thought.decision.answer.toLowerCase()).toContain("isn't available");
   const drive = await fetch(base + "/computer", { method: "POST", headers, body: JSON.stringify({ goal: "open figma", step: 0, history: [] }) });
   expect(drive.ok).toBe(true);
   const acted = await drive.json() as { action: { type: string; reason?: string }; usedModel: boolean };
   expect(acted.usedModel).toBe(false);
   expect(acted.action.type).toBe("fail");
-  expect(acted.action.reason?.toLowerCase()).toContain("anthropic key");
+  expect(acted.action.reason?.toLowerCase()).toContain("isn't available");
 });
 
 test("an approved plan streams output and success", async () => {
@@ -92,6 +92,31 @@ test("malformed connector requests are rejected before invoking a service", asyn
   for (const payload of [null, {}, { runId: "job", call: { connector: "unknown" } }, { runId: "job", call: { connector: "mcp", server: "missing" } }, { runId: "job", call: { connector: "apify", actor: "" } }]) {
     const response = await fetch(base + "/connector/run", { method: "POST", headers, body: JSON.stringify(payload) });
     expect(response.status).toBe(400);
+  }
+});
+
+test("the Apify key check uses the request token, then the environment, and never calls out with neither", async () => {
+  const saved = process.env.APIFY_API_KEY;
+  const seen: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers).get("authorization") ?? "");
+    return Response.json({ data: { username: "fixture" } });
+  }) as typeof globalThis.fetch;
+  const check = (body: unknown) => fetch(base + "/apify/check", { method: "POST", headers, body: JSON.stringify(body) });
+  try {
+    delete process.env.APIFY_API_KEY;
+    const none = await (await check({})).json() as { ok: boolean; error?: string };
+    expect(none.ok).toBe(false);
+    expect(none.error).toContain("No Apify key");
+    expect(seen).toEqual([]);
+    process.env.APIFY_API_KEY = "env-token";
+    expect((await (await check({})).json() as { ok: boolean }).ok).toBe(true);
+    expect((await (await check({ token: "given-token" })).json() as { ok: boolean }).ok).toBe(true);
+    expect(seen).toEqual(["Bearer env-token", "Bearer given-token"]);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.APIFY_API_KEY; else process.env.APIFY_API_KEY = saved;
   }
 });
 

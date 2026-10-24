@@ -158,6 +158,28 @@ test("Apify execution passes credentials, input and the spending cap through to 
   } finally { server.stop(true); }
 });
 
+test("Apify falls back to the key the Mac put in the environment, and refuses plainly with none", async () => {
+  const saved = process.env.APIFY_API_KEY;
+  const server = httpFixture(async request => {
+    expect(request.headers.get("authorization")).toBe("Bearer env-token");
+    return Response.json([{ title: "From env" }]);
+  });
+  const request = { runId: "apify-env", prompt: "fixture", call: { connector: "apify" as const, actor: "fixture/actor", input: {} } };
+  try {
+    process.env.APIFY_API_KEY = "env-token";
+    const result = await runConnector(request, undefined);
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("From env");
+    delete process.env.APIFY_API_KEY;
+    const refused = await runConnector(request, undefined);
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("Apify key");
+  } finally {
+    if (saved === undefined) delete process.env.APIFY_API_KEY; else process.env.APIFY_API_KEY = saved;
+    server.stop(true);
+  }
+});
+
 test("Apify failures reach the result and Stop aborts the pending HTTP request", async () => {
   const { stopConnector } = await import("../src/connectors");
   let wait = false, began!: () => void;

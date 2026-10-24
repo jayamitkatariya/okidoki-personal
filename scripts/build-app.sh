@@ -57,8 +57,9 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
 cp Resources/BrandMark.png "$APP/Contents/Resources/BrandMark.png"
 # Service credentials live in the gitignored .env; the app reads them from service.env in its bundle.
+# Deploy and build-only keys never belong in a bundle anyone can open.
 if [ -f .env ]; then
-  cp .env "$APP/Contents/Resources/service.env"
+  grep -vE '^\s*(CONVEX_DEPLOY_KEY|VITE_[A-Z0-9_]*)\s*=' .env > "$APP/Contents/Resources/service.env"
   chmod 600 "$APP/Contents/Resources/service.env"
 fi
 if [ -d Resources/brain ]; then

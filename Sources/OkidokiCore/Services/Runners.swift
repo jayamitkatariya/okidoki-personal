@@ -107,7 +107,7 @@ public enum SafetyPolicy {
         guard connectors.contains(where: { $0.id == kind && $0.enabled }) else {
             return "\(kind == "mcp" ? "MCP" : "Apify") is off in Toolbox. Turn it on and ask again."
         }
-        if kind == "apify" { return hasApifyKey ? nil : "Add an Apify key in Keys first." }
+        if kind == "apify" { return hasApifyKey ? nil : "Apify isn't set up in this build." }
         guard let id = call["server"] as? String,
               let server = settings.mcpServers.first(where: { $0.id == id && $0.enabled }) else {
             return "This MCP server is off or was removed. Check Toolbox and ask again."
@@ -202,7 +202,9 @@ public final class ConvexSyncService: ObservableObject {
         return URL(string: trimmed + path)
     }
 
-    public func push(store: OkidokiStore) async {
+    /// `sentAt` is normally now; a 409 hands back the newest accepted stamp so a Mac whose clock went
+    /// backwards can retry once just ahead of it instead of being refused until wall time catches up.
+    public func push(store: OkidokiStore, sentAt: Int? = nil) async {
         guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else {
             status = "local only"
             return
@@ -236,11 +238,12 @@ public final class ConvexSyncService: ObservableObject {
             // Only the tail of each run's terminal output syncs; the full log stays on this Mac.
             // Keeps the request well under Convex's HTTP body limit as history grows.
             var syncState = store.stateForSync()
-            syncState.runs = syncState.runs.map { run in
+            syncState.runs = syncState.runs.sorted { $0.createdAt > $1.createdAt }.prefix(1_000).map { run in
                 var run = run
                 run.output = String(run.output.suffix(20_000))
                 return run
             }
+            syncState.threads = Array(syncState.threads.sorted { $0.updatedAt > $1.updatedAt }.prefix(300))
             // lastSyncAt is written by this very method; counting it would make every push schedule the next.
             var forHash = syncState
             forHash.settings.lastSyncAt = nil
@@ -254,7 +257,7 @@ public final class ConvexSyncService: ObservableObject {
             let body: [String: Any] = [
                 "accountId": store.currentAccountID,
                 "device": Host.current().localizedName ?? "mac",
-                "sentAt": Int(Date().timeIntervalSince1970 * 1000),
+                "sentAt": sentAt ?? Int(Date().timeIntervalSince1970 * 1000),
                 "state": stateObject,
             ]
             var request = URLRequest(url: url)
@@ -270,6 +273,13 @@ public final class ConvexSyncService: ObservableObject {
             }
             if http.statusCode == 409 {
                 // A newer sync for this account already landed (another Mac, or a faster push). Nothing lost.
+                if sentAt == nil,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let latest = json["latest"] as? Int {
+                    isSyncing = false
+                    await push(store: store, sentAt: latest + 1)
+                    return
+                }
                 status = "synced elsewhere"
                 return
             }

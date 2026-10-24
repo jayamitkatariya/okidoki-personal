@@ -337,7 +337,7 @@ export function AppShell({
             <i />
             <span>{convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}</span>
             <span className="spacer" />
-            <span>v{state.version}</span>
+            {state.version ? <span>v{state.version}</span> : null}
           </div>
         </div>
       </aside>

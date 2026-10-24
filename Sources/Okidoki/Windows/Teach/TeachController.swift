@@ -60,7 +60,7 @@ struct TeachShownStep: Equatable {
     /// Quartz global rect that counts as "on the target" for a click.
     var hitRect: CGRect?
     var dragTo: CGPoint?
-    /// Global center, for Show me and "do it for me".
+    /// Global center, for "do it for me".
     var actGlobal: CGPoint?
     var actFrom: CGPoint?
     var retry: Bool
@@ -83,8 +83,8 @@ final class TeachControlPanel: NSPanel {
 // MARK: - Controller
 
 /// A live tutor. Each turn it looks at the real screen, asks the model for one step, draws it,
-/// then watches what the learner does before looking again. In Guide me the learner is the hands;
-/// in Show me okidoki does each step while narrating. ⌥⌥ fast-forwards, esc stops.
+/// then watches what the learner does before looking again. The learner is the hands; the lesson
+/// moves on by itself the moment a step lands. Nothing to press — esc stops.
 @MainActor
 final class TeachController {
     let model = TeachModel()
@@ -98,15 +98,15 @@ final class TeachController {
     private var outline: [String] = []
     private var log: [TeachLogEntry] = []
     private var generation = 0
-    private var showGeneration = 0
     private var monitors: [Any] = []
     private var appObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
+    private var resignObserver: NSObjectProtocol?
     private var pendingVerify: DispatchWorkItem?
     private var idleWork: [DispatchWorkItem] = []
     private var followTimer: Timer?
     private var scrollSettle: DispatchWorkItem?
     private var mouseDownAt: CGPoint?
-    private var pointerAtStep: CGPoint?
     private var typedCount = 0
     private var performingForThem = false
     private var lastShot: TeachShot?
@@ -114,16 +114,15 @@ final class TeachController {
     private var stepsShown = 0
     private var cleanHits = 0
     private var doItInARow = 0
-    private var queuedFastForward = false
+    private var modelRetries = 0
     private var confirmContinuation: CheckedContinuation<Bool, Never>?
-    private var gesture: TeachGesture?
     private var current: TeachShownStep?
     private var askingQuestion = false
     private var practiceRound = false
     private var lab: TeachLab?
     private var lastPointerUpdate: TimeInterval = 0
 
-    private static let barSize = CGSize(width: 640, height: 56)
+    private static let barSize = CGSize(width: TeachBarView.width, height: 56)
 
     init(environment: AppEnvironment) { self.env = environment }
 
@@ -145,7 +144,7 @@ final class TeachController {
         stepsShown = 0
         cleanHits = 0
         doItInARow = 0
-        queuedFastForward = false
+        modelRetries = 0
         lastShot = nil
         elements = []
         typedCount = 0
@@ -171,12 +170,10 @@ final class TeachController {
         model.provisional = false
         model.summary = ""
         model.offerPractice = false
-        model.canDo = false
         model.runID = runID
         model.threadID = threadID
         model.voice = env.store.settings.teachVoice
-        model.gesture = TeachGesture.Kind(setting: env.store.settings.teachGesture)
-        model.mode = forced ?? Self.inferMode(from: requestText, saved: env.store.settings.teachMode)
+        model.mode = forced ?? .guide
         model.phase = .looking
         model.isActive = true
 
@@ -186,13 +183,7 @@ final class TeachController {
         stagePanel?.orderFrontRegardless()
         barPanel?.orderFrontRegardless()
         installMonitors()
-        startGesture()
-        requestStep(after: 0.45, settle: false)
-    }
-
-    /// "show me…" starts Show me; "teach me" / "let me try" starts Guide me; otherwise the saved choice.
-    static func inferMode(from text: String, saved: String) -> TeachMode {
-        TeachMode(rawValue: TeachModePicker.infer(text: text, saved: saved)) ?? .guide
+        requestStep(after: 0.2, settle: false)
     }
 
     private func resolveApp(bundleID: String) -> NSRunningApplication? {
@@ -231,9 +222,13 @@ final class TeachController {
         panel.hasShadow = false
         panel.level = .statusBar + 3
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // Panels hide themselves when the app deactivates by default, and a lesson deactivates
+        // okidoki the moment it brings the learner's app forward. Stay put.
+        panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
-        // Hidden from screenshots so the model never sees its own rings; the lab keeps them visible to check the visuals.
-        panel.sharingType = lab == nil ? .none : .readOnly
+        // Hidden from screenshots so the model never sees its own rings; the lab (and a scripted
+        // test run with OKIDOKI_TEACH_CAPTURE=1) keeps them visible to check the visuals.
+        panel.sharingType = capturable ? .readOnly : .none
         panel.isReleasedWhenClosed = false
         let stage = TeachStageView(frame: NSRect(origin: .zero, size: screen.frame.size))
         stage.accent = accent
@@ -255,17 +250,14 @@ final class TeachController {
         bar.hasShadow = false
         bar.level = .statusBar + 4
         bar.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        bar.sharingType = lab == nil ? .none : .readOnly
+        bar.hidesOnDeactivate = false
+        bar.sharingType = capturable ? .readOnly : .none
         bar.isReleasedWhenClosed = false
         let view = TeachBarView(
             model: model,
             accent: Color(accent),
-            onBack: { [weak self] in self?.replayCurrent() },
-            onNext: { [weak self] in self?.fastForward(source: "button") },
-            onDoIt: { [weak self] in self?.doItForThem() },
             onConfirm: { [weak self] in self?.resolveConfirm(true) },
             onSkip: { [weak self] in self?.resolveConfirm(false) },
-            onMode: { [weak self] mode in self?.switchMode(mode) },
             onVoice: { [weak self] in self?.toggleVoice() },
             onPractice: { [weak self] in self?.startPractice() },
             onStop: { [weak self] in self?.stop(completed: self?.model.phase == .done) }
@@ -278,21 +270,12 @@ final class TeachController {
         barPanel = bar
     }
 
-    private func startGesture() {
-        gesture?.stop()
-        guard model.gesture != .off else { gesture = nil; return }
-        let g = TeachGesture(kind: model.gesture) { [weak self] in self?.fastForward(source: "gesture") }
-        g.start()
-        gesture = g
-    }
-
     // MARK: Loop
 
     /// Look at the screen and ask for the next step. `settle` waits for the app to stop changing first.
     private func requestStep(after delay: Double, settle: Bool) {
         guard model.isActive, let env else { return }
         generation += 1
-        showGeneration += 1
         let gen = generation
         pendingVerify?.cancel()
         pendingVerify = nil
@@ -300,7 +283,6 @@ final class TeachController {
         stopFollowing()
         model.phase = .looking
         model.stuck = false
-        model.canDo = false
         model.hint = stepsShown == 0 ? "looking at \(model.appName)…" : "checking…"
         stage?.setThinking(true)
         Task { [weak self] in
@@ -327,8 +309,8 @@ final class TeachController {
                 // Two frames that agree mean the app has finished repainting after what they did.
                 var tries = 0
                 var previous = TeachImage.settleHash(captured.full)
-                while tries < 4 {
-                    try? await Task.sleep(nanoseconds: 230_000_000)
+                while tries < 3 {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
                     guard gen == self.generation, self.model.isActive else { return }
                     guard let again = await ComputerUseService.shared.capture(screen: screen) else { break }
                     let hash = TeachImage.settleHash(again.full)
@@ -393,19 +375,31 @@ final class TeachController {
             let step = await self.stepProvider(request)
             guard gen == self.generation, self.model.isActive else { return }
             guard let step else {
-                self.model.phase = .waiting
-                self.model.hint = "the model didn't answer — \(self.model.gesture.hint.isEmpty ? "press next" : self.model.gesture.hint) to try again"
-                self.stage?.setThinking(false)
+                self.retryAfterSilence()
                 return
             }
+            self.modelRetries = 0
             if step.waiting, self.stepsShown < 40 {
                 self.model.say = step.say.isEmpty ? "waiting for it to load…" : step.say
                 self.model.hint = "waiting for the screen"
-                self.requestStep(after: 1.2, settle: true)
+                self.requestStep(after: 0.9, settle: true)
                 return
             }
             self.apply(step)
         }
+    }
+
+    /// No answer from the model: try again on our own, backing off, so nobody has to press anything.
+    private func retryAfterSilence() {
+        modelRetries += 1
+        if modelRetries <= 3 {
+            model.hint = "one sec — asking again"
+            requestStep(after: [1.0, 2.0, 4.0][modelRetries - 1], settle: false)
+            return
+        }
+        model.phase = .waiting
+        model.hint = "i couldn't reach the model — say \"next\" to retry, or esc to stop"
+        stage?.setThinking(false)
     }
 
     /// The model behind each step; the lab swaps in scripted steps.
@@ -440,7 +434,6 @@ final class TeachController {
         typedCount = 0
         mouseDownAt = nil
         current = shown
-        pointerAtStep = TeachGeometry.quartz(NSEvent.mouseLocation)
 
         withAnimation(OKMotion.spring) {
             model.say = step.say
@@ -450,7 +443,6 @@ final class TeachController {
             model.phase = .waiting
             model.stuck = false
             model.provisional = false
-            model.canDo = step.isDoable
             model.hint = retry ? "not quite — try this" : Self.hint(for: step, mode: model.mode)
         }
         stage?.setThinking(false)
@@ -476,25 +468,19 @@ final class TeachController {
             }
             return
         }
-        if queuedFastForward {
-            queuedFastForward = false
-            // Let the step flash on screen before acting on it, so nothing happens unseen.
-            let id = shown.id
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                guard let self, self.current?.id == id, self.model.phase == .waiting else { return }
-                self.fastForward(source: "queued")
-            }
-            return
-        }
-        if model.mode == .show, step.isDoable {
-            runShow(shown, skipSpeech: false)
-        } else if step.action == "look" {
+        if step.action == "look" {
             armLookDwell()
+        } else if step.action == "open_app", let app = step.app, !app.isEmpty {
+            // Bringing the right app forward isn't the lesson; do it so the real first step can start.
+            let id = shown.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+                guard let self, self.current?.id == id, self.model.phase == .waiting, !self.performingForThem else { return }
+                Task { await self.perform(shown, narrated: "okidoki brought it forward") }
+            }
         }
     }
 
     private static func hint(for step: TeachLiveStep, mode: TeachMode) -> String {
-        if mode == .show { return step.isDoable ? "watch" : "take a look" }
         if mode == .practice { return "your turn" }
         switch step.action {
         case "click": return "your move — click it"
@@ -533,7 +519,7 @@ final class TeachController {
     private func armLookDwell() {
         let gen = generation
         let words = model.say.split { $0.isWhitespace }.count
-        let dwell = min(14, max(4.5, Double(words) * 0.42 + 3.0))
+        let dwell = min(12, max(3.5, Double(words) * 0.38 + 2.2))
         DispatchQueue.main.asyncAfter(deadline: .now() + dwell) { [weak self] in
             guard let self, gen == self.generation, self.model.isActive, self.model.phase == .waiting,
                   self.current?.live.action == "look" else { return }
@@ -542,29 +528,38 @@ final class TeachController {
         }
     }
 
-    /// Nobody likes being rushed, but a long silence means they're lost. Offer a hand first,
-    /// then ask the model for a smaller, clearer step.
+    /// Nobody likes being rushed, but a long silence means they're lost. First show the move
+    /// (a ghost cursor walks from their pointer to the ring), then ask the model for a smaller step.
     private func armIdle() {
         clearIdle()
-        guard model.mode != .show, let step = current, step.live.action != "look" else { return }
+        guard let step = current, step.live.action != "look" else { return }
         let id = step.id
-        let offer = DispatchWorkItem { [weak self] in
+        let show = DispatchWorkItem { [weak self] in
             guard let self, self.model.isActive, self.model.phase == .waiting, self.current?.id == id,
                   self.log.last?.outcome.isEmpty ?? false else { return }
             withAnimation(OKMotion.spring) {
                 self.model.stuck = true
-                self.model.hint = "stuck? \(self.model.gesture.hint.isEmpty ? "press next" : self.model.gesture.hint) and i'll do this one"
+                if step.scene?.hasTarget == true { self.model.hint = "it's right here" }
             }
+            self.pantomime(step)
         }
         let nudge = DispatchWorkItem { [weak self] in
             guard let self, self.model.isActive, self.model.phase == .waiting, self.current?.id == id,
                   self.log.last?.outcome.isEmpty ?? false else { return }
-            self.setOutcome("nothing yet after 25 seconds — they seem stuck; make it smaller and point again")
+            self.setOutcome("nothing yet after 20 seconds — they seem stuck; make it smaller and point again")
             self.requestStep(after: 0.1, settle: false)
         }
-        idleWork = [offer, nudge]
-        DispatchQueue.main.asyncAfter(deadline: .now() + 11, execute: offer)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: nudge)
+        idleWork = [show, nudge]
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9, execute: show)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: nudge)
+    }
+
+    /// Walk a ghost cursor from where their pointer is to the target, once.
+    private func pantomime(_ shown: TeachShownStep) {
+        guard let scene = shown.scene, scene.hasTarget, let screen else { return }
+        let from = TeachGeometry.local(TeachGeometry.quartz(NSEvent.mouseLocation), on: screen)
+        stage?.demoGhostOnce(to: scene.kind == "arrow" ? scene.from : scene.center, from: from)
+        showGuide(to: scene)
     }
 
     private func clearIdle() {
@@ -816,12 +811,16 @@ final class TeachController {
 
     // MARK: Following the window
 
+    private var capturable: Bool {
+        lab != nil || ProcessInfo.processInfo.environment["OKIDOKI_TEACH_CAPTURE"] == "1"
+    }
+
     private func startFollowing() {
         stopFollowing()
         guard let pid = targetApp?.processIdentifier, let origin = lastShot?.windowRect else { return }
         followTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.model.isActive, self.model.phase == .waiting || self.model.phase == .paused,
+                guard let self, self.model.isActive, self.model.phase == .waiting,
                       let now = TeachGeometry.frontWindowGlobal(pid: pid) else { return }
                 let dx = now.minX - origin.minX
                 let dy = now.minY - origin.minY
@@ -895,6 +894,17 @@ final class TeachController {
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             Task { @MainActor in self?.handleActivation(app) }
         }
+        // Whatever happens to spaces, full-screen apps or okidoki's own activation, the marks stay on top.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.bringPanelsForward() }
+        }
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.bringPanelsForward() }
+        }
     }
 
     private func removeMonitors() {
@@ -902,6 +912,16 @@ final class TeachController {
         monitors = []
         if let appObserver { NSWorkspace.shared.notificationCenter.removeObserver(appObserver) }
         appObserver = nil
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+        spaceObserver = nil
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
+    }
+
+    private func bringPanelsForward() {
+        guard model.isActive else { return }
+        stagePanel?.orderFrontRegardless()
+        barPanel?.orderFrontRegardless()
     }
 
     private func handle(_ event: NSEvent) {
@@ -915,13 +935,9 @@ final class TeachController {
         let point = TeachGeometry.quartz(cocoa)
         if event.type == .mouseMoved || event.type == .leftMouseDragged {
             let now = CACurrentMediaTime()
-            if now - lastPointerUpdate > 0.033, let screen, model.phase == .waiting || model.phase == .paused {
+            if now - lastPointerUpdate > 0.033, let screen, model.phase == .waiting {
                 lastPointerUpdate = now
                 stage?.pointer(at: TeachGeometry.local(point, on: screen))
-            }
-            if model.mode == .show, model.phase == .waiting, !performingForThem,
-               let origin = pointerAtStep, hypot(point.x - origin.x, point.y - origin.y) > 26 {
-                pauseShow()
             }
             return
         }
@@ -939,14 +955,10 @@ final class TeachController {
                 self.requestStep(after: 0.1, settle: true)
             }
             scrollSettle = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
             return
         }
 
-        if model.mode == .show, model.phase == .waiting, event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .keyDown {
-            pauseShow()
-            return
-        }
         guard model.phase == .waiting, let step = current else { return }
         stage?.cancelGuide()
 
@@ -970,12 +982,12 @@ final class TeachController {
                 setOutcome("\(verb) the target “\(name)” at \(Int(point.x)),\(Int(point.y))")
                 let wantsSecond = step.live.action == "double_click" && event.clickCount < 2
                 if let next = step.live.next, !wantsSecond { showLookahead(next) }
-                scheduleVerify(after: wantsSecond ? 1.4 : 0.7)
+                scheduleVerify(after: wantsSecond ? 1.0 : 0.3)
             } else {
                 cleanHits = 0
                 let where_ = label.isEmpty ? "" : " on “\(label)”"
                 setOutcome("\(verb) elsewhere at \(Int(point.x)),\(Int(point.y))\(where_)")
-                scheduleVerify(after: 1.2)
+                scheduleVerify(after: 0.9)
             }
 
         case .leftMouseUp:
@@ -985,7 +997,7 @@ final class TeachController {
             let landed = step.dragTo.map { hypot($0.x - point.x, $0.y - point.y) < 90 } ?? false
             if landed { celebrate(at: point); cleanHits += 1; if let next = step.live.next { showLookahead(next) } } else { cleanHits = 0 }
             setOutcome("dragged from \(Int(down.x)),\(Int(down.y)) to \(Int(point.x)),\(Int(point.y))\(landed ? " (onto the target)" : "")")
-            scheduleVerify(after: 0.8)
+            scheduleVerify(after: 0.4)
 
         case .keyDown:
             let combo = TeachKeys.combo(for: event)
@@ -996,23 +1008,23 @@ final class TeachController {
                     celebrate(at: step.scene.map { TeachGeometry.quartz(local: $0.center, on: screen) })
                     setOutcome("pressed \(combo) — the shortcut")
                     if let next = step.live.next { showLookahead(next) }
-                    scheduleVerify(after: 0.7)
+                    scheduleVerify(after: 0.3)
                 } else {
                     setOutcome("pressed \(combo)")
-                    scheduleVerify(after: 1.6)
+                    scheduleVerify(after: 1.2)
                 }
             case "type":
                 if combo == "return" {
                     setOutcome("typed \(typedCount) characters and pressed return")
-                    scheduleVerify(after: 0.8)
+                    scheduleVerify(after: 0.4)
                 } else {
                     typedCount += 1
                     setOutcome("typed \(typedCount) characters so far")
-                    scheduleVerify(after: 2.4)
+                    scheduleVerify(after: 1.8)
                 }
             default:
                 setOutcome("pressed \(combo)")
-                scheduleVerify(after: 1.6)
+                scheduleVerify(after: 1.2)
             }
 
         default:
@@ -1046,7 +1058,7 @@ final class TeachController {
             stagePanel?.orderFrontRegardless()
             barPanel?.orderFrontRegardless()
         }
-        scheduleVerify(after: 1.1)
+        scheduleVerify(after: 0.8)
     }
 
     private func setOutcome(_ text: String) {
@@ -1060,7 +1072,7 @@ final class TeachController {
         pendingVerify?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.model.isActive, self.model.phase == .waiting || self.model.phase == .looking else { return }
-            self.requestStep(after: 0.2, settle: true)
+            self.requestStep(after: 0.05, settle: true)
         }
         pendingVerify = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -1080,59 +1092,7 @@ final class TeachController {
         model.hint = "nice"
     }
 
-    // MARK: Show me
-
-    private func pauseShow() {
-        guard model.mode == .show, model.phase == .waiting else { return }
-        showGeneration += 1
-        env?.speaker.stop()
-        withAnimation(OKMotion.spring) { model.phase = .paused }
-    }
-
-    private func resumeShow() {
-        guard model.phase == .paused, let shown = current else { return }
-        pointerAtStep = TeachGeometry.quartz(NSEvent.mouseLocation)
-        withAnimation(OKMotion.spring) { model.phase = .waiting; model.hint = "watch" }
-        runShow(shown, skipSpeech: true)
-    }
-
-    /// Narrate, pantomime, then do the step. Pauses the moment the learner moves.
-    private func runShow(_ shown: TeachShownStep, skipSpeech: Bool, immediate: Bool = false) {
-        showGeneration += 1
-        let gen = showGeneration
-        let stepID = shown.id
-        Task { [weak self] in
-            guard let self else { return }
-            @MainActor func alive() -> Bool { gen == self.showGeneration && self.model.isActive && self.current?.id == stepID }
-            if !immediate {
-                let words = shown.live.say.split { $0.isWhitespace }.count
-                let wait = (!skipSpeech && self.model.voice) ? max(1.4, Double(words) * 0.36 + 0.6) : 1.0
-                var elapsed = 0.0
-                while elapsed < wait {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    elapsed += 0.1
-                    guard alive() else { return }
-                    if elapsed > 1.0, self.model.voice, !(self.env?.speaker.isSpeaking ?? false) { break }
-                }
-                if let scene = shown.scene, scene.hasTarget, let screen = self.screen {
-                    let from = TeachGeometry.local(TeachGeometry.quartz(NSEvent.mouseLocation), on: screen)
-                    self.stage?.demoGhostOnce(to: scene.kind == "arrow" ? scene.from : scene.center, from: from)
-                    try? await Task.sleep(nanoseconds: 950_000_000)
-                    guard alive() else { return }
-                }
-            }
-            if shown.live.risky {
-                let yes = await self.askConfirm()
-                guard alive() else { return }
-                guard yes else {
-                    self.setOutcome("skipped — they didn't want that done")
-                    self.requestStep(after: 0.1, settle: false)
-                    return
-                }
-            }
-            await self.perform(shown, narrated: "okidoki did it")
-        }
-    }
+    // MARK: Doing a step for them
 
     private func askConfirm() async -> Bool {
         withAnimation(OKMotion.spring) { model.phase = .confirm }
@@ -1173,10 +1133,16 @@ final class TeachController {
             var actions: [ComputerAction] = []
             func sent(_ p: CGPoint) -> CGPoint { shot.sentPixels(p) }
             switch live.action {
-            case "click", "double_click", "right_click", "scroll":
+            case "click", "double_click", "right_click":
                 guard let center = shown.actGlobal else { break }
                 let p = sent(center)
-                actions.append(ComputerAction(type: live.action == "scroll" ? "click" : live.action, x: p.x, y: p.y, target: live.target))
+                actions.append(ComputerAction(type: live.action, x: p.x, y: p.y, target: live.target))
+            case "scroll":
+                guard let center = shown.actGlobal else { break }
+                let p = sent(center)
+                // The scroll annotation says which way; default to down, the common case.
+                let up = live.annotations.contains { $0.kind == "scroll" && $0.text?.lowercased() == "up" }
+                actions.append(ComputerAction(type: "scroll", x: p.x, y: p.y, dy: up ? -400 : 400, target: live.target))
             case "drag":
                 guard let from = shown.actFrom, let to = shown.actGlobal else { break }
                 let a = sent(from), b = sent(to)
@@ -1208,50 +1174,34 @@ final class TeachController {
         celebrate(at: nil)
         setOutcome("\(narrated): \(results.joined(separator: "; ").prefix(160))")
         if let next = live.next { showLookahead(next) }
-        requestStep(after: 0.9, settle: true)
+        requestStep(after: 0.5, settle: true)
     }
 
-    // MARK: Buttons & keys
+    // MARK: Voice commands
 
-    /// ⌥⌥ / next: do the current step if needed and move on. In Show me, act now. Paused → continue.
-    func fastForward(source: String) {
+    /// "next" / "skip": move past the current step without doing it. Also retries after the model went quiet.
+    func skipStep() {
         guard model.isActive, !askingQuestion else { return }
-        if lab != nil, model.phase == .waiting {
-            setOutcome("lab: next scene")
-            requestStep(after: 0.1, settle: false)
-            return
-        }
         switch model.phase {
-        case .looking:
-            queuedFastForward = true
-            model.hint = "ok — next, as soon as i've looked"
-        case .paused:
-            resumeShow()
-        case .confirm:
-            model.hint = "this one needs a real click on do it"
+        case .looking, .confirm:
+            return
         case .done:
             stop(completed: true)
         case .waiting:
-            guard let shown = current else { return }
-            if model.mode == .show {
-                runShow(shown, skipSpeech: true, immediate: true)
-            } else if shown.live.isDoable, shown.actGlobal != nil || shown.live.action == "key" || shown.live.action == "open_app" {
-                doItForThem()
-            } else {
-                setOutcome("skipped — move on")
-                requestStep(after: 0.1, settle: false)
-            }
+            if current != nil { setOutcome("skipped — move on") }
+            modelRetries = 0
+            requestStep(after: 0.1, settle: false)
         }
     }
 
-    /// Borrow their hands for this one step, then keep teaching. Twice in a row, offer Show me.
+    /// "do it": borrow their hands for this one step, then keep teaching.
     func doItForThem() {
         guard model.isActive, model.phase == .waiting, let shown = current else { return }
-        doItInARow += 1
-        if doItInARow == 2, model.mode == .guide {
-            model.hint = "want me to just show you the rest? switch to show me"
+        guard shown.live.isDoable, shown.actGlobal != nil || shown.live.action == "key" || shown.live.action == "open_app" else {
+            skipStep()
+            return
         }
-        showGeneration += 1
+        doItInARow += 1
         Task { [weak self] in
             guard let self else { return }
             if shown.live.risky {
@@ -1263,39 +1213,12 @@ final class TeachController {
         }
     }
 
-    /// Show the current step again: narration and the pantomime, no model call.
+    /// "again": the narration and the pantomime once more, no model call.
     func replayCurrent() {
-        guard model.isActive, model.phase == .waiting || model.phase == .paused, let shown = current else { return }
-        if model.phase == .paused { withAnimation(OKMotion.spring) { model.phase = .waiting } }
+        guard model.isActive, model.phase == .waiting, let shown = current else { return }
         stage?.present(shown.scene, animated: false)
-        if let scene = shown.scene, scene.hasTarget, let screen {
-            let from = TeachGeometry.local(TeachGeometry.quartz(NSEvent.mouseLocation), on: screen)
-            stage?.demoGhostOnce(to: scene.kind == "arrow" ? scene.from : scene.center, from: from)
-        }
+        pantomime(shown)
         speak(shown.live.say)
-        if model.mode == .show {
-            pointerAtStep = TeachGeometry.quartz(NSEvent.mouseLocation)
-            runShow(shown, skipSpeech: true)
-        }
-    }
-
-    func switchMode(_ mode: TeachMode) {
-        guard model.isActive, mode != model.mode, let env else { return }
-        env.store.settings.teachMode = mode.rawValue
-        env.store.saveNow()
-        withAnimation(OKMotion.spring) { model.mode = mode }
-        guard let shown = current, model.phase == .waiting || model.phase == .paused else { return }
-        if mode == .show {
-            pointerAtStep = TeachGeometry.quartz(NSEvent.mouseLocation)
-            model.phase = .waiting
-            model.hint = "watch"
-            runShow(shown, skipSpeech: true)
-        } else {
-            showGeneration += 1
-            model.phase = .waiting
-            model.hint = Self.hint(for: shown.live, mode: .guide)
-            armIdle()
-        }
     }
 
     func toggleVoice() {
@@ -1312,11 +1235,10 @@ final class TeachController {
     func pauseForQuestion() {
         guard model.isActive else { return }
         askingQuestion = true
-        showGeneration += 1
         pendingVerify?.cancel()
         clearIdle()
         env?.speaker.stop()
-        if model.phase == .waiting || model.phase == .paused {
+        if model.phase == .waiting {
             model.hint = "ask away — i'll hold the step"
         }
     }
@@ -1324,11 +1246,9 @@ final class TeachController {
     func resumeAfterQuestion() {
         guard model.isActive, askingQuestion else { return }
         askingQuestion = false
-        guard let shown = current, model.phase == .waiting || model.phase == .paused else { return }
-        model.phase = .waiting
+        guard let shown = current, model.phase == .waiting else { return }
         model.hint = Self.hint(for: shown.live, mode: model.mode)
-        pointerAtStep = TeachGeometry.quartz(NSEvent.mouseLocation)
-        if model.mode == .show { runShow(shown, skipSpeech: true) } else { armIdle() }
+        armIdle()
     }
 
     /// What the lesson is about right now, for a question's context.
@@ -1343,9 +1263,9 @@ final class TeachController {
         guard model.isActive else { return false }
         let t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         switch t {
-        case "next", "skip", "move on", "go on", "continue", "fast forward":
+        case "next", "skip", "move on", "go on", "continue":
             askingQuestion = false
-            fastForward(source: "voice")
+            skipStep()
             return true
         case "do it", "do it for me", "you do it", "just do it":
             askingQuestion = false
@@ -1354,14 +1274,6 @@ final class TeachController {
         case "go back", "back", "again", "show that again", "repeat":
             askingQuestion = false
             replayCurrent()
-            return true
-        case "show me", "show me the rest", "you take over":
-            askingQuestion = false
-            switchMode(.show)
-            return true
-        case "let me try", "guide me", "my turn":
-            askingQuestion = false
-            switchMode(.guide)
             return true
         case "stop", "stop the lesson", "quit", "enough", "cancel":
             stop(completed: false)
@@ -1375,7 +1287,6 @@ final class TeachController {
 
     private func finish(summary: String, say: String) {
         generation += 1
-        showGeneration += 1
         pendingVerify?.cancel()
         clearIdle()
         stopFollowing()
@@ -1387,7 +1298,7 @@ final class TeachController {
             model.hint = "that's it"
             model.remaining = 0
             model.milestone = max(0, model.milestones.count - 1)
-            let watched = model.mode == .show || (model.mode == .guide && doItInARow > 0)
+            let watched = model.mode == .guide && doItInARow > 0
             model.offerPractice = watched && stepsShown >= 3 && !practiceRound
         }
         stage?.present(nil, animated: true)
@@ -1419,15 +1330,12 @@ final class TeachController {
     func stop(completed: Bool, quiet: Bool = false, keepRun: Bool = false) {
         guard model.isActive else { return }
         generation += 1
-        showGeneration += 1
         pendingVerify?.cancel()
         pendingVerify = nil
         scrollSettle?.cancel()
         clearIdle()
         stopFollowing()
         removeMonitors()
-        gesture?.stop()
-        gesture = nil
         if let continuation = confirmContinuation { confirmContinuation = nil; continuation.resume(returning: false) }
         model.isActive = false
         model.phase = .looking

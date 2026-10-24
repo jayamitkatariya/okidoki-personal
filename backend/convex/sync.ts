@@ -238,9 +238,9 @@ export const upsertBatch = internalMutation({
 
 // Deletes this account's rows the Mac no longer has, one page at a time; the caller loops on the cursor.
 export const removeMissingPage = internalMutation({
-  args: { accountId: v.string(), table: tableArg, keep: v.array(v.string()), cursor: v.union(v.string(), v.null()) },
+  args: { accountId: v.string(), table: tableArg, keep: v.string(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { accountId, table, keep, cursor }) => {
-    const keepSet = new Set(keep);
+    const keepSet = new Set(keep.split("\n").filter(Boolean));
     const page = await ctx.db
       .query(table)
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
@@ -254,6 +254,12 @@ export const removeMissingPage = internalMutation({
           .withIndex("by_run", (q) => q.eq("runId", row.clientId))
           .collect();
         for (const preview of previews) await ctx.db.delete(preview._id);
+        // A run deleted on the Mac shouldn't stay public through its share link.
+        const links = await ctx.db
+          .query("shareLinks")
+          .withIndex("by_run", (q) => q.eq("runId", row.clientId))
+          .collect();
+        for (const link of links) await ctx.db.delete(link._id);
       }
       await ctx.db.delete(row._id);
       removed++;
@@ -345,13 +351,15 @@ export const createShare = internalMutation({
     run: v.any(),
   },
   handler: async (ctx, args) => {
+    // The page is public: leave out the account id and local paths the Mac keeps on the run.
+    const { accountID, workingDirectory, pickedPath, ...run } = args.run as Record<string, unknown>;
     const existing = await ctx.db
       .query("shareLinks")
       .withIndex("by_run", (q) => q.eq("runId", args.runId))
       .order("desc")
       .first();
     if (existing && existing.accountId === args.accountId) {
-      await ctx.db.patch(existing._id, { run: args.run, accountName: args.accountName });
+      await ctx.db.patch(existing._id, { run, accountName: args.accountName });
       return { token: existing.token, created: false };
     }
     await ctx.db.insert("shareLinks", {
@@ -359,7 +367,7 @@ export const createShare = internalMutation({
       accountId: args.accountId,
       accountName: args.accountName,
       runId: args.runId,
-      run: args.run,
+      run,
       views: 0,
       createdAt: Date.now(),
     });

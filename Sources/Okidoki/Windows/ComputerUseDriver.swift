@@ -38,12 +38,15 @@ final class ComputerUseDriver {
     private var panel: DriverHUDPanel?
     private var runID: String?
     private var cancelled = false
+    /// Bumped by begin() and cancel(); a loop whose number no longer matches stays out of the way.
+    private var session = 0
     private var driving = false
     private var escLocal: Any?
     private var escGlobal: Any?
     private var blindVision = 0
     private var target: ComputerTarget = LocalComputer()
     private let cursor = DriveCursorController()
+    private let glow = EdgeGlowController()
 
     static let pillWidth: CGFloat = 440
     static let pillHeight: CGFloat = 56
@@ -56,11 +59,18 @@ final class ComputerUseDriver {
     var stopsOnUserEscape: Bool { model.visible && target.stopsOnUserEscape }
 
     func begin(run: AgentRun, target: ComputerTarget? = nil) {
-        guard let env, !model.visible else { return }
+        guard let env else { return }
+        guard !model.visible else {
+            // execute() already marked the run running; don't leave it that way with no pill.
+            env.store.finishRun(run.id, status: .failed, summary: "already driving another run — stop it first")
+            return
+        }
         let target = target ?? LocalComputer()
         self.target = target
         runID = run.id
         cancelled = false
+        session += 1
+        let current = session
         driving = false
         blindVision = 0
         model.goal = run.title
@@ -96,15 +106,21 @@ final class ComputerUseDriver {
         self.panel = panel
 
         if target.stopsOnUserEscape { installMonitors() }
-        if target.showsPointerOverlay { cursor.show(on: screen, label: "okidoki · looking") }
-        env.speak(target.stopsOnUserEscape ? "On it. Press escape or stop if you want it back." : "On it, in the background.")
-        Task { await loop(run: run) }
+        if target.showsPointerOverlay {
+            cursor.show(on: screen, label: "okidoki · looking")
+            glow.show(on: screen)
+        }
+        env.speak(target.stopsOnUserEscape ? "On it. Press escape or stop if you want it back."
+                  : target.isRemote ? "On it, on your private Mac." : "On it, in the background.")
+        Task { await loop(run: run, session: current) }
     }
 
     // MARK: Loop
 
-    private func loop(run: AgentRun) async {
-        defer { cleanupPanels() }
+    /// `session` tells a loop that was cancelled mid-request apart from the one that replaced it, so
+    /// it never touches the newer run's pill, monitors or step list when it wakes up.
+    private func loop(run: AgentRun, session: Int) async {
+        defer { if session == self.session { cleanupPanels() } }
         var history: [[String: Any]] = []
         var recent: [String] = []
         // The screenshot from before the last action, so the model can see what changed.
@@ -114,7 +130,7 @@ final class ComputerUseDriver {
         var zoom: ComputerUseService.Zoom?
         let maxSteps = 60
         for step in 0..<maxSteps {
-            guard !cancelled, let env else { return }
+            guard session == self.session, !cancelled, let env else { return }
             guard let current = env.store.run(run.id), current.status == .running else { return }
             model.kind = ""
             model.detail = ""
@@ -129,6 +145,12 @@ final class ComputerUseDriver {
             let imageHeight = shot?.imageHeight ?? box.height
             let context = await target.context(box: box, imageWidth: imageWidth, imageHeight: imageHeight)
             var act: ComputerAction?
+            // Right after launch the brain may still be starting; give it a moment instead of failing.
+            if !env.sidecar.status.isReady {
+                for _ in 0..<16 where !env.sidecar.status.isReady && !cancelled {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
             if env.sidecar.status.isReady {
                 act = await BrainClient.shared.computer(goal: run.prompt, step: step,
                                                         appName: context.appName,
@@ -142,14 +164,18 @@ final class ComputerUseDriver {
                                                         zoom: zoom,
                                                         canClick: target.canAct,
                                                         canSee: shot != nil,
+                                                        remote: target.isRemote,
                                                         model: env.store.settings.claudeModel)
             }
             zoom = nil
             previous = shot?.png
             // The user may have taken over while the model was thinking.
-            guard !cancelled, env.store.run(run.id)?.status == .running else { return }
+            guard session == self.session, !cancelled, env.store.run(run.id)?.status == .running else { return }
             guard var act else {
-                finish(success: false, summary: "the model didn't answer, so i stopped. the brain has to be running.")
+                let brain = env.sidecar.status
+                finish(success: false, summary: brain.isReady
+                       ? "the model didn't answer, so i stopped. try again in a moment."
+                       : "the brain isn't running (\(brain.label)), so i stopped. open Settings to restart it.")
                 return
             }
             if act.say?.isEmpty ?? true { act.say = fallbackSay(for: act) }
@@ -214,12 +240,14 @@ final class ComputerUseDriver {
                 result = try await target.perform(act, screen: box,
                                                   imageWidth: shot?.imageWidth ?? 1, imageHeight: shot?.imageHeight ?? 1)
             } catch {
+                guard session == self.session else { return }
                 driving = false
                 panel?.ignoresMouseEvents = false
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 finish(success: false, summary: message)
                 return
             }
+            guard session == self.session else { return }
             driving = false
             panel?.ignoresMouseEvents = false
             if ["click", "double_click", "triple_click", "right_click", "middle_click"].contains(act.type),
@@ -452,6 +480,8 @@ final class ComputerUseDriver {
     func cancel(reason: String = "control is yours") {
         guard model.visible || runID != nil else { return }
         cancelled = true
+        session += 1
+        ScriptActuator.cancelRunning()
         let id = runID
         if let last = model.steps.indices.last {
             model.steps[last].status = "done"
@@ -471,6 +501,7 @@ final class ComputerUseDriver {
         panel?.orderOut(nil)
         panel = nil
         cursor.hide()
+        glow.hide()
         if let escLocal { NSEvent.removeMonitor(escLocal) }
         if let escGlobal { NSEvent.removeMonitor(escGlobal) }
         escLocal = nil; escGlobal = nil

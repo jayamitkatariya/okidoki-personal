@@ -290,11 +290,15 @@ export interface RecalledItem {
   score: number;
 }
 
+/** Mirrors CodingAgentID in Sources/OkidokiCore/Models/Models.swift. */
+export const CODING_AGENTS = ["claude", "opencode", "omp", "hermes", "codex", "gemini", "cursor"] as const;
+export type CodingAgent = (typeof CODING_AGENTS)[number];
+
 export interface ExecuteRequest {
   runId: string;
   kind: "terminal" | "background" | "coding";
   commands?: string[];
-  agent?: "claude" | "opencode" | "omp" | "hermes";
+  agent?: CodingAgent;
   prompt?: string;
   workingDirectory?: string;
   model?: string;
@@ -344,6 +348,8 @@ export interface ComputerRequest {
   screenshotBase64?: string;
   canClick?: boolean;
   canSee?: boolean;
+  /** True when driving okidoki's private Mac (a VM): no scripts or accessibility, only clicks and keys. */
+  remote?: boolean;
   settings?: {
     claudeModel?: string;
   };

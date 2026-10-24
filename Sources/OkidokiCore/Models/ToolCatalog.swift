@@ -65,7 +65,7 @@ public enum ToolCatalog {
                 "batch-convert these videos to 1080p",
                 "make these videos smaller without losing quality"
             ],
-            installCommand: "brew install --cask handbrake",
+            installCommand: "brew install handbrake",
             checkCommand: "command -v HandBrakeCLI",
             docs: """
             HandBrakeCLI transcodes video:
@@ -945,10 +945,12 @@ public enum ToolCatalog {
                   blurb: "Drop a thought into Notes, with the source app attached.",
                   installCommand: "osascript -l JavaScript -e 'Application(\"Notes\").name()'",
                   docs: "Use Notes.app via JXA. Keep the note body plain text; include a small source line."),
+        // On by default when the build ships an Apify key; otherwise it stays off until one is added in Keys.
         Connector(id: "apify", name: "Apify", kind: "cloud",
                   blurb: "Run ready-made scrapers and actors when a task needs live web data.",
+                  enabled: !ServiceSecrets.apify.isEmpty, installed: !ServiceSecrets.apify.isEmpty,
                   installCommand: "",
-                  docs: "Requires an Apify API key (Keys). Runs actors through the brain's connector kind; always preview first, since actors cost credits."),
+                  docs: "Uses the Apify key the build ships (APIFY_API_KEY), or one added in Keys. Runs actors through the brain's connector kind; always preview first, since actors cost credits."),
         Connector(id: "mcp", name: "MCP servers", kind: "mcp",
                   blurb: "Bring your existing model-context tools into Okidoki runs.",
                   installCommand: "",

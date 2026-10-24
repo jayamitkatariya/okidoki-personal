@@ -109,7 +109,7 @@ const tools: Tool[] = [
     replaces: "paid video converters",
     blurb: "Batch-friendly video transcoding with presets that already know what they're doing.",
     installed: false,
-    installCommand: "brew install --cask handbrake",
+    installCommand: "brew install handbrake",
     docs: "HandBrakeCLI -i input.mov -o output.mp4 --preset \"Fast 1080p30\"",
     license: "GPL",
     category: "video",
@@ -744,7 +744,9 @@ export const demoState: NativeState = {
     showedWelcome: true,
     claudeModel: "claude-haiku-5-5",
     drivePace: "calm",
+    computerTarget: "mac",
     agentExtraArgs: {},
+    autoConnectAgents: true,
     lastWorkingDirectory: "/Users/jay/Desktop",
     mcpServers: [
       { id: "mcp-github", name: "GitHub", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], url: "", enabled: true },
@@ -843,6 +845,14 @@ export const demoState: NativeState = {
     { id: "mem4", section: "rightNow", text: "building Okidoki, a Mac assistant", source: "said", createdAt: iso(-240), updatedAt: iso(-240) },
     { id: "mem5", section: "rightNow", text: "redesigning the Workro onboarding", source: "said", createdAt: iso(-1440), updatedAt: iso(-1440) },
   ],
+  memorySources: [
+    { id: "claude-code", name: "Claude Code", blurb: "Its CLAUDE.md and the notes it keeps per project.", files: ["~/.claude/CLAUDE.md"] },
+    { id: "hermes", name: "Hermes Agent", blurb: "What Hermes has written down about you and your setup.", files: ["~/.hermes/memories/USER.md", "~/.hermes/memories/MEMORY.md"] },
+    { id: "codex", name: "Codex", blurb: "The global AGENTS.md and saved memories.", files: [] },
+    { id: "chatgpt", name: "ChatGPT", blurb: "Ask ChatGPT to export its saved memories, save the text, then pick the file.", files: [] },
+    { id: "gemini", name: "Gemini", blurb: "Ask Gemini to export what it has saved about you, save the text, then pick the file.", files: [] },
+    { id: "claude", name: "Claude", blurb: "Ask Claude to export its memories, save the text, then pick the file.", files: [] },
+  ],
   skills: [
     {
       id: "skill-cleanup",
@@ -911,12 +921,21 @@ export const demoState: NativeState = {
     { id: "calendar", name: "Apple Calendar", kind: "apple", blurb: "Read today's events and move things around without opening Calendar.", enabled: true, installed: true, installCommand: "", docs: "" },
     { id: "reminders", name: "Apple Reminders", kind: "apple", blurb: "Add reminders with a due date. Undo from the notch toast.", enabled: true, installed: true, installCommand: "", docs: "" },
     { id: "notes", name: "Apple Notes", kind: "apple", blurb: "Drop a thought into Notes, with the source app attached.", enabled: true, installed: true, installCommand: "", docs: "" },
-    { id: "apify", name: "Apify", kind: "cloud", blurb: "Run ready-made scrapers and actors when a task needs live web data.", enabled: false, installed: false, installCommand: "", docs: "" },
+    { id: "apify", name: "Apify", kind: "cloud", blurb: "Run ready-made scrapers and actors when a task needs live web data.", enabled: true, installed: true, installCommand: "", docs: "" },
     { id: "mcp", name: "MCP servers", kind: "mcp", blurb: "Bring your existing model-context tools into Okidoki runs.", enabled: true, installed: true, installCommand: "", docs: "" },
   ],
   tools,
   installedAgents: ["claude", "opencode", "omp", "hermes"],
-  keys: { anthropic: false, cartesia: false, moss: false, apify: false, convex: false },
+  agents: [
+    { id: "claude", name: "Claude Code", installed: true, signedIn: true, account: "jay@example.com", providers: ["anthropic"], source: "~/.claude/.credentials.json", installHint: "npm install -g @anthropic-ai/claude-code", loginHint: "claude login" },
+    { id: "opencode", name: "OpenCode", installed: true, signedIn: true, account: "", providers: ["anthropic", "openrouter"], source: "~/.local/share/opencode/auth.json", installHint: "curl -fsSL https://opencode.ai/install | bash", loginHint: "opencode auth login" },
+    { id: "omp", name: "omp", installed: true, signedIn: false, account: "", providers: [], source: "", installHint: "https://omp.sh", loginHint: "omp auth-broker login" },
+    { id: "hermes", name: "Hermes", installed: true, signedIn: true, account: "", providers: ["nous"], source: "~/.hermes/auth.json", installHint: "pipx install hermes-agent", loginHint: "hermes auth" },
+    { id: "codex", name: "Codex", installed: false, signedIn: true, account: "jay@example.com", providers: ["openai"], source: "~/.codex/auth.json", installHint: "npm install -g @openai/codex", loginHint: "codex login" },
+    { id: "gemini", name: "Gemini CLI", installed: false, signedIn: false, account: "", providers: [], source: "", installHint: "npm install -g @google/gemini-cli", loginHint: "gemini (sign in on first run)" },
+    { id: "cursor", name: "Cursor Agent", installed: false, signedIn: false, account: "", providers: [], source: "", installHint: "curl https://cursor.com/install -fsS | bash", loginHint: "cursor-agent login" },
+  ],
+  keys: { anthropic: false, cartesia: false, moss: false, apify: true, convex: false },
   mcpStatus: {
     "mcp-github": {
       id: "mcp-github",

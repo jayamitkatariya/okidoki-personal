@@ -15,6 +15,26 @@ public enum AppleError: LocalizedError {
     }
 }
 
+/// Dates arrive from JavaScript (`toISOString()`, always with milliseconds) and from the model
+/// (sometimes without a zone); a strict `ISO8601DateFormatter` rejects both.
+public enum DateParsing {
+    public static func iso8601(_ text: String) -> Date? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        // A date with no zone means the user's own clock ("6pm"), not UTC.
+        formatter.timeZone = .current
+        for options: ISO8601DateFormatter.Options in [[.withInternetDateTime],
+                                                      [.withInternetDateTime, .withFractionalSeconds],
+                                                      [.withFullDate, .withTime, .withColonSeparatorInTime],
+                                                      [.withFullDate]] {
+            formatter.formatOptions = options
+            if let date = formatter.date(from: trimmed) { return date }
+        }
+        return nil
+    }
+}
+
 public struct CalendarEventBrief: Codable, Sendable, Identifiable {
     public var id: String
     public var title: String
@@ -26,10 +46,25 @@ public final class AppleBridge: @unchecked Sendable {
     public static let shared = AppleBridge()
     private init() {}
 
+    /// JavaScript's `toISOString()` always carries milliseconds, which `.iso8601` refuses.
+    private static let jsDateDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let text = try container.decode(String.self)
+            guard let date = DateParsing.iso8601(text) else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "not an ISO 8601 date: \(text)")
+            }
+            return date
+        }
+        return decoder
+    }()
+
     private func runJXA(_ script: String, args: [String] = []) async throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-l", "JavaScript", "-e", script] + args
+        // "--" keeps a title that starts with "-" from being read as an osascript option.
+        process.arguments = ["-l", "JavaScript", "-e", script, "--"] + args
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
@@ -38,9 +73,10 @@ public final class AppleBridge: @unchecked Sendable {
         do { try process.run() } catch {
             throw AppleError.scriptFailed(error.localizedDescription)
         }
-        process.waitUntilExit()
+        // Drain before waiting: a result over the pipe buffer would otherwise block osascript forever.
         let output = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let errorOutput = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        process.waitUntilExit()
         if process.terminationStatus != 0 {
             let message = errorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             if message.lowercased().contains("not authorized") || message.lowercased().contains("not allowed") || message.contains("-1743") {
@@ -160,9 +196,7 @@ public final class AppleBridge: @unchecked Sendable {
         """
         let raw = try await runJXA(script, args: [String(withinMinutes)])
         guard let data = raw.data(using: .utf8) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([CalendarEventBrief].self, from: data)) ?? []
+        return (try? Self.jsDateDecoder.decode([CalendarEventBrief].self, from: data)) ?? []
     }
 
     public func eventsToday() async throws -> [CalendarEventBrief] {
@@ -191,9 +225,7 @@ public final class AppleBridge: @unchecked Sendable {
         """
         let raw = try await runJXA(script)
         guard let data = raw.data(using: .utf8) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([CalendarEventBrief].self, from: data)) ?? []
+        return (try? Self.jsDateDecoder.decode([CalendarEventBrief].self, from: data)) ?? []
     }
 
     public func moveEvent(startingHour: Int, toWeekday: Int, hour: Int? = nil) async throws -> String {
@@ -201,7 +233,7 @@ public final class AppleBridge: @unchecked Sendable {
         function run(argv) {
             const app = Application("Calendar");
             const targetHour = Number(argv[0]);
-            const targetWeekday = Number(argv[1]); // 0 = sunday
+            const targetWeekday = Number(argv[1]) - 1; // argv is 1 = sunday … 7 = saturday, getDay() is 0-based
             const newHour = argv[2] ? Number(argv[2]) : targetHour;
             const now = new Date();
             const today = now.getDay();

@@ -13,7 +13,7 @@ interface SharedRun {
 
 const KIND_LABEL: Record<string, string> = {
   answer: "Answer",
-  quickAction: "Quick action",
+  quick_action: "Quick action",
   terminal: "Terminal",
   coding: "Coding",
   background: "Background",
@@ -49,6 +49,7 @@ export function SharePage({ token }: { token: string }) {
       setError("This link needs sync. Ask the sender to turn it on in okidoki.");
       return;
     }
+    document.documentElement.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     const client = new ConvexClient(url);
     const unsubscribe = client.onUpdate(
       anyApi.share.get,
@@ -63,7 +64,11 @@ export function SharePage({ token }: { token: string }) {
       },
       () => setError("Couldn't connect. Check your connection and try again."),
     );
-    return () => unsubscribe();
+    void client.mutation(anyApi.share.viewed, { token }).catch(() => {});
+    return () => {
+      unsubscribe();
+      void client.close();
+    };
   }, [token]);
 
   if (error) {

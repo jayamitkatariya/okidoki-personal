@@ -15,18 +15,22 @@ export const vec3 = (v, def = [0, 0, 0], max = MAX_COORD) =>
 const radius = (v, def) => Math.max(0.001, num(v, def, MAX_RADIUS));
 const int = (v, def, max) => Math.max(1, Math.min(max, Math.round(num(v, def, max))));
 
+// A light clearcoat reads as "made of something" under the key light instead of flat plastic.
 export function standardMaterial(spec, ctx, extra = {}) {
-  return new THREE.MeshStandardMaterial({
+  return new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(spec.color || ctx.defaultColor || DEFAULT_COLOR),
     metalness: num(spec.metal, 0.1, 1),
-    roughness: num(spec.rough, 0.55, 1),
+    roughness: num(spec.rough, 0.5, 1),
+    clearcoat: 0.25,
+    clearcoatRoughness: 0.45,
     ...extra,
   });
 }
 
 function mesh(geometry, material) {
   const m = new THREE.Mesh(geometry, material);
-  m.castShadow = false;
+  m.castShadow = true;
+  m.receiveShadow = true;
   return m;
 }
 

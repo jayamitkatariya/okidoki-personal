@@ -8,8 +8,8 @@ import { checkToken } from "./apify";
 import { closeAll, forget, reconcile, validateMcpServer } from "./mcp";
 import { mcpCatalog, runConnector, stopConnector, stopAllConnectors, validateConnectorRun } from "./connectors";
 import { closeMemory, memoryStatus, syncMemory, warmMemory } from "./memory";
-import { anthropicKey, mossCredentials } from "./keys";
-import type { ComputerRequest, ConceptFollowRequest, ConceptRequest, ConnectorRunRequest, ExecuteRequest, McpServerConfig, MemorySyncRequest, TeachRefineRequest, TeachStepRequest, ThinkRequest } from "./types";
+import { anthropicKey, apifyToken, mossCredentials } from "./keys";
+import { CODING_AGENTS, type ComputerRequest, type ConceptFollowRequest, type ConceptRequest, type ConnectorRunRequest, type ExecuteRequest, type McpServerConfig, type MemorySyncRequest, type TeachRefineRequest, type TeachStepRequest, type ThinkRequest } from "./types";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4319);
 
@@ -42,7 +42,7 @@ export async function handleRequest(request: Request): Promise<Response> {
         ok: true,
         version: "0.9.1",
         runtime: `bun ${Bun.version}`,
-        agents: ["claude", "opencode", "omp", "hermes"].filter((agent) => Bun.which(agent) !== null),
+        agents: CODING_AGENTS.filter((agent) => Bun.which(agent === "cursor" ? "cursor-agent" : agent) !== null),
         tools: installedTools(),
         port,
       });
@@ -122,7 +122,7 @@ export async function handleRequest(request: Request): Promise<Response> {
             imageHeight: payload.imageHeight ?? 0,
             screenshotBase64: payload.screenshotBase64,
             controls: Array.isArray(payload.controls) ? payload.controls.slice(0, 120) : [],
-            mode: payload.mode === "show" || payload.mode === "practice" ? payload.mode : "guide",
+            mode: payload.mode === "practice" ? "practice" : "guide",
             known: Array.isArray(payload.known) ? payload.known.filter((k) => typeof k === "string").slice(0, 20) : [],
             milestones: Array.isArray(payload.milestones) ? payload.milestones.filter((m) => typeof m === "string").slice(0, 6) : [],
             language: payload.language,
@@ -161,6 +161,52 @@ export async function handleRequest(request: Request): Promise<Response> {
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
       }
+    }
+
+    // Newline-delimited JSON: an "intro" line as soon as the title and first sentence exist, then
+    // the full "lesson" (or an "error"). Lets the app start talking while the model is still drawing.
+    if (url.pathname === "/teach/concept/stream" && request.method === "POST") {
+      let payload: Partial<ConceptRequest>;
+      try {
+        payload = await body<Partial<ConceptRequest>>(request);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+      if (!payload.topic) return json({ error: "topic required" }, 400);
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      const topic = payload.topic;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          const send = (line: unknown) => {
+            try { controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`)); } catch { /* client went away */ }
+          };
+          conceptLesson(
+            {
+              topic,
+              context: payload.context,
+              pageTitle: payload.pageTitle,
+              pageURL: payload.pageURL,
+              screenshotBase64: payload.screenshotBase64,
+              imageWidth: payload.imageWidth,
+              imageHeight: payload.imageHeight,
+              language: payload.language,
+              model: payload.model,
+            },
+            key,
+            fetch,
+            { intro: (title, intro) => send({ type: "intro", title, intro }) },
+          ).then((result) => {
+            if (result.lesson) send({ type: "lesson", lesson: result.lesson, warnings: result.warnings ?? [] });
+            else send({ type: "error", error: result.error ?? "couldn't build the lesson" });
+          }).catch((error) => {
+            send({ type: "error", error: error instanceof Error ? error.message : "couldn't build the lesson" });
+          }).finally(() => {
+            try { controller.close(); } catch { /* already closed */ }
+          });
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache", ...corsHeaders } });
     }
 
     if (url.pathname === "/teach/concept/follow" && request.method === "POST") {
@@ -316,8 +362,10 @@ export async function handleRequest(request: Request): Promise<Response> {
     }
 
     if (url.pathname === "/apify/check" && request.method === "POST") {
-      const { token } = await body<{ token: string }>(request);
-      return json(await checkToken(token ?? ""));
+      const { token } = await body<{ token?: string }>(request);
+      const resolved = apifyToken(token);
+      if (!resolved) return json({ ok: false, error: "No Apify key configured" });
+      return json(await checkToken(resolved));
     }
 
     if (url.pathname === "/connector/run" && request.method === "POST") {
@@ -350,7 +398,8 @@ export async function handleRequest(request: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  const server = Bun.serve({ port, hostname: "127.0.0.1", maxRequestBodySize: 64 * 1024 * 1024, fetch: handleRequest });
+  // idleTimeout defaults to 10 s and would close a slow model call or a job that's quiet for a while.
+  const server = Bun.serve({ port, hostname: "127.0.0.1", idleTimeout: 0, maxRequestBodySize: 64 * 1024 * 1024, fetch: handleRequest });
 
 
 let shuttingDown = false;

@@ -43,9 +43,14 @@ public final class ShellRunner: @unchecked Sendable {
 
     public static let searchPaths: [String] = {
         let home = NSHomeDirectory()
+        // Node version managers put global npm installs (claude, codex, gemini) under their own bins.
+        let nvm = ((try? FileManager.default.contentsOfDirectory(atPath: "\(home)/.nvm/versions/node")) ?? [])
+            .sorted(by: >).map { "\(home)/.nvm/versions/node/\($0)/bin" }
         return [
             "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "\(home)/.opencode/bin",
             "\(home)/.hermes/bin", "\(home)/.bun/bin", "\(home)/.cargo/bin", "\(home)/bin",
+            "\(home)/.npm-global/bin", "\(home)/.volta/bin",
+        ] + nvm + [
             "/usr/bin", "/bin", "/usr/sbin", "/sbin",
         ]
     }()

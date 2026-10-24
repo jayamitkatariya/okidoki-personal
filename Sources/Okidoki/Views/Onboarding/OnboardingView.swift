@@ -15,6 +15,7 @@ struct OnboardingView: View {
     @State private var connecting: String?
     @State private var didShake = false
     @State private var didCircle = false
+    @State private var workspace = "mac"
 
     var body: some View {
         ZStack {
@@ -32,6 +33,7 @@ struct OnboardingView: View {
         .onAppear {
             name = store.activeAccount.name == "you" ? "" : store.activeAccount.name
             inputMode = store.settings.defaultInput
+            workspace = store.settings.computerTarget
             refreshPermissions()
         }
         .onDisappear { env.suspendSummonForTour = false }
@@ -119,6 +121,7 @@ struct OnboardingView: View {
         switch step {
         case .welcome: welcomeStep
         case .access: accessStep
+        case .workspace: workspaceStep
         case .brain: brainStep
         case .about: aboutStep
         case .tour: tourStep
@@ -176,6 +179,86 @@ struct OnboardingView: View {
             }
             .groupBox()
         }
+    }
+
+    private var workspaceStep: some View {
+        let supported = PrivateMacService.isSupported
+        let phase = env.privateMac.phase
+        let busy = phase == .downloading || phase == .installing
+        return VStack(alignment: .leading, spacing: 0) {
+            title("Where should okidoki work?")
+            subtitle("When you ask it to do something in an app, it needs a screen to do it on.")
+            VStack(spacing: 10) {
+                workspaceCard(id: "mac", symbol: "macbook", title: "This Mac",
+                              detail: "Shares your screen and cursor. Press Esc to take over anytime.",
+                              enabled: true)
+                workspaceCard(id: "vm", symbol: "macwindow.on.rectangle", title: "A private Mac",
+                              detail: supported
+                                  ? "Its own macOS in a window. You keep working while it does. A one-time \(Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)) GB download."
+                                  : "Needs a Mac with Apple silicon.",
+                              enabled: supported)
+            }
+            .padding(.top, 22)
+            if workspace == "vm" || busy {
+                HStack(spacing: 10) {
+                    if busy {
+                        ProgressView(value: env.privateMac.progress)
+                            .progressViewStyle(.linear)
+                            .tint(OKBrand.greenInk)
+                            .frame(width: 120)
+                    } else {
+                        Image(systemName: phase == .running || phase == .stopped ? "checkmark.circle.fill" : "arrow.down.circle")
+                            .foregroundStyle(OKBrand.greenInk)
+                    }
+                    Text(workspaceHint(phase: phase))
+                        .font(.okBody(12.5))
+                        .foregroundStyle(OKBrand.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                .padding(.top, 14)
+            }
+        }
+    }
+
+    private func workspaceHint(phase: PrivateMacService.Phase) -> String {
+        switch phase {
+        case .downloading, .installing: return env.privateMac.detail + " — keep going, this runs in the background."
+        case .stopped, .running, .starting, .stopping: return "Your private Mac is ready. It starts the first time a run needs it."
+        case .failed: return env.privateMac.error ?? "Setup didn't finish. You can retry in Settings."
+        case .unsupported: return "Needs a Mac with Apple silicon."
+        case .notSetUp: return "Setup starts when you continue and runs in the background. You can finish it later in Settings."
+        }
+    }
+
+    private func workspaceCard(id: String, symbol: String, title: String, detail: String, enabled: Bool) -> some View {
+        let selected = workspace == id
+        return Button {
+            guard enabled else { return }
+            withAnimation(OKMotion.spring) { workspace = id }
+        } label: {
+            HStack(spacing: 12) {
+                iconTile(symbol, active: selected)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+                    Text(detail).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                ZStack {
+                    Circle().strokeBorder(selected ? OKBrand.greenInk : OKBrand.ink.opacity(0.18), lineWidth: 1.5)
+                        .frame(width: 18, height: 18)
+                    if selected { Circle().fill(OKBrand.greenInk).frame(width: 9, height: 9) }
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(selected ? 0.95 : 0.7)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(selected ? OKBrand.green.opacity(0.45) : OKBrand.ink.opacity(0.07)))
+            .opacity(enabled ? 1 : 0.55)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     private var brainStep: some View {
@@ -296,6 +379,10 @@ struct OnboardingView: View {
             if !trimmed.isEmpty { account.name = trimmed }
             store.updateAccount(account)
             store.saveNow()
+        case .workspace:
+            store.settings.computerTarget = workspace
+            store.saveNow()
+            if workspace == "vm" { env.privateMac.setUp() }
         case .brain:
             store.settings.defaultInput = inputMode
             store.saveNow()
@@ -502,7 +589,7 @@ private struct OnboardingCanvas: View {
 }
 
 enum OnboardStep: Int, CaseIterable {
-    case welcome, access, brain, about, tour, done
+    case welcome, access, workspace, brain, about, tour, done
 }
 
 struct TourCanvas: View {

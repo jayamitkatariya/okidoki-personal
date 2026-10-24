@@ -104,7 +104,7 @@ test("recall keeps only relevant hits from this account, never the current threa
   expect(recallPrompt([])).toBe("");
 });
 
-test("the clipboard reaches the model only when the request is about it, never as an echo of the chat", () => {
+test("the clipboard reaches the model only when the request names it, never as an echo of the chat", () => {
   const answer = "**Make the repo closed** means change a repository from public to private.";
   const history = [
     { role: "user" as const, text: "explain this to me" },
@@ -112,16 +112,23 @@ test("the clipboard reaches the model only when the request is about it, never a
   ];
   // They pressed copy on the card, then asked a follow-up: the clipboard is the previous answer.
   expect(clipboardFor({ text: "and how do i do that on github?", history, clipboardText: answer })).toBe("");
-  expect(clipboardFor({ text: "explain this to me", history: [], clipboardText: "git fetch origin main" })).toBe("git fetch origin main");
+  expect(clipboardFor({ text: "what did i copy? it's on my clipboard", history, clipboardText: answer })).toBe("");
+  // Named outright: it goes along.
   expect(clipboardFor({ text: "summarize what i copied", history: [], clipboardText: "a long article" })).toBe("a long article");
-  // An unrelated command on the clipboard is not sent along with an unrelated request.
+  expect(clipboardFor({ text: "explain my clipboard", history: [], clipboardText: "git fetch origin main" })).toBe("git fetch origin main");
+  expect(clipboardFor({ text: "paste this into notes", history: [], clipboardText: "git fetch origin main" })).toBe("git fetch origin main");
+  expect(clipboardFor({ text: "note this", history: [], clipboardText: "call mom at 5" })).toBe("call mom at 5");
+  // Typed questions stand on their own; whatever is on the clipboard stays out of them.
   expect(clipboardFor({ text: "open safari private browsing", history: [], clipboardText: "git fetch origin main" })).toBe("");
   expect(clipboardFor({ text: "teach me how to use notes", history: [], clipboardText: "git fetch origin main" })).toBe("");
-  // "this" with a screenshot means the screen, not the clipboard.
-  expect(clipboardFor({ text: "what's this", history: [], clipboardText: "git fetch", screenshotBase64: "img" })).toBe("git fetch");
-  expect(clipboardFor({ text: "explain this", history: [], clipboardText: "git fetch", screenshotBase64: "img" })).toBe("git fetch");
-  expect(clipboardFor({ text: "fix this", history: [], clipboardText: "", screenshotBase64: "img" })).toBe("");
+  expect(clipboardFor({ text: "explain this to me", history: [], clipboardText: "git fetch origin main" })).toBe("");
+  expect(clipboardFor({ text: "fix this error", history: [], clipboardText: "git fetch origin main" })).toBe("");
+  expect(clipboardFor({ text: "summarize this page", history: [], clipboardText: "git fetch origin main" })).toBe("");
+  expect(clipboardFor({ text: "copy that file to the desktop", history: [], clipboardText: "git fetch origin main" })).toBe("");
+  expect(clipboardFor({ text: "what's this", history: [], clipboardText: "git fetch", screenshotBase64: "img" })).toBe("");
   expect(clipboardFor({ text: "do this", history: [], clipboardText: "git fetch", screenshotBase64: "img" })).toBe("");
+  // The same stale clipboard doesn't come back on the next question either.
+  expect(clipboardFor({ text: "and how do i undo that?", history, clipboardText: "git fetch origin main" })).toBe("");
 });
 
 test("history drops the Mac's esc suffix, merges same-role runs and never ends with the live request", () => {

@@ -30,8 +30,8 @@ enum SidecarStatus: Equatable {
 final class BrainSidecar: ObservableObject {
     @Published private(set) var status: SidecarStatus = .idle
     @Published private(set) var lastHealth: [String: Any]?
-    let port: Int
-    let baseURL: URL
+    private(set) var port: Int
+    private(set) var baseURL: URL
 
     private var process: Process?
     private var startedAt: Date?
@@ -69,6 +69,21 @@ final class BrainSidecar: ObservableObject {
         }
         status = .starting
         intentionalStop = false
+        Task { [weak self] in
+            guard let self else { return }
+            // Another copy of okidoki (a second build, a leftover from a force-quit) may already own
+            // the port with its own token. Spawning there fails with EADDRINUSE and every request
+            // would hit a brain that answers 401, so move to a free port instead.
+            if await probe() == .foreign, let free = Self.freePort(after: port) {
+                port = free
+                baseURL = URL(string: "http://127.0.0.1:\(free)")!
+                BrainClient.shared.baseURL = baseURL
+            }
+            spawn(bun: bun, script: script)
+        }
+    }
+
+    private func spawn(bun: String, script: URL) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: bun)
         process.arguments = [script.path]
@@ -90,12 +105,15 @@ final class BrainSidecar: ObservableObject {
         let logHandle = self.logHandle
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
-            logHandle?.write(data)
+            // Empty data is end-of-file; without clearing the handler Foundation keeps calling it.
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            try? logHandle?.write(contentsOf: data)
         }
         process.terminationHandler = { [weak self] process in
+            pipe.fileHandleForReading.readabilityHandler = nil
             Task { @MainActor in
-                guard let self, !self.intentionalStop else { return }
+                // A restart may already have spawned a newer brain; only the current one's exit counts.
+                guard let self, !self.intentionalStop, process === self.process else { return }
                 self.status = .failed("brain exited (\(process.terminationStatus))")
                 self.process = nil
             }
@@ -112,6 +130,7 @@ final class BrainSidecar: ObservableObject {
 
     func stop() {
         intentionalStop = true
+        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         process?.terminate()
         process = nil
         status = .idle
@@ -159,17 +178,52 @@ final class BrainSidecar: ObservableObject {
 
     @discardableResult
     func health() async -> Bool {
+        await probe() == .ours
+    }
+
+    enum Probe: Equatable {
+        /// Nothing answers on the port.
+        case silent
+        /// A brain that knows our token.
+        case ours
+        /// Something else is listening: a brain started by another copy of okidoki, or an unrelated server.
+        case foreign
+    }
+
+    func probe() async -> Probe {
         var request = URLRequest(url: baseURL.appendingPathComponent("health"))
         request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 1
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+            guard let http = response as? HTTPURLResponse else { return .foreign }
+            guard http.statusCode == 200 else { return .foreign }
             lastHealth = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            return true
+            return .ours
         } catch {
-            return false
+            return .silent
         }
+    }
+
+    /// The first port after `start` that nothing is bound to, within a short range.
+    nonisolated static func freePort(after start: Int) -> Int? {
+        for candidate in (start + 1)...(start + 40) {
+            let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+            guard socketFD >= 0 else { continue }
+            defer { close(socketFD) }
+            var reuse: Int32 = 1
+            setsockopt(socketFD, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = in_port_t(UInt16(candidate).bigEndian)
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let bound = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            if bound == 0 { return candidate }
+        }
+        return nil
     }
 
     private func scriptURL() -> URL? {
@@ -328,7 +382,8 @@ struct BrainExecResult {
 @MainActor
 final class BrainClient {
     static let shared = BrainClient()
-    private var baseURL: URL { BrainClient.resolvedBaseURL }
+    /// Where the brain answers. The sidecar moves this when it has to start on another port.
+    var baseURL: URL = BrainClient.resolvedBaseURL
     private static var resolvedBaseURL: URL {
         if let override = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_URL"], let url = URL(string: override) {
             return url
@@ -481,6 +536,7 @@ final class BrainClient {
                   screenshotPNG: Data?, previousPNG: Data? = nil,
                   zoom: ComputerUseService.Zoom? = nil,
                   canClick: Bool = true, canSee: Bool = true,
+                  remote: Bool = false,
                   model: String) async -> ComputerAction? {
         var body: [String: Any] = [
             "goal": goal,
@@ -495,6 +551,7 @@ final class BrainClient {
             "scripting": scripting,
             "canClick": canClick,
             "canSee": canSee,
+            "remote": remote,
             "settings": ["claudeModel": model],
         ]
         if let screenshotPNG {
@@ -596,6 +653,74 @@ final class BrainClient {
         guard let data = await postJSON("teach/concept", body: body, timeout: 120) else { return (nil, "the brain didn't answer") }
         guard let envelope = try? JSONDecoder().decode(ConceptEnvelope.self, from: data) else { return (nil, "bad reply") }
         return (envelope.lesson, envelope.error)
+    }
+
+    /// What the streaming concept endpoint reports, in order: maybe an intro, then a lesson or an error.
+    enum ConceptStreamEvent {
+        case intro(title: String, intro: String)
+        case lesson(ConceptLesson)
+        case error(String)
+    }
+
+    private struct ConceptStreamLine: Decodable {
+        var type: String
+        var title: String?
+        var intro: String?
+        var lesson: ConceptLesson?
+        var error: String?
+    }
+
+    /// Same lesson as `teachConcept`, but the title and intro arrive as soon as the model has
+    /// written them, so narration can start while the scene is still being drawn.
+    func teachConceptStream(topic: String, context: String, pageTitle: String?, pageURL: String?,
+                            screenshotBase64: String?, imageWidth: Double, imageHeight: Double,
+                            language: String?, model: String) -> AsyncStream<ConceptStreamEvent> {
+        var body: [String: Any] = ["topic": topic, "context": context, "imageWidth": imageWidth, "imageHeight": imageHeight, "model": model]
+        if let pageTitle { body["pageTitle"] = pageTitle }
+        if let pageURL { body["pageURL"] = pageURL }
+        if let screenshotBase64 { body["screenshotBase64"] = screenshotBase64 }
+        if let language { body["language"] = language }
+        var request = URLRequest(url: baseURL.appendingPathComponent("teach/concept/stream"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        request.httpMethod = "POST"
+        request.timeoutInterval = 130
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
+            request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return AsyncStream { continuation in
+            let task = Task {
+                var delivered = false
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        continuation.yield(.error("the brain didn't answer"))
+                        continuation.finish()
+                        return
+                    }
+                    for try await line in bytes.lines {
+                        guard let data = line.data(using: .utf8),
+                              let event = try? JSONDecoder().decode(ConceptStreamLine.self, from: data) else { continue }
+                        switch event.type {
+                        case "intro":
+                            continuation.yield(.intro(title: event.title ?? "", intro: event.intro ?? ""))
+                        case "lesson":
+                            if let lesson = event.lesson { continuation.yield(.lesson(lesson)); delivered = true }
+                        case "error":
+                            continuation.yield(.error(event.error ?? "couldn't build the lesson")); delivered = true
+                        default:
+                            break
+                        }
+                    }
+                } catch {
+                    if !delivered { continuation.yield(.error("the brain didn't answer")) }
+                }
+                if !delivered { continuation.yield(.error("the lesson never arrived")) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     func teachConceptFollow(topic: String, question: String, partID: String?, partName: String?,

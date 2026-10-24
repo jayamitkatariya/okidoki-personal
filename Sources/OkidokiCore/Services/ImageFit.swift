@@ -20,7 +20,8 @@ public struct ImageFit: Equatable, Sendable {
     /// The tier for a model id. Haiku/Sonnet/Opus 4.7+ and 5.x are high resolution.
     public static func tier(for model: String) -> ImageFit {
         let lower = model.lowercased()
-        guard let range = lower.range(of: #"(\d+)[-.](\d+)"#, options: .regularExpression) else {
+        // Two short numbers: a dated id like "claude-sonnet-4-20250514" must not read as 4.20250514.
+        guard let range = lower.range(of: #"(\d+)[-.](\d{1,2})(?!\d)"#, options: .regularExpression) else {
             return .standard
         }
         let digits = lower[range].split { $0 == "-" || $0 == "." }.compactMap { Int($0) }

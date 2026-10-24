@@ -57,6 +57,7 @@ dispatched as a `CustomEvent('okidoki-stage', { detail })` on `window`.
 | `focusPart(id)` | Tweens the camera to frame the part's bounding sphere and highlights it. |
 | `resetView()` | Camera back to the spec camera; clears explode, cutaway, x-ray, highlight and auto-orbit. |
 | `setAccent(cssColor)` | Changes the accent used by highlights, outlines, labels. Default `#44E45E`. |
+| `setBuilding(on)` | Shows (or fades out) a slow wireframe placeholder while a lesson is still being written. `load` clears it. |
 | `screenshot()` | Renders synchronously and returns a PNG data URL (transparent background). |
 | `partAt(x, y)` | Raycast at CSS-pixel coordinates; returns the nearest part id (innermost nested part) or `null`. |
 | `dispose()` | Tears down the renderer and observers. |
@@ -89,7 +90,7 @@ Scene {
 * `parent` nests the object under another part (transforms are relative to the parent).
   Highlight / x-ray / color / show / hide on a parent apply to its nested parts.
 * `name` makes the part hoverable with a temporary label; `name`/`description` are sent with `partClick`.
-* Materials are `MeshStandardMaterial` (default color `#B8C0CC`, metal 0.1, rough 0.55) lit by hemisphere + key + rim + fill lights and a subtle room environment map.
+* Materials are `MeshPhysicalMaterial` with a light clearcoat (default color `#B8C0CC`, metal 0.1, rough 0.5) lit by hemisphere + key + rim + fill lights and a subtle room environment map. The key light casts soft shadows onto the parts and onto an invisible shadow catcher just under the model (3d only). A loaded scene eases in from slightly further out.
 
 ### Part types
 

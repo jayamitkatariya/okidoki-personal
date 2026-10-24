@@ -6,7 +6,7 @@ import { Button, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented, Stat
 
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
-  quickAction: "bolt",
+  quick_action: "bolt",
   terminal: "terminal",
   coding: "code",
   background: "runs",
@@ -20,7 +20,7 @@ const kindGlyph: Record<RunKind, string> = {
 
 const kindName: Record<RunKind, string> = {
   answer: "Answer",
-  quickAction: "Quick action",
+  quick_action: "Quick action",
   terminal: "Terminal",
   coding: "Coding",
   background: "Background",
@@ -172,7 +172,7 @@ export function RunsPage() {
             onRedirect={() => setRedirectOpen(true)}
             onShare={() => {
               invoke("shareRun", { id: current.id });
-              notify("Run copied", "Paste it anywhere to share");
+              notify("Sharing…", "A link lands on your clipboard in a moment", "info");
             }}
           />
         ) : (
@@ -227,7 +227,10 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
   const doneSteps = run.steps.filter((step) => step.status === "done").length;
 
   useEffect(() => {
-    if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    // Follow live output only while already at the bottom; reading further up must stay put.
+    const el = outputRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) el.scrollTop = el.scrollHeight;
   }, [run.output]);
 
   const output = allOutput ? run.output : run.output.slice(-14000);
@@ -503,7 +506,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
               </span>
             ) : null}
             {run.kind === "teach" ? (
-              <Button variant="secondary" size="sm" icon="play" onClick={() => invoke("startSkill", { id: run.id })}>
+              <Button variant="secondary" size="sm" icon="play" onClick={() => { invoke("ask", { text: run.prompt }); notify("Walking through it again", run.prompt); }}>
                 Walk through again
               </Button>
             ) : (

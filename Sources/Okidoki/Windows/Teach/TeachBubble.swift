@@ -6,23 +6,23 @@ import OkidokiCore
 enum TeachPhase: Equatable {
     /// Screenshot in flight, model deciding the next step.
     case looking
-    /// A step is on screen; the learner (or okidoki, in Show me) does it.
+    /// A step is on screen; the learner does it and the lesson moves on by itself.
     case waiting
-    /// Show me is paused because the learner moved the mouse.
-    case paused
-    /// A risky step wants a real yes before okidoki does it.
+    /// A risky step wants a real yes before okidoki does it on their behalf.
     case confirm
     /// The lesson wrapped up; the card lingers for a beat.
     case done
 }
 
 enum TeachMode: String {
-    case guide, show, practice
+    /// okidoki points, the learner does it.
+    case guide
+    /// The same lesson again with hints held back.
+    case practice
 
     var title: String {
         switch self {
         case .guide: return "guide me"
-        case .show: return "show me"
         case .practice: return "your turn"
         }
     }
@@ -45,9 +45,7 @@ final class TeachModel: ObservableObject {
     @Published var stuck = false
     @Published var provisional = false
     @Published var voice = true
-    @Published var gesture = TeachGesture.Kind.option
     @Published var summary = ""
-    @Published var canDo = false
     @Published var offerPractice = false
     @Published var hasBubble = false
     var runID: String?
@@ -65,7 +63,7 @@ struct TeachBubbleView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Circle().fill(accent).frame(width: 6, height: 6)
-                    .shadow(color: accent.opacity(0.8), radius: 3)
+                    .shadow(color: accent.opacity(0.4), radius: 1.5)
                 Text(statusLine)
                     .font(.okMono(8.5))
                     .foregroundStyle(statusColor)
@@ -94,7 +92,7 @@ struct TeachBubbleView: View {
         .frame(width: 312, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .overlayGlass(cornerRadius: 16, veil: 0.56, tone: .dark)
+        .overlayGlass(cornerRadius: 16, veil: 0.62, tone: .dark)
         .animation(OKMotion.spring, value: model.say)
         .animation(OKMotion.spring, value: model.why)
     }
@@ -103,7 +101,6 @@ struct TeachBubbleView: View {
         switch model.phase {
         case .looking: return model.hint.isEmpty ? "looking…" : model.hint
         case .waiting: return model.hint
-        case .paused: return "paused — \(model.gesture.hint.isEmpty ? "press next" : model.gesture.hint) to continue"
         case .confirm: return "wants a yes"
         case .done: return "done"
         }
@@ -118,17 +115,14 @@ struct TeachBubbleView: View {
 
 // MARK: - Bar
 
-/// The slim bar at the bottom: progress, the next key, the mode switch, voice and stop.
+/// The slim bar at the bottom: progress, voice and stop. Nothing to press to move on — the
+/// lesson follows what the learner does. Confirm and done show their buttons only in those phases.
 struct TeachBarView: View {
     @ObservedObject var model: TeachModel
     @Environment(\.colorScheme) private var scheme
     var accent: Color
-    var onBack: () -> Void
-    var onNext: () -> Void
-    var onDoIt: () -> Void
     var onConfirm: () -> Void
     var onSkip: () -> Void
-    var onMode: (TeachMode) -> Void
     var onVoice: () -> Void
     var onPractice: () -> Void
     var onStop: () -> Void
@@ -139,21 +133,24 @@ struct TeachBarView: View {
     var body: some View {
         HStack(spacing: 10) {
             progress
-            Rectangle().fill(theme.line).frame(width: 1, height: 18)
-            controls
+            if model.phase == .confirm || model.phase == .done {
+                Rectangle().fill(theme.line).frame(width: 1, height: 18)
+                controls
+            }
             Spacer(minLength: 6)
             trailing
         }
         .padding(.horizontal, 14)
-        .frame(width: 640, height: 56)
+        .frame(width: TeachBarView.width, height: 56)
         .overlayGlass(cornerRadius: 28, veil: 0.46, tone: .dark)
         .animation(OKMotion.spring, value: model.phase)
         .animation(OKMotion.spring, value: model.stuck)
-        .animation(OKMotion.spring, value: model.mode)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { blink = true }
         }
     }
+
+    static let width: CGFloat = 460
 
     @ViewBuilder private var progress: some View {
         HStack(spacing: 8) {
@@ -182,7 +179,7 @@ struct TeachBarView: View {
                     .textCase(.uppercase)
                     .foregroundStyle(accent)
                     .lineLimit(1)
-                    .frame(maxWidth: 150, alignment: .leading)
+                    .frame(maxWidth: 170, alignment: .leading)
                 if !model.milestones.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(Array(model.milestones.enumerated()), id: \.offset) { index, _ in
@@ -194,7 +191,7 @@ struct TeachBarView: View {
                             .font(.okMono(8))
                             .foregroundStyle(theme.tertiary)
                             .lineLimit(1)
-                            .frame(maxWidth: 110, alignment: .leading)
+                            .frame(maxWidth: 130, alignment: .leading)
                     }
                     .animation(OKMotion.spring, value: model.milestone)
                 } else {
@@ -236,60 +233,8 @@ struct TeachBarView: View {
                     .buttonStyle(OKButtonStyle(kind: .primary, compact: true))
             }
         default:
-            HStack(spacing: 7) {
-                Button {
-                    onBack()
-                } label: {
-                    Image(systemName: "arrow.counterclockwise").font(.system(size: 11, weight: .semibold))
-                }
-                .buttonStyle(OKButtonStyle(kind: .ghost, compact: true))
-                .help("show that step again")
-                .disabled(model.stepNumber == 0 || model.phase == .looking)
-                .opacity(model.stepNumber == 0 || model.phase == .looking ? 0.4 : 1)
-
-                Button {
-                    onNext()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: model.phase == .paused ? "play.fill" : "forward.fill").font(.system(size: 10, weight: .bold))
-                        Text(model.phase == .paused ? "continue" : (model.mode == .show ? "now" : "next"))
-                        if !model.gesture.caps.isEmpty {
-                            Text(model.gesture.caps)
-                                .font(.okMono(9, .medium))
-                                .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.12)))
-                        }
-                    }
-                }
-                .buttonStyle(OKButtonStyle(kind: model.stuck ? .primary : .secondary, compact: true))
-                .disabled(model.phase == .looking)
-                .opacity(model.phase == .looking ? 0.55 : 1)
-                .help(model.mode == .show ? "act now instead of waiting" : "do this step for me and move on")
-
-                if model.mode != .practice {
-                    modeSwitch
-                }
-            }
+            EmptyView()
         }
-    }
-
-    @ViewBuilder private var modeSwitch: some View {
-        HStack(spacing: 0) {
-            ForEach([TeachMode.guide, TeachMode.show], id: \.rawValue) { mode in
-                Button(mode.title) { onMode(mode) }
-                    .buttonStyle(.plain)
-                    .font(.okMono(9, model.mode == mode ? .semibold : .regular))
-                    .foregroundStyle(model.mode == mode ? Color.black.opacity(0.85) : Color.white.opacity(0.7))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule().fill(model.mode == mode ? accent : Color.clear)
-                    )
-            }
-        }
-        .padding(2)
-        .background(Capsule().fill(Color.white.opacity(0.08)))
-        .help("guide me: you do it · show me: okidoki does it while explaining")
     }
 
     @ViewBuilder private var trailing: some View {
@@ -344,7 +289,7 @@ enum TeachRecap {
             lines.append("**shortcuts**: " + Array(Set(keys)).prefix(6).joined(separator: " · "))
         }
         lines.append("")
-        lines.append("_in \(app). say \"teach me \(topic)\" again any time, or \"show me\" to watch it._")
+        lines.append("_in \(app). say \"teach me \(topic)\" again any time._")
         return lines.joined(separator: "\n")
     }
 }

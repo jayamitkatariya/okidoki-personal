@@ -66,6 +66,38 @@
   color: var(--muted);
 }
 
+/* import from other assistants */
+.memory-import {
+  margin-top: 14px;
+}
+.memory-import-copy {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: -2px 0 6px;
+}
+.memory-import-list {
+  display: flex;
+  flex-direction: column;
+}
+.memory-import-list .memory-setting .btn {
+  margin-left: auto;
+}
+.memory-import-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding-top: 10px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--faint);
+}
+.memory-import-foot > span {
+  margin-right: 4px;
+}
+
 /* lists */
 .memory-list-tile {
   min-height: 188px;

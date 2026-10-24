@@ -55,17 +55,53 @@ public final class PermissionsService {
     public func request(_ kind: PermissionKind) async -> PermissionState {
         switch kind {
         case .screen:
+            if !CGPreflightScreenCaptureAccess() { repairStaleGrant(kind) }
             let granted = CGRequestScreenCaptureAccess()
             return granted ? .granted : .notDetermined
         case .microphone:
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             return granted ? .granted : .denied
         case .accessibility:
+            if !AXIsProcessTrusted() { repairStaleGrant(kind) }
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             let granted = AXIsProcessTrustedWithOptions(options)
             return granted ? .granted : .notDetermined
         case .automation:
+            repairStaleGrant(kind)
             return .notDetermined
+        }
+    }
+
+    /// Services already cleared once in this process, so a user who declines isn't nagged on every step.
+    private var repaired: Set<PermissionKind> = []
+
+    /// The macOS privacy database ties a grant to the app's code signature. A grant recorded for an
+    /// earlier build (an ad-hoc signature pins it to one binary) leaves the toggle switched on in
+    /// System Settings while the system quietly denies this copy and never asks again — clicks, keys
+    /// and Apple events all fail with no visible reason. Clearing only okidoki's own entry makes the
+    /// next request prompt properly; it needs no password and touches no other app.
+    @discardableResult
+    public func repairStaleGrant(_ kind: PermissionKind) -> Bool {
+        guard !repaired.contains(kind), let bundleID = Bundle.main.bundleIdentifier else { return false }
+        repaired.insert(kind)
+        let service: String
+        switch kind {
+        case .accessibility: service = "Accessibility"
+        case .screen: service = "ScreenCapture"
+        case .automation: service = "AppleEvents"
+        case .microphone: service = "Microphone"
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", service, bundleID]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
         }
     }
 

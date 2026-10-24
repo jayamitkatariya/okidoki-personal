@@ -27,8 +27,8 @@ export function futureTime(value: string | null | undefined): string {
 
 export function formatBytes(bytes: number | null | undefined): string {
   if (!bytes) return "0 MB";
-  if (bytes >= 1_000_000_000) return `${(bytes / 1_073_741_824).toFixed(1).replace(/\.0$/, "")} GB`;
-  if (bytes >= 1_000_000) return `${(bytes / 1_048_576).toFixed(0)} MB`;
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1).replace(/\.0$/, "")} GB`;
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(0)} MB`;
   return `${Math.round(bytes / 1024)} KB`;
 }
 

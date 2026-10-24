@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, clockLabel, dayLabel, formatBytes, relativeTime } from "../lib";
 import type { Run, Thread } from "../types";
-import { Button, Empty, Logo, Markdown, Modal, PageTitle, PixelIcon, Segmented, StatusBadge, TextField } from "../components/ui";
+import { Button, Empty, Logo, Markdown, Modal, PageTitle, PixelIcon, Segmented, StatusBadge, TextField, isComposing } from "../components/ui";
 import type { Page } from "../components/Layout";
 
 type Tab = "requests" | "threads";
@@ -99,7 +99,7 @@ export function HistoryPage({ go }: { go: (page: Page) => void }) {
         runs.length ? (
           <div className="history-days">
             {groups.map((group) => (
-              <section className="history-day" key={group.label}>
+              <section className="history-day" key={`${group.label}-${group.runs[0].id}`}>
                 <h2 className="history-day-label">{group.label}</h2>
                 <div className="tile request-list">
                   {group.runs.map((run) => (
@@ -307,7 +307,7 @@ function ThreadBody({ thread, onClose }: { thread: Thread; onClose: () => void }
           placeholder="Continue this thread…"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && text.trim()) send();
+            if (event.key === "Enter" && !isComposing(event) && text.trim()) send();
           }}
         />
         <button className="thread-send" onClick={send} disabled={!text.trim()} aria-label="Send" title="Send">
@@ -335,7 +335,7 @@ function kindGlyph(kind: Run["kind"]): string {
   return (
     {
       answer: "spark",
-      quickAction: "bolt",
+      quick_action: "bolt",
       terminal: "terminal",
       coding: "code",
       background: "runs",

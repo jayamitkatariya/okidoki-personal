@@ -6,6 +6,14 @@ export function anthropicKey(header: string | null | undefined): string | undefi
   return fromEnv || undefined;
 }
 
+/** Apify token from the request, then the environment the Mac injected. */
+export function apifyToken(fromRequest?: string): string | undefined {
+  const given = fromRequest?.trim();
+  if (given) return given;
+  const fromEnv = process.env.APIFY_API_KEY?.trim();
+  return fromEnv || undefined;
+}
+
 /** Moss project credentials from the request, then the environment. */
 export function mossCredentials(projectId?: string, projectKey?: string): { projectId: string; projectKey: string } | null {
   const id = (projectId || process.env.MOSS_PROJECT_ID || "").trim();

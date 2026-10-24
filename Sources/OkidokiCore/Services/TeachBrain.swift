@@ -167,12 +167,10 @@ public enum TeachBrain {
 
     static func modeLines(_ mode: String) -> String {
         switch mode {
-        case "show":
-            return "Mode: SHOW ME. Okidoki performs every step itself while you narrate; the learner watches. Keep say short and spoken (\"now i'll open the file menu — that's where saving lives\"). Still point exactly, since the ring and ghost cursor show where okidoki clicks. Mark risky steps so okidoki asks before doing them."
         case "practice":
             return "Mode: PRACTICE. They already saw this once and are trying alone. say names only the goal of the step (\"make a frame\") with no location hints. Still fill element/x,y so the ring can appear if they get stuck. If they do it, previous_done true and move on quickly."
         default:
-            return "Mode: GUIDE ME. They do every action themselves. You point at the exact control and explain, one small step at a time, like a patient friend sitting beside them."
+            return "Mode: GUIDE ME. They do every action themselves. You point at the exact control and explain, one small step at a time, like a patient friend sitting beside them. The ring is how they find the control, so always give element or x,y — a step with no point leaves them searching."
         }
     }
 

@@ -30,6 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A running private Mac gets a clean shutdown before the app goes, so its disk stays healthy.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard environment.privateMac.isRunning else { return .terminateNow }
+        Task { @MainActor in
+            await environment.privateMac.stop(grace: 12)
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         environment.stop()
     }

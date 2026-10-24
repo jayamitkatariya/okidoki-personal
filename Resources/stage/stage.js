@@ -49,6 +49,8 @@ class Stage {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.localClippingEnabled = false;
     renderer.domElement.style.cssText = 'width:100%;height:100%;display:block;touch-action:none;';
     container.appendChild(renderer.domElement);
@@ -85,6 +87,7 @@ class Stage {
     this.raycaster = new THREE.Raycaster();
     this.hoverId = null;
     this.hoverLabel = null;
+    this.placeholder = null;
     this.outlineMaterial = new THREE.MeshBasicMaterial({ color: this.accent, side: THREE.BackSide, transparent: true, opacity: 0.6, depthWrite: false });
 
     this.mode = '3d';
@@ -100,11 +103,72 @@ class Stage {
     const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x1c1f24, 0.9);
     const key = new THREE.DirectionalLight(0xffffff, 1.7);
     key.position.set(5, 8, 6);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.bias = -0.0005;
+    key.shadow.normalBias = 0.02;
+    key.shadow.radius = 4;
+    const cam = key.shadow.camera;
+    cam.near = 0.5; cam.far = 40;
+    cam.left = cam.bottom = -9; cam.right = cam.top = 9;
     const rim = new THREE.DirectionalLight(0x9db4ff, 0.6);
     rim.position.set(-6, 3, -7);
     const fill = new THREE.DirectionalLight(0xffffff, 0.35);
     fill.position.set(-4, -2, 5);
     this.scene.add(hemi, key, rim, fill);
+    this.keyLight = key;
+
+    // A soft shadow catcher under the model, so parts sit on something instead of floating in a void.
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.ShadowMaterial({ opacity: 0.28, transparent: true, depthWrite: false }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    ground.userData.noPick = true;
+    ground.visible = false;
+    this.scene.add(ground);
+    this.ground = ground;
+  }
+
+  // Drop the shadow catcher just under the lowest part. Only in 3d; a flat diagram has no floor.
+  placeGround() {
+    if (!this.ground) return;
+    if (this.mode !== '3d' || this.parts.size === 0) { this.ground.visible = false; return; }
+    const box = new THREE.Box3();
+    for (const p of this.parts.values()) {
+      if (p.type === 'label' || p.type === 'grid' || p.type === 'axes' || p.type === 'particles') continue;
+      const b = new THREE.Box3().setFromObject(p.obj, true);
+      if (!b.isEmpty()) box.union(b);
+    }
+    if (box.isEmpty()) { this.ground.visible = false; return; }
+    const center = box.getCenter(new THREE.Vector3());
+    this.ground.position.set(center.x, box.min.y - 0.02, center.z);
+    this.ground.visible = true;
+    this.keyLight.target.position.copy(center);
+    this.keyLight.target.updateMatrixWorld();
+  }
+
+  // ---------- building placeholder ----------
+  // While the model is still being written, a slow wireframe keeps the stage alive instead of blank.
+  setBuilding(on) {
+    if (on && !this.placeholder) {
+      const geo = new THREE.IcosahedronGeometry(1.6, 1);
+      const mat = new THREE.MeshBasicMaterial({ color: this.accent, wireframe: true, transparent: true, opacity: 0.35 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.userData.noPick = true;
+      const dots = new THREE.Points(geo, new THREE.PointsMaterial({ color: this.accent, size: 0.07, transparent: true, opacity: 0.8 }));
+      dots.userData.noPick = true;
+      const group = new THREE.Group();
+      group.add(mesh, dots);
+      this.scene.add(group);
+      this.placeholder = { group, geo, mat, dotsMat: dots.material, t: 0 };
+      this.schedule();
+    } else if (!on && this.placeholder) {
+      const ph = this.placeholder;
+      this.placeholder = null;
+      this.tween(0.5, (k) => { ph.mat.opacity = 0.35 * (1 - k); ph.dotsMat.opacity = 0.8 * (1 - k); ph.group.scale.setScalar(1 + k * 0.6); }, () => {
+        ph.group.removeFromParent(); ph.geo.dispose(); ph.mat.dispose(); ph.dotsMat.dispose();
+      });
+      this.requestRender();
+    }
   }
 
   setupCamera(mode, camSpec) {
@@ -202,7 +266,7 @@ class Stage {
     if (!this.raf) this.raf = requestAnimationFrame((t) => this.tick(t));
   }
   hasAnimations() {
-    if (this.tweens.length || this.pulses.length || this.beatTimers.length || this.highlighted.size) return true;
+    if (this.tweens.length || this.pulses.length || this.beatTimers.length || this.highlighted.size || this.placeholder) return true;
     for (const p of this.parts.values()) {
       if (p.spin.x || p.spin.y || p.spin.z) return true;
       if (p.osc && p.osc.on) return true;
@@ -224,6 +288,13 @@ class Stage {
     if (animating || controlsMoved || this.interacting || this.controls.autoRotate || this.needsRender) this.schedule();
   }
   step(dt) {
+    if (this.placeholder) {
+      const ph = this.placeholder;
+      ph.t += dt;
+      ph.group.rotation.y += dt * 0.35;
+      ph.group.rotation.x = Math.sin(ph.t * 0.5) * 0.25;
+      ph.mat.opacity = 0.28 + 0.1 * Math.sin(ph.t * 2);
+    }
     for (const tw of this.tweens.slice()) {
       tw.t += dt;
       const k = tw.dur > 0 ? Math.min(1, tw.t / tw.dur) : 1;
@@ -285,8 +356,26 @@ class Stage {
     this.beats = this.spec.beats;
     this.addParts(this.spec.parts, warnings);
     this.computeExplodeCenter();
+    this.placeGround();
+    this.setBuilding(false);
+    if (!this.instant) this.reveal();
     this.requestRender();
     return warnings;
+  }
+  // A fresh scene eases in from a little further out, so it arrives instead of popping.
+  reveal() {
+    const spec = this.cameraSpec;
+    const target = new THREE.Vector3(...spec.target);
+    const home = new THREE.Vector3(...spec.position);
+    const far = target.clone().addScaledVector(home.clone().sub(target), this.mode === '2d' ? 1.25 : 1.45);
+    if (this.mode === '3d') far.applyAxisAngle(new THREE.Vector3(0, 1, 0), -0.35);
+    this.camera.position.copy(far);
+    if (this.camera.isOrthographicCamera) {
+      this.camera.zoom = this.baseDist / Math.max(0.01, far.distanceTo(target));
+      this.camera.updateProjectionMatrix();
+    }
+    this.controls.update();
+    this.tweenCamera(spec.position, spec.target, 1.4);
   }
   clearScene() {
     this.cancelBeatTimers();
@@ -385,6 +474,7 @@ class Stage {
       this.addParts(extra.parts, warnings);
       this.computeExplodeCenter();
       this.applyExplode();
+      this.placeGround();
     }
     if (Array.isArray(extra?.beats)) this.spec.beats.push(...extra.beats);
     this.beats = this.spec.beats;
@@ -410,6 +500,9 @@ class Stage {
     if (p.label) p.label.setOpacity(o);
     if (p.extraLabels) p.extraLabels.forEach((l) => l.setOpacity(o));
     for (const s of p.outlines) s.material.visible = o > 0.05;
+    // Ghosted or x-rayed parts shouldn't throw a solid (or dotted) shadow.
+    const solid = !p.xray && o > 0.5;
+    p.obj.traverse((m) => { if (m.isMesh && !m.userData.noPick && m.castShadow !== solid) m.castShadow = solid; });
   }
   setEmissive(p, glow, floor = 0) {
     const v = Math.max(glow, floor);
@@ -425,6 +518,8 @@ class Stage {
       if (!o.isMesh || o.isInstancedMesh || o.userData.noPick || o.isSprite) return;
       const shell = new THREE.Mesh(o.geometry, this.outlineMaterial);
       shell.scale.setScalar(1.045);
+      shell.castShadow = false;
+      shell.receiveShadow = false;
       shell.userData.noPick = true;
       shell.renderOrder = 5;
       o.add(shell);
@@ -770,6 +865,7 @@ class Stage {
     try { new THREE.Color(color); } catch (e) { warn(`setAccent: invalid color '${color}'`); return; }
     this.accent = color;
     this.outlineMaterial.color.set(color);
+    if (this.placeholder) { this.placeholder.mat.color.set(color); this.placeholder.dotsMat.color.set(color); }
     this.forEachLabel((l) => l.setAccent(color));
     for (const p of this.parts.values()) if (this.isHighlighted(p)) this.setEmissive(p, HIGHLIGHT_GLOW);
     this.requestRender();
@@ -815,6 +911,7 @@ class Stage {
   }
   dispose() {
     this.clearScene();
+    if (this.placeholder) { this.placeholder.group.removeFromParent(); this.placeholder = null; }
     this.resizeObserver.disconnect();
     this.controls.dispose();
     if (this.raf) cancelAnimationFrame(this.raf);
@@ -840,6 +937,7 @@ const api = {
   focusPart: (id) => stage.focusPart(id),
   resetView: () => stage.resetView(),
   setAccent: (c) => stage.setAccent(c),
+  setBuilding: (on) => stage.setBuilding(!!on),
   screenshot: () => stage.screenshot(),
   partAt: (x, y) => stage.partAt(x, y),
   dispose: () => stage.dispose(),

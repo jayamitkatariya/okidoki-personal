@@ -21,7 +21,7 @@ final class SkillReplayer {
     init(environment: AppEnvironment) { self.env = environment }
 
     func begin(skill: Skill, runID: String, times: Int) {
-        guard !isActive else { return }
+        guard !isActive else { env?.failReplay(runID: runID, reason: "a replay is already running — let it finish or stop it first"); return }
         guard AccessibilityActions.canPost else {
             env?.failReplay(runID: runID, reason: "allow accessibility access in System Settings, then try again")
             return
@@ -94,11 +94,16 @@ final class SkillReplayer {
         let hasApp = SkillReplayGeometry.isRealApp(step.app)
         if action == "switch" {
             guard hasApp else { return nil }
-            return await activate(step.app) ? nil : "couldn't open \(step.app)"
+            if await activate(step.app) { return nil }
+            switch await rescue(step, because: "\(step.app) didn't open") {
+            case .done: return nil
+            case .failed(let problem): return problem
+            case .unavailable: return "couldn't open \(step.app)"
+            }
         }
         if hasApp, NSWorkspace.shared.frontmostApplication?.localizedName != step.app {
             _ = await activate(step.app)
-            try? await Task.sleep(nanoseconds: 450_000_000)
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
         switch action {
         case "type":
@@ -121,8 +126,10 @@ final class SkillReplayer {
             let dy = step.toY ?? 0
             return await offMain { AccessibilityActions.scroll(at: point, dy: dy) } ? nil : "couldn't scroll"
         case "drag":
-            guard let from = await resolvePoint(step), let tx = step.toX, let ty = step.toY else { return "drag has no end point" }
-            let to = CGPoint(x: tx, y: ty)
+            let target = await resolveTarget(step)
+            guard let from = target.point, let tx = step.toX, let ty = step.toY else { return "drag has no end point" }
+            // The end point moves with the window just like the start did.
+            let to = CGPoint(x: tx + target.shift.width, y: ty + target.shift.height)
             moveGhost(to: from)
             try? await Task.sleep(nanoseconds: 500_000_000)
             model.clicking = true
@@ -132,7 +139,19 @@ final class SkillReplayer {
             model.clicking = false
             return ok ? nil : "couldn't drag"
         default:
-            guard let point = await resolvePoint(step) else { return "can't find where to click" }
+            let target = await resolveTarget(step)
+            // The control was recorded by name and it's nowhere on screen: the app is in a different
+            // state than when it was recorded. Let the brain look and do this one step, instead of
+            // clicking blind at the old spot and knocking the rest of the replay off course.
+            if !target.verified, SkillReplayGeometry.isCheckable(step), canRescue {
+                let what = targetLabel(step).isEmpty ? "the \(step.role ?? "control")" : "“\(targetLabel(step))”"
+                switch await rescue(step, because: "\(what) isn't where it was") {
+                case .done: return nil
+                case .failed(let problem): return problem
+                case .unavailable: break
+                }
+            }
+            guard let point = target.point else { return "can't find where to click" }
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 650_000_000)
             model.clicking = true
@@ -150,42 +169,87 @@ final class SkillReplayer {
     }
 
     private func activate(_ name: String) async -> Bool {
-        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) {
-            app.activate()
-            return true
-        }
-        return await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-a", name]
-            do {
-                try process.run()
-                process.waitUntilExit()
-                return process.terminationStatus == 0
-            } catch {
-                return false
-            }
-        }.value
+        await SkillTargetResolver.activate(name)
     }
 
     // MARK: - Finding the target
 
-    /// Quartz-space point for the step. Order: the recorded spot if the same control is still there,
-    /// else an element in the front app whose label matches exactly, else the recorded spot as-is.
+    /// Quartz-space point for the step: the recorded spot if the same control is still there, else
+    /// the spot carried along with its moved window, else a label search, else the recorded spot as-is.
     private func resolvePoint(_ step: SkillStep) async -> CGPoint? {
+        await resolveTarget(step).point
+    }
+
+    private func resolveTarget(_ step: SkillStep) async -> SkillTargetResolver.Resolution {
         let recorded = recordedPoint(step)
-        let label = targetLabel(step)
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
-        guard !label.isEmpty, pid != 0, AXIsProcessTrusted() else { return recorded }
+        let pid = SkillTargetResolver.ownerPid(for: step)
         return await Task.detached(priority: .userInitiated) {
-            if let recorded, ElementFinder.label(in: pid, at: recorded).caseInsensitiveCompare(label) == .orderedSame {
-                return recorded
-            }
-            if let found = ElementFinder.find(label: label, in: pid, near: recorded) {
-                return found
-            }
-            return recorded
+            SkillTargetResolver.resolve(step, pid: pid, recorded: recorded)
         }.value
+    }
+
+    // MARK: - Rescue (the brain does one step when the screen doesn't match the recording)
+
+    /// Only when there's a brain to ask. Without it the replay stays exactly as fast and blind as before.
+    private var canRescue: Bool {
+        guard let env else { return false }
+        return env.hasKey("anthropic") && env.sidecar.status.isReady && CGPreflightScreenCaptureAccess()
+    }
+
+    private enum Rescue { case done, failed(String), unavailable }
+
+    /// Asks the brain to look at the screen and do just this step. `.done` means the replay can
+    /// carry on at full speed; `.unavailable` means fall back to the recorded point as before.
+    private func rescue(_ step: SkillStep, because reason: String) async -> Rescue {
+        guard canRescue, let env else { return .unavailable }
+        let before = model.label
+        model.label = "looking closer — \(reason)"
+        defer { model.label = before }
+        let target = LocalComputer()
+        let name = env.store.run(runID ?? "")?.prompt ?? "a recorded skill"
+        var goal = "You are finishing ONE step of a recorded skill called “\(name)”. Do only this step, then report done: \(step.text)."
+        goal += " It was recorded as “\(step.action ?? "click")”"
+        if let x = step.x, let y = step.y { goal += " at screen point (\(Int(x)), \(Int(y)))" }
+        let label = targetLabel(step)
+        if !label.isEmpty { goal += " on a control labelled “\(label)”" }
+        goal += ", but \(reason). The app may be in a different state than when it was recorded (a dialog, a menu, a moved window, a different page)."
+        goal += " Deal with whatever is in the way only as far as needed to do this step. Do not do any later steps. If it truly can't be done, fail with the reason."
+        var history: [[String: Any]] = []
+        var previous: Data?
+        for turn in 0..<5 {
+            if Task.isCancelled { return .failed("stopped") }
+            let shot = await target.capture()
+            let screen = target.screen()
+            let box = shot?.box ?? ScreenBox(x: 0, y: 0, width: Double(screen?.frame.width ?? 1), height: Double(screen?.frame.height ?? 1))
+            let context = await target.context(box: box, imageWidth: shot?.imageWidth ?? box.width, imageHeight: shot?.imageHeight ?? box.height)
+            guard let act = await BrainClient.shared.computer(goal: goal, step: turn, appName: context.appName,
+                                                              windowTitle: context.windowTitle, screen: box,
+                                                              imageWidth: shot?.imageWidth ?? 0, imageHeight: shot?.imageHeight ?? 0,
+                                                              history: history, controls: context.controls,
+                                                              scripting: context.scripting, screenshotPNG: shot?.png,
+                                                              previousPNG: previous, canClick: target.canAct, canSee: shot != nil,
+                                                              model: env.store.settings.claudeModel) else {
+                // No answer on the first look: nothing was touched, so the plain replay can go on.
+                return turn == 0 ? .unavailable : .failed("the brain stopped answering mid-step")
+            }
+            previous = shot?.png
+            if Task.isCancelled { return .failed("stopped") }
+            if act.type == "done" { return .done }
+            if act.type == "fail" { return .failed(act.reason ?? act.summary ?? "couldn't do “\(step.text)”") }
+            if let say = act.say, !say.isEmpty { model.label = say }
+            if let x = act.x, let y = act.y, let shot, shot.imageWidth > 0, shot.imageHeight > 0 {
+                moveGhost(to: CGPoint(x: box.x + x / shot.imageWidth * box.width, y: box.y + y / shot.imageHeight * box.height))
+            }
+            let result: String
+            do {
+                result = try await target.perform(act, screen: box, imageWidth: shot?.imageWidth ?? 1, imageHeight: shot?.imageHeight ?? 1)
+            } catch {
+                return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+            history.append(act.dictionary.merging(["result": result]) { current, _ in current })
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        return .failed("“\(step.text)” took too many tries")
     }
 
     private func targetLabel(_ step: SkillStep) -> String {
@@ -239,15 +303,17 @@ final class SkillReplayer {
     }
 
     private func installMonitors() {
+        // An escape the brain presses during a rescue (to close a menu, say) is stamped synthetic
+        // and must not read as the user stopping the replay.
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {
+            if event.keyCode == 53, !EventActuator.isSynthetic(event) {
                 Task { @MainActor in self?.escPressed() }
                 return nil
             }
             return event
         }
         globalEsc = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {
+            if event.keyCode == 53, !EventActuator.isSynthetic(event) {
                 Task { @MainActor in self?.escPressed() }
             }
         }
@@ -294,58 +360,5 @@ final class SkillReplayer {
                        undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: runID)
         }
         runID = nil
-    }
-}
-
-// MARK: - Element lookup
-
-/// Accessibility lookups scoped to one app, so the ghost overlay never gets in the way.
-enum ElementFinder {
-    /// Label of whatever the app has at a Quartz point.
-    static func label(in pid: pid_t, at point: CGPoint) -> String {
-        let app = AXUIElementCreateApplication(pid)
-        var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &element) == .success,
-              let element else { return "" }
-        return AccessibilityLabel.of(element)
-    }
-
-    /// Centre of the element whose label matches exactly (case-insensitive). When several match,
-    /// the one closest to `near` wins. Substring matches are deliberately not accepted.
-    static func find(label: String, in pid: pid_t, near: CGPoint?) -> CGPoint? {
-        let app = AXUIElementCreateApplication(pid)
-        var queue: [AXUIElement] = [app]
-        var visited = 0
-        var best: (point: CGPoint, distance: Double)?
-        while !queue.isEmpty && visited < 3000 {
-            let element = queue.removeFirst()
-            visited += 1
-            if AccessibilityLabel.of(element).caseInsensitiveCompare(label) == .orderedSame, let center = center(of: element) {
-                let distance = near.map { hypot(center.x - $0.x, center.y - $0.y) } ?? 0
-                if best == nil || distance < best!.distance { best = (center, distance) }
-                if near == nil { break }
-            }
-            var childrenRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-               let children = childrenRef as? [AXUIElement] {
-                queue.append(contentsOf: children.prefix(120))
-            }
-        }
-        return best?.point
-    }
-
-    private static func center(of element: AXUIElement) -> CGPoint? {
-        var posRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
-              let posValue = posRef, let sizeValue = sizeRef,
-              CFGetTypeID(posValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
-        var point = CGPoint.zero
-        var size = CGSize.zero
-        AXValueGetValue(posValue as! AXValue, .cgPoint, &point)
-        AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
-        guard size.width > 0, size.height > 0, size.width < 4000, size.height < 4000 else { return nil }
-        return CGPoint(x: point.x + size.width / 2, y: point.y + size.height / 2)
     }
 }
