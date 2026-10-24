@@ -158,4 +158,76 @@ export default defineSchema({
     .index("by_token", ["token"])
     .index("by_account", ["accountId"])
     .index("by_run", ["runId"]),
+
+  // Enterprise: a company. Work accounts link to it through a membership of the signed-in login.
+  organizations: defineTable({
+    name: v.string(),
+    // Lowercase email domain, or "" when the org doesn't take domain join requests.
+    domain: v.string(),
+    plan: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_domain", ["domain"]),
+
+  // One row per login per organization. `accountClientId` is the Mac work account this membership is linked to.
+  memberships: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    role: v.string(), // owner · admin · member · agent
+    status: v.string(), // active · pending
+    accountClientId: v.union(v.string(), v.null()),
+    joinedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_user", ["userId"])
+    .index("by_account", ["accountClientId"]),
+
+  // A space: a group inside an organization with a chat, shared files, skills and a worker.
+  spaces: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    colorHex: v.string(),
+    // Which Mac runs the space's jobs: "thisMac" (whoever accepts), "privateMac", "hostedVM".
+    workerPolicy: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    lastMessageAt: v.number(),
+    lastMessage: v.string(),
+  }).index("by_org", ["orgId"]),
+
+  spaceMembers: defineTable({
+    spaceId: v.id("spaces"),
+    userId: v.id("users"),
+    role: v.string(), // owner · member
+    lastReadAt: v.number(),
+    joinedAt: v.number(),
+  })
+    .index("by_space", ["spaceId"])
+    .index("by_user", ["userId"]),
+
+  spaceMessages: defineTable({
+    spaceId: v.id("spaces"),
+    // Who wrote it: a user id, or null for the agent and system lines.
+    authorId: v.union(v.id("users"), v.null()),
+    author: v.string(), // user · agent · system
+    kind: v.string(), // text · run · file · approval · system
+    text: v.string(),
+    runId: v.union(v.string(), v.null()),
+    fileId: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+  }).index("by_space_time", ["spaceId", "createdAt"]),
+
+  joinCodes: defineTable({
+    code: v.string(),
+    orgId: v.id("organizations"),
+    spaceId: v.union(v.string(), v.null()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    uses: v.number(),
+    maxUses: v.number(),
+    revoked: v.boolean(),
+  })
+    .index("by_code", ["code"])
+    .index("by_org", ["orgId"]),
 });

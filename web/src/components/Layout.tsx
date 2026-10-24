@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { createPortal } from "react-dom";
 import { useDashboard } from "../store";
 import { cx } from "../lib";
+import { navFor, pageAvailable, SECTION_META, type NavGroup, type Page } from "../nav";
 import type { AccountKind } from "../types";
 import { useDialog } from "./useDialog";
 import {
@@ -19,55 +20,10 @@ import {
   ToastStack,
 } from "./ui";
 
-export type Page =
-  | "home"
-  | "runs"
-  | "live"
-  | "history"
-  | "memory"
-  | "skills"
-  | "toolbox"
-  | "settings";
-
-const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }[] = [
-  {
-    label: "workspace",
-    items: [
-      { id: "home", title: "Home", icon: "home" },
-      { id: "runs", title: "Runs", icon: "runs" },
-      { id: "live", title: "Live", icon: "eye" },
-      { id: "history", title: "History", icon: "clock" },
-    ],
-  },
-  {
-    label: "knowledge",
-    items: [
-      { id: "memory", title: "Memory", icon: "memory" },
-      { id: "skills", title: "Skills", icon: "record" },
-    ],
-  },
-  {
-    label: "setup",
-    items: [
-      { id: "toolbox", title: "Toolbox", icon: "grid" },
-      { id: "settings", title: "Settings", icon: "gear" },
-    ],
-  },
-];
+export type { Page };
 
 const SIDEBAR_KEY = "okidoki.sidebar";
 const NARROW_QUERY = "(max-width: 760px)";
-
-const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
-  home: { title: "Home", subtitle: "What needs you, and what's moving" },
-  runs: { title: "Runs", subtitle: "Live work and action previews" },
-  live: { title: "Live", subtitle: "Watch okidoki drive, step by step" },
-  history: { title: "History", subtitle: "Threads and past requests" },
-  memory: { title: "Memory", subtitle: "What okidoki knows about you" },
-  skills: { title: "Skills", subtitle: "Show it once, replay it forever" },
-  toolbox: { title: "Toolbox", subtitle: "Free tools, agents and Apple apps" },
-  settings: { title: "Settings", subtitle: "Input, voice, permissions, look" },
-};
 
 export function AppShell({
   page,
@@ -82,7 +38,8 @@ export function AppShell({
   setAskOpen: (value: boolean) => void;
   children: React.ReactNode;
 }) {
-  const { state, settings, account, invoke, updateSettings, toasts, dismissToast, convexConnected, native } = useDashboard();
+  const { state, settings, account, enterprise, invoke, updateSettings, toasts, dismissToast, convexConnected, native } = useDashboard();
+  const nav = useMemo(() => navFor(account.kind), [account.kind]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteAsk, setPaletteAsk] = useState(false);
   const [palettePrompt, setPalettePrompt] = useState("");
@@ -156,13 +113,18 @@ export function AppShell({
     };
     bridge.okidokiNavigate = (next: string) => {
       const page = next === "keys" ? "settings" : next;
-      if (NAV.some((group) => group.items.some((item) => item.id === page))) setPage(page as Page);
+      if (nav.some((group) => group.items.some((item) => item.id === page))) setPage(page as Page);
     };
     return () => {
       delete bridge.okidokiOpenAsk;
       delete bridge.okidokiNavigate;
     };
-  }, [setPage]);
+  }, [setPage, nav]);
+
+  // Switching to a personal account while on an enterprise page lands on Home, never on a blank page.
+  useEffect(() => {
+    if (!pageAvailable(page, account.kind)) setPage("home");
+  }, [page, account.kind, setPage]);
 
   const waiting = state.runs.filter((run) => run.status === "waiting" || run.status === "previewing").length;
   const live = state.runs.filter((run) => run.status === "running" || run.status === "paused").length;
@@ -178,11 +140,17 @@ export function AppShell({
             ? [`${live} working`, ""]
             : ["Ready when you are", ""];
 
+  const pendingJoins = enterprise.view?.pending.length ?? 0;
+  const unreadChats = enterprise.spaces.reduce((sum, space) => sum + space.unread, 0);
   const runBadge = (id: Page): number => {
     if (id === "home") return waiting;
     if (id === "runs") return live;
+    if (id === "spaces") return unreadChats;
+    if (id === "team") return pendingJoins;
     return 0;
   };
+  const enterprisePage = nav.find((group) => group.enterprise)?.items.some((item) => item.id === page) ?? false;
+  const crumbRoot = enterprisePage ? (enterprise.view?.org.name ?? "Enterprise") : "Workspace";
 
   const openAsk = () => {
     setPalettePrompt("");
@@ -305,8 +273,8 @@ export function AppShell({
         </button>
 
         <nav className="nav" aria-label="Main navigation">
-          {NAV.map((group) => (
-            <div className="nav-group" key={group.label}>
+          {nav.map((group) => (
+            <div className={cx("nav-group", group.enterprise && "nav-group-enterprise")} key={group.label}>
               <span className="nav-label">{group.label}</span>
               {group.items.map((item) => {
                 const badge = runBadge(item.id);
@@ -357,7 +325,7 @@ export function AppShell({
               <PixelIcon name="panel" size={15} />
             </button>
             <span className="workspace-breadcrumb">
-              Workspace <PixelIcon name="chevron" size={12} /> <strong>{SECTION_META[page].title}</strong>
+              {crumbRoot} <PixelIcon name="chevron" size={12} /> <strong>{SECTION_META[page].title}</strong>
             </span>
           </div>
           <div className="workspace-actions">
@@ -395,6 +363,7 @@ export function AppShell({
 
       <CommandPalette
         open={paletteOpen}
+        nav={nav}
         askFirst={paletteAsk}
         initialQuery={palettePrompt}
         onClose={() => setPaletteOpen(false)}
@@ -412,12 +381,14 @@ export function AppShell({
 
 function CommandPalette({
   open,
+  nav,
   askFirst,
   initialQuery,
   onClose,
   onNavigate,
 }: {
   open: boolean;
+  nav: NavGroup[];
   askFirst: boolean;
   initialQuery: string;
   onClose: () => void;
@@ -433,13 +404,13 @@ function CommandPalette({
 
   const sections = useMemo(
     () =>
-      NAV.flatMap((group) => group.items).filter(
+      nav.flatMap((group) => group.items).filter(
         (item) =>
           !query ||
           item.title.toLowerCase().includes(query.toLowerCase()) ||
           SECTION_META[item.id].subtitle.toLowerCase().includes(query.toLowerCase()),
       ),
-    [query],
+    [query, nav],
   );
 
   useLayoutEffect(() => {

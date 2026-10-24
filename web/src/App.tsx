@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { MotionConfig } from "motion/react";
 import { DashboardProvider, useDashboard } from "./store";
-import { AppShell, AuthGate, type Page } from "./components/Layout";
+import { AppShell, AuthGate } from "./components/Layout";
+import { isPage, type Page } from "./nav";
 import { HomePage } from "./pages/HomePage";
+import { TeamPage } from "./pages/TeamPage";
+import { SpacesPage } from "./pages/SpacesPage";
 import { RunsPage } from "./pages/RunsPage";
 import { LivePage } from "./pages/LivePage";
 import { HistoryPage } from "./pages/HistoryPage";
@@ -78,11 +81,9 @@ function Root() {
       {page === "memory" ? <MemoryPage /> : null}
       {page === "skills" ? <SkillsPage /> : null}
       {page === "toolbox" ? <ToolboxPage /> : null}
-      {page === "settings" ? <SettingsPage /> : null}
+      {page === "settings" ? <SettingsPage go={setPage} /> : null}
+      {page === "spaces" ? <SpacesPage go={setPage} /> : null}
+      {page === "team" ? <TeamPage go={setPage} /> : null}
     </AppShell>
   );
-}
-
-function isPage(value: string): value is Page {
-  return ["home", "runs", "live", "history", "memory", "skills", "toolbox", "settings"].includes(value);
 }

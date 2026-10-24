@@ -3,6 +3,7 @@ import type { Account, NativeState, Settings, Toast } from "./types";
 import { useNativeState, invoke as nativeInvoke } from "./bridge";
 import { demoState } from "./demo";
 import { Cloud, CLOUD_OFF, hostedConvexUrl, nativeConvexUrl, type CloudState } from "./cloud";
+import { ENTERPRISE_OFF, type EnterpriseState } from "./enterprise";
 
 interface DashboardContextValue {
   state: NativeState;
@@ -14,6 +15,11 @@ interface DashboardContextValue {
   /** A browser build pointed at a deployment, with no Mac app around it: read-only, behind sign-in. */
   hosted: boolean;
   cloud: CloudState;
+  /** The organization side of a work account. Off until sync is on and signed in. */
+  enterprise: EnterpriseState;
+  /** The space whose chat is open, remembered per account. */
+  spaceId: string | null;
+  selectSpace: (spaceId: string | null) => void;
   toasts: Toast[];
   updateSettings: (patch: Partial<Settings>) => void;
   updateManySettings: (settings: Settings) => void;
@@ -31,6 +37,7 @@ function resolveTheme(appearance: Settings["appearance"]): "light" | "dark" {
 }
 
 const HOSTED_ACCOUNT_KEY = "okidoki.hostedAccount";
+const SPACE_KEY = "okidoki.spaces";
 
 function readStored(key: string): string | null {
   try {
@@ -92,9 +99,20 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const cloudUrl = native ? nativeConvexUrl(nativeState) : hostedUrl;
 
   const [cloud, setCloud] = useState<CloudState>(CLOUD_OFF);
+  const [enterprise, setEnterprise] = useState<EnterpriseState>(ENTERPRISE_OFF);
   useEffect(() => {
-    if (!cloudUrl) setCloud(CLOUD_OFF);
+    if (!cloudUrl) {
+      setCloud(CLOUD_OFF);
+      setEnterprise(ENTERPRISE_OFF);
+    }
   }, [cloudUrl]);
+  const [spaceIds, setSpaceIds] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(readStored(SPACE_KEY) ?? "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
 
   const [hostedAccountId, setHostedAccountId] = useState<string | null>(() => readStored(HOSTED_ACCOUNT_KEY));
   const hostedAccount = hosted ? (cloud.accounts.find((item) => item.id === hostedAccountId) ?? cloud.accounts[0] ?? null) : null;
@@ -202,6 +220,22 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
+  const accountId = native ? (nativeState?.currentAccountID ?? null) : (hostedAccount?.id ?? null);
+  const spaceId = accountId ? (spaceIds[accountId] ?? null) : null;
+  const selectSpace = useCallback(
+    (next: string | null) => {
+      if (!accountId) return;
+      setSpaceIds((current) => {
+        const updated = { ...current };
+        if (next) updated[accountId] = next;
+        else delete updated[accountId];
+        writeStored(SPACE_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    },
+    [accountId],
+  );
+
   const value: DashboardContextValue = {
     state: { ...state, settings },
     settings,
@@ -211,6 +245,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     convexConnected: cloud.status === "signedIn" && Boolean(cloud.snapshot),
     hosted,
     cloud,
+    enterprise,
+    spaceId,
+    selectSpace,
     toasts,
     updateSettings,
     updateManySettings,
@@ -224,9 +261,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       {cloudUrl ? (
         <Cloud
           url={cloudUrl}
-          accountId={native ? (nativeState?.currentAccountID ?? null) : (hostedAccount?.id ?? null)}
+          accountId={accountId}
           claimAccounts={native ? (nativeState?.accounts ?? null) : null}
+          spaceId={spaceId}
           onChange={setCloud}
+          onEnterprise={setEnterprise}
         />
       ) : null}
       {children}

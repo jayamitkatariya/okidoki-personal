@@ -3,6 +3,7 @@ import { ConvexReactClient, useConvexAuth, useMutation, useQuery } from "convex/
 import { ConvexAuthProvider, useAuthActions } from "@convex-dev/auth/react";
 import { anyApi } from "convex/server";
 import type { Account, NativeState } from "./types";
+import { EnterpriseBridge, type EnterpriseState } from "./enterprise";
 
 // Sign-in for sync and the hosted panel, through Convex Auth on the person's own deployment.
 // Without a Convex URL none of this mounts, and okidoki stays fully local.
@@ -65,11 +66,19 @@ function clientFor(url: string): ConvexReactClient {
   return shared.client;
 }
 
-export function Cloud(props: { url: string; accountId: string | null; claimAccounts: Account[] | null; onChange: (state: CloudState) => void }) {
+export function Cloud(props: {
+  url: string;
+  accountId: string | null;
+  claimAccounts: Account[] | null;
+  spaceId: string | null;
+  onChange: (state: CloudState) => void;
+  onEnterprise: (state: EnterpriseState) => void;
+}) {
   const client = clientFor(props.url);
   return (
     <ConvexAuthProvider client={client} storageNamespace={props.url}>
       <CloudBridge accountId={props.accountId} claimAccounts={props.claimAccounts} onChange={props.onChange} />
+      <EnterpriseBridge accountId={props.accountId} spaceId={props.spaceId} onChange={props.onEnterprise} />
     </ConvexAuthProvider>
   );
 }

@@ -10,9 +10,12 @@
 
 import type * as accounts from "../accounts.js";
 import type * as auth from "../auth.js";
+import type * as chat from "../chat.js";
 import type * as dashboard from "../dashboard.js";
 import type * as http from "../http.js";
+import type * as orgs from "../orgs.js";
 import type * as share from "../share.js";
+import type * as spaces from "../spaces.js";
 import type * as sync from "../sync.js";
 
 import type {
@@ -24,9 +27,12 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   auth: typeof auth;
+  chat: typeof chat;
   dashboard: typeof dashboard;
   http: typeof http;
+  orgs: typeof orgs;
   share: typeof share;
+  spaces: typeof spaces;
   sync: typeof sync;
 }>;
 

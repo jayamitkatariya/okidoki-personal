@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
 import type { AccountKind, AgentStatus, CodingAgentID, PrivateMacPhase, PrivateMacState, Toast } from "../types";
+import type { Page } from "../nav";
 import { SyncLogin } from "../components/CloudAuth";
 import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
@@ -38,12 +39,13 @@ const SECTIONS = [
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
   { id: "account", label: "Account", icon: "user" },
+  { id: "organization", label: "Organization", icon: "building" },
   { id: "sync-login", label: "Sync login", icon: "link" },
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
 
-export function SettingsPage() {
-  const { state, settings, account, updateSettings, invoke, notify, convexConnected, native } = useDashboard();
+export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
+  const { state, settings, account, enterprise, updateSettings, invoke, notify, convexConnected, native } = useDashboard();
   const [instructions, setInstructions] = useState(settings.customInstructions);
   const [name, setName] = useState(account.name);
   const [email, setEmail] = useState(account.email);
@@ -114,7 +116,7 @@ export function SettingsPage() {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.filter((section) => native || section.id !== "sync-login").map((section) => (
+          {SECTIONS.filter((section) => (native || section.id !== "sync-login") && (account.kind === "work" || section.id !== "organization")).map((section) => (
             <button key={section.id} className={cx("settings-nav-item", active === section.id && "is-active")} onClick={() => jump(section.id)}>
               <PixelIcon name={section.icon} size={15} />
               {section.label}
@@ -505,6 +507,35 @@ export function SettingsPage() {
               </button>
             </div>
           </SettingsSection>
+
+          {/* Organization: the enterprise side of a work account. Personal accounts never see it. */}
+          {account.kind === "work" ? (
+            <SettingsSection id="organization" title="Organization" description="A work account can link to your company. Spaces, shared skills and the vault then follow it.">
+              <div className="pref-group">
+                {enterprise.status === "ready" && enterprise.view ? (
+                  <PrefRow title={enterprise.view.org.name} detail={`${account.name} is linked as ${enterprise.view.role} · ${enterprise.view.org.memberCount} ${enterprise.view.org.memberCount === 1 ? "person" : "people"}`}>
+                    <Button size="sm" variant="secondary" icon="people" onClick={() => go?.("team")}>
+                      Open Team
+                    </Button>
+                  </PrefRow>
+                ) : enterprise.status === "ready" ? (
+                  <PrefRow title="Not linked" detail="Create an organization, join with a code, or ask to join by email domain.">
+                    <Button size="sm" variant="primary" icon="people" onClick={() => go?.("team")}>
+                      Link account
+                    </Button>
+                  </PrefRow>
+                ) : enterprise.status === "loading" ? (
+                  <PrefRow title="Connecting…" detail="Checking your organization on your deployment.">
+                    {null}
+                  </PrefRow>
+                ) : (
+                  <PrefRow title="Needs your sync login" detail="Organizations live on Convex, so turn on sync and sign in below first.">
+                    {null}
+                  </PrefRow>
+                )}
+              </div>
+            </SettingsSection>
+          ) : null}
 
           {/* Sync login: only inside the Mac app; the hosted panel signs in at its front door. */}
           {native ? (
