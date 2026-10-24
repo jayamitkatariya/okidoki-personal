@@ -1,7 +1,7 @@
-import type { Decision, TeachMark, ThinkRequest } from "./types";
+import type { Decision, TeachMark, ThinkRequest, ToolSpec } from "./types";
 import { toolDocs } from "./catalog";
 import { checkConnectorDecision, connectorPrompt, mcpCatalog, type McpCatalogEntry } from "./connectors";
-import { recall, recallPrompt } from "./memory";
+import { recall, recallPrompt, recallTools } from "./memory";
 
 const responseTool = {
   name: "okidoki_respond",
@@ -184,9 +184,19 @@ export function clipboardFor(request: ThinkRequest): string {
   return text.slice(0, 6000);
 }
 
-function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalled: string): string {
+
+// Toolbox tools Moss found for this request that aren't installed yet. Installed ones already have their docs in the prompt.
+export function toolSuggestions(suggested: ToolSpec[], installed: string[]): string {
+  const missing = suggested.filter((tool) => !installed.includes(tool.id));
+  if (!missing.length) return "";
+  const entries = missing.map((tool) => `${tool.name} (not installed; install with: ${tool.installCommand}):\n${tool.docs}`);
+  return `Free tools from the Toolbox that may fit this request, found by meaning. Use one only if it truly fits; installing it is part of the plan and needs approval:\n${entries.join("\n\n")}`;
+}
+
+function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalled: string, suggested: ToolSpec[] = []): string {
   const memory = request.memory?.length ? request.memory.map((m) => `· ${m}`).join("\n") : "nothing yet.";
   const docs = toolDocs(request.installedTools ?? []);
+  const fitting = toolSuggestions(suggested, request.installedTools ?? []);
   const native = request.nativeContext;
   const connectors = connectorPrompt(request.connectors, catalog);
   const lines = [
@@ -228,7 +238,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     `- sudo is allowed only when a tool genuinely needs administrator access (e.g. "sudo -v" before "mo clean"); the app shows a native password dialog. Never sudo an install that can go in the home folder.`,
     `- Chat UIs and full-screen tools (claude, opencode, omp, hermes, "mo analyze", "ollama run <model>" with no prompt, editors) are fine as the last command: the app opens them in a Terminal window for the person. Use them when the person wants to use the tool, not when they want a result.`,
     `- For a project or destination folder, set pick_file=folder; it becomes the working directory, even without placeholders. Otherwise commands start in the home folder. Never assume a prior coding directory.`,
-    `- The app adds Homebrew and known tools automatically when a command needs them; still list other missing dependencies before using a tool. Prefer Homebrew and known package names. Known installs: Claude Code (curl -fsSL https://claude.ai/install.sh -o /tmp/claude.sh && bash /tmp/claude.sh), OpenCode (brew install opencode), Hermes Agent (curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes.sh && bash /tmp/hermes.sh), omp (curl -fsSL https://omp.sh/install -o /tmp/omp.sh && sh /tmp/omp.sh), Node (brew install node), Python (brew install python), uv, pipx, Mole (brew install mole). Download installer scripts to a file first; never pipe curl into a shell. Explain downloads and installs in the preview.`,
+    `- The app adds Homebrew and known tools automatically when a command needs them; still list other missing dependencies before using a tool. Prefer Homebrew and known package names. Known installs: Claude Code (curl -fsSL https://claude.ai/install.sh -o /tmp/claude.sh && bash /tmp/claude.sh), OpenCode (brew install opencode), Hermes Agent (curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes.sh && bash /tmp/hermes.sh), omp (curl -fsSL https://omp.sh/install -o /tmp/omp.sh && sh /tmp/omp.sh), Node (brew install node), Python (brew install python), uv, pipx, Mole (brew install mole). Toolbox tools install with brew under these names: whisper.cpp gives whisper-cli, sevenzip gives 7zz, poppler gives pdftotext, ghostscript gives gs, czkawka gives czkawka_cli, webp gives cwebp, zbar gives zbarimg, smartmontools gives smartctl, switchaudio-osx gives SwitchAudioSource; yt-dlp, gifski, sox, pngquant, oxipng, exiftool, qpdf, typst, unar, duckdb, mas, restic, gh, tesseract, qrencode, img2pdf, jpegoptim, croc, age and topgrade use their own names. Download installer scripts to a file first; never pipe curl into a shell. Explain downloads and installs in the preview.`,
     `- When the request reports a failed step with its output, diagnose the real cause from the output and reply with a corrected terminal plan that fixes it and finishes the job. Explain the cause in one plain sentence in answer. Don't repeat completed steps unless they must run again.`,
     `- Preserve originals and refuse to overwrite output files. Use ffmpeg -nostdin -n. Paths and placeholders may contain spaces, apostrophes, or shell metacharacters. Placeholders expand to already shell-quoted fragments; do not wrap them in more quotes.`,
     `- preview_steps should have one plain-language step per command, in the same order. Describe the intended result; never claim it succeeded before execution.`,
@@ -251,6 +261,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     native?.frontWindow ? `Front window: ${native.frontWindow}` : "",
     request.documentName ? `Attached document: ${request.documentName}` : "",
     docs ? `\nOpen-source tool docs you can rely on:\n${docs}` : "",
+    fitting ? `\n${fitting}` : "",
     connectors ? `\nConnected services:\n${connectors}` : "",
   ];
   return lines.filter(Boolean).join("\n");
@@ -320,9 +331,10 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
   const messages: { role: "user" | "assistant"; content: unknown }[] = historyMessages(request);
   // Cached after the first listing, so this is usually instant; a slow server is left out rather than stalling.
   // Both are quick (cached servers, in-process index) and run side by side; either can come back empty.
-  const [catalog, recalled] = await Promise.all([
+  const [catalog, recalled, suggested] = await Promise.all([
     request.connectors?.mcpServers?.length ? mcpCatalog(request.connectors.mcpServers, 4_000) : Promise.resolve([]),
     recall(request.text, request.accountId, { threadId: request.threadID }),
+    recallTools(request.text),
   ]);
   const content: unknown[] = [];
   if (request.screenshotBase64) {
@@ -341,7 +353,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
   const body = {
     model,
     max_tokens: 1600,
-    system: systemPrompt(request, catalog, recallPrompt(recalled)),
+    system: systemPrompt(request, catalog, recallPrompt(recalled), suggested),
     messages,
     tools: [responseTool],
     // Sonnet/Opus 5.5 reject forced tool calls. The prompt selects our single tool.

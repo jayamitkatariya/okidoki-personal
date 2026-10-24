@@ -888,6 +888,18 @@ final class AppEnvironment: ObservableObject {
                                   status: .waiting, builtin: builtin,
                                   pickedPath: folder?.path ?? file?.path)
 
+        // Commands you chose "always allow" for start straight away, unless something here is on always ask.
+        if decision.kind == .terminal || decision.kind == .background,
+           SafetyPolicy.preApproved(commands: filled, risk: risk, settings: store.settings) {
+            store.appendMessage(threadID: threadID, role: .assistant,
+                                text: "running “\(run.title)”. you always allow these commands.", runID: run.id)
+            summon.hideInput()
+            approveRun(run.id)
+            store.saveNow()
+            return
+        }
+        let askedFor = SafetyPolicy.mustAsk(filled + preview.apps, settings: store.settings)
+
         store.appendMessage(threadID: threadID, role: .assistant,
                             text: "prepared “\(run.title)”. \(preview.summary). waiting for your okay.", runID: run.id)
 
@@ -924,7 +936,7 @@ final class AppEnvironment: ObservableObject {
         let card = AnswerCardModel(title: decision.title, text: text, actions: actions,
                                    threadTitle: store.thread(threadID)?.title, runID: run.id, threadID: threadID)
         card.terminalCommands = filled
-        card.footnote = "action preview · \(risk.label) risk"
+        card.footnote = "action preview · \(risk.label) risk" + (askedFor.map { " · \($0) is on always ask" } ?? "")
         present(card, source: source)
         store.saveNow()
         speak(decision.speak.isEmpty ? "Here's the plan. Want me to go ahead?" : decision.speak)
@@ -974,8 +986,31 @@ final class AppEnvironment: ObservableObject {
         store.appendMessage(threadID: threadID, role: .assistant,
                             text: "clicking “\(target)”. press esc if you want it back.",
                             runID: run.id)
+        startOrAsk(run, decision: decision, threadID: threadID, source: source)
+    }
+
+    /// Borrow and computer-use runs start on their own, unless the app or target is on always ask.
+    private func startOrAsk(_ run: AgentRun, decision: BrainDecision, threadID: String, source: String) {
         summon.hideInput()
-        approveRun(run.id)
+        let items = (run.preview?.apps ?? []) + [run.pickedPath ?? "", run.prompt]
+        guard let asked = SafetyPolicy.mustAsk(items, settings: store.settings) else {
+            approveRun(run.id)
+            return
+        }
+        let actions = [
+            CardAction(title: "review preview", kind: .secondary, glyph: "grid") { [weak self] in
+                self?.openDashboard(.runs, runID: run.id)
+            },
+            CardAction(title: run.kind == .borrow ? "allow once" : "do it", kind: .primary, glyph: "bolt") { [weak self] in
+                self?.approveRun(run.id)
+            },
+        ]
+        let card = AnswerCardModel(title: decision.title, text: run.preview?.summary ?? decision.title, actions: actions,
+                                   threadTitle: store.thread(threadID)?.title, runID: run.id, threadID: threadID)
+        card.footnote = "action preview · \(asked) is on always ask"
+        present(card, source: source)
+        store.saveNow()
+        speak("\(asked) is on your always ask list. Want me to go ahead?")
     }
 
     // MARK: - Computer use (end-to-end driving)
@@ -1007,8 +1042,7 @@ final class AppEnvironment: ObservableObject {
         // The brain strips its own "esc stops me"; guard here too so history never carries it twice.
         let note = detail.lowercased().contains("esc stops me") ? detail : "\(detail) esc stops me."
         store.appendMessage(threadID: threadID, role: .assistant, text: note, runID: run.id)
-        summon.hideInput()
-        approveRun(run.id)
+        startOrAsk(run, decision: decision, threadID: threadID, source: source)
     }
 
     // MARK: - Overlay (simulations drawn on screen)
@@ -1094,14 +1128,22 @@ final class AppEnvironment: ObservableObject {
 
     func allowAlways(_ id: String) {
         guard let run = store.run(id) else { return }
-        if let command = run.preview?.commands.first {
-            let prefix = command.split(separator: " ").prefix(2).joined(separator: " ")
-            if !prefix.isEmpty, !store.settings.alwaysAllow.contains(prefix) {
-                store.settings.alwaysAllow.append(prefix)
+        // Only shell commands can be matched next time; other runs are approved just this once.
+        // Installs and deletes still ask every time, so they're never remembered.
+        let remembers = run.kind == .terminal || run.kind == .background
+        let stillAsks = remembers && (run.preview?.commands ?? []).contains(where: SafetyPolicy.alwaysNeedsApproval)
+        if remembers {
+            for command in run.preview?.commands ?? [] where !SafetyPolicy.alwaysNeedsApproval(command) {
+                let prefix = SafetyPolicy.allowPrefix(command)
+                if !prefix.isEmpty, !store.settings.alwaysAllow.contains(prefix) {
+                    store.settings.alwaysAllow.append(prefix)
+                }
             }
         }
         approveRun(id)
-        toast(title: "always allowed", detail: "i won't ask for this one again", kind: .info,
+        toast(title: remembers ? "always allowed" : "allowed once",
+              detail: !remembers ? "always allow only covers terminal commands"
+                : stillAsks ? "installs and deletes will still ask" : "i won't ask for these commands again", kind: .info,
               undoLabel: nil, onUndo: nil, editLabel: "settings", onEdit: { [weak self] in
                   self?.openDashboard(.settings)
               }, runID: id)
@@ -1411,6 +1453,13 @@ final class AppEnvironment: ObservableObject {
                   undoLabel: nil, onUndo: nil, editLabel: "details", onEdit: { [weak self] in
                       self?.openDashboard(.runs, runID: run.id)
                   }, runID: run.id)
+            if !cleaned, commands.contains(where: { $0.hasPrefix("mo clean") }) {
+                // Mole's preview is done; the real clean is its own approval, after they've seen what it found.
+                finishTerminalCard(run.id)
+                store.saveNow()
+                await offerMoleClean(after: run, output: allOutput)
+                return
+            }
             speak(summary)
         } else {
             let failedIndex = progress.failed ?? progress.currentStep
@@ -1425,6 +1474,22 @@ final class AppEnvironment: ObservableObject {
         }
         finishTerminalCard(run.id)
         store.saveNow()
+    }
+
+    /// The second half of "free up space": prepare the real clean, which waits for its own okay.
+    private func offerMoleClean(after run: AgentRun, output: String) async {
+        let threadID = run.threadID ?? store.threadForContext(app: "mac", topic: run.title).id
+        let found = OutputInsights.reclaimableBytes(in: output).map { "Mole can free about \(Bytes.human($0))" }
+            ?? "Mole's preview is done"
+        let decision = BrainDecision(kind: .terminal, title: "clean with mole",
+                                     answer: "\(found) from caches, logs and trash. The full list is in the run's output. Clean it?",
+                                     speak: "\(found). Want me to clean it?",
+                                     risk: .medium,
+                                     previewSummary: "clean what Mole found in caches, logs and trash",
+                                     previewSteps: ["ask for your Mac password", "clean caches, logs and trash"],
+                                     commands: ["sudo -v", "mo clean"], apps: [])
+        let request = BrainRequest(text: run.prompt, threadID: threadID, source: "followup")
+        await prepareTask(decision: decision, request: request, threadID: threadID, source: "followup")
     }
 
     private var repairAttempts: [String: Int] = [:]
@@ -2200,6 +2265,7 @@ final class AppEnvironment: ObservableObject {
         let card = AnswerCardModel(title: decision.title, text: decision.answer, actions: actions,
                                    threadTitle: store.thread(threadID)?.title, runID: run.id, threadID: threadID)
         card.footnote = "action preview · \(risk.label) risk"
+            + (SafetyPolicy.mustAsk(lines + [target], settings: store.settings).map { " · \($0) is on always ask" } ?? "")
         present(card, source: source)
         store.saveNow()
         speak(decision.speak.isEmpty ? "Here's the plan. Want me to go ahead?" : decision.speak)

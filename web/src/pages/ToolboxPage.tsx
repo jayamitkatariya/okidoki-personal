@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
 import { joinCommand, splitCommand, parseServerJSON } from "../mcp";
-import { cx, copyText, findTools, money, toolBlocked, toolPrice } from "../lib";
+import { cx, copyText, findTools, money, searchTools, toolBlocked, toolPrice } from "../lib";
 import type { Connector, McpServer, Tool } from "../types";
 import { Button, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField } from "../components/ui";
 
@@ -49,9 +49,7 @@ export function ToolboxPage() {
   const installed = state.tools.filter((tool) => tool.installed);
   const savings = state.savings || installed.reduce((sum, tool) => sum + toolPrice(tool.id), 0);
   const tools = useMemo(() => {
-    if (!query.trim()) return state.tools;
-    const q = query.toLowerCase();
-    return state.tools.filter((tool) => `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")}`.toLowerCase().includes(q));
+    return searchTools(state.tools, query);
   }, [state.tools, query]);
 
   const installTool = (tool: Tool) => {

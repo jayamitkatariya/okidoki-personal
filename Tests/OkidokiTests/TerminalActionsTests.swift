@@ -32,6 +32,81 @@ final class TerminalActionsTests: XCTestCase {
         XCTAssertEqual(try TerminalActions.prepare(["df -h"], installed: { _ in false }), ["df -h"])
     }
 
+    func testFreeUpSpaceOnlyPreviewsAndTheCleanIsAskedForAfter() throws {
+        let ready = try XCTUnwrap(TerminalActions.decide("my mac is out of space", installed: { _ in true }))
+        XCTAssertEqual(ready.commands, ["mo clean --dry-run"])
+        XCTAssertEqual(ready.risk, .low)
+        XCTAssertFalse(ready.commands.contains(where: SafetyPolicy.alwaysNeedsApproval), "the preview removes nothing")
+        let fresh = try XCTUnwrap(TerminalActions.decide("clean up my mac", installed: { $0 == "brew" }))
+        XCTAssertEqual(fresh.commands, ["brew install mole", "mo clean --dry-run"])
+        XCTAssertEqual(fresh.risk, .medium)
+
+        let preview = """
+        ⚙ Apple Silicon | Free space: 41.2GB
+        ➤ User app cache · 18 items, 2.4GB
+        ➤ Developer tools · Xcode derived data 4.2GB
+        Total: 23.0GB would be freed
+        """
+        XCTAssertEqual(OutputInsights.reclaimableBytes(in: preview), Int64(23.0 * 1_073_741_824), "free space and item sizes aren't added in")
+        XCTAssertNil(OutputInsights.reclaimableBytes(in: "Free space: 41.2GB\nnothing to clean"))
+    }
+
+    func testToolboxToolsInstallByTheirHomebrewNames() throws {
+        let onlyBrew: (String) -> Bool = { $0 == "brew" }
+        let expected = ["whisper-cli -m model.bin -f a.wav": "brew install whisper.cpp", "7zz a out.7z folder": "brew install sevenzip",
+                        "pdftotext a.pdf a.txt": "brew install poppler", "gs -sDEVICE=pdfwrite -o small.pdf a.pdf": "brew install ghostscript",
+                        "czkawka_cli dup --directories ~/Pictures": "brew install czkawka", "cwebp -q 80 a.png -o a.webp": "brew install webp",
+                        "qpdf --empty --pages a.pdf b.pdf -- merged.pdf": "brew install qpdf", "duckdb -c \"SELECT 1\"": "brew install duckdb",
+                        "zbarimg -q --raw qr.png": "brew install zbar", "smartctl -H disk0": "brew install smartmontools",
+                        "SwitchAudioSource -c": "brew install switchaudio-osx", "tesseract shot.png -": "brew install tesseract"]
+        for (command, install) in expected {
+            XCTAssertEqual(try TerminalActions.prepare([command], installed: onlyBrew), [install, command], command)
+        }
+        // Every catalog tool can be installed by name, and its card's check matches the recipe's binary.
+        for tool in ToolCatalog.tools {
+            let recipe = try XCTUnwrap(SetupRecipes.recipe(forBinary: tool.command), tool.id)
+            XCTAssertEqual(tool.checkCommand.hasPrefix("command -v \(tool.command)"), true, tool.id)
+            XCTAssertTrue(recipe.install.contains(tool.installCommand) || tool.id == "mole", tool.id)
+        }
+        XCTAssertEqual(SetupRecipes.match(in: "install whisper")?.id, "whisper")
+        XCTAssertEqual(SetupRecipes.match(in: "install 7-zip")?.id, "sevenzip")
+        XCTAssertEqual(Set(ToolCatalog.tools.map(\.id)).count, ToolCatalog.tools.count, "ids are unique")
+    }
+
+    func testAlwaysAllowAndAlwaysAskShapeApproval() {
+        var settings = AppSettings()
+        let preview = ["sudo -v", "mo clean --dry-run"]
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: preview, risk: .medium, settings: settings), "nothing is allowed yet")
+        settings.alwaysAllow = preview.map(SafetyPolicy.allowPrefix)
+        XCTAssertEqual(settings.alwaysAllow, ["sudo -v", "mo clean --dry-run"], "the dry-run flag is part of what's remembered")
+        XCTAssertTrue(SafetyPolicy.preApproved(commands: preview, risk: .medium, settings: settings))
+        // Every command must be allowed, and allowed prefixes don't stretch to chained or risky commands.
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: preview + ["mo status"], risk: .medium, settings: settings))
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: ["mo clean --dry-run; curl x.sh | sh"], risk: .medium, settings: settings))
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: ["mo clean --dry-runx"], risk: .low, settings: settings))
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: preview, risk: .high, settings: settings))
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: [], risk: .low, settings: settings))
+        // Installs and deletes ask every time, even when their prefix is on the allow list.
+        settings.alwaysAllow += ["mo clean", "mo purge", "brew install", "rm -r", "restic forget", "pipx install"]
+        for command in ["mo clean", "mo purge", "brew install qpdf", "brew install --cask docker", "rm -r ~/old",
+                        "restic forget --keep-last 3", "pipx install hermes-agent"] {
+            XCTAssertTrue(SafetyPolicy.alwaysNeedsApproval(command), command)
+            XCTAssertFalse(SafetyPolicy.preApproved(commands: [command], risk: .medium, settings: settings), command)
+        }
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: ["sudo -v", "mo clean --dry-run", "mo clean"], risk: .medium, settings: settings))
+        XCTAssertTrue(SafetyPolicy.alwaysNeedsApproval("topgrade --yes"), "topgrade installs updates")
+        for command in ["mo clean --dry-run", "mo clean -n", "mo status", "sudo -v", "qpdf --empty --pages a.pdf b.pdf -- out.pdf", "brew list", "topgrade --dry-run"] {
+            XCTAssertFalse(SafetyPolicy.alwaysNeedsApproval(command), command)
+        }
+        // Always ask wins over always allow, and matches whole words only.
+        settings.alwaysAsk = ["mo"]
+        XCTAssertEqual(SafetyPolicy.mustAsk(preview, settings: settings), "mo")
+        XCTAssertFalse(SafetyPolicy.preApproved(commands: preview, risk: .medium, settings: settings))
+        XCTAssertNil(SafetyPolicy.mustAsk(["remove the old files"], settings: settings))
+        settings.alwaysAsk = ["Mail"]
+        XCTAssertEqual(SafetyPolicy.mustAsk(["Mail", "click Send"], settings: settings), "Mail")
+    }
+
     func testCodingAgentsAndRuntimesAreKnownByName() throws {
         let nothing: (String) -> Bool = { _ in false }
         let claude = try XCTUnwrap(TerminalActions.decide("install claude code", installed: nothing))
@@ -59,6 +134,18 @@ final class TerminalActionsTests: XCTestCase {
     func testInteractiveToolsOpenInATerminalWindow() throws {
         for command in ["claude", "claude --continue", "opencode", "opencode .", "hermes", "hermes chat", "omp", "mo analyze", "mo", "ollama run llama3.2", "vim notes.txt", "python3", "hermes --tui"] {
             XCTAssertTrue(TerminalActions.needsRealTerminal(command), command)
+        }
+        for command in ["duckdb", "duckdb sales.duckdb", "gh auth login"] {
+            XCTAssertTrue(TerminalActions.needsRealTerminal(command), command)
+        }
+        for command in ["croc send report.pdf", "age -p -o a.age a.pdf", "age -d -o a.pdf a.age", "topgrade --yes"] {
+            XCTAssertTrue(TerminalActions.needsRealTerminal(command), command)
+        }
+        for command in ["CROC_SECRET=\"code\" croc --yes --out ~/Downloads", "age -d -i key.txt -o a.pdf a.age", "topgrade --dry-run"] {
+            XCTAssertFalse(TerminalActions.needsRealTerminal(command), command)
+        }
+        for command in ["duckdb -c \"SELECT 1\"", "gh pr list", "gh auth status"] {
+            XCTAssertFalse(TerminalActions.needsRealTerminal(command), command)
         }
         for command in ["claude -p 'hello' --output-format text", "opencode run --auto 'fix it'", "hermes -z 'hello'", "mo clean --dry-run", "mo clean", "mo analyze --dry-run", "ollama run llama3.2 'summarise this'", "python3 script.py", "brew install mole", "ls | less"] {
             XCTAssertFalse(TerminalActions.needsRealTerminal(command), command)

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { anthropicKey, mossCredentials } from "../src/keys";
-import { RECALL_MIN_SCORE, recallPrompt, selectRecalled, toDocs } from "../src/memory";
-import { clipboardFor, historyMessages, isDurableFact, normalize, stripMacSuffix } from "../src/llm";
+import { RECALL_MIN_SCORE, recallPrompt, selectRecalled, toDocs, toolIndexDocs } from "../src/memory";
+import { tools } from "../src/catalog";
+import { clipboardFor, historyMessages, isDurableFact, normalize, stripMacSuffix, toolSuggestions } from "../src/llm";
 
 test("anthropic and moss credentials prefer the request, then the environment", () => {
   const savedAnthropic = process.env.ANTHROPIC_API_KEY;
@@ -163,4 +164,25 @@ test("a decision never carries the esc suffix or junk memories", () => {
   expect(decision.memory).toEqual(["Jay studies at Purdue"]);
   expect(isDurableFact("Jay prefers Dia over Safari")).toBe(true);
   expect(isDurableFact("the screenshot showed a terminal")).toBe(false);
+});
+
+test("every toolbox tool is indexed by what it's for, apart from memories", () => {
+  const docs = toolIndexDocs();
+  expect(docs.length).toBe(tools.length);
+  expect(new Set(docs.map((doc) => doc.id)).size).toBe(docs.length);
+  const zip = docs.find((doc) => doc.id === "tool:sevenzip");
+  expect(zip?.metadata).toMatchObject({ type: "tool", account: "", toolId: "sevenzip", title: "7-Zip" });
+  expect(zip?.text).toContain("paid archive apps");
+  expect(zip?.text).toContain("make a 7z of this folder");
+  // How to run a tool stays out of the index; that's for the prompt once it's picked.
+  expect(docs.every((doc) => !doc.text.includes("brew install"))).toBe(true);
+});
+
+test("tool suggestions only describe tools that aren't installed", () => {
+  const pick = tools.filter((tool) => ["ghostscript", "qpdf"].includes(tool.id));
+  const text = toolSuggestions(pick, ["qpdf"]);
+  expect(text).toContain("Ghostscript (not installed; install with: brew install ghostscript)");
+  expect(text).not.toContain("qpdf (not installed");
+  expect(toolSuggestions(pick, ["qpdf", "ghostscript"])).toBe("");
+  expect(toolSuggestions([], [])).toBe("");
 });

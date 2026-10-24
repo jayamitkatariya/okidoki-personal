@@ -103,6 +103,87 @@ public enum SetupRecipes {
         SetupRecipe(id: "docker", name: "Docker Desktop", aliases: ["docker"], binary: "docker",
                     install: ["brew install --cask docker"], needs: ["homebrew"],
                     blurb: "Runs apps in containers."),
+        SetupRecipe(id: "gifski", name: "gifski", aliases: ["gifski"], binary: "gifski",
+                    install: ["brew install gifski"], needs: ["homebrew"], update: ["brew upgrade gifski"],
+                    blurb: "Turns video clips into crisp, small GIFs."),
+        SetupRecipe(id: "sox", name: "SoX", aliases: ["sox"], binary: "sox",
+                    install: ["brew install sox"], needs: ["homebrew"], update: ["brew upgrade sox"],
+                    blurb: "Trims, converts, joins and evens out the volume of audio files."),
+        SetupRecipe(id: "whisper", name: "whisper.cpp", aliases: ["whisper", "whisper.cpp", "whisper cpp", "whisper-cli"], binary: "whisper-cli",
+                    install: ["brew install whisper.cpp"], needs: ["homebrew"], update: ["brew upgrade whisper.cpp"],
+                    blurb: "Transcribes recordings on your Mac. Private, offline, no per-minute bill."),
+        SetupRecipe(id: "pngquant", name: "pngquant", aliases: ["pngquant"], binary: "pngquant",
+                    install: ["brew install pngquant"], needs: ["homebrew"], update: ["brew upgrade pngquant"],
+                    blurb: "Shrinks PNGs by 60-80% with barely visible quality loss."),
+        SetupRecipe(id: "oxipng", name: "oxipng", aliases: ["oxipng"], binary: "oxipng",
+                    install: ["brew install oxipng"], needs: ["homebrew"], update: ["brew upgrade oxipng"],
+                    blurb: "Shrinks PNGs without changing a single pixel."),
+        SetupRecipe(id: "exiftool", name: "ExifTool", aliases: ["exiftool", "exif tool"], binary: "exiftool",
+                    install: ["brew install exiftool"], needs: ["homebrew"], update: ["brew upgrade exiftool"],
+                    blurb: "Shows and removes hidden photo data like location, camera and dates."),
+        SetupRecipe(id: "webp", name: "WebP", aliases: ["webp", "cwebp"], binary: "cwebp",
+                    install: ["brew install webp"], needs: ["homebrew"], update: ["brew upgrade webp"],
+                    blurb: "Converts images to WebP, a fraction of the size for websites."),
+        SetupRecipe(id: "qpdf", name: "qpdf", aliases: ["qpdf"], binary: "qpdf",
+                    install: ["brew install qpdf"], needs: ["homebrew"], update: ["brew upgrade qpdf"],
+                    blurb: "Merges, splits, rotates and unlocks PDFs without touching quality."),
+        SetupRecipe(id: "ghostscript", name: "Ghostscript", aliases: ["ghostscript"], binary: "gs",
+                    install: ["brew install ghostscript"], needs: ["homebrew"], update: ["brew upgrade ghostscript"],
+                    blurb: "Shrinks heavy PDFs so they fit in an email."),
+        SetupRecipe(id: "poppler", name: "Poppler", aliases: ["poppler", "pdftotext", "pdfimages"], binary: "pdftotext",
+                    install: ["brew install poppler"], needs: ["homebrew"], update: ["brew upgrade poppler"],
+                    blurb: "Pulls the text, images and details out of any PDF."),
+        SetupRecipe(id: "typst", name: "Typst", aliases: ["typst"], binary: "typst",
+                    install: ["brew install typst"], needs: ["homebrew"], update: ["brew upgrade typst"],
+                    blurb: "Turns simple markup into polished PDFs. Also gives Pandoc a PDF engine."),
+        SetupRecipe(id: "czkawka", name: "Czkawka", aliases: ["czkawka", "czkawka_cli", "duplicate finder"], binary: "czkawka_cli",
+                    install: ["brew install czkawka"], needs: ["homebrew"], update: ["brew upgrade czkawka"],
+                    blurb: "Finds duplicate files, similar photos and the biggest space hogs."),
+        SetupRecipe(id: "sevenzip", name: "7-Zip", aliases: ["7-zip", "7zip", "7zz", "sevenzip"], binary: "7zz",
+                    install: ["brew install sevenzip"], needs: ["homebrew"], update: ["brew upgrade sevenzip"],
+                    blurb: "Makes and opens .7z and .zip archives with strong compression."),
+        SetupRecipe(id: "unar", name: "unar", aliases: ["unar", "the unarchiver"], binary: "unar",
+                    install: ["brew install unar"], needs: ["homebrew"], update: ["brew upgrade unar"],
+                    blurb: "Opens RAR, 7z, ISO and old Mac archives with one command."),
+        SetupRecipe(id: "duckdb", name: "DuckDB", aliases: ["duckdb", "duck db"], binary: "duckdb",
+                    install: ["brew install duckdb"], needs: ["homebrew"], update: ["brew upgrade duckdb"],
+                    blurb: "Answers questions about CSV, Excel and Parquet files with SQL, even huge ones."),
+        SetupRecipe(id: "mas", name: "mas", aliases: ["mas", "app store cli"], binary: "mas",
+                    install: ["brew install mas"], needs: ["homebrew"], update: ["brew upgrade mas"],
+                    blurb: "Updates and installs Mac App Store apps from one command."),
+        SetupRecipe(id: "restic", name: "restic", aliases: ["restic"], binary: "restic",
+                    install: ["brew install restic"], needs: ["homebrew"], update: ["brew upgrade restic"],
+                    blurb: "Encrypted, versioned backups to a drive or cloud storage."),
+        SetupRecipe(id: "tesseract", name: "Tesseract", aliases: ["tesseract", "image ocr"], binary: "tesseract",
+                    install: ["brew install tesseract"], needs: ["homebrew"], update: ["brew upgrade tesseract"],
+                    blurb: "Copies the text out of screenshots, photos and scans."),
+        SetupRecipe(id: "qrencode", name: "qrencode", aliases: ["qrencode", "qr code generator"], binary: "qrencode",
+                    install: ["brew install qrencode"], needs: ["homebrew"], update: ["brew upgrade qrencode"],
+                    blurb: "Makes QR codes for links, text and Wi-Fi as PNG or SVG."),
+        SetupRecipe(id: "zbar", name: "zbar", aliases: ["zbar", "zbarimg", "qr code reader", "barcode reader"], binary: "zbarimg",
+                    install: ["brew install zbar"], needs: ["homebrew"], update: ["brew upgrade zbar"],
+                    blurb: "Reads QR codes and barcodes from images and screenshots."),
+        SetupRecipe(id: "img2pdf", name: "img2pdf", aliases: ["img2pdf", "image to pdf"], binary: "img2pdf",
+                    install: ["brew install img2pdf"], needs: ["homebrew"], update: ["brew upgrade img2pdf"],
+                    blurb: "Turns photos and scans into one PDF without losing quality."),
+        SetupRecipe(id: "jpegoptim", name: "jpegoptim", aliases: ["jpegoptim"], binary: "jpegoptim",
+                    install: ["brew install jpegoptim"], needs: ["homebrew"], update: ["brew upgrade jpegoptim"],
+                    blurb: "Makes photos smaller with little visible change."),
+        SetupRecipe(id: "croc", name: "croc", aliases: ["croc"], binary: "croc",
+                    install: ["brew install croc"], needs: ["homebrew"], update: ["brew upgrade croc"],
+                    blurb: "Sends files to another computer, encrypted, with no size limit."),
+        SetupRecipe(id: "age", name: "age", aliases: ["age", "age encryption"], binary: "age",
+                    install: ["brew install age"], needs: ["homebrew"], update: ["brew upgrade age"],
+                    blurb: "Locks files with a password or key, simply and securely."),
+        SetupRecipe(id: "smartmontools", name: "smartmontools", aliases: ["smartmontools", "smartctl"], binary: "smartctl",
+                    install: ["brew install smartmontools"], needs: ["homebrew"], update: ["brew upgrade smartmontools"],
+                    blurb: "Checks the health of your Mac's drive and external disks."),
+        SetupRecipe(id: "switchaudio", name: "SwitchAudio", aliases: ["switchaudio", "switchaudiosource", "switchaudio-osx"], binary: "SwitchAudioSource",
+                    install: ["brew install switchaudio-osx"], needs: ["homebrew"], update: ["brew upgrade switchaudio-osx"],
+                    blurb: "Switches your sound output or microphone from one command."),
+        SetupRecipe(id: "topgrade", name: "topgrade", aliases: ["topgrade"], binary: "topgrade",
+                    install: ["brew install topgrade"], needs: ["homebrew"], update: ["brew upgrade topgrade"],
+                    blurb: "Updates Homebrew, App Store apps and your other tools in one go."),
     ]
 
     public static func recipe(id: String) -> SetupRecipe? { all.first { $0.id == id } }
@@ -248,9 +329,10 @@ public enum TerminalActions {
         }
         if t.range(of: #"\b(clean|clean up|free up|tidy)\b.*\b(mac|space|storage|disk|caches?)\b|\bout of (space|storage)\b"#, options: .regularExpression) != nil {
             let installs = SetupRecipes.installPlan(for: SetupRecipes.recipe(id: "mole")!, installed: installed)
-            return plan("free up space", "Preview what Mole can clean, then clean caches, logs and trash. Nothing of yours is touched. It asks for your Mac password so system caches count too.",
-                        installs.map(\.command) + ["sudo -v", "mo clean --dry-run", "mo clean"],
-                        steps: installs.map { "install \($0.recipe.name)" } + ["ask for your Mac password", "preview what would be removed", "clean caches, logs and trash"], risk: .medium)
+            // Only the preview runs here. When it finishes, the real clean is offered as its own approval.
+            return plan("free up space", "Preview what Mole can clean from caches, logs and trash. Nothing is removed yet; you approve the clean after you've seen it.",
+                        installs.map(\.command) + ["mo clean --dry-run"],
+                        steps: installs.map { "install \($0.recipe.name)" } + ["preview what would be removed"], risk: installs.isEmpty ? .low : .medium)
         }
         if t.contains("system info") || t.contains("mac version") {
             return plan("about this Mac", "Check your macOS version and processor.", ["sw_vers", "uname -m"])
@@ -377,6 +459,13 @@ public enum TerminalActions {
             if args.isEmpty { return true }
             if args.contains(where: { ["-z", "--oneshot", "-q", "--query", "--version", "-V", "-h", "--help"].contains($0) }) { return false }
             return ["chat", "setup", "model", "tui", "login", "auth", "config", "gateway"].contains(args[0])
+        case "duckdb": return !args.contains { ["-c", "-s", "-version", "--version", "-help", "--help"].contains($0) }
+        case "gh": return args.prefix(2) == ["auth", "login"]
+        // croc send waits for the other side and shows the code; age asks for a password; topgrade asks for the Mac password.
+        case "croc": return args.contains("send")
+        case "age": return args.contains { ["-p", "--passphrase"].contains($0) }
+            || (args.contains { ["-d", "--decrypt"].contains($0) } && !args.contains { ["-i", "--identity"].contains($0) })
+        case "topgrade": return !args.contains { ["--dry-run", "-n", "--help", "-h", "--version", "-V"].contains($0) }
         case "mo", "mole": return args.first.map { ["analyze", "status", "touchid", "uninstall", "optimize", "installer", "slim", "remove"].contains($0) && !args.contains("--dry-run") && !args.contains("-n") } ?? true
         case "ollama": return args.first == "run" && args.count == 2
         case "python", "python3", "node", "bun", "deno", "ruby":

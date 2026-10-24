@@ -15,9 +15,13 @@ public enum CommandRisk {
         // `sudo -v` only caches the password for a tool that needs it (Mole's system caches).
         let withoutCredentialCheck = c.replacingOccurrences(of: #"(^|[;&|\n]\s*)sudo -v(\s|$)"#, with: "$1", options: .regularExpression)
         if withoutCredentialCheck != c { return classify(withoutCredentialCheck) == .high ? .high : .medium }
-        let high = ["rm -", "sudo ", "killall", "pkill", "mv ", "chmod ", "chown ", "launchctl", "defaults delete", "git reset --hard", "git clean -f", "brew uninstall", "osascript", "security "]
+        let high = ["rm -", "sudo ", "killall", "pkill", "mv ", "chmod ", "chown ", "launchctl", "defaults delete", "git reset --hard", "git clean -f", "brew uninstall", "osascript", "security ",
+                    "restic forget", "restic prune", "--delete-method", "-overwrite_original", "mas uninstall", "gh repo delete"]
         if high.contains(where: { c.contains($0) }) { return .high }
-        let medium = ["npm install", "pip3 install", "uv ", "mkdir ", "touch ", "ditto ", "git ", "brew install", "brew upgrade", "curl ", "wget ", "pip install", "npm install -g", "ffmpeg", "pandoc", "ocrmypdf", "magick", "rclone", "ollama", "git clone", "npm run", "bun ", "yarn "]
+        let medium = ["npm install", "pip3 install", "uv ", "mkdir ", "touch ", "ditto ", "git ", "brew install", "brew upgrade", "curl ", "wget ", "pip install", "npm install -g", "ffmpeg", "pandoc", "ocrmypdf", "magick", "rclone", "ollama", "git clone", "npm run", "bun ", "yarn ",
+                      "yt-dlp", "gifski", "sox ", "whisper-cli", "pngquant", "oxipng", "exiftool", "cwebp", "dwebp", "qpdf", "gs -",
+                      "pdfimages", "pdfunite", "typst", "czkawka", "7zz", "unar ", "duckdb", "restic", "mas upgrade", "gh repo", "gh pr", "gh issue",
+                      "tesseract", "qrencode", "img2pdf", "jpegoptim", "croc", "age -", "switchaudiosource -s", "topgrade"]
         if medium.contains(where: { c.contains($0) }) { return .medium }
         return .low
     }
