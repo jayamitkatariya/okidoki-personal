@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { callTool, closeAll, listTools, reconcile } from "../src/mcp";
-import { checkConnectorDecision, mcpCatalog, runConnector } from "../src/connectors";
+import { KNOWN_ACTORS } from "../src/apify";
+import { checkConnectorDecision, connectorPrompt, mcpCatalog, runConnector } from "../src/connectors";
 import type { McpServerConfig } from "../src/types";
 
 const stdio: McpServerConfig = {
@@ -139,6 +140,20 @@ test("HTTP MCP negotiates the protocol version and rejects mismatched response i
     invalid = true;
     await expect(callTool(config, "echo", {})).rejects.toThrow("invalid response id");
   } finally { closeAll(); server.stop(true); }
+});
+
+test("every known Apify actor reaches the prompt with a valid example input and a cost", () => {
+  const prompt = connectorPrompt({ apify: true }, []);
+  const ids = KNOWN_ACTORS.map(actor => actor.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(ids).toContain("harvestapi/linkedin-profile-scraper");
+  for (const actor of KNOWN_ACTORS) {
+    expect(actor.id).toMatch(/^[\w.-]+\/[\w.-]+$/);
+    expect(actor.cost.length).toBeGreaterThan(0);
+    expect(() => JSON.parse(actor.input)).not.toThrow();
+    expect(prompt).toContain(`· ${actor.id} — ${actor.use}. cost: ${actor.cost}. input: ${actor.input}`);
+  }
+  expect(connectorPrompt({ apify: false }, [])).not.toContain("Apify");
 });
 
 test("Apify execution passes credentials, input and the spending cap through to returned results", async () => {

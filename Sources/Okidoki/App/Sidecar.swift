@@ -273,6 +273,11 @@ struct BrainNativeContext: Encodable {
     var events: [BrainNativeEvent]
     var reminders: [String]
     var frontWindow: String
+    /// The browser tab in front, when the current app is a browser.
+    var pageTitle: String?
+    var pageURL: String?
+    /// True when the screenshot is the whole display taken at summon time, not something they circled.
+    var screenshotIsDisplay: Bool
 }
 
 struct BrainMessage: Encodable {
@@ -398,6 +403,10 @@ final class BrainClient {
                events: [BrainNativeEvent], settings: AppSettings, account: Account,
                installedTools: [String], frontWindow: String,
                connectors: BrainConnectorsPayload) async -> BrainThinkEnvelope? {
+        // What they circled wins; otherwise the display shot from summon time gives the brain context.
+        let circled = request.screenshotPNG
+        let screenshot = circled ?? request.screen?.screenshotPNG
+        let page = request.screen
         let payload = BrainThinkPayload(
             text: text,
             appName: request.appName,
@@ -412,14 +421,17 @@ final class BrainClient {
                                            voiceEnabled: settings.voiceEnabled),
             memory: memory,
             history: history,
-            screenshotBase64: request.screenshotPNG?.base64EncodedString(),
-            screenshotMediaType: request.screenshotPNG == nil ? nil : "image/png",
+            screenshotBase64: screenshot?.base64EncodedString(),
+            screenshotMediaType: screenshot == nil ? nil : "image/png",
             documentText: request.documentText,
             documentName: request.attachmentName,
             clipboardText: request.clipboardText,
             installedTools: installedTools,
             nativeContext: BrainNativeContext(now: ISO8601DateFormatter().string(from: Date()),
-                                              events: events, reminders: [], frontWindow: frontWindow),
+                                              events: events, reminders: [], frontWindow: frontWindow,
+                                              pageTitle: page?.pageTitle.isEmpty == false ? page?.pageTitle : nil,
+                                              pageURL: page?.pageURL.isEmpty == false ? page?.pageURL : nil,
+                                              screenshotIsDisplay: circled == nil && screenshot != nil),
             connectors: connectors,
             accountId: account.id
         )
@@ -534,6 +546,7 @@ final class BrainClient {
                   controls: [[String: Any]] = [],
                   scripting: String = "",
                   screenshotPNG: Data?, previousPNG: Data? = nil,
+                  referencePNG: Data? = nil,
                   zoom: ComputerUseService.Zoom? = nil,
                   canClick: Bool = true, canSee: Bool = true,
                   remote: Bool = false,
@@ -559,6 +572,9 @@ final class BrainClient {
         }
         if let previousPNG {
             body["previousScreenshotBase64"] = previousPNG.base64EncodedString()
+        }
+        if let referencePNG {
+            body["referenceBase64"] = referencePNG.base64EncodedString()
         }
         if let zoom {
             body["zoomBase64"] = zoom.png.base64EncodedString()

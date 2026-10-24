@@ -1444,11 +1444,31 @@ public final class ComputerUseService {
         return (png, Double(scaled.width), Double(scaled.height))
     }
 
+    /// A full-resolution capture of one display with no downscaling or encoding, for local image
+    /// work (a replay finding a control by its picture). Nil without Screen Recording.
+    public func captureRaw(screen: NSScreen) async -> (image: CGImage, box: ScreenBox)? {
+        guard CGPreflightScreenCaptureAccess() else { return nil }
+        if let raw = await captureDisplayImage(screen) { return (raw.image, raw.box) }
+        let rect = Self.cgGlobalRect(for: screen)
+        return await Task.detached(priority: .userInitiated) {
+            Self.captureCLI(rect: rect).map { ($0.full, $0.box) }
+        }.value
+    }
+
     private func captureDisplay(_ screen: NSScreen) async -> Screenshot? {
         guard CGPreflightScreenCaptureAccess() else {
             _ = CGRequestScreenCaptureAccess()
             return nil
         }
+        guard let raw = await captureDisplayImage(screen) else { return nil }
+        let encoded = await Task.detached(priority: .userInitiated) {
+            Self.encodeForModel(raw.image, pointWidth: raw.pointWidth, pointHeight: raw.pointHeight)
+        }.value
+        guard let encoded else { return nil }
+        return Screenshot(png: encoded.png, box: raw.box, imageWidth: encoded.width, imageHeight: encoded.height, full: raw.image)
+    }
+
+    private func captureDisplayImage(_ screen: NSScreen) async -> (image: CGImage, box: ScreenBox, pointWidth: CGFloat, pointHeight: CGFloat)? {
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
             ?? CGMainDisplayID()
         do {
@@ -1475,11 +1495,7 @@ public final class ComputerUseService {
             let bounds = display.frame
             let box = ScreenBox(x: bounds.origin.x, y: bounds.origin.y,
                                 width: bounds.size.width, height: bounds.size.height)
-            let encoded = await Task.detached(priority: .userInitiated) {
-                Self.encodeForModel(image, pointWidth: pointW, pointHeight: pointH)
-            }.value
-            guard let encoded else { return nil }
-            return Screenshot(png: encoded.png, box: box, imageWidth: encoded.width, imageHeight: encoded.height, full: image)
+            return (image, box, pointW, pointH)
         } catch {
             return nil
         }

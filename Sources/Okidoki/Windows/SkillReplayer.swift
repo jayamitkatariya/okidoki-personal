@@ -3,8 +3,9 @@ import ApplicationServices
 import SwiftUI
 import OkidokiCore
 
-/// Plays a recorded skill back, step by step, under the ghost cursor. Buttons are re-found by
-/// their accessibility label so a moved window still works; otherwise the recorded point is used.
+/// Plays a recorded skill back, step by step, under the ghost cursor. Controls are re-found by
+/// their accessibility label, then by the picture saved when they were recorded, so a moved
+/// window or a reordered list still works; only when neither finds them does the brain look.
 @MainActor
 final class SkillReplayer {
     let model = BorrowModel()
@@ -32,6 +33,8 @@ final class SkillReplayer {
         }
         isActive = true
         self.runID = runID
+        rescuesInARow = 0
+        preparedPids = []
         model.label = "replaying “\(skill.name)”"
         model.clicking = false
         showPanel()
@@ -50,7 +53,7 @@ final class SkillReplayer {
                     let wait = SkillReplayGeometry.pause(for: step)
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     if Task.isCancelled { break outer }
-                    if let problem = await self.perform(step) {
+                    if let problem = await self.perform(step, index: index, of: steps) {
                         failed = problem
                         self.markStep(index, status: .failed, pass: pass, of: passes, total: steps.count, text: step.text)
                         break outer
@@ -89,19 +92,21 @@ final class SkillReplayer {
     }
 
     /// Returns a reason when the step couldn't be done.
-    private func perform(_ step: SkillStep) async -> String? {
+    private func perform(_ step: SkillStep, index: Int, of steps: [SkillStep]) async -> String? {
         let action = step.action ?? "click"
         let hasApp = SkillReplayGeometry.isRealApp(step.app)
+        let around = Neighbours(previous: index > 0 ? steps[index - 1] : nil,
+                                next: index + 1 < steps.count ? steps[index + 1] : nil)
         if action == "switch" {
             guard hasApp else { return nil }
             if await activate(step.app) { return nil }
-            switch await rescue(step, because: "\(step.app) didn't open") {
+            switch await rescue(step, around: around, because: "\(step.app) didn't open") {
             case .done: return nil
             case .failed(let problem): return problem
             case .unavailable: return "couldn't open \(step.app)"
             }
         }
-        if hasApp, NSWorkspace.shared.frontmostApplication?.localizedName != step.app {
+        if hasApp, !SkillReplayGeometry.sameApp(NSWorkspace.shared.frontmostApplication?.localizedName ?? "", step.app) {
             _ = await activate(step.app)
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
@@ -120,13 +125,21 @@ final class SkillReplayer {
             }
             return ok ? nil : "couldn't press \(WatchRecorder.prettyCombo(combo))"
         case "scroll":
-            guard let point = await resolvePoint(step) else { return nil }
+            // Scrolling somewhere near the right place is fine; it isn't worth waiting for.
+            guard let point = await locate(step, patient: false).point else { return nil }
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 350_000_000)
             let dy = step.toY ?? 0
             return await offMain { AccessibilityActions.scroll(at: point, dy: dy) } ? nil : "couldn't scroll"
         case "drag":
-            let target = await resolveTarget(step)
+            let target = await locate(step, patient: true)
+            if !target.verified, hasEvidence(step) {
+                switch await rescue(step, around: around, because: "\(describe(step)) isn't where it was") {
+                case .done: return nil
+                case .failed(let problem): return problem
+                case .unavailable: return "\(describe(step)) isn't on screen"
+                }
+            }
             guard let from = target.point, let tx = step.toX, let ty = step.toY else { return "drag has no end point" }
             // The end point moves with the window just like the start did.
             let to = CGPoint(x: tx + target.shift.width, y: ty + target.shift.height)
@@ -139,19 +152,19 @@ final class SkillReplayer {
             model.clicking = false
             return ok ? nil : "couldn't drag"
         default:
-            let target = await resolveTarget(step)
-            // The control was recorded by name and it's nowhere on screen: the app is in a different
-            // state than when it was recorded. Let the brain look and do this one step, instead of
-            // clicking blind at the old spot and knocking the rest of the replay off course.
-            if !target.verified, SkillReplayGeometry.isCheckable(step), canRescue {
-                let what = targetLabel(step).isEmpty ? "the \(step.role ?? "control")" : "“\(targetLabel(step))”"
-                switch await rescue(step, because: "\(what) isn't where it was") {
+            let target = await locate(step, patient: true)
+            if !target.verified, hasEvidence(step) {
+                // We know what this control is called or looks like, and it's nowhere on screen:
+                // the app is in a different state than when it was recorded. Clicking the old spot
+                // blind would knock the rest of the replay off course, so the brain looks instead.
+                switch await rescue(step, around: around, because: "\(describe(step)) isn't where it was") {
                 case .done: return nil
                 case .failed(let problem): return problem
-                case .unavailable: break
+                case .unavailable: return "\(describe(step)) isn't on screen"
                 }
             }
             guard let point = target.point else { return "can't find where to click" }
+            rescuesInARow = 0
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 650_000_000)
             model.clicking = true
@@ -174,18 +187,92 @@ final class SkillReplayer {
 
     // MARK: - Finding the target
 
-    /// Quartz-space point for the step: the recorded spot if the same control is still there, else
-    /// the spot carried along with its moved window, else a label search, else the recorded spot as-is.
-    private func resolvePoint(_ step: SkillStep) async -> CGPoint? {
-        await resolveTarget(step).point
+    /// Something to check a candidate against before acting: a label, a role, or a picture.
+    private func hasEvidence(_ step: SkillStep) -> Bool {
+        SkillReplayGeometry.isCheckable(step) || hasPicture(step)
     }
 
-    private func resolveTarget(_ step: SkillStep) async -> SkillTargetResolver.Resolution {
+    private func hasPicture(_ step: SkillStep) -> Bool {
+        step.frameRect != nil && SkillFrames.has(step.id)
+    }
+
+    private func describe(_ step: SkillStep) -> String {
+        let label = targetLabel(step)
+        return label.isEmpty ? "the \(step.role?.replacingOccurrences(of: "AX", with: "").lowercased() ?? "control")" : "“\(label)”"
+    }
+
+    /// Where the step's control is now. Cheapest first: accessibility at the recorded spot, carried
+    /// with its window, by label; then by its recorded picture; and when `patient`, the same again
+    /// every little while for a couple of seconds, since the app may simply not have caught up yet.
+    private func locate(_ step: SkillStep, patient: Bool) async -> SkillTargetResolver.Resolution {
         let recorded = recordedPoint(step)
         let pid = SkillTargetResolver.ownerPid(for: step)
-        return await Task.detached(priority: .userInitiated) {
-            SkillTargetResolver.resolve(step, pid: pid, recorded: recorded)
+        prepareTree(pid)
+        let picture = hasPicture(step)
+        var result = await resolveTarget(step, pid: pid, recorded: recorded, quick: false)
+        if result.verified {
+            // A match on a generic role alone is a guess: after a list reorders, the old spot
+            // still holds *a* cell, just not this one. With a picture, the picture decides.
+            guard picture, SkillReplayGeometry.isWeakEvidence(step) else { return result }
+            if let seen = await resolveByPicture(step, pid: pid, recorded: recorded, near: result.point) { return seen }
+            result.verified = false
+        }
+        guard hasEvidence(step) else { return result }
+        let deadline = Date().addingTimeInterval(patient ? SkillReplayGeometry.patience : 0)
+        let before = model.label
+        defer { model.label = before }
+        var looks = 0
+        while !Task.isCancelled {
+            if picture, let seen = await resolveByPicture(step, pid: pid, recorded: recorded, near: result.point ?? recorded) {
+                return seen
+            }
+            guard Date() < deadline else { return result }
+            if looks == 0 { model.label = "waiting for \(describe(step))" }
+            looks += 1
+            try? await Task.sleep(nanoseconds: UInt64(SkillReplayGeometry.lookInterval * 1_000_000_000))
+            // The tree walk is the slow part; every third look is enough for it.
+            result = await resolveTarget(step, pid: pid, recorded: recorded, quick: looks % 3 != 0)
+            if result.verified { return result }
+        }
+        return result
+    }
+
+    private var preparedPids: Set<pid_t> = []
+
+    /// Electron and Chromium apps keep their accessibility tree empty until asked once.
+    private func prepareTree(_ pid: pid_t) {
+        guard pid != 0, !preparedPids.contains(pid) else { return }
+        preparedPids.insert(pid)
+        AXSearch.enableTree(pid: pid)
+    }
+
+    private func resolveTarget(_ step: SkillStep, pid: pid_t, recorded: CGPoint?, quick: Bool) async -> SkillTargetResolver.Resolution {
+        await Task.detached(priority: .userInitiated) {
+            SkillTargetResolver.resolve(step, pid: pid, recorded: recorded, quick: quick)
         }.value
+    }
+
+    /// One capture of the display the control should be on, matched against the step's picture;
+    /// then the other displays, in case the window went there.
+    private func resolveByPicture(_ step: SkillStep, pid: pid_t, recorded: CGPoint?, near: CGPoint?) async -> SkillTargetResolver.Resolution? {
+        let anchor = near ?? recorded
+        let first = anchor.flatMap { screenContaining(quartz: $0) } ?? NSScreen.okidokiPrimary
+        let screens = [first] + NSScreen.screens.filter { $0 != first }
+        for screen in screens {
+            if Task.isCancelled { return nil }
+            guard let raw = await ComputerUseService.shared.captureRaw(screen: screen) else { continue }
+            let found = await Task.detached(priority: .userInitiated) {
+                SkillTargetResolver.resolveByPicture(step, pid: pid, shot: raw.image, box: raw.box, recorded: recorded, near: near)
+            }.value
+            if let found { return found }
+        }
+        return nil
+    }
+
+    private func screenContaining(quartz: CGPoint) -> NSScreen? {
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        let appKit = CGPoint(x: quartz.x, y: mainHeight - quartz.y)
+        return NSScreen.screens.first { $0.frame.contains(appKit) }
     }
 
     // MARK: - Rescue (the brain does one step when the screen doesn't match the recording)
@@ -198,10 +285,24 @@ final class SkillReplayer {
 
     private enum Rescue { case done, failed(String), unavailable }
 
+    private struct Neighbours {
+        var previous: SkillStep?
+        var next: SkillStep?
+    }
+
+    /// Steps the brain has had to do back to back. A replay that needs help on every step has
+    /// lost the thread, and it's better to say so than to keep guessing.
+    private var rescuesInARow = 0
+    private let rescueLimit = 3
+
     /// Asks the brain to look at the screen and do just this step. `.done` means the replay can
-    /// carry on at full speed; `.unavailable` means fall back to the recorded point as before.
-    private func rescue(_ step: SkillStep, because reason: String) async -> Rescue {
+    /// carry on at full speed; `.unavailable` means there is no brain to ask.
+    private func rescue(_ step: SkillStep, around: Neighbours, because reason: String) async -> Rescue {
         guard canRescue, let env else { return .unavailable }
+        guard rescuesInARow < rescueLimit else {
+            return .failed("lost track — needed help on \(rescueLimit) steps in a row and \(describe(step)) still isn't on screen")
+        }
+        rescuesInARow += 1
         let before = model.label
         model.label = "looking closer — \(reason)"
         defer { model.label = before }
@@ -212,7 +313,13 @@ final class SkillReplayer {
         if let x = step.x, let y = step.y { goal += " at screen point (\(Int(x)), \(Int(y)))" }
         let label = targetLabel(step)
         if !label.isEmpty { goal += " on a control labelled “\(label)”" }
-        goal += ", but \(reason). The app may be in a different state than when it was recorded (a dialog, a menu, a moved window, a different page)."
+        if let role = step.role, !role.isEmpty { goal += " (accessibility role \(role))" }
+        if let title = step.winTitle, !title.isEmpty { goal += " in a window titled “\(title)”" }
+        goal += ", but \(reason). The app may be in a different state than when it was recorded (a dialog, a menu, a moved window, a different page, a list that reordered)."
+        if let previous = around.previous { goal += " The step before this one was: \(previous.text). It may not have taken effect — if so, get the app to the state it should have produced first." }
+        if let next = around.next { goal += " The step after this one will be: \(next.text) — leave the app ready for it, but do not do it." }
+        let reference = SkillFrames.png(step.id)
+        if reference != nil { goal += " A picture of what the target looked like when it was recorded is attached; find the same thing on the screen now." }
         goal += " Deal with whatever is in the way only as far as needed to do this step. Do not do any later steps. If it truly can't be done, fail with the reason."
         var history: [[String: Any]] = []
         var previous: Data?
@@ -227,7 +334,8 @@ final class SkillReplayer {
                                                               imageWidth: shot?.imageWidth ?? 0, imageHeight: shot?.imageHeight ?? 0,
                                                               history: history, controls: context.controls,
                                                               scripting: context.scripting, screenshotPNG: shot?.png,
-                                                              previousPNG: previous, canClick: target.canAct, canSee: shot != nil,
+                                                              previousPNG: previous, referencePNG: reference,
+                                                              canClick: target.canAct, canSee: shot != nil,
                                                               model: env.store.settings.claudeModel) else {
                 // No answer on the first look: nothing was touched, so the plain replay can go on.
                 return turn == 0 ? .unavailable : .failed("the brain stopped answering mid-step")
@@ -247,7 +355,7 @@ final class SkillReplayer {
                 return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
             history.append(act.dictionary.merging(["result": result]) { current, _ in current })
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            try? await Task.sleep(nanoseconds: 150_000_000)
         }
         return .failed("“\(step.text)” took too many tries")
     }

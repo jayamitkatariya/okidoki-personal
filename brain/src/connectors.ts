@@ -37,9 +37,9 @@ export function connectorPrompt(context: ConnectorsContext | undefined, catalog:
   const lines: string[] = [];
   if (context?.apify) {
     lines.push(
-      `Apify is connected. For live web data — search results, a site's contents, prices, listings, reviews — use kind=connector with connector_call {connector: "apify", actor, input}. It costs Apify credits, so the preview must say so and set risk=medium. Known actors:`,
-      ...KNOWN_ACTORS.map((actor) => `· ${actor.id} — ${actor.use}. input: ${actor.input}`),
-      `Keep inputs small (10-20 results) unless they asked for more.`,
+      `Apify is connected. For live web data — search results, a site's contents, LinkedIn, social posts, prices, listings, reviews — use kind=connector with connector_call {connector: "apify", actor, input}. It costs Apify credits, so the preview must say so (name the actor and its rough cost) and set risk=medium. Known actors:`,
+      ...KNOWN_ACTORS.map((actor) => `· ${actor.id} — ${actor.use}. cost: ${actor.cost}. input: ${actor.input}`),
+      `Pick the most specific actor for the ask (LinkedIn jobs → linkedin-job-search, not google-search-scraper). Use the input shape shown; don't invent fields. Keep inputs small (10-20 results) unless they asked for more.`,
     );
   }
   const usable = catalog.filter((entry) => entry.tools.length);

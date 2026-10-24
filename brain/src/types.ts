@@ -68,6 +68,9 @@ export interface TeachStepRequest {
   milestones?: string[];
   language?: string;
   model?: string;
+  /** The browser tab in front, when the app is a browser, so the tutor teaches the site, not the browser. */
+  pageTitle?: string;
+  pageURL?: string;
 }
 
 export type TeachAction = "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "look" | "open_app" | "done";
@@ -176,6 +179,8 @@ export interface Decision {
   teachPlan?: TeachPlanStep[];
   /** For teach: "app" walks through the app on screen, "concept" explains with a 2D/3D stage. */
   lessonKind?: "app" | "concept";
+  /** What the model saw in front of them: watching, reading, working, or other. */
+  scene?: "watching" | "reading" | "working" | "other";
   overlayHTML?: string;
   overlayTitle?: string;
   overlayWidth?: number;
@@ -240,6 +245,11 @@ export interface NativeContext {
   events?: { title: string; start: string }[];
   reminders?: string[];
   frontWindow?: string;
+  /** The browser tab in front, when the current app is a browser. */
+  pageTitle?: string;
+  pageURL?: string;
+  /** True when the screenshot is the whole display at summon time, not something they circled. */
+  screenshotIsDisplay?: boolean;
 }
 
 export interface ThinkRequest {
@@ -342,6 +352,8 @@ export interface ComputerRequest {
   scripting?: string;
   /** The screen as it was before the last action. */
   previousScreenshotBase64?: string;
+  /** What the target looked like when a skill was recorded: a crop around the click point. */
+  referenceBase64?: string;
   /** A magnified crop requested by the last zoom action. */
   zoomBase64?: string;
   zoom?: { x: number; y: number; width: number; height: number; imageWidth: number; imageHeight: number };

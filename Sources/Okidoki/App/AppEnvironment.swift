@@ -60,6 +60,9 @@ final class AppEnvironment: ObservableObject {
 
     private var summonAppName = "mac"
     private var summonBundleID = ""
+    /// Window, browser tab and a small screenshot, gathered while the capsule opens so the brain
+    /// can see what the request is about. Finished (or given up on) by the time they submit.
+    private var summonContext: Task<ScreenContext?, Never>?
     private var watchRunID: String?
     /// How many passes a queued skill replay should make, by run id.
     private var pendingReplays: [String: Int] = [:]
@@ -344,9 +347,20 @@ final class AppEnvironment: ObservableObject {
 
     func startSummon() {
         let front = NSWorkspace.shared.frontmostApplication
+        summonContext?.cancel()
+        summonContext = nil
         if front?.bundleIdentifier != Bundle.main.bundleIdentifier {
             summonAppName = front?.localizedName ?? "mac"
             summonBundleID = front?.bundleIdentifier ?? ""
+            // Start looking at the screen now, before the capsule covers anything and while they type.
+            if store.settings.screenContext, hasKey("anthropic") {
+                let screen = OverlayPlacement.mouseScreen ?? NSScreen.okidokiPrimary
+                let model = store.settings.claudeModel
+                summonContext = Task { [weak self] in
+                    guard self != nil else { return nil }
+                    return await ScreenContextService.capture(app: front, screen: screen, model: model)
+                }
+            }
         } else {
             summonAppName = "mac"
             summonBundleID = ""
@@ -356,7 +370,33 @@ final class AppEnvironment: ObservableObject {
         notch.noteListening(store.settings.defaultInput == .voice)
     }
 
+    /// Claims the summon-time capture so a later dismiss can't cancel it out from under the request.
+    private func claimSummonContext() -> Task<ScreenContext?, Never>? {
+        defer { summonContext = nil }
+        return summonContext
+    }
+
+    /// The claimed screen context, waiting at most `timeout` seconds for it to finish.
+    /// A slow capture must never hold up the request; it just goes without the picture.
+    /// (Awaiting a Task's value ignores cancellation, so this is a first-wins race, not a group.)
+    private func awaitSummonContext(_ task: Task<ScreenContext?, Never>?, timeout: Double = 2.5) async -> ScreenContext? {
+        guard let task else { return nil }
+        let once = FirstWins()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<ScreenContext?, Never>) in
+            Task { @MainActor in
+                let value = await task.value
+                if once.claim() { continuation.resume(returning: value) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if once.claim() { task.cancel(); continuation.resume(returning: nil) }
+            }
+        }
+    }
+
     func dismissSummon() {
+        summonContext?.cancel()
+        summonContext = nil
         draw.dismissAll()
         summon.dismiss()
         answerController.close()
@@ -420,10 +460,13 @@ final class AppEnvironment: ObservableObject {
             notch.collapse()
             return
         }
+        let pendingContext = claimSummonContext()
         Task {
+            let screenContext = await awaitSummonContext(pendingContext)
             await handleRequest(text: text, appName: appName, bundleID: bundleID, threadID: nil,
                                 screenshot: screenshot, selection: selection,
-                                attachmentName: attachmentName, documentText: "", source: "summon")
+                                attachmentName: attachmentName, documentText: "", source: "summon",
+                                screenContext: screenContext)
             summon.hideInput()
         }
     }
@@ -486,7 +529,8 @@ final class AppEnvironment: ObservableObject {
 
     private func handleRequest(text: String, appName: String, bundleID: String, threadID: String?,
                                screenshot: Data?, selection: CGRect?, attachmentName: String,
-                               documentText: String, source: String) async {
+                               documentText: String, source: String,
+                               screenContext: ScreenContext? = nil) async {
         // Skills and recordings are driven straight from the chat: "replay invoice flow", "stop",
         // "save as …", "my skills". No brain round trip, no key needed, no variance.
         if screenshot == nil, documentText.isEmpty, source != "repair",
@@ -547,7 +591,7 @@ final class AppEnvironment: ObservableObject {
                                    threadID: thread.id, screenshotPNG: screenshot,
                                    selection: selection, source: source,
                                    attachmentName: docName, documentText: document,
-                                   clipboardText: clipboard)
+                                   clipboardText: clipboard, screen: screenContext)
         var events: [BrainNativeEvent] = []
         if store.settings.appleCalendar,
            lower.contains("calendar") || lower.contains("meeting") || lower.contains("schedule") || lower.contains("what's next") {
@@ -567,7 +611,7 @@ final class AppEnvironment: ObservableObject {
                                                     memory: memory, events: events,
                                                     settings: store.settings, account: store.activeAccount,
                                                     installedTools: installed,
-                                                    frontWindow: appName,
+                                                    frontWindow: screenContext?.windowTitle ?? "",
                                                     connectors: connectorsPayload())
         }
         if let decision = result?.decision {
@@ -579,7 +623,13 @@ final class AppEnvironment: ObservableObject {
     }
 
     private func handleDecision(_ decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
-        let decision = withoutShowOrDoChoice(decision, request: request)
+        var decision = withoutShowOrDoChoice(decision, request: request)
+        if decision.kind == .teach {
+            // Same rule as the brain, applied once more here so the sidecar and the native
+            // fallback can't disagree: a how-to in the tool in front of them is an app lesson,
+            // an "explain" over a lecture is a concept model.
+            decision.lessonKind = LessonRouting.resolve(lessonKind: decision.lessonKind, scene: decision.scene, text: request.text)
+        }
         for fact in decision.memory where BrainService.isDurableFact(fact) {
             store.addMemory(fact, section: fact.lowercased().hasPrefix("right now") ? .rightNow : .aboutYou,
                             source: source == "summon" ? "said" : source)
@@ -1440,7 +1490,7 @@ final class AppEnvironment: ObservableObject {
             return
         }
 
-        let commands = run.preview?.commands ?? []
+        var commands = run.preview?.commands ?? []
         guard !commands.isEmpty else {
             store.finishRun(run.id, status: .failed, summary: "No commands were prepared. Ask again with the job you want to do.")
             finishTerminalCard(run.id)
@@ -1448,27 +1498,21 @@ final class AppEnvironment: ObservableObject {
         }
         guard store.run(run.id)?.status != .cancelled else { return }
 
+        var interactiveCommand: String?
         if run.builtin == TerminalActions.launchBuiltin {
             do {
-                let script = try await TerminalLauncher.open(title: run.title, commands: commands,
-                                                             workingDirectory: run.workingDirectory ?? NSHomeDirectory())
-                let summary = "Opened in a Terminal window. Everything it does is on screen there; close the window when you're finished."
-                store.updateRun(run.id) { current in
-                    current.output = "[opened \(script.lastPathComponent) in Terminal]\n" + commands.map { "$ " + $0 }.joined(separator: "\n")
-                    for index in current.steps.indices { current.steps[index].status = .done; current.steps[index].endedAt = Date() }
-                }
-                store.finishRun(run.id, status: .done, summary: summary)
-                toast(title: "opened in Terminal", detail: run.title, kind: .success,
-                      undoLabel: nil, onUndo: nil, editLabel: "details", onEdit: { [weak self] in
-                          self?.openDashboard(.runs, runID: run.id)
-                      }, runID: run.id)
-                speak("It's open in Terminal.")
+                let split = try TerminalActions.splitLaunch(commands)
+                commands = split.setup
+                interactiveCommand = split.launch
             } catch {
                 fail(run.id, error)
+                finishTerminalCard(run.id)
+                return
             }
-            finishTerminalCard(run.id)
-            store.saveNow()
-            return
+            if commands.isEmpty, let interactiveCommand {
+                await openInteractiveTerminal(run, command: interactiveCommand)
+                return
+            }
         }
 
         let marker = "okidoki_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -1504,6 +1548,17 @@ final class AppEnvironment: ObservableObject {
         store.updateRun(run.id) { $0.output = String(allOutput.suffix(80_000)) }
 
         if exitCode == 0 && progress.completed.count == commands.count {
+            if let interactiveCommand {
+                store.updateRun(run.id) { current in
+                    for index in commands.indices where current.steps.indices.contains(index) {
+                        current.steps[index].status = .done
+                        current.steps[index].endedAt = current.steps[index].endedAt ?? Date()
+                    }
+                }
+                noteInstallFinished(run)
+                await openInteractiveTerminal(run, command: interactiveCommand)
+                return
+            }
             if run.builtin == MemoryImport.builtin {
                 store.updateRun(run.id) { current in
                     for index in current.steps.indices { current.steps[index].status = .done; current.steps[index].endedAt = current.steps[index].endedAt ?? Date() }
@@ -1543,9 +1598,37 @@ final class AppEnvironment: ObservableObject {
                     current.steps[failedIndex].endedAt = Date()
                 }
             }
-            await recover(run: run, commands: commands, failedIndex: failedIndex, output: allOutput)
+            // Keep the final handoff in repair plans too; a failed prerequisite must not
+            // silently turn “install and open” into an install-only retry.
+            await recover(run: run, commands: run.preview?.commands ?? commands, failedIndex: failedIndex, output: allOutput)
             return
         }
+        finishTerminalCard(run.id)
+        store.saveNow()
+    }
+
+    /// A launch acknowledges only the handoff. Setup has already completed under ShellRunner,
+    /// and no output or successful execution of the interactive tool is invented here.
+    private func openInteractiveTerminal(_ run: AgentRun, command: String) async {
+        guard store.run(run.id)?.status != .cancelled else { return }
+        do {
+            let script = try await TerminalLauncher.open(title: run.title, commands: [command],
+                                                         workingDirectory: run.workingDirectory ?? NSHomeDirectory())
+            guard store.run(run.id)?.status != .cancelled else { return }
+            store.updateRun(run.id) { current in
+                current.output += "\n[handed \(script.lastPathComponent) to Terminal; interactive session is not monitored]\n"
+                if let index = current.steps.indices.last {
+                    current.steps[index].status = .done
+                    current.steps[index].endedAt = Date()
+                }
+            }
+            store.finishRun(run.id, status: .done, summary: "Handed the interactive session to Terminal. Its progress and exit status are shown there.")
+            toast(title: "opened in Terminal", detail: run.title, kind: .success,
+                  undoLabel: nil, onUndo: nil, editLabel: "details", onEdit: { [weak self] in
+                      self?.openDashboard(.runs, runID: run.id)
+                  }, runID: run.id)
+            speak("It's open in Terminal.")
+        } catch { fail(run.id, error) }
         finishTerminalCard(run.id)
         store.saveNow()
     }
@@ -1943,6 +2026,7 @@ final class AppEnvironment: ObservableObject {
     private func handleWatchFinished(_ steps: [WatchedStep]) {
         watchHUD.hide()
         let meaningful = steps.filter { $0.action != "start" && !$0.detail.isEmpty }
+        watch.dropFrames(except: meaningful)
         guard !meaningful.isEmpty else {
             if let watchRunID { store.finishRun(watchRunID, status: .failed, summary: "nothing to learn") }
             watchRunID = nil
@@ -2894,4 +2978,15 @@ private final class StringBox: @unchecked Sendable {
     private var text = ""
     func append(_ value: String) { lock.lock(); text = String((text + value).suffix(80_000)); lock.unlock() }
     var value: String { lock.lock(); defer { lock.unlock() }; return text }
+}
+
+/// Lets exactly one of two racing tasks deliver a result.
+@MainActor
+private final class FirstWins {
+    private var fired = false
+    func claim() -> Bool {
+        if fired { return false }
+        fired = true
+        return true
+    }
 }

@@ -39,7 +39,7 @@ for (const model of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
     const action = await computerAct({ goal: "open Notes", step: 0, app: "Finder", screen: { x: 0, y: 0, width: 800, height: 600 }, imageWidth: 800, imageHeight: 600, history: [], settings: { claudeModel: model } }, "test-key", api);
     expect(action.usedModel).toBe(true);
     expect(action.action.type).toBe("open_app");
-    expect(requests[1].model).toBe(model.includes("haiku") ? "claude-sonnet-5-5" : model);
+    expect(requests[2].model).toBe(model.includes("haiku") ? "claude-sonnet-5-5" : model);
 
     const lesson = await teachStep({ topic: "notes", outline: [], log: [], stepNumber: 1, imageWidth: 800, imageHeight: 600, model }, "test-key", api);
     expect(lesson.usedModel).toBe(true);
@@ -51,7 +51,7 @@ for (const model of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
     const ground = await groundTeach({ screenshotBase64: "image-fixture", topic: "notes", say: "new note", stepIndex: 0, stepCount: 1, space: "screen" }, "test-key", model, api);
     expect(ground.marks).toHaveLength(1);
     expect(ground.marks[0].text).toBe("new note");
-    expect(requests).toHaveLength(5);
+    expect(requests).toHaveLength(6);
     for (const request of requests) expect(request.tool_choice).toEqual({ type: "auto" });
   });
 }

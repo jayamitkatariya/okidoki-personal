@@ -766,45 +766,6 @@ final class StageSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
-// MARK: - Browser context
-
-/// Title and URL of the front browser tab, read through AppleScript, so a lesson about "this video" knows which video.
-enum BrowserContext {
-    struct Page { var title: String; var url: String }
-
-    static func current(app: NSRunningApplication?) async -> Page? {
-        guard let bundle = app?.bundleIdentifier?.lowercased() else { return nil }
-        let script: String?
-        if bundle.contains("safari") {
-            script = "tell application \"Safari\" to return (name of front document) & \"\\n\" & (URL of front document)"
-        } else if bundle.contains("chrome") || bundle.contains("chromium") || bundle.contains("brave") || bundle.contains("arc") || bundle.contains("edge") {
-            let name = app?.localizedName ?? "Google Chrome"
-            script = "tell application \"\(name)\" to return (title of active tab of front window) & \"\\n\" & (URL of active tab of front window)"
-        } else {
-            script = nil
-        }
-        guard let script else { return nil }
-        return await Task.detached(priority: .utility) { () -> Page? in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = Pipe()
-            do {
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                return nil
-            }
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            guard lines.count >= 2 else { return nil }
-            return Page(title: lines[0].trimmingCharacters(in: .whitespaces), url: lines[1].trimmingCharacters(in: .whitespaces))
-        }.value
-    }
-}
-
 // MARK: - Views
 
 struct ConceptTitleView: View {

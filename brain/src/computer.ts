@@ -87,6 +87,7 @@ export function systemPrompt(request: ComputerRequest): string {
     `You are Okidoki's computer-use controller on the user's real Mac. Reply with exactly ONE next action through the okidoki_act tool. The user watches every move live.`,
     ``,
     `The user's goal: ${request.goal}`,
+    `Complete every requested part and preserve explicit tools, sources, destinations, formats, quantities, order and negative constraints. Opening the app, setup, locating an input or creating a draft is only intermediate unless that is the entire goal. Never silently substitute an easier outcome.`,
     ``,
     `Pick the earliest tool that can really do this step:`,
     `1. script — AppleScript by default (lang "applescript"); lang "javascript" is JXA; lang "shell" is zsh.`,
@@ -175,6 +176,7 @@ function remoteSystemPrompt(
     `You are Okidoki's computer-use controller on the user's PRIVATE MAC: a separate, clean macOS running in a virtual machine that only you use. Reply with exactly ONE next action through the okidoki_act tool. The user's own Mac is untouched and they are not watching; they will read your summary.`,
     ``,
     `The user's goal: ${request.goal}`,
+    `Complete every requested part and preserve explicit tools, sources, destinations, formats, quantities, order and negative constraints. Opening the app, setup, locating an input or creating a draft is only intermediate unless that is the entire goal. Never silently substitute an easier outcome.`,
     ``,
     `What works here, and nothing else:`,
     `1. key for shortcuts: cmd+space opens Spotlight (then type the app name, then key return) — this is how you launch apps. cmd+l is the address bar, cmd+t new tab, cmd+n, cmd+f, cmd+s, cmd+w, cmd+a, cmd+z, return, esc, tab, arrows. times repeats a key.`,
@@ -238,6 +240,12 @@ export function messageContent(request: ComputerRequest): unknown[] {
   }
   if (request.zoomBase64 && request.zoom) {
     content.push({ type: "text", text: "Zoomed crop you asked for:" }, image(request.zoomBase64));
+  }
+  if (request.referenceBase64) {
+    content.push(
+      { type: "text", text: "What the target looked like when this skill was recorded (a crop of the screen around the point that was clicked; the control is at its centre). Find the same thing on the screen now, even if it moved or its text changed slightly:" },
+      image(request.referenceBase64),
+    );
   }
   content.push({ type: "text", text: systemPrompt(request) });
   return content;

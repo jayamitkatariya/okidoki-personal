@@ -127,6 +127,8 @@ export async function handleRequest(request: Request): Promise<Response> {
             milestones: Array.isArray(payload.milestones) ? payload.milestones.filter((m) => typeof m === "string").slice(0, 6) : [],
             language: payload.language,
             model: payload.model,
+            pageTitle: typeof payload.pageTitle === "string" ? payload.pageTitle.slice(0, 200) : undefined,
+            pageURL: typeof payload.pageURL === "string" ? payload.pageURL.slice(0, 300) : undefined,
           },
           key,
         );

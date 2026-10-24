@@ -23,9 +23,32 @@ public enum SkillReplayGeometry {
     }
 
     /// Replay pacing: the recorded gap, kept between a floor that lets apps catch up and a
-    /// ceiling so a coffee break during recording doesn't become one during replay.
+    /// ceiling so a coffee break during recording doesn't become one during replay. A step the
+    /// replay can check before acting on (a labelled control, a saved picture) gets a lower
+    /// ceiling: the check itself waits for the control to be there.
     public static func pause(for step: SkillStep) -> TimeInterval {
-        min(max(step.delay ?? 0.6, 0.45), 2.5)
+        let ceiling = isCheckable(step) || step.frameRect != nil ? 1.2 : 2.5
+        return min(max(step.delay ?? 0.6, 0.45), ceiling)
+    }
+
+    /// How long a replay keeps looking for a control that isn't there yet before asking for help.
+    public static let patience: TimeInterval = 2.5
+    /// Gap between looks while waiting.
+    public static let lookInterval: TimeInterval = 0.22
+
+    /// App names as macOS reports them sometimes carry invisible direction marks
+    /// (“\u{200E}WhatsApp”), which `open -a` doesn't accept and which never match a plain name.
+    public static func cleanAppName(_ name: String) -> String {
+        let marks: Set<Unicode.Scalar> = ["\u{200E}", "\u{200F}", "\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}",
+                                          "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}", "\u{FEFF}"]
+        var scalars = String.UnicodeScalarView()
+        for scalar in name.unicodeScalars where !marks.contains(scalar) { scalars.append(scalar) }
+        return String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether two app names refer to the same app, ignoring direction marks and case.
+    public static func sameApp(_ a: String, _ b: String) -> Bool {
+        cleanAppName(a).caseInsensitiveCompare(cleanAppName(b)) == .orderedSame
     }
 
     /// Mouse button and press count for a click-family action.
@@ -83,5 +106,21 @@ public enum SkillReplayGeometry {
     /// True when the step carries something a replay can check before clicking.
     public static func isCheckable(_ step: SkillStep) -> Bool {
         !targetLabel(step).isEmpty || !(step.role ?? "").isEmpty
+    }
+
+    /// Roles that say what kind of thing was clicked but not which one: after a list reorders,
+    /// the old spot still holds a cell, an image, a group. A match on one of these is a guess;
+    /// when the step has a picture, the picture decides.
+    public static func isWeakRole(_ role: String) -> Bool {
+        ["AXGroup", "AXCell", "AXRow", "AXColumn", "AXImage", "AXStaticText", "AXUnknown", "AXLayoutItem", "AXLayoutArea",
+         "AXList", "AXOutline", "AXTable", "AXWebArea", "AXScrollArea", "AXSplitGroup", "AXGenericElement", "AXLink",
+         "AXHeading"].contains(role)
+    }
+
+    /// True when a verified accessibility match for this step rests on a weak role alone.
+    public static func isWeakEvidence(_ step: SkillStep) -> Bool {
+        guard targetLabel(step).isEmpty else { return false }
+        let role = step.role ?? ""
+        return role.isEmpty || isWeakRole(role)
     }
 }

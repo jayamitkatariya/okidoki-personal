@@ -294,6 +294,8 @@ final class TeachController {
             let bounds = TeachGeometry.quartzRect(of: screen)
             let windowRect = pid.flatMap { TeachGeometry.frontWindowGlobal(pid: $0) }
 
+            // In a browser the lesson is about the site, so the tutor is told which tab is in front.
+            async let page = BrowserContext.current(app: self.targetApp)
             async let inventory: [AXSeenControl] = Task.detached(priority: .userInitiated) {
                 guard let pid else { return [] }
                 return AXInventory.controls(pid: pid, within: bounds, limit: 110)
@@ -365,13 +367,16 @@ final class TeachController {
                                         x: r.midX.rounded(), y: r.midY.rounded(), w: r.width.rounded(), h: r.height.rounded())
             }
             let known = env.store.memories.map(\.text).filter { $0.lowercased().contains("knows ") && $0.lowercased().contains(app.lowercased()) }
+            let pageInfo = await page
+            guard gen == self.generation, self.model.isActive else { return }
             let request = TeachStepRequest(topic: self.model.topic, app: app, outline: self.outline,
                                            log: Array(self.log.suffix(14)), stepNumber: self.stepsShown + 1,
                                            imageWidth: prepared.shot.sentWidth, imageHeight: prepared.shot.sentHeight,
                                            screenshotBase64: prepared.base64, controls: hints,
                                            mode: self.model.mode.rawValue, known: Array(known.prefix(12)),
                                            milestones: self.model.milestones, language: Self.language(),
-                                           model: env.store.settings.claudeModel)
+                                           model: env.store.settings.claudeModel,
+                                           pageTitle: pageInfo?.title, pageURL: pageInfo?.url)
             let step = await self.stepProvider(request)
             guard gen == self.generation, self.model.isActive else { return }
             guard let step else {

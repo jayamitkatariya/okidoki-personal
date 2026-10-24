@@ -947,7 +947,7 @@ public enum ToolCatalog {
                   docs: "Use Notes.app via JXA. Keep the note body plain text; include a small source line."),
         // On by default when the build ships an Apify key; otherwise it stays off until one is added in Keys.
         Connector(id: "apify", name: "Apify", kind: "cloud",
-                  blurb: "Run ready-made scrapers and actors when a task needs live web data.",
+                  blurb: "Live web data: Google, LinkedIn, Instagram, TikTok, X, YouTube, Reddit, Amazon, Maps, Airbnb, Zillow and any site's text.",
                   enabled: !ServiceSecrets.apify.isEmpty, installed: !ServiceSecrets.apify.isEmpty,
                   installCommand: "",
                   docs: "Uses the Apify key the build ships (APIFY_API_KEY), or one added in Keys. Runs actors through the brain's connector kind; always preview first, since actors cost credits."),

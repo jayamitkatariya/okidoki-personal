@@ -12,8 +12,9 @@ public struct WatchedTarget: Equatable, Sendable {
     public var role: String
     /// The control's window, Quartz space. Nil for things without one (Dock items).
     public var window: CGRect?
-    public init(label: String = "", owner: String = "", role: String = "", window: CGRect? = nil) {
-        self.label = label; self.owner = owner; self.role = role; self.window = window
+    public var windowTitle: String
+    public init(label: String = "", owner: String = "", role: String = "", window: CGRect? = nil, windowTitle: String = "") {
+        self.label = label; self.owner = owner; self.role = role; self.window = window; self.windowTitle = windowTitle
     }
 }
 
@@ -33,19 +34,24 @@ public struct WatchedStep: Identifiable, Sendable {
     public var owner: String
     public var role: String
     public var window: CGRect?
+    public var windowTitle: String
+    /// Screen region saved as a picture for this step (see `SkillFrames`), once the capture lands.
+    public var frame: CGRect?
     public init(app: String, action: String, detail: String, label: String = "", input: String = "",
                 x: Double? = nil, y: Double? = nil, toX: Double? = nil, toY: Double? = nil,
-                delay: Double = 0, at: Date = Date(), owner: String = "", role: String = "", window: CGRect? = nil) {
+                delay: Double = 0, at: Date = Date(), owner: String = "", role: String = "", window: CGRect? = nil,
+                windowTitle: String = "", frame: CGRect? = nil) {
         self.app = app; self.action = action; self.detail = detail; self.label = label; self.input = input
         self.x = x; self.y = y; self.toX = toX; self.toY = toY; self.delay = delay; self.at = at
-        self.owner = owner; self.role = role; self.window = window
+        self.owner = owner; self.role = role; self.window = window; self.windowTitle = windowTitle; self.frame = frame
     }
 
     public var step: SkillStep {
         SkillStep(id: id.uuidString, text: detail.isEmpty ? action : detail, app: app, x: x, y: y, action: action,
                   label: label.isEmpty ? nil : label, input: input.isEmpty ? nil : input,
                   toX: toX, toY: toY, delay: delay,
-                  owner: owner.isEmpty || owner == app ? nil : owner, role: role.isEmpty ? nil : role, window: window)
+                  owner: owner.isEmpty || owner == app ? nil : owner, role: role.isEmpty ? nil : role, window: window,
+                  windowTitle: windowTitle, frame: frame)
     }
 }
 
@@ -82,11 +88,55 @@ public final class WatchRecorder: ObservableObject {
     private var scrollPoint: CGPoint?
     private var scrollApp = ""
     private var scrollWindow: CGRect?
+    private var scrollWindowTitle = ""
     private var scrollFlush: DispatchWorkItem?
 
     /// Overridable so the event pipeline can be driven in tests without a real screen.
-    var frontAppProvider: () -> String = { NSWorkspace.shared.frontmostApplication?.localizedName ?? "mac" }
+    var frontAppProvider: () -> String = { SkillReplayGeometry.cleanAppName(NSWorkspace.shared.frontmostApplication?.localizedName ?? "mac") }
     var targetProvider: (CGPoint) -> WatchedTarget = WatchRecorder.systemTarget(at:)
+    /// Takes the picture of the screen around a point. Nil turns pictures off (tests).
+    var frameProvider: ((CGPoint) async -> SkillFrames.Capture?)? = { await SkillFrames.capture(around: $0) }
+    /// Saves a picture for a step. Overridable so tests can see what would be written.
+    var frameSaver: (SkillFrames.Capture, String) async -> Bool = { await SkillFrames.save($0, stepID: $1) }
+
+    /// Starts and stops watching the display for pictures. Nil turns that off (tests).
+    var frameSession: ((Bool) async -> Void)? = { starting in
+        if starting { await SkillFrames.prepare() } else { SkillFrames.finish() }
+    }
+
+    /// One recording's pictures: which are still being taken or written, and which landed where.
+    /// Its own object so a recording started right after another stopped can't mix them up.
+    final class FrameLedger: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [String: Task<Void, Never>] = [:]
+        private var rects: [String: CGRect] = [:]
+
+        func begin(_ id: String, _ task: Task<Void, Never>) { lock.lock(); pending[id] = task; lock.unlock() }
+        func end(_ id: String, rect: CGRect?) {
+            lock.lock()
+            pending[id] = nil
+            if let rect { rects[id] = rect }
+            lock.unlock()
+        }
+        var inFlight: [Task<Void, Never>] { lock.lock(); defer { lock.unlock() }; return Array(pending.values) }
+        var saved: [String: CGRect] { lock.lock(); defer { lock.unlock() }; return rects }
+
+        /// Waits for the pictures still in flight, but not for ever.
+        func settle(within seconds: TimeInterval) async {
+            let tasks = inFlight
+            guard !tasks.isEmpty else { return }
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { for task in tasks { await task.value } }
+                group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+                await group.next()
+                group.cancelAll()
+            }
+        }
+    }
+
+    private var ledger = FrameLedger()
+    /// The ledger of the recording that last finished, for cleaning up steps that weren't kept.
+    private var finishedLedger: FrameLedger?
     /// Label-only shorthand for tests that don't care about owner, role or window.
     var labelProvider: (CGPoint) -> String {
         get { { [targetProvider] in targetProvider($0).label } }
@@ -113,11 +163,14 @@ public final class WatchRecorder: ObservableObject {
         mouseDownPoint = nil
         mouseDownIndex = nil
         pendingName = name
+        ledger = FrameLedger()
         isRecording = true
         startedAt = Date()
         lastStepAt = Date()
         lastApp = frontApp
         lastAppAt = .distantPast
+        // Watching the display from the start means the first click's picture is already pre-click.
+        if frameProvider != nil, let frameSession { Task { await frameSession(true) } }
 
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             let point = Self.quartzPoint(event)
@@ -160,26 +213,56 @@ public final class WatchRecorder: ObservableObject {
         ) { [weak self] note in
             guard let self else { return }
             let running = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            let app = running?.localizedName ?? "app"
+            let app = SkillReplayGeometry.cleanAppName(running?.localizedName ?? "app")
             let own = running?.bundleIdentifier == Bundle.main.bundleIdentifier
             Task { @MainActor in self.appSwitched(to: app, own: own) }
         }
     }
 
-    /// Stops and hands the steps to `onFinish`.
+    /// Stops and hands the steps to `onFinish`: at once when every picture has landed, otherwise as
+    /// soon as they have (a click just before Stop may still be writing its picture).
     public func stop() {
         guard isRecording else { return }
         flushTyping()
         flushScroll()
+        let ledger = self.ledger
+        let recorded = steps
         tearDown()
-        onFinish?(steps)
+        finishedLedger = ledger
+        guard !ledger.inFlight.isEmpty else { onFinish?(Self.attach(ledger.saved, to: recorded)); return }
+        Task { [weak self] in
+            await ledger.settle(within: 1.5)
+            guard let self else { return }
+            let finished = Self.attach(ledger.saved, to: recorded)
+            // Only while this is still the latest recording; a newer one shows its own steps.
+            if !self.isRecording { self.steps = finished }
+            self.onFinish?(finished)
+        }
     }
 
-    /// Stops and throws the recording away.
+    private static func attach(_ rects: [String: CGRect], to steps: [WatchedStep]) -> [WatchedStep] {
+        var out = steps
+        for index in out.indices { out[index].frame = rects[out[index].id.uuidString] }
+        return out
+    }
+
+    /// Stops and throws the recording away, pictures included.
     public func cancel() {
         guard isRecording else { return }
+        let ledger = self.ledger
         tearDown()
         steps = []
+        Task.detached(priority: .utility) {
+            await ledger.settle(within: 3)
+            SkillFrames.remove(Array(ledger.saved.keys))
+        }
+    }
+
+    /// Picture clean-up for steps that were recorded but not kept.
+    public func dropFrames(except kept: [WatchedStep]) {
+        guard let finishedLedger else { return }
+        let keep = Set(kept.map(\.id.uuidString))
+        SkillFrames.remove(finishedLedger.saved.keys.filter { !keep.contains($0) }.sorted())
     }
 
     private func tearDown() {
@@ -191,6 +274,7 @@ public final class WatchRecorder: ObservableObject {
         scrollFlush?.cancel()
         typingFlush = nil
         scrollFlush = nil
+        if frameProvider != nil, let frameSession { Task { await frameSession(false) } }
         typing = ""
         scrollPoint = nil
         mouseDownPoint = nil
@@ -231,12 +315,37 @@ public final class WatchRecorder: ObservableObject {
         // A click on the Dock or a menu bar extra belongs to that surface, not to whichever app
         // happened to be in front; the sentence says so and replay won't try to activate it.
         let shown = SkillReplayGeometry.isSystemSurface(target.owner) ? target.owner : app
-        append(WatchedStep(app: shown, action: action, detail: "in \(shown), \(action) \(where_)",
-                           label: label, x: point.x, y: point.y, owner: target.owner, role: target.role, window: target.window))
+        let step = WatchedStep(app: shown, action: action, detail: "in \(shown), \(action) \(where_)",
+                               label: label, x: point.x, y: point.y, owner: target.owner, role: target.role,
+                               window: target.window, windowTitle: target.windowTitle)
+        append(step)
+        takePicture(for: step.id, at: point)
         if type == .leftMouseDown {
             mouseDownPoint = point
             mouseDownIndex = steps.indices.last
         }
+    }
+
+    // MARK: - Pictures
+
+    /// Saves what the screen looked like around a step's point, as it was just before the step.
+    private func takePicture(for id: UUID, at point: CGPoint) {
+        guard let provider = frameProvider else { return }
+        let key = id.uuidString
+        let saver = frameSaver
+        let ledger = self.ledger
+        ledger.begin(key, Task { [weak self] in
+            guard let capture = await provider(point), await saver(capture, key) else {
+                ledger.end(key, rect: nil)
+                return
+            }
+            ledger.end(key, rect: capture.rect)
+            await MainActor.run {
+                guard let self, self.ledger === ledger,
+                      let index = self.steps.firstIndex(where: { $0.id == id }) else { return }
+                self.steps[index].frame = capture.rect
+            }
+        })
     }
 
     func mouseUp(at point: CGPoint) {
@@ -291,7 +400,9 @@ public final class WatchRecorder: ObservableObject {
         if scrollPoint == nil {
             scrollPoint = point
             scrollApp = frontApp
-            scrollWindow = targetProvider(point).window
+            let target = targetProvider(point)
+            scrollWindow = target.window
+            scrollWindowTitle = target.windowTitle
             scrollDevice = 0
             scrollShown = 0
         }
@@ -331,14 +442,16 @@ public final class WatchRecorder: ObservableObject {
         let device = scrollDevice
         let shown = scrollShown
         let window = scrollWindow
+        let title = scrollWindowTitle
         scrollPoint = nil
         scrollWindow = nil
+        scrollWindowTitle = ""
         scrollDevice = 0
         scrollShown = 0
         guard abs(device) >= 4 else { return }
         let direction = shown > 0 ? "up" : "down"
         append(WatchedStep(app: scrollApp, action: "scroll", detail: "in \(scrollApp), scroll \(direction)",
-                           x: point.x, y: point.y, toX: 0, toY: device, window: window))
+                           x: point.x, y: point.y, toX: 0, toY: device, window: window, windowTitle: title))
     }
 
     private func append(_ step: WatchedStep) {
@@ -370,15 +483,17 @@ public final class WatchRecorder: ObservableObject {
         guard result == .success, let element else { return WatchedTarget() }
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
-        let owner = pid > 0 ? NSRunningApplication(processIdentifier: pid)?.localizedName ?? "" : ""
+        let owner = pid > 0 ? SkillReplayGeometry.cleanAppName(NSRunningApplication(processIdentifier: pid)?.localizedName ?? "") : ""
         var windowRef: CFTypeRef?
         var window: CGRect?
+        var title = ""
         if AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &windowRef) == .success,
            let windowRef, let windowElement = AXSearch.axElement(windowRef) {
             window = AXSearch.frame(of: windowElement)
+            title = AXSearch.stringAttribute(kAXTitleAttribute, of: windowElement)
         }
         return WatchedTarget(label: AccessibilityLabel.of(element), owner: owner,
-                             role: AXSearch.stringAttribute(kAXRoleAttribute, of: element), window: window)
+                             role: AXSearch.stringAttribute(kAXRoleAttribute, of: element), window: window, windowTitle: title)
     }
 
     nonisolated static func specialKeyName(_ keyCode: UInt16) -> String? {

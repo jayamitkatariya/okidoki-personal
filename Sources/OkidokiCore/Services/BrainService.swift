@@ -39,6 +39,10 @@ public final class BrainService {
     }
 
     public func think(_ request: BrainRequest) async -> BrainResult {
+        if request.documentText.isEmpty, request.screenshotPNG == nil,
+           let delegated = TerminalActions.agentTask(request.text) {
+            return BrainResult(decision: delegated, usedModel: false)
+        }
         let key = KeyStore.get("anthropic") ?? ""
         guard !key.isEmpty else {
             return BrainResult(decision: Self.needsKeyDecision(), usedModel: false, error: "anthropic key required")
@@ -75,6 +79,7 @@ public final class BrainService {
     // MARK: - Anthropic
 
     private func anthropic(_ request: BrainRequest, key: String) async throws -> BrainDecision {
+        let started = Date()
         var urlRequest = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue(key, forHTTPHeaderField: "x-api-key")
@@ -91,7 +96,8 @@ public final class BrainService {
         // The thread already holds this request as its last user turn; either way the final user
         // message must carry the screenshot, not just the words.
         var content: [[String: Any]] = []
-        if let png = request.screenshotPNG {
+        // What they circled wins; otherwise the display shot from summon time gives the model context.
+        if let png = request.screenshotPNG ?? request.screen?.screenshotPNG {
             content.append([
                 "type": "image",
                 "source": ["type": "base64", "media_type": "image/png", "data": png.base64EncodedString()],
@@ -115,7 +121,7 @@ public final class BrainService {
 
         let body: [String: Any] = [
             "model": store.settings.claudeModel,
-            "max_tokens": 1600,
+            "max_tokens": 4000,
             "system": systemPrompt(request),
             "messages": normalized,
             "tools": [responseTool],
@@ -137,17 +143,24 @@ public final class BrainService {
         for block in content {
             if block["type"] as? String == "tool_use",
                let input = block["input"] as? [String: Any] {
-                let normalized = normalize(input)
+                let final: [String: Any]
+                if PlanReview.needsReview(input["kind"] as? String ?? "") {
+                    var reviewRequest = urlRequest
+                    reviewRequest.timeoutInterval = min(30, max(1, 75 - Date().timeIntervalSince(started)))
+                    reviewRequest.httpBody = try JSONSerialization.data(withJSONObject: PlanReview.body(original: body, proposed: input))
+                    let (reviewData, reviewResponse) = try await session.data(for: reviewRequest)
+                    guard let http = reviewResponse as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                        throw BrainError.server("plan review unavailable; nothing was executed")
+                    }
+                    final = try PlanReview.decision(from: reviewData)
+                } else { final = input }
+                let normalized = normalize(final)
                 let inputData = try JSONSerialization.data(withJSONObject: normalized)
                 let decoder = JSONDecoder()
                 if let decision = try? decoder.decode(BrainDecision.self, from: inputData) {
                     return decision
                 }
             }
-        }
-        if let textBlock = content.first(where: { $0["type"] as? String == "text" }),
-           let text = textBlock["text"] as? String, !text.isEmpty {
-            return BrainDecision(kind: .answer, title: "okidoki", answer: text, speak: text)
         }
         throw BrainError.empty
     }
@@ -156,7 +169,11 @@ public final class BrainService {
         let schema: [String: Any] = [
             "type": "object",
             "properties": [
+                "scene": ["type": "string", "enum": ["watching", "reading", "working", "other"],
+                          "description": "first, what is in front of them right now (from the app, window, browser tab and screenshot): 'watching' a video, lecture, livestream, call or presentation; 'reading' an article, PDF, slides, docs, textbook, chat or email; 'working' in a tool where things get made, edited, designed, simulated, written or computed (a web app like Tinkercad, Figma, Google Sheets, Replit, or a Mac app like Blender, Xcode, Logic, Numbers); 'other' for the desktop, Finder or nothing relevant."],
                 "kind": ["type": "string", "enum": ["answer", "quick_action", "terminal", "coding", "background", "teach", "borrow", "computer_use", "watch", "memory", "routine"]],
+                "lesson_kind": ["type": "string", "enum": ["app", "concept"],
+                                "description": "for teach, required: 'app' is a live tutor pointing at the real controls of the tool on screen (scene working, or a tool they ask to use); 'concept' is an animated 2D/3D model with narration beside what they're watching or reading (an idea, a mechanism, a molecule, what the lecture is about)."],
                 "title": ["type": "string", "description": "short lowercase title, max 6 words"],
                 "answer": ["type": "string", "description": "the response to show in the card; short, warm, concrete, markdown allowed"],
                 "speak": ["type": "string", "description": "what to say aloud; 1-2 sentences, or empty"],
@@ -265,6 +282,8 @@ public final class BrainService {
         if !request.appName.isEmpty { parts.append("Frontmost app: \(request.appName)") }
         if let selection = request.selection {
             parts.append(String(format: "They circled screen area x=%.0f y=%.0f w=%.0f h=%.0f.", selection.origin.x, selection.origin.y, selection.width, selection.height))
+        } else if request.screen?.screenshotPNG != nil {
+            parts.append("The image is their whole display as it was when they asked — context, not something they circled. Don't describe it unless they asked about it.")
         }
         if !request.attachmentName.isEmpty {
             parts.append("Attached document: \(request.attachmentName)")
@@ -286,20 +305,27 @@ public final class BrainService {
         You always respond through the okidoki_respond tool.
 
         Decide how to help without asking the person to pick a mode:
-        - a question → answer
+        - a question seeking information → answer. "Can you", "could you" and "please" followed by work to do are action requests; choose the route that completes that work.
         - a small action in Reminders, Calendar or Notes → quick_action
         - a terminal job using free open-source tools → terminal, always with an action preview
         - writing or fixing code → coding (the app runs their chosen coding agent)
         - a long batch job → background
-        - learning a piece of software, "teach me", "how do I", "walk me through", or a concept that lives in the app they're using → teach, with a teach_plan outline. a live tutor starts immediately on their screen. never ask them to approve a lesson, and never send teach through computer_use.
+        - learning — "teach me", "show me how", "how do I", "walk me through", "explain" — → teach. Set scene first, then lesson_kind by this table:
+          · scene working, and they want to do, make, build, use or set up something in that tool, or understand one of its features ("show me how to make a circuit" on Tinkercad, "how do I add auto layout" in Figma, "what does this node do" in Blender) → lesson_kind "app". The live tutor points at that tool's real panels and controls. Never a concept model while the place to build it is open in front of them.
+          · scene watching or reading, and they want to understand something ("explain this", "what is she talking about", "how does a transistor work", "explain compound interest", "what is this video about") → lesson_kind "concept". An animated model with narration appears beside the lecture, video or page. The title is the topic. Use the screenshot to see what "this" is.
+          · scene working, but the thing is a general idea with no control to point at ("explain Ohm's law" in Tinkercad, "what is recursion" in VS Code) → lesson_kind "concept".
+          · scene watching or reading, but they want to do it in a tool that isn't open ("show me how to do that in Blender") → lesson_kind "app" with the first step opening that app.
+          · learning how a Mac app works in general ("teach me Figma") → lesson_kind "app".
+          For "app" give a teach_plan outline. A live tutor or model starts immediately on their screen: never ask them to approve a lesson, never clarify "show or do", and never send a lesson through computer_use.
         - a single click on something already on their screen → borrow, with a clear preview
-        - a result that takes several steps in one or more apps ("send …", "open … and …", "make a …", "export …", "search for …") → computer_use. okidoki then looks at the screen and drives the Mac itself, step by step. list the apps involved in `apps`.
+        - a result they want done for them, taking several steps in one or more apps ("send …", "open … and …", "make me a …", "export …", "search for …") with no learning words → computer_use. okidoki then looks at the screen and drives the Mac itself, step by step. list the apps involved in `apps`.
         - "watch me" → watch
         - a durable fact → memory
         - a recurring job → routine
-        Never ask them to choose between showing and doing, and leave `clarification` empty. If they want to understand or try it, teach and start. If they want the result ("make", "export", "send", "fix"), use computer_use and start. A bare concept in the app they have open is a lesson.
+        Never ask them to choose between showing and doing, and leave `clarification` empty. If they want to understand it or learn to do it themselves ("show me how", "how do I", "teach me", "explain"), teach and start. If they want it done for them with no learning words, use computer_use and start. A bare concept in the app they have open is a lesson.
 
         Rules:
+        - Follow the full latest request literally. Identify its requested end result before choosing a route. Preserve all named tools, sources, destinations, formats, quantities, ordering and negative constraints. Context helps resolve references; it must not replace what they asked. Setup, opening an app, and preparing a draft are intermediate steps unless those are the requested result. Never silently drop a second action or change parameters to fit a convenient recipe.
         - Never claim an action is done. The app asks for approval and then executes it.
         - Keep answers under 120 words unless they asked for depth.
         - For risky or destructive work set risk=high and explain plainly.
@@ -311,6 +337,7 @@ public final class BrainService {
         - Commands must be nonempty and noninteractive. Never read passwords from stdin, pipe remote scripts into shells, or start indefinite servers.
         - sudo is allowed only when a tool genuinely needs administrator access (e.g. "sudo -v" before "mo clean"); the app shows a native password dialog. Never sudo an install that can go in the home folder.
         - Chat UIs and full-screen tools (claude, opencode, omp, hermes, "mo analyze", "ollama run <model>" with no prompt, editors) are fine as the last command: the app opens them in a Terminal window for the person. Use them when they want to use the tool, not when they want a result.
+        - When they name an agent AND a task ("use Hermes in terminal to find my Bridge pptx"), preserve that agent and pass the complete task in its noninteractive command: hermes -z '<task>', claude -p '<task>', or opencode run '<task>'. Never replace the job with installing/opening a chat UI or asking them to type the task again. Do not substitute a connector or the default coding agent. Reuse installed tools; install only missing dependencies. The final command must perform the requested task and return output here.
         - The app adds Homebrew and known tools automatically when a command needs them; still list other missing dependencies in the preview. Known installs: Claude Code (curl -fsSL https://claude.ai/install.sh -o /tmp/claude.sh && bash /tmp/claude.sh), OpenCode (brew install opencode), Hermes Agent (curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes.sh && bash /tmp/hermes.sh), omp (curl -fsSL https://omp.sh/install -o /tmp/omp.sh && sh /tmp/omp.sh), Node (brew install node), Python (brew install python), Mole (brew install mole). Download installer scripts to a file first.
         - When the request reports a failed step with its output, diagnose the real cause from the output and reply with a corrected terminal plan that fixes it and finishes the job. Explain the cause in one plain sentence. Don't repeat completed steps unless they must run again.
         - Preserve original files, check for output collisions, use ffmpeg -nostdin -n.
@@ -327,6 +354,11 @@ public final class BrainService {
             parts.append("Their custom instructions:\n\(store.settings.customInstructions)")
         }
         parts.append("Current app: \(request.appName.isEmpty ? "unknown" : request.appName)")
+        if let screen = request.screen {
+            let page = [screen.pageTitle, screen.pageURL].filter { !$0.isEmpty }.joined(separator: " — ")
+            if !page.isEmpty { parts.append("Browser tab: \(page)") }
+            if !screen.windowTitle.isEmpty { parts.append("Front window: \(screen.windowTitle)") }
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, MMM d, yyyy 'at' h:mm a"
         parts.append("Now: \(formatter.string(from: Date()))")

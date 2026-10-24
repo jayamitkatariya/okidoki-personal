@@ -61,6 +61,8 @@ export interface Settings {
   alwaysAllow: string[];
   spendingLimit: number;
   hideInScreenshots: boolean;
+  /** Send the front window, browser tab and a small screenshot with every request so the brain knows what's on screen. */
+  screenContext?: boolean;
   appleCalendar: boolean;
   appleReminders: boolean;
   appleNotes: boolean;

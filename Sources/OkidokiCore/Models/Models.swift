@@ -131,6 +131,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     /// Voice during lessons, remembered separately from the app-wide voice switch.
     public var teachVoice: Bool = true
+    /// Send the front window, browser tab and a small screenshot with every request, so the
+    /// brain knows what's on screen before it decides how to help. Never stored.
+    public var screenContext: Bool = true
 
     /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Mac's key file, not here.
     public var mcpServers: [MCPServer] = []
@@ -146,7 +149,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
         case convexSiteURL, syncEnabled, lastSyncAt, onboardingComplete, tourComplete, showedWelcome
         case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace, computerTarget
-        case teachVoice, autoConnectAgents
+        case teachVoice, autoConnectAgents, screenContext
     }
 
     public init(from decoder: Decoder) throws {
@@ -201,6 +204,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         drivePace = string(.drivePace, "calm")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
         teachVoice = bool(.teachVoice, true)
+        screenContext = bool(.screenContext, true)
     }
 }
 
@@ -595,10 +599,20 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     public var winY: Double?
     public var winW: Double?
     public var winH: Double?
+    /// Title of that window, so the right one is picked when the app has several of similar size.
+    public var winTitle: String?
+    /// Region of the screen (Quartz points) saved as a picture when the step was recorded, under
+    /// `SkillFrames`. Replay matches it against the live screen when the control can't be found
+    /// through accessibility — a reordered list, a moved window, a web page without labels.
+    public var frameX: Double?
+    public var frameY: Double?
+    public var frameW: Double?
+    public var frameH: Double?
     public init(id: String = UUID().uuidString, text: String, app: String = "",
                 x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,
                 input: String? = nil, toX: Double? = nil, toY: Double? = nil, delay: Double? = nil,
-                owner: String? = nil, role: String? = nil, window: CGRect? = nil) {
+                owner: String? = nil, role: String? = nil, window: CGRect? = nil, windowTitle: String? = nil,
+                frame: CGRect? = nil) {
         self.id = id; self.text = text; self.app = app; self.x = x; self.y = y
         self.action = action; self.label = label; self.input = input
         self.toX = toX; self.toY = toY; self.delay = delay
@@ -606,11 +620,20 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
         if let window {
             winX = window.minX; winY = window.minY; winW = window.width; winH = window.height
         }
+        self.winTitle = (windowTitle?.isEmpty ?? true) ? nil : windowTitle
+        if let frame {
+            frameX = frame.minX; frameY = frame.minY; frameW = frame.width; frameH = frame.height
+        }
     }
 
     public var windowFrame: CGRect? {
         guard let winX, let winY, let winW, let winH, winW > 0, winH > 0 else { return nil }
         return CGRect(x: winX, y: winY, width: winW, height: winH)
+    }
+
+    public var frameRect: CGRect? {
+        guard let frameX, let frameY, let frameW, let frameH, frameW > 0, frameH > 0 else { return nil }
+        return CGRect(x: frameX, y: frameY, width: frameW, height: frameH)
     }
 }
 
@@ -1012,15 +1035,20 @@ public struct TeachStepRequest: Codable, Sendable {
     public var milestones: [String]
     public var language: String?
     public var model: String?
+    /// The browser tab in front, when the app is a browser, so the tutor teaches the site, not the browser.
+    public var pageTitle: String?
+    public var pageURL: String?
 
     public init(topic: String, app: String, outline: [String], log: [TeachLogEntry], stepNumber: Int,
                 imageWidth: Double, imageHeight: Double, screenshotBase64: String?,
                 controls: [TeachControlHint] = [], mode: String = "guide", known: [String] = [],
-                milestones: [String] = [], language: String? = nil, model: String?) {
+                milestones: [String] = [], language: String? = nil, model: String?,
+                pageTitle: String? = nil, pageURL: String? = nil) {
         self.topic = topic; self.app = app; self.outline = outline; self.log = log; self.stepNumber = stepNumber
         self.imageWidth = imageWidth; self.imageHeight = imageHeight
         self.screenshotBase64 = screenshotBase64; self.controls = controls
         self.mode = mode; self.known = known; self.milestones = milestones; self.language = language; self.model = model
+        self.pageTitle = pageTitle; self.pageURL = pageURL
     }
 }
 
@@ -1089,28 +1117,61 @@ public struct TeachRefineResult: Codable, Equatable, Sendable {
     }
 }
 
+/// What was on screen when the person summoned okidoki: the front window's title, the browser
+/// tab (title and URL) when the front app is a browser, and a small screenshot of the display.
+/// Gathered before the request is routed so the brain knows a "circuit" asked about on
+/// Tinkercad lives in the page in front of them, not in a model beside it.
+public struct ScreenContext: Sendable, Equatable {
+    public var windowTitle: String
+    public var pageTitle: String
+    public var pageURL: String
+    public var screenshotPNG: Data?
+    public var imageWidth: Double
+    public var imageHeight: Double
+
+    public init(windowTitle: String = "", pageTitle: String = "", pageURL: String = "",
+                screenshotPNG: Data? = nil, imageWidth: Double = 0, imageHeight: Double = 0) {
+        self.windowTitle = windowTitle; self.pageTitle = pageTitle; self.pageURL = pageURL
+        self.screenshotPNG = screenshotPNG; self.imageWidth = imageWidth; self.imageHeight = imageHeight
+    }
+
+    public var isEmpty: Bool {
+        windowTitle.isEmpty && pageTitle.isEmpty && pageURL.isEmpty && screenshotPNG == nil
+    }
+
+    /// One line for a prompt: "Tinkercad Circuits — https://www.tinkercad.com/…", or the window title.
+    public var summary: String {
+        let page = [pageTitle, pageURL].filter { !$0.isEmpty }.joined(separator: " — ")
+        if !page.isEmpty { return page }
+        return windowTitle
+    }
+}
+
 public struct BrainRequest: Sendable {
     public var text: String
     public var appName: String
     public var bundleID: String
     public var threadID: String?
+    /// What they circled, if anything. Takes precedence over the display shot in `screen`.
     public var screenshotPNG: Data?
     public var selection: CGRect?
     public var source: String
     public var attachmentName: String
     public var documentText: String
     public var clipboardText: String
+    /// The window, browser tab and display as they were at summon time.
+    public var screen: ScreenContext?
 
     public init(text: String, appName: String = "", bundleID: String = "",
                 threadID: String? = nil, screenshotPNG: Data? = nil,
                 selection: CGRect? = nil, source: String = "summon",
                 attachmentName: String = "", documentText: String = "",
-                clipboardText: String = "") {
+                clipboardText: String = "", screen: ScreenContext? = nil) {
         self.text = text; self.appName = appName; self.bundleID = bundleID
         self.threadID = threadID; self.screenshotPNG = screenshotPNG
         self.selection = selection; self.source = source
         self.attachmentName = attachmentName; self.documentText = documentText
-        self.clipboardText = clipboardText
+        self.clipboardText = clipboardText; self.screen = screen
     }
 }
 
@@ -1171,6 +1232,8 @@ public struct BrainDecision: Codable, Equatable, Sendable {
     public var connectorCallJSON: String?
     /// For teach: "app" walks through the app on screen, "concept" explains with a 2D/3D stage.
     public var lessonKind: String?
+    /// What the model saw in front of them: "watching", "reading", "working" or "other".
+    public var scene: String?
 
     public init(kind: Kind, title: String, answer: String, speak: String = "",
                 risk: RiskLevel = .low, previewSummary: String = "", previewSteps: [String] = [],
@@ -1192,6 +1255,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         self.overlayWidth = overlayWidth; self.overlayHeight = overlayHeight
         self.connectorCallJSON = connectorCallJSON
         self.lessonKind = nil
+        self.scene = nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1206,6 +1270,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         case overlayWidthSnake = "overlay_width"
         case overlayHeightSnake = "overlay_height"
         case lessonKind, lessonKindSnake = "lesson_kind"
+        case scene
     }
 
     public init(from decoder: Decoder) throws {
@@ -1249,6 +1314,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         connectorCallJSON = try? c.decodeIfPresent(String.self, forKey: .connectorCallJSON)
         lessonKind = (try? c.decodeIfPresent(String.self, forKey: .lessonKind))
             ?? (try? c.decodeIfPresent(String.self, forKey: .lessonKindSnake))
+        scene = try? c.decodeIfPresent(String.self, forKey: .scene)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1282,6 +1348,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         try c.encodeIfPresent(overlayHeight, forKey: .overlayHeight)
         try c.encodeIfPresent(connectorCallJSON, forKey: .connectorCallJSON)
         try c.encodeIfPresent(lessonKind, forKey: .lessonKind)
+        try c.encodeIfPresent(scene, forKey: .scene)
     }
 }
 

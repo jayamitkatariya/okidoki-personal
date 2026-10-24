@@ -121,9 +121,13 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
   const log = request.log.length ? request.log.map(describe).join("\n") : "none yet. this is the first step.";
   const known = request.known?.length ? request.known.map((k) => `· ${k}`).join("\n") : "";
   const milestones = request.milestones?.length ? request.milestones.map((m, i) => `${i}. ${m}`).join("\n") : "";
+  const page = [request.pageTitle ?? "", request.pageURL ?? ""].map((s) => s.trim()).filter(Boolean).join(" — ");
   return [
     `You are Okidoki's tutor. A person is learning "${request.topic}" in ${request.app || "the app on screen"} on their own Mac.`,
     `You see their screen right now.`,
+    page
+      ? `The browser tab in front is ${page}. The lesson is about that site, not the browser: teach with its own panels, menus and controls, never the browser's.`
+      : ``,
     ...modeLines(request.mode || "guide"),
     `Reply with exactly ONE step through okidoki_teach.`,
     request.language ? `Write say, why and labels in ${request.language}.` : ``,

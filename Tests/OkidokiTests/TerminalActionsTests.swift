@@ -2,6 +2,74 @@ import XCTest
 @testable import OkidokiCore
 
 final class TerminalActionsTests: XCTestCase {
+    func testFixedRecipesDoNotDiscardExtraGoalsOrConstraints() {
+        for text in ["compress this video and save it in Downloads", "resize my photos to 800 pixels", "convert this Word document to PDF", "zip a folder but exclude node_modules", "install python and node", "check free disk space then list the largest files", "download https://github.com/example/project without changing existing files"] {
+            XCTAssertNil(TerminalActions.decide(text), text)
+        }
+    }
+    func testNamedAgentKeepsTheTaskInsteadOfJustOpeningAChat() throws {
+        for text in [
+            "can you use hermes agent in terminal to find my bridge presentation pptx file",
+            "Can you use Hermes Agent in terminal to find my Bridge presentation pptx file?",
+            "use hermes to find my bridge deck",
+            "can you run my hermes agent and find me book places near sf palace of fine arts",
+            "install hermes and find my presentation",
+            "find my bridge presentation using hermes",
+            "use claude code to find my presentation",
+            "run opencode to check my project"
+        ] {
+            let decision = try XCTUnwrap(TerminalActions.decide(text, installed: { _ in true }), text)
+            XCTAssertEqual(decision.kind, .terminal, text)
+            XCTAssertNil(decision.builtin, "a task runs to completion inside Okidoki")
+            XCTAssertNil(decision.pickFile, "finding a file must not ask the user to locate it")
+            XCTAssertEqual(decision.commands.count, 1, "don't reinstall a working agent")
+            XCTAssertTrue(decision.commands[0].contains(shellQuote(text)), "preserve the whole request")
+            XCTAssertFalse(TerminalActions.needsRealTerminal(decision.commands[0]), text)
+            XCTAssertTrue(decision.title.contains("find") || decision.title.contains("check"), text)
+        }
+        for text in ["open hermes", "start hermes", "use hermes in terminal", "install hermes", "teach me how to use hermes to find files", "how do I use hermes to find files?"] {
+            XCTAssertNil(TerminalActions.agentTask(text), text)
+        }
+        let request = "can you use hermes agent in terminal to find my bridge presentation pptx file"
+        let decision = try XCTUnwrap(TerminalActions.decide(request, installed: { _ in false }))
+        let prepared = try TerminalActions.preparePlan(decision.commands, installed: { _ in false })
+        XCTAssertEqual(prepared.commands.count, 2, "one missing install, followed by the task")
+        XCTAssertTrue(prepared.commands[0].contains("hermes-agent.nousresearch.com"))
+        XCTAssertEqual(prepared.commands.last, "hermes -z " + shellQuote(request))
+    }
+
+    func testDelegatedPromptIsOneLiteralArgumentInARealShell() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("okidoki-agent-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fakeAgent = folder.appendingPathComponent("hermes")
+        try "#!/bin/sh\nprintf '%s\\n' \"$#\" \"$1\" \"$2\"\n".write(to: fakeAgent, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeAgent.path)
+        let prompt = "use hermes to find my 'bridge'; $(touch INJECTED) `touch ALSO_INJECTED`\npresentation 世界.pptx?"
+        let decision = try XCTUnwrap(TerminalActions.decide(prompt))
+        let result = await ShellRunner.shared.run(command: "export PATH=" + shellQuote(folder.path) + ":$PATH\n" + TerminalActions.script(decision.commands), cwd: folder.path)
+        XCTAssertEqual(result.code, 0, result.output)
+        XCTAssertTrue(result.output.hasSuffix("2\n-z\n" + prompt + "\n"), result.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("INJECTED").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("ALSO_INJECTED").path))
+    }
+
+    func testInteractiveSetupIsMonitoredBeforeTheHandoff() async throws {
+        let split = try TerminalActions.splitLaunch(["printf SETUP_OK", "false", "hermes"])
+        XCTAssertEqual(split.setup, ["printf SETUP_OK", "false"])
+        XCTAssertEqual(split.launch, "hermes")
+        let marker = "launch_test"
+        let result = await ShellRunner.shared.run(command: TerminalActions.script(split.setup, progressMarker: marker))
+        let progress = TerminalActions.progress(in: result.output, marker: marker, commandCount: 3)
+        XCTAssertNotEqual(result.code, 0)
+        XCTAssertEqual(progress.completed, [0])
+        XCTAssertEqual(progress.failed, 1)
+        XCTAssertFalse(progress.completed.contains(2), "opening Terminal must not mark the setup done")
+        XCTAssertTrue(try TerminalActions.splitLaunch(["hermes"]).setup.isEmpty)
+        XCTAssertThrowsError(try TerminalActions.splitLaunch([]))
+        XCTAssertThrowsError(try TerminalActions.splitLaunch(["hermes", "printf never"]))
+    }
+
     func testNaturalRequestsAndDependencies() throws {
         let onlyBrew: (String) -> Bool = { $0 == "brew" }
         for text in ["install ffmpeg", "compress this video for Discord", "make this PDF searchable", "resize my photos", "zip a folder", "check free disk space", "show git status", "clean up my mac", "update everything"] {
@@ -166,6 +234,12 @@ final class TerminalActionsTests: XCTestCase {
     }
 
     func testFailuresAreDiagnosedInPlainLanguage() {
+        let gateway = TerminalActions.diagnose(output: "Error: Gateway inaccessible: service_start_failed", command: "hermes -z 'find my Bridge.pptx'")
+        XCTAssertTrue(gateway.message.contains("background service"))
+        XCTAssertEqual(gateway.fixCommands, ["hermes gateway start"])
+        XCTAssertTrue(gateway.retry)
+        XCTAssertFalse(TerminalActions.needsRealTerminal("hermes gateway start"))
+        XCTAssertFalse(TerminalActions.needsRealTerminal("hermes gateway status"))
         let nothing: (String) -> Bool = { _ in false }
         let missing = TerminalActions.diagnose(output: "$ ffmpeg -i in.mov out.mp4\nzsh:1: command not found: ffmpeg\n", command: "ffmpeg -i in.mov out.mp4", installed: nothing)
         XCTAssertTrue(missing.message.contains("ffmpeg isn't installed"), missing.message)

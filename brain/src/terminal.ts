@@ -1,9 +1,37 @@
 import type { Decision } from "./types";
 import { tools } from "./catalog";
-import { shellQuote } from "./executor";
+import { agentCommand, shellQuote } from "./executor";
+import type { CodingAgent } from "./types";
+
+/** Keep an explicitly named agent and the complete task together, including question phrasing. */
+export function agentTaskDecision(text: string): Decision | undefined {
+  const raw = text.trim();
+  if (!/^(?:(?:please|can you|could you|would you)\s+)*(?:use|run|open|start|launch|ask|have|get|install|set up|find|locate|search|write|build|fix|summarize|summarise|analyze|analyse|create|check)\b/i.test(raw)) return;
+  const aliases: [RegExp, CodingAgent, string][] = [
+    [/\b(?:hermes(?:[ -]agent)?)\b/i, "hermes", "Hermes Agent"],
+    [/\bclaude[ -]?code\b/i, "claude", "Claude Code"],
+    [/\bopen[ -]?code\b/i, "opencode", "OpenCode"],
+    [/\bomp\b/i, "omp", "omp"],
+    [/\bcodex(?: cli)?\b/i, "codex", "Codex"],
+    [/\bgemini(?:[ -]cli)?\b/i, "gemini", "Gemini CLI"],
+    [/\bcursor[ -](?:agent|cli)\b/i, "cursor", "Cursor Agent"],
+  ];
+  const named = aliases.find(([pattern]) => pattern.test(raw));
+  const match = raw.match(/\b(?:to|and|then)\s+(?:find|locate|search|write|build|fix|summarize|summarise|analyze|analyse|create|check|list|read|convert|download|make|do|tell|help)\b[\s\S]+|^(?:find|locate|search|write|build|fix|summarize|summarise|analyze|analyse|create|check)\b[\s\S]+\b(?:using|with|via)\b[\s\S]+/i);
+  if (!named || !match) return;
+  const [, agent, name] = named;
+  const task = match[0].replace(/^(?:to|and|then)\s+/i, "");
+  const command = agentCommand({ runId: "plan", kind: "coding", agent, prompt: raw }).map(arg => arg === raw ? shellQuote(arg) : arg).join(" ");
+  const summary = `Use ${name} to ${task}. Return its result here.`;
+  return { kind: "terminal", title: task.slice(0, 70), answer: summary, previewSummary: summary,
+    previewSteps: [`give ${name} your full request and wait for its result`], commands: [command], risk: "medium" };
+}
 
 export function terminalDecision(text: string): Decision | undefined {
   const raw = text.trim(), t = raw.toLowerCase();
+  const delegated = agentTaskDecision(raw);
+  if (delegated) return delegated;
+  if (requiresCustomPlan(raw)) return;
   if (/^(teach|how |what )/.test(t)) return;
   const plan = (title: string, answer: string, commands: string[], pickFile?: Decision["pickFile"], risk: Decision["risk"] = "low"): Decision =>
     ({ kind: "terminal", title, previewSteps: commands.map(c => c.startsWith("test ") ? "check that the output doesn't already exist" : c.startsWith("mkdir ") ? "make a folder for the copies" : c.startsWith("command -v ") ? "check the installation" : title), answer: `${answer} I'll show the result here.`, previewSummary: answer, commands, pickFile, risk });
@@ -22,4 +50,9 @@ export function terminalDecision(text: string): Decision | undefined {
   if (/git status|uncommitted/.test(t)) return plan("check project changes", "Choose a project. I'll show its changed files.", ["git status --short --branch"], "folder");
   const repo = raw.match(/https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/);
   if (repo && /clone|download|get this repo/.test(t)) return plan("download repository", "Choose where to save the project. I'll download it with Git.", [`git clone -- ${shellQuote(repo[0].replace(/\.$/, ""))}`], "folder", "medium");
+}
+
+/** A fixed single-job recipe must never swallow extra actions or parameters. */
+export function requiresCustomPlan(text: string): boolean {
+  return /\b(?:and|then|also|afterwards|before|after|but|without|except|instead|only|don't|do not|using|with|to|keep|ensure)\b|\d/i.test(text);
 }

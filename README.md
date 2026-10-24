@@ -50,6 +50,7 @@ work without a model key:
 - “install claude code” · “set up hermes agent” · “get opencode” · “install omp”
 - “install node” · “install python” · “install ffmpeg” · “install mole”
 - “open claude code in my project” · “start hermes” · “run mole” (opens a Terminal window)
+- “use hermes agent in terminal to find my Bridge presentation pptx file” (passes the full task to Hermes and returns its answer here)
 - “update everything” · “update claude code”
 - “clean up my mac” · “check free disk space” · “what tools do I have”
 - “compress this video for Discord” · “make this PDF searchable” · “resize my photos”
@@ -57,6 +58,13 @@ work without a model key:
 - “import my memory from claude code” · “bring over what chatgpt knows about me”
 
 Broader requests and custom plans go through the model.
+
+Fixed recipes handle a single simple job. Requests with additional actions, destinations,
+parameters or constraints go to the planner so those details are preserved. Model-generated
+action plans get a separate review against the complete original request and context before
+execution; a failed review stops the plan. The review uses Sonnet when routing uses Haiku.
+Opening a tool or completing setup cannot substitute for the requested result, and prose
+claiming success without a structured decision cannot trigger an action.
 
 ## Memory from other assistants
 
@@ -84,7 +92,10 @@ How it stays end to end:
   will ask.
 - **Interactive tools get a real terminal.** Chat UIs and full-screen tools (Claude Code,
   OpenCode, omp, Hermes, `mo analyze`, `ollama run`, editors) open in a Terminal window
-  via a `.command` file, after any installs. No automation permission is needed.
+  via a `.command` file, after any installs finish under the monitored shell. The result
+  acknowledges the handoff; it does not claim the interactive session has completed.
+  Requests that name an agent and a task use its noninteractive mode, keep the full
+  request, and wait for its output in Okidoki. No automation permission is needed.
 - **Failures are explained and fixed.** When a step stops, the cause is diagnosed on the
   Mac first (missing tool, Apple's command line tools, pip's managed environment, no
   internet, wrong password, protected folder…) and a fix-and-retry plan is offered. For
@@ -118,9 +129,16 @@ Everything about skills can be driven from the chat, instantly and without a mod
 away under the ghost cursor; **Esc** or “stop” hands control back.
 
 Replays stay fast: every click is re-found by its accessibility label and posted straight
-away. Only when a recorded control is nowhere on screen (a dialog in the way, a moved
-window, a different page) does the replayer ask the brain to look at the screen and do
-that one step, then carries on at full speed. Without a key the replay behaves as before.
+away. Each recorded click also keeps a small picture of the screen around it (taken from the
+frame just before the click, so it shows the control un-pressed; needs Screen Recording).
+When the label route misses — a window moved, a list reordered, a web page with no labels —
+the replayer finds the control by that picture in a fresh capture (local, ~0.1 s, no model),
+checking the small text so look-alike rows don't get mixed up, and waits a couple of
+seconds for an app that hasn't caught up. Only when neither finds it does the brain look at
+the screen, with the picture and the neighbouring steps for context, and do that one step;
+a control it knows is never clicked blind at its old spot. Pictures live in
+`~/Library/Application Support/Okidoki/frames` and go when the skill does. Without a key or
+without Screen Recording the replay behaves as before.
 
 ## Computer use
 

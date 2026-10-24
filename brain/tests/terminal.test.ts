@@ -2,8 +2,65 @@ import { test, expect } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execute, jobEnvironment, pause, resume, stop, validateExecution } from "../src/executor";
+import { execute, jobEnvironment, pause, resume, shellQuote, stop, validateExecution } from "../src/executor";
 import { localRouter, prefersShowing } from "../src/router";
+import { agentTaskDecision, terminalDecision } from "../src/terminal";
+
+test("fixed recipes never drop additional goals, custom parameters or negative constraints", () => {
+  for (const text of [
+    "compress this video and save it in Downloads",
+    "resize my photos to 800 pixels",
+    "convert this Word document to PDF",
+    "zip a folder but exclude node_modules",
+    "install python and node",
+    "check free disk space then list the largest files",
+    "download https://github.com/example/project without changing existing files",
+  ]) expect(terminalDecision(text)).toBeUndefined();
+});
+
+test("named agent requests preserve the requested job and never become an empty chat", () => {
+  for (const text of [
+    "can you use hermes agent in terminal to find my bridge presentation pptx file",
+    "Can you use Hermes Agent in terminal to find my Bridge presentation pptx file?",
+    "use hermes to find my bridge deck",
+    "can you run my hermes agent and find me book places near sf palace of fine arts",
+    "install hermes and find my presentation",
+    "find my bridge presentation using hermes",
+    "use claude code to find my presentation",
+    "run opencode to check my project",
+  ]) {
+    const decision = localRouter({ text });
+    expect(decision.kind).toBe("terminal");
+    expect(decision.commands).toHaveLength(1);
+    expect(decision.commands?.[0]).not.toContain("install.sh");
+    expect(decision.pickFile).toBeUndefined();
+    expect(decision.builtin).toBeUndefined();
+    expect(decision.title).toMatch(/find|check/);
+  }
+  for (const text of ["open hermes", "start hermes", "use hermes in terminal", "install hermes", "teach me how to use hermes to find files", "how do I use hermes to find files?"]) {
+    expect(agentTaskDecision(text)).toBeUndefined();
+  }
+});
+
+test("delegated tasks survive execution without shell interpolation", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "okidoki-delegate-"));
+  try {
+    await Bun.write(join(dir, "hermes"), '#!/bin/sh\nprintf "%s\\n" "$#" "$1" "$2" > args.txt\nprintf "FOUND /verified/Bridge.pptx\\n"\n');
+    const { chmod } = await import("node:fs/promises");
+    await chmod(join(dir, "hermes"), 0o700);
+    const text = "use hermes to find my 'bridge'; $(touch INJECTED) `touch ALSO_INJECTED`\npresentation 世界.pptx?";
+    const decision = agentTaskDecision(text)!;
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await execute({ runId: crypto.randomUUID(), kind: "terminal", workingDirectory: dir,
+      commands: ["export PATH=" + shellQuote(dir) + ":$PATH", ...decision.commands!] },
+      (event, data) => events.push({ event, data }));
+    expect(await readFile(join(dir, "args.txt"), "utf8")).toBe("2\n-z\n" + text + "\n");
+    expect(await Bun.file(join(dir, "INJECTED")).exists()).toBe(false);
+    expect(await Bun.file(join(dir, "ALSO_INJECTED")).exists()).toBe(false);
+    expect(events.filter(e => e.event === "output").map(e => e.data.text).join("")).toContain("FOUND /verified/Bridge.pptx");
+    expect(events.at(-1)?.event).toBe("done");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 test("plain requests become concrete jobs without a key", () => {
   for (const text of ["install ffmpeg", "compress this video for Discord", "resize my photos", "make this PDF searchable", "zip a folder", "check free disk space", "download https://github.com/example/project", "show git status"]) {

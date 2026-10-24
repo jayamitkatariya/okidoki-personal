@@ -193,9 +193,11 @@ public enum TeachBrain {
         let known = request.known.isEmpty ? "" : "\n\nWhat they already know here (skip the basics of these):\n" + request.known.map { "· \($0)" }.joined(separator: "\n")
         let milestones = request.milestones.isEmpty ? "" : "\n\nChapters so far:\n" + request.milestones.enumerated().map { "\($0.offset). \($0.element)" }.joined(separator: "\n")
         let language = request.language.map { "Write say, why and labels in \($0)." } ?? ""
+        let pageBits = [request.pageTitle ?? "", request.pageURL ?? ""].filter { !$0.isEmpty }
+        let page = pageBits.isEmpty ? "" : "\nThe browser tab in front is \(pageBits.joined(separator: " — ")). The lesson is about that site, not the browser: teach with its own panels, menus and controls, never the browser's."
         return """
         You are Okidoki's tutor. A person is learning "\(request.topic)" in \(app) on their own Mac.
-        You see their screen right now.
+        You see their screen right now.\(page)
         \(modeLines(request.mode))
         Reply with exactly ONE step through okidoki_teach.
         \(language)

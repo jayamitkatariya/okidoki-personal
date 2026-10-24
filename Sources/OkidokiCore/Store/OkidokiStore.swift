@@ -337,7 +337,10 @@ public final class OkidokiStore: ObservableObject {
         return skill
     }
 
-    public func deleteSkill(_ id: String) { skills.removeAll { $0.id == id } }
+    public func deleteSkill(_ id: String) {
+        if let skill = skills.first(where: { $0.id == id }) { SkillFrames.remove(skill: skill) }
+        skills.removeAll { $0.id == id }
+    }
     public func incrementSkillRun(_ id: String, by count: Int = 1) {
         guard let index = skills.firstIndex(where: { $0.id == id }) else { return }
         skills[index].runCount += max(1, count)

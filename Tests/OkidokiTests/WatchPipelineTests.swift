@@ -16,6 +16,8 @@ final class WatchPipelineTests: XCTestCase {
         recorder = WatchRecorder()
         front = "Finder"
         labels = [:]
+        recorder.frameProvider = nil
+        recorder.frameSession = nil
         recorder.frontAppProvider = { [unowned self] in self.front }
         recorder.labelProvider = { [unowned self] point in self.labels["\(Int(point.x)),\(Int(point.y))"] ?? "" }
         recorder.typingIdle = 0.05

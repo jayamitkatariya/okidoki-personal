@@ -92,6 +92,13 @@ test("images go before the instructions: before, now, then the zoom crop", () =>
   expect(plain.map((c) => c.type)).toEqual(["image", "text"]);
 });
 
+test("a recorded skill's reference crop is shown before the instructions", () => {
+  const content = messageContent({ ...base, referenceBase64: "cmVm" }) as { type: string; text?: string; source?: { data: string } }[];
+  expect(content.map((c) => c.type)).toEqual(["image", "text", "image", "text"]);
+  expect(content[1].text).toContain("when this skill was recorded");
+  expect(content[2].source?.data).toBe("cmVm");
+});
+
 test("transient model errors are retried, a bad key is not", async () => {
   const calls: number[] = [];
   const flaky = (async (_url: string | URL | Request, _init?: RequestInit) => {

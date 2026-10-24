@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { fakeAPI, systemText } from "./fixtures/fake-api";
 const token = crypto.randomUUID();
 process.env.OKIDOKI_BRAIN_TOKEN = token;
 // These cases assert the no-key path. A developer .env must not satisfy them.
@@ -28,6 +29,18 @@ test("think and computer use refuse without an anthropic key", async () => {
   expect(acted.usedModel).toBe(false);
   expect(acted.action.type).toBe("fail");
   expect(acted.action.reason?.toLowerCase()).toContain("isn't available");
+});
+
+test("/think hands the full task to the named agent without a model or connector", async () => {
+  const text = "can you use hermes agent in terminal to find my bridge presentation pptx file";
+  const response = await fetch(base + "/think", { method: "POST", headers, body: JSON.stringify({ text }) });
+  expect(response.ok).toBe(true);
+  const thought = await response.json() as { decision: { kind: string; commands: string[]; title: string; connectorCall?: unknown }; usedModel: boolean };
+  expect(thought.usedModel).toBe(false);
+  expect(thought.decision.kind).toBe("terminal");
+  expect(thought.decision.commands).toEqual(["hermes -z '" + text + "'"]);
+  expect(thought.decision.title).toContain("find my bridge presentation");
+  expect(thought.decision.connectorCall).toBeUndefined();
 });
 
 test("an approved plan streams output and success", async () => {
@@ -66,6 +79,30 @@ test("a live teach step needs a topic and refuses without a key", async () => {
   expect(body.step).toBeNull();
   expect(body.usedModel).toBe(false);
   expect(body.error?.toLowerCase()).toContain("anthropic key");
+});
+
+test("/teach/step forwards the browser tab to the tutor instead of dropping it", async () => {
+  const requests: Record<string, any>[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeAPI(requests, { previous_done: true, action: "look", say: "see the Components panel on the right" });
+  try {
+    const response = await fetch(base + "/teach/step", {
+      method: "POST",
+      headers: { ...headers, "x-anthropic-key": "test-key" },
+      body: JSON.stringify({
+        topic: "a circuit", app: "Google Chrome", outline: [], log: [], stepNumber: 1, imageWidth: 800, imageHeight: 600,
+        pageTitle: "Circuits · Tinkercad", pageURL: "https://www.tinkercad.com/things/abc",
+      }),
+    });
+    expect(response.ok).toBe(true);
+    const body = await response.json() as { step: { say: string } | null; usedModel: boolean };
+    expect(body.usedModel).toBe(true);
+    expect(body.step?.say).toContain("Components");
+    expect(requests).toHaveLength(1);
+    expect(systemText(requests[0])).toContain("The browser tab in front is Circuits · Tinkercad — https://www.tinkercad.com/things/abc.");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("a zoomed refine needs a crop and keeps the first guess without a key", async () => {

@@ -242,6 +242,10 @@ public enum TerminalActions {
     public static func decide(_ text: String, installed: (String) -> Bool = { ShellRunner.which($0) != nil }) -> BrainDecision? {
         let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let t = raw.lowercased()
+        if let decision = agentTask(raw) { return decision }
+        // Fixed recipes cover one simple job. Let the planner handle extra actions,
+        // destinations, parameters and constraints rather than silently dropping them.
+        if requiresCustomPlan(raw) { return nil }
         // Bringing memories over: "import my memory from claude code", "what does chatgpt know about me, pull it in".
         // Checked before installs, since the other assistant's name would otherwise read as a setup request,
         // and before the question guard below, since these are often phrased as questions.
@@ -364,6 +368,39 @@ public enum TerminalActions {
                         ["git clone -- \(shellQuote(url))"], pick: "folder", risk: .medium)
         }
         return nil
+    }
+
+    public static func requiresCustomPlan(_ text: String) -> Bool {
+        text.range(of: #"\b(?:and|then|also|afterwards|before|after|but|without|except|instead|only|don't|do not|using|with|to|keep|ensure)\b|\d"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Deterministic delegation: preserve the entire request as one literal argument.
+    /// Returning nil for launch-only and learning requests keeps their existing behavior.
+    public static func agentTask(_ text: String) -> BrainDecision? {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = raw.lowercased()
+        guard t.range(of: #"^(?:(?:please|can you|could you|would you)\s+)*(?:use|run|open|start|launch|ask|have|get|install|set up|find|locate|search|write|build|fix|summarize|summarise|analyze|analyse|create|check)\b"#, options: .regularExpression) != nil,
+              let recipe = SetupRecipes.match(in: t),
+              let agent = CodingAgentID.allCases.first(where: { $0.binary == recipe.binary }),
+              let range = raw.range(of: #"\b(?:to|and|then)\s+(?:find|locate|search|write|build|fix|summarize|summarise|analyze|analyse|create|check|list|read|convert|download|make|do|tell|help)\b[\s\S]+|^(?:find|locate|search|write|build|fix|summarize|summarise|analyze|analyse|create|check)\b[\s\S]+\b(?:using|with|via)\b[\s\S]+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let task = String(raw[range]).replacingOccurrences(of: #"^(?:to|and|then)\s+"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let command = ([recipe.binary] + agent.defaultArguments.map { $0 == "{prompt}" ? shellQuote(raw) : $0 }).joined(separator: " ")
+        let summary = "Use \(recipe.name) to \(task). Return its result here."
+        return BrainDecision(kind: .terminal, title: String(task.prefix(70)), answer: summary,
+                             risk: .medium, previewSummary: summary,
+                             previewSteps: ["give \(recipe.name) your full request and wait for its result"], commands: [command])
+    }
+
+    /// Setup runs under our monitored shell. Only the final interactive command is handed
+    /// to Terminal; opening a window cannot count as completing the earlier commands.
+    public static func splitLaunch(_ commands: [String]) throws -> (setup: [String], launch: String) {
+        guard let launch = commands.last,
+              !launch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !commands.dropLast().contains(where: needsRealTerminal) else {
+            throw TerminalPlanError("An interactive tool must be the last step. Run its setup first, then open it.")
+        }
+        return (Array(commands.dropLast()), launch)
     }
 
     public struct PreparedPlan: Sendable {
@@ -491,6 +528,7 @@ public enum TerminalActions {
         case "hermes":
             if args.isEmpty { return true }
             if args.contains(where: { ["-z", "--oneshot", "-q", "--query", "--version", "-V", "-h", "--help"].contains($0) }) { return false }
+            if args.first == "gateway", args.count > 1, ["start", "stop", "restart", "status", "ensure"].contains(args[1]) { return false }
             return ["chat", "setup", "model", "tui", "login", "auth", "config", "gateway"].contains(args[0])
         case "duckdb": return !args.contains { ["-c", "-s", "-version", "--version", "-help", "--help"].contains($0) }
         case "gh": return args.prefix(2) == ["auth", "login"]
@@ -547,6 +585,10 @@ public enum TerminalActions {
         let lower = output.lowercased()
         let tail = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !$0.hasPrefix("$ ") }.suffix(3).joined(separator: "\n")
+        if command.hasPrefix("hermes "), lower.contains("gateway inaccessible"), lower.contains("service_start_failed") {
+            return Diagnosis(message: "Hermes is installed, but its background service couldn't start. I can start that service and retry your task.",
+                             fixCommands: ["hermes gateway start"], fixLabels: ["start the Hermes service"], retry: true)
+        }
         if let name = firstCapture(in: output, patterns: [#"command not found: ([\w.+-]+)"#, #"(?:^|\s)([\w.+-]+): command not found"#, #"No such file or directory: '?([\w.+-]+)'?\s*$"#].prefix(2)) {
             if let recipe = SetupRecipes.recipe(forBinary: name) ?? SetupRecipes.match(in: name) {
                 let steps = SetupRecipes.installPlan(for: recipe, installed: installed)

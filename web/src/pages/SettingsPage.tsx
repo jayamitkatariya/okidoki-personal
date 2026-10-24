@@ -290,6 +290,9 @@ export function SettingsPage() {
               <PrefRow title="Hide in screenshots" detail="Keep the overlay out of captures">
                 <Switch label="Hide in screenshots" checked={settings.hideInScreenshots} onChange={(value) => updateSettings({ hideInScreenshots: value })} />
               </PrefRow>
+              <PrefRow title="See the screen" detail="Send the front window, browser tab and a small screenshot with each request, so okidoki knows what it's about. Never stored.">
+                <Switch label="See the screen" checked={settings.screenContext ?? true} onChange={(value) => updateSettings({ screenContext: value })} />
+              </PrefRow>
               <PrefRow title="Spending limit" detail="Per task, for tools that cost money">
                 <Slider min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
               </PrefRow>
