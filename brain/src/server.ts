@@ -39,7 +39,7 @@ const server = Bun.serve({
     if (url.pathname === "/health") {
       return json({
         ok: true,
-        version: "0.9.0",
+        version: "0.9.1",
         runtime: `bun ${Bun.version}`,
         agents: ["claude", "opencode", "omp", "hermes"].filter((agent) => Bun.which(agent) !== null),
         tools: installedTools(),

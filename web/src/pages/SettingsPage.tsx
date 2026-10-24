@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
 import type { AccountKind } from "../types";
-import { Avatar, Button, IconButton, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField } from "../components/ui";
+import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
   { id: "sarah", name: "Sarah", blurb: "Calm, clear, a little dry" },
@@ -33,7 +33,7 @@ const SECTIONS = [
 ];
 
 export function SettingsPage() {
-  const { state, settings, account, updateSettings, invoke, notify } = useDashboard();
+  const { state, settings, account, updateSettings, invoke, notify, convexConnected } = useDashboard();
   const [instructions, setInstructions] = useState(settings.customInstructions);
   const [name, setName] = useState(account.name);
   const [email, setEmail] = useState(account.email);
@@ -41,6 +41,7 @@ export function SettingsPage() {
   const [appDraft, setAppDraft] = useState("");
   const [askDraft, setAskDraft] = useState("");
   const [active, setActive] = useState(SECTIONS[0].id);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   useEffect(() => setInstructions(settings.customInstructions), [settings.customInstructions]);
   useEffect(() => {
@@ -49,24 +50,42 @@ export function SettingsPage() {
     setKind(account.kind);
   }, [account.id, account.name, account.email, account.kind]);
 
-  // Highlight the section currently at the top of the scroll area.
+  // Highlight the section at the top of the scroll area. Driven by scroll position, so the
+  // last sections still light up at the bottom, and a click holds its section while the
+  // smooth scroll passes the others.
+  const jumping = useRef<number | null>(null);
   useEffect(() => {
-    const root = document.querySelector(".content");
-    const nodes = SECTIONS.map((section) => document.getElementById(`settings-${section.id}`)).filter(Boolean) as HTMLElement[];
-    if (!nodes.length || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible[0]) setActive(visible[0].target.id.replace("settings-", ""));
-      },
-      { root, rootMargin: "0px 0px -65% 0px", threshold: 0 },
-    );
-    nodes.forEach((node) => observer.observe(node));
-    return () => observer.disconnect();
+    const root = document.querySelector<HTMLElement>(".content");
+    if (!root) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      if (jumping.current !== null) return;
+      const top = root.getBoundingClientRect().top + 96;
+      let current: string = SECTIONS[0].id;
+      for (const section of SECTIONS) {
+        const node = document.getElementById(`settings-${section.id}`);
+        if (node && node.getBoundingClientRect().top <= top) current = section.id;
+      }
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4) current = SECTIONS[SECTIONS.length - 1].id;
+      setActive(current);
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    root.addEventListener("scroll", onScroll, { passive: true });
+    update();
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+      if (jumping.current !== null) window.clearTimeout(jumping.current);
+    };
   }, []);
 
   const jump = (id: string) => {
     setActive(id);
+    if (jumping.current !== null) window.clearTimeout(jumping.current);
+    jumping.current = window.setTimeout(() => (jumping.current = null), 700);
     document.getElementById(`settings-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -130,7 +149,7 @@ export function SettingsPage() {
                 />
               </PrefRow>
               <PrefRow title="Speaking speed">
-                <Slider min={0.7} max={1.4} step={0.05} value={settings.voiceSpeed} onChange={(value) => updateSettings({ voiceSpeed: value })} label={`${settings.voiceSpeed.toFixed(2)}×`} />
+                <Slider min={0.7} max={1.4} step={0.05} value={settings.voiceSpeed} onChange={(value) => updateSettings({ voiceSpeed: value })} format={(value) => `${value.toFixed(2)}×`} />
               </PrefRow>
               <PrefRow title="Captions" detail="Show what okidoki is saying">
                 <Switch label="Captions" checked={settings.captions} onChange={(value) => updateSettings({ captions: value })} />
@@ -233,7 +252,7 @@ export function SettingsPage() {
                 <Switch label="Hide in screenshots" checked={settings.hideInScreenshots} onChange={(value) => updateSettings({ hideInScreenshots: value })} />
               </PrefRow>
               <PrefRow title="Spending limit" detail="Per task, for tools that cost money">
-                <Slider min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} label={`$${settings.spendingLimit}`} />
+                <Slider min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
               </PrefRow>
             </div>
 
@@ -302,17 +321,6 @@ export function SettingsPage() {
                   compact
                 />
               </PrefRow>
-              <PrefRow title="External displays">
-                <Segmented
-                  options={[
-                    { value: "top-center", label: "Top center" },
-                    { value: "notch", label: "Follow the notch" },
-                  ]}
-                  value={settings.notchExternalPosition}
-                  onChange={(value) => updateSettings({ notchExternalPosition: value })}
-                  compact
-                />
-              </PrefRow>
             </div>
           </SettingsSection>
 
@@ -330,7 +338,7 @@ export function SettingsPage() {
                 />
               </PrefRow>
               <PrefRow title="Cursor glow">
-                <Swatches value={settings.cursorGlowHex} onPick={(color) => updateSettings({ cursorGlowHex: color, drawingColorHex: color })} />
+                <Swatches value={settings.cursorGlowHex} onPick={(color) => updateSettings({ cursorGlowHex: color })} />
               </PrefRow>
               <PrefRow title="Shake sensitivity" detail="Lower is easier to trigger">
                 <Slider
@@ -339,7 +347,7 @@ export function SettingsPage() {
                   step={0.05}
                   value={settings.shakeSensitivity}
                   onChange={(value) => updateSettings({ shakeSensitivity: value })}
-                  label={`${Math.round(settings.shakeSensitivity * 100)}%`}
+                  format={(value) => `${Math.round(value * 100)}%`}
                 />
               </PrefRow>
             </div>
@@ -362,7 +370,7 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="account" title="Account" description="Personal and work accounts keep separate threads, memory and routines.">
+          <SettingsSection id="account" title="Account" description="Personal and work accounts keep separate threads, runs, skills and routines. Memory is shared by every account on this Mac.">
             <div className="pref-group">
               <PrefRow title="Name">
                 <TextField value={name} onChange={setName} className="pref-field" />
@@ -423,14 +431,20 @@ export function SettingsPage() {
               </button>
               <button
                 className="pref-row pref-row-button pref-action is-danger"
-                onClick={() => {
-                  if (confirm("Delete this account and all of its threads, memory and runs? This cannot be undone.")) {
-                    invoke("deleteAccount", { id: state.currentAccountID });
-                  }
-                }}
+                disabled={state.accounts.length <= 1}
+                title={state.accounts.length <= 1 ? "Your only account can't be deleted. Add another first." : undefined}
+                onClick={() =>
+                  setConfirm({
+                    title: `Delete ${account.name}?`,
+                    detail: "Its threads, runs, skills and routines go with it. Memory is shared and stays. This can't be undone.",
+                    action: "Delete account",
+                    onConfirm: () => invoke("deleteAccount", { id: state.currentAccountID }),
+                  })
+                }
               >
                 <PixelIcon name="trash" size={15} />
                 Delete account…
+                {state.accounts.length <= 1 ? <span className="pref-hint">Add another account first</span> : null}
               </button>
             </div>
           </SettingsSection>
@@ -476,9 +490,9 @@ export function SettingsPage() {
                 </span>
               </PrefRow>
               <PrefRow title="Convex live">
-                <span className={cx("pref-value", state.sidecar === "ready" && "is-on")}>
+                <span className={cx("pref-value", convexConnected && "is-on")}>
                   <i />
-                  {state.sidecar === "ready" ? "Yes" : "No"}
+                  {convexConnected ? "Yes" : "No"}
                 </span>
               </PrefRow>
               {settings.lastSyncAt ? (
@@ -490,7 +504,18 @@ export function SettingsPage() {
 
             <div className="pref-group">
               <PrefRow title="Quit okidoki" detail="Stops listening until you open it again">
-                <Button variant="danger" size="sm" onClick={() => invoke("quit")}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() =>
+                    setConfirm({
+                      title: "Quit okidoki?",
+                      detail: "It stops listening until you open it again.",
+                      action: "Quit",
+                      onConfirm: () => invoke("quit"),
+                    })
+                  }
+                >
                   Quit
                 </Button>
               </PrefRow>
@@ -503,6 +528,7 @@ export function SettingsPage() {
           </footer>
         </div>
       </div>
+      <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
@@ -531,8 +557,23 @@ function PrefRow({ title, detail, children }: { title: string; detail?: string; 
   );
 }
 
-function Slider({ min, max, step, value, onChange, label }: { min: number; max: number; step: number; value: number; onChange: (value: number) => void; label: string }) {
-  const fill = ((value - min) / (max - min)) * 100;
+// Moves live while dragging; commits once on release so a drag isn't a save and a sync per tick.
+function Slider({ min, max, step, value, onChange, format }: { min: number; max: number; step: number; value: number; onChange: (value: number) => void; format: (value: number) => string }) {
+  const [draft, setDraft] = useState(value);
+  const latest = useRef(value);
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (!dragging.current) {
+      latest.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+  const commit = () => {
+    dragging.current = false;
+    if (latest.current !== value) onChange(latest.current);
+  };
+  const fill = ((draft - min) / (max - min)) * 100;
+  const label = format(draft);
   return (
     <span className="pref-slider">
       <input
@@ -540,10 +581,17 @@ function Slider({ min, max, step, value, onChange, label }: { min: number; max: 
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={draft}
         aria-label={label}
         style={{ ["--fill" as string]: `${fill}%` }}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onPointerDown={() => (dragging.current = true)}
+        onChange={(event) => {
+          latest.current = Number(event.target.value);
+          setDraft(latest.current);
+        }}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
       />
       <em>{label}</em>
     </span>

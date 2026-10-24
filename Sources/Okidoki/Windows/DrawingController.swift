@@ -89,22 +89,29 @@ final class DrawingController {
                                      width: padded.width, height: padded.height)
         captureGeneration += 1
         let generation = captureGeneration
+        let region = ScreenCaptureService.region(for: padded, on: screen)
         // Our overlays are excluded from capture (sharingType = .none), so nothing has to hide.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.captureGeneration == generation else { return }
-            let image = ScreenCaptureService.capture(rect: padded, on: screen)
-            self.env?.summon.attachSelection(name: "Selection", image: image, selection: globalSelection)
-            if image == nil {
-                self.model.strokes = []
-                self.env?.toast(title: "couldn't capture the screen",
-                                detail: "grant screen recording in onboarding, then try again",
-                                kind: .warning,
-                                undoLabel: nil,
-                                onUndo: nil,
-                                editLabel: nil,
-                                onEdit: nil,
-                                runID: nil)
-            }
+        // `screencapture` takes a few hundred ms: run it off the main thread so the stroke,
+        // the cursor mark and the summon box don't freeze while it works.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let image = region.flatMap { ScreenCaptureService.capture(region: $0) }
+            await self?.captured(image, selection: globalSelection, generation: generation)
+        }
+    }
+
+    private func captured(_ image: Data?, selection globalSelection: CGRect, generation: Int) {
+        guard captureGeneration == generation else { return }
+        env?.summon.attachSelection(name: "Selection", image: image, selection: globalSelection)
+        if image == nil {
+            model.strokes = []
+            env?.toast(title: "couldn't capture the screen",
+                       detail: "grant screen recording in onboarding, then try again",
+                       kind: .warning,
+                       undoLabel: nil,
+                       onUndo: nil,
+                       editLabel: nil,
+                       onEdit: nil,
+                       runID: nil)
         }
     }
 }
@@ -128,6 +135,9 @@ struct DrawingView: View {
             .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Stroke points are treated as offsets from the screen's top-left: never inset them
+        // by the camera-housing safe area on notched screens.
+        .ignoresSafeArea()
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 0, coordinateSpace: .local)
@@ -180,19 +190,26 @@ struct DrawingView: View {
 }
 
 enum ScreenCaptureService {
-    static func capture(rect: CGRect, on screen: NSScreen) -> Data? {
+    /// `rect` (top-left origin, local to `screen`) in the global top-left coordinates
+    /// `screencapture -R` expects, or nil (after asking) without screen-recording access.
+    @MainActor
+    static func region(for rect: CGRect, on screen: NSScreen) -> CGRect? {
         guard CGPreflightScreenCaptureAccess() else {
             let _ = CGRequestScreenCaptureAccess()
             return nil
         }
+        let mainHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        return CGRect(x: screen.frame.minX + rect.minX, y: mainHeight - screen.frame.maxY + rect.minY,
+                      width: rect.width, height: rect.height)
+    }
+
+    /// Blocks until `screencapture` exits; call off the main thread.
+    static func capture(region: CGRect) -> Data? {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("okidoki-capture-\(UUID().uuidString).png")
-        let mainHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
-        let topY = mainHeight - screen.frame.maxY + rect.minY
-        let x = screen.frame.minX + rect.minX
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-x", "-R", "\(Int(x)),\(Int(topY)),\(Int(rect.width)),\(Int(rect.height))", temp.path]
+        process.arguments = ["-x", "-R", "\(Int(region.minX)),\(Int(region.minY)),\(Int(region.width)),\(Int(region.height))", temp.path]
         do {
             try process.run()
             process.waitUntilExit()

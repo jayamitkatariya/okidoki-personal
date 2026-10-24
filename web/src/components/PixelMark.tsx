@@ -18,9 +18,9 @@ export function PixelMark({ src = "brand.png", className = "" }: { src?: string;
     const img = new Image();
     let cells: { x: number; y: number; delay: number }[] = [];
     let size = 0;
+    let timer = 0;
     let raf = 0;
     let started = 0;
-    let last = 0;
 
     const build = () => {
       const box = canvas.getBoundingClientRect();
@@ -68,13 +68,13 @@ export function PixelMark({ src = "brand.png", className = "" }: { src?: string;
       ctx.globalAlpha = 1;
     };
 
-    const loop = (now: number) => {
-      // blink at 2.4 beats a second: the steps() feel, not a smooth fade
-      if (now - last > 420 || last === 0) {
-        last = now;
-        paint(now);
-      }
-      raf = requestAnimationFrame(loop);
+    // develop smoothly, then settle to the blink beat: 2.4 a second, the steps() feel.
+    // A timer, not a free-running rAF, so the idle mark costs nothing between beats.
+    const developFor = () => (cells.length ? Math.max(...cells.map((cell) => cell.delay)) + 260 : 0);
+    const loop = () => {
+      const now = performance.now();
+      paint(now);
+      timer = window.setTimeout(() => (raf = requestAnimationFrame(loop)), now - started < developFor() ? 16 : 420);
     };
 
     img.onload = () => {
@@ -84,20 +84,24 @@ export function PixelMark({ src = "brand.png", className = "" }: { src?: string;
         paint(started + 10_000);
         return;
       }
-      raf = requestAnimationFrame(loop);
+      loop();
     };
     img.src = src;
 
     const resize = new ResizeObserver(() => {
+      if (!img.complete || !img.naturalWidth) return;
+      window.clearTimeout(timer);
       cancelAnimationFrame(raf);
       build();
       if (reduced) paint(started + 10_000);
-      else raf = requestAnimationFrame(loop);
+      else loop();
     });
     resize.observe(canvas);
 
     return () => {
+      window.clearTimeout(timer);
       cancelAnimationFrame(raf);
+      img.onload = null;
       resize.disconnect();
     };
   }, [src]);

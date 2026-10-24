@@ -99,6 +99,15 @@ final class SummonController {
                 self.showError(message)
             }
             .store(in: &cancellables)
+        // Removing the attachment also wipes its circle off the screen (it used to linger).
+        model.$screenshotPNG
+            .dropFirst()
+            .filter { $0 == nil }
+            .sink { [weak self] _ in
+                guard let draw = self?.env?.draw, !draw.model.strokes.isEmpty else { return }
+                draw.model.strokes = []
+            }
+            .store(in: &cancellables)
         // Authorization is async: if the mic comes up after we've left voice mode, stop it.
         speech.$isListening
             .receive(on: RunLoop.main)

@@ -111,13 +111,23 @@ final class TeachController {
             onStop: { [weak self] in self?.stop(completed: false) }
         )
         .environmentObject(env!)
-        control.contentView = NSHostingView(rootView: view)
+        // First-mouse hosting: the panel is never key while you work in your app, and a plain
+        // NSHostingView swallowed the first click on back / next / stop.
+        control.contentView = OverlayHostingView(rootView: view)
         controlPanel = control
     }
 
     private func animateProgress() {
-        model.progress = 0
-        withAnimation(.easeOut(duration: 0.55)) { model.progress = 1 }
+        // Reset without animation and let that render first: setting 0 then animating to 1 in
+        // the same turn coalesced into 1 → 1, so marks never drew in (they just popped).
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) { model.progress = 0 }
+        let index = model.index
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            guard let self, self.model.isActive, self.model.index == index else { return }
+            withAnimation(.easeOut(duration: 0.55)) { self.model.progress = 1 }
+        }
     }
 
     func next() {
@@ -276,7 +286,9 @@ struct TeachHighlightView: View {
                     .frame(width: 230, height: 30)
                     .background(Capsule().fill(Color(hex: 0x0B0B0C).opacity(0.9)))
                     .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 0.6))
-                    .padding(.bottom, 172)
+                    // Just above the control card, which sits on the visible frame (above the
+                    // Dock); this panel spans the full frame, so add the Dock's height back.
+                    .padding(.bottom, 172 + max(0, screen.visibleFrame.minY - screen.frame.minY))
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -582,6 +594,7 @@ struct TeachControlView: View {
                         .font(.okMono(8.5, .medium))
                         .textCase(.uppercase)
                         .foregroundStyle(Color(hex: 0x1FB57A))
+                        .lineLimit(1)
                     Rectangle().fill(theme.line).frame(width: 1, height: 9)
                     Text("i'll wait for you")
                         .font(.okMono(8.5))

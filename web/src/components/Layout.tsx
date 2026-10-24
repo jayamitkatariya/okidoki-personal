@@ -6,11 +6,11 @@ import type { AccountKind } from "../types";
 import {
   Avatar,
   Button,
+  isComposing,
   KeyHint,
   Logo,
   Modal,
   PixelIcon,
-  PixelWipe,
   Segmented,
   TextField,
   ThemeToggle,
@@ -78,6 +78,12 @@ export function AppShell({
   const [accountOpen, setAccountOpen] = useState(false);
   const [addAccount, setAddAccount] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // each page starts at the top, not wherever the last one was scrolled to
+  useLayoutEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [page]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -146,7 +152,6 @@ export function AppShell({
 
   return (
     <div className="app">
-      <PixelWipe trigger={page} />
       <aside className="sidebar">
         <div className="brand">
           <Logo size={30} glow />
@@ -276,19 +281,17 @@ export function AppShell({
       </aside>
 
       <main className="main">
-        <div className="content">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={page}
-              className="page"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
-            >
-              {children}
-            </motion.div>
-          </AnimatePresence>
+        <div className="content" ref={contentRef}>
+          {/* the next page fades straight in: no exit wait, so navigation never lags a beat */}
+          <motion.div
+            key={page}
+            className="page"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+          >
+            {children}
+          </motion.div>
         </div>
       </main>
 
@@ -395,8 +398,12 @@ function CommandPalette({
                   setIndex(0);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") submit();
-                  if (event.key === "Escape") onClose();
+                  if (event.key === "Enter" && !isComposing(event)) submit();
+                  if (event.key === "Escape" && !isComposing(event)) {
+                    // keep a page modal underneath open
+                    event.preventDefault();
+                    onClose();
+                  }
                   if (event.key === "ArrowDown") {
                     event.preventDefault();
                     setIndex((value) => Math.min(sections.length - 1, value + 1));

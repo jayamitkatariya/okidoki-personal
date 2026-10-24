@@ -5,6 +5,9 @@
   flex-direction: column;
   gap: 28px;
 }
+.skills-page > .page-head {
+  margin-bottom: 4px;
+}
 .skills-section .section-head {
   margin-bottom: 10px;
 }

@@ -88,6 +88,8 @@ final class GhostCursorController {
     private var startMouse: CGPoint = .zero
     private var started = Date()
     private var cancelled = false
+    /// Bumped per takeover so a cancelled one's pending click/finish can't fire into the next.
+    private var session = 0
 
     init(environment: AppEnvironment) { self.env = environment }
 
@@ -95,6 +97,8 @@ final class GhostCursorController {
         guard !model.visible else { return }
         self.runID = runID
         cancelled = false
+        session += 1
+        let session = session
         let front = NSWorkspace.shared.frontmostApplication
         let pid = front?.processIdentifier ?? 0
         let found = AccessibilityLocator.find(target: target, pid: pid)
@@ -130,12 +134,12 @@ final class GhostCursorController {
         env?.speaker.speak("taking over for a second.", voiceID: env?.store.settings.voiceID ?? "sarah",
                            speed: env?.store.settings.voiceSpeed ?? 1)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) { [weak self] in
-            self?.performClick()
+            self?.performClick(session: session)
         }
     }
 
-    private func performClick() {
-        guard !cancelled, model.visible else { return }
+    private func performClick(session: Int) {
+        guard session == self.session, !cancelled, model.visible else { return }
         if let moveMonitor {
             NSEvent.removeMonitor(moveMonitor)
             self.moveMonitor = nil
@@ -145,10 +149,14 @@ final class GhostCursorController {
             cancel(reason: "you moved — control is yours")
             return
         }
+        guard AccessibilityActions.click(at: targetGlobal) else {
+            // No permission to post events: don't animate a click that never happened.
+            cancel(reason: "couldn't click — allow accessibility access, then try again")
+            return
+        }
         model.clicking = true
-        AccessibilityActions.click(at: targetGlobal)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            guard let self, !self.cancelled else { return }
+            guard let self, self.session == session, !self.cancelled else { return }
             self.finish()
         }
     }
@@ -310,6 +318,8 @@ final class WatchHUDController {
 
     func show() {
         guard let env else { return }
+        // A second show used to replace `panel` without ordering the old HUD out, leaving it stuck on screen.
+        panel?.orderOut(nil)
         model.visible = true
         model.elapsed = 0
         model.steps = 0
@@ -327,7 +337,8 @@ final class WatchHUDController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .none
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: WatchHUDView(model: model, onStop: { [weak self] in self?.env?.stopWatching() })
+        // First-mouse hosting so "stop" works on the first click (the HUD is never key).
+        panel.contentView = OverlayHostingView(rootView: WatchHUDView(model: model, onStop: { [weak self] in self?.env?.stopWatching() })
             .environmentObject(env))
         panel.orderFrontRegardless()
         self.panel = panel
@@ -373,6 +384,8 @@ struct WatchHUDView: View {
                 Text("\(timeString) · \(model.steps) steps · click stop when you're done")
                     .font(.okMono(8))
                     .foregroundStyle(Color.white.opacity(0.42))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
             Spacer(minLength: 0)
             Button("stop") { onStop() }

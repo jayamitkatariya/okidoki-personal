@@ -194,13 +194,30 @@ enum OKMotion {
 // MARK: - Appearance helper
 
 extension View {
-    @ViewBuilder
+    /// Always the same modifier, only the value changes — branching here would swap the view's
+    /// identity on every appearance change and tear down whatever it wraps (state, web views).
     func okPreferredScheme(_ appearance: AppAppearance) -> some View {
-        switch appearance {
-        case .system: self
-        case .light: self.preferredColorScheme(.light)
-        case .dark: self.preferredColorScheme(.dark)
+        preferredColorScheme(appearance.okColorScheme)
+    }
+}
+
+extension AppAppearance {
+    var okColorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
         }
+    }
+}
+
+extension NSColor {
+    /// Matches the web control panel's `--bg` in both themes so the window never flashes a
+    /// different colour while the page loads or when the theme flips.
+    static let okDashboardBackground = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0x07 / 255, green: 0x09 / 255, blue: 0x08 / 255, alpha: 1)
+            : NSColor(srgbRed: 0xF1 / 255, green: 0xF2 / 255, blue: 0xF1 / 255, alpha: 1)
     }
 }
 
@@ -236,11 +253,17 @@ enum OKRegistry {
         for url in fontURLs {
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         }
-        if fontURLs.isEmpty, let bundleURL {
-            let folder = bundleURL.appendingPathComponent("Fonts")
-            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-            for file in files where ["ttf", "otf"].contains(file.pathExtension.lowercased()) {
-                CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
+        if fontURLs.isEmpty {
+            // Running bare (`swift run`) there's no bundle Fonts folder; fall back to the repo copy,
+            // the same way OKBrandMark does, so text doesn't silently drop to the system font.
+            let folders = [bundleURL?.appendingPathComponent("Fonts"), URL(fileURLWithPath: "Resources/Fonts")]
+            for folder in folders.compactMap({ $0 }) {
+                let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+                let fonts = files.filter { ["ttf", "otf"].contains($0.pathExtension.lowercased()) }
+                for file in fonts {
+                    CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
+                }
+                if !fonts.isEmpty { break }
             }
         }
     }

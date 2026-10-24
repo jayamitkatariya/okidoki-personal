@@ -65,10 +65,13 @@ export function duration(start: string | null | undefined, end: string | null | 
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export function copyText(text: string): void {
-  if (navigator.clipboard?.writeText) {
-    void navigator.clipboard.writeText(text);
-  }
+/** Resolves false when the clipboard isn't available or the write is refused. */
+export function copyText(text: string): Promise<boolean> {
+  if (!navigator.clipboard?.writeText) return Promise.resolve(false);
+  return navigator.clipboard.writeText(text).then(
+    () => true,
+    () => false,
+  );
 }
 
 export function clamp(value: number, min: number, max: number): number {
@@ -105,4 +108,11 @@ export function riskLabel(risk: string | undefined): string {
 
 export function greetingName(name: string): string {
   return name.split(" ")[0] || name;
+}
+
+// Rough yearly price of the paid app each free tool stands in for. Mirrors ToolCatalog.paidAlternatives.
+const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59 };
+
+export function toolPrice(id: string): number {
+  return TOOL_PRICES[id] ?? 0;
 }

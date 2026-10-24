@@ -51,7 +51,7 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       break;
     }
     case "updateSettings": {
-      state.settings = { ...state.settings, ...(payload.settings as Partial<Settings>) };
+      state.settings = { ...state.settings, ...((payload.patch ?? payload.settings) as Partial<Settings>) };
       break;
     }
     default:
@@ -127,6 +127,8 @@ export function useConvexSnapshot(accountId: string | undefined, siteURL: string
     if (!url || !accountId) return;
     try {
       if (!client || clientURL !== url) {
+        // drop the old socket rather than leaving one open per URL tried
+        void client?.close();
         client = new ConvexClient(url);
         clientURL = url;
       }

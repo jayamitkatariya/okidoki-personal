@@ -273,6 +273,7 @@ final class NotchController {
     private var settleWork: DispatchWorkItem?
     private var openWork: DispatchWorkItem?
     private var escapeMonitor: Any?
+    private var globalEscapeMonitor: Any?
     private var clickMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
     private var islandSize: CGSize = .zero
@@ -299,47 +300,7 @@ final class NotchController {
         buildHotZone()
         observe()
         refresh()
-        debugScript() // TEMP-DEBUG
     }
-
-    // TEMP-DEBUG-BEGIN
-    private func debugScript() {
-        guard ProcessInfo.processInfo.environment["OKIDOKI_NOTCH_DEBUG"] == "1" else { return }
-        panel?.sharingType = .readOnly
-        func at(_ t: Double, _ f: @escaping () -> Void) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + t) { MainActor.assumeIsolated { f() } }
-        }
-        func snap(_ name: String) {
-            guard let host = self.host, let panel = self.panel else { return }
-            print("SNAP \(name) frame=\(panel.frame) island=\(self.islandSize) visible=\(panel.isVisible) presented=\(self.model.presented)")
-            let rect = host.bounds
-            guard let rep = host.bitmapImageRepForCachingDisplay(in: rect) else { return }
-            host.cacheDisplay(in: rect, to: rep)
-            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/private/tmp/claude-501/shots/\(name).png"))
-        }
-        for (name, t) in [("a_approval", 3.0), ("a2_mid", 4.15), ("b_expanded", 6.2), ("c_appr_toast", 9.2), ("d_toasts", 12.2),
-                          ("e_live", 15.2), ("f_listen", 18.2), ("g_closed", 21.2), ("h_empty", 24.0)] {
-            at(t) { snap(name) }
-        }
-        at(4) { self.setExpanded(true) }
-        at(7) {
-            self.setExpanded(false)
-            self.env.toast(title: "saved to notes", detail: "“groceries” is in notes", kind: .success,
-                           undoLabel: "undo", onUndo: {}, editLabel: "edit", onEdit: {}, runID: nil)
-        }
-        at(10) { if let id = self.env.store.waitingRuns.first?.id { self.env.denyRun(id) } }
-        at(13) {
-            self.model.clear()
-            self.refresh()
-        }
-        at(16) {
-            for run in self.env.store.liveRuns { self.env.store.cancelRun(run.id) }
-            self.noteListening(true)
-        }
-        at(19) { self.noteListening(false) }
-        at(22) { self.setExpanded(true) }
-    }
-    // TEMP-DEBUG-END
 
     private func buildPanel() {
         let panel = NotchPanel(contentRect: windowFrame(for: CGSize(width: model.islandWidth, height: model.metrics.bandHeight)),
@@ -556,7 +517,9 @@ final class NotchController {
     private func hotZoneFrame() -> NSRect {
         let m = model.metrics
         if m.hasNotch {
-            let width = m.notchWidth + 80
+            // Barely wider than the notch: the zone takes clicks, so anything wider swallows
+            // clicks on the menu bar items that sit right beside the notch.
+            let width = m.notchWidth + 12
             return NSRect(x: (screen.frame.midX - width / 2).rounded(), y: screen.frame.maxY - m.notchHeight,
                           width: width, height: m.notchHeight)
         }
@@ -707,6 +670,19 @@ final class NotchController {
                 return handled ? nil : event
             }
         }
+        if globalEscapeMonitor == nil {
+            // The island opens on hover and never takes key (that would steal typing from the
+            // app you're in), so Esc usually goes to another app: watch for it there too.
+            // Global key monitors need Accessibility, which okidoki already asks for.
+            globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard event.keyCode == 53 else { return }
+                MainActor.assumeIsolated {
+                    guard let self, self.model.expanded else { return }
+                    self.lastManualClose = Date()
+                    self.setExpanded(false)
+                }
+            }
+        }
         if clickMonitor == nil {
             clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -721,6 +697,8 @@ final class NotchController {
     private func removeMonitors() {
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
+        if let globalEscapeMonitor { NSEvent.removeMonitor(globalEscapeMonitor) }
+        globalEscapeMonitor = nil
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         clickMonitor = nil
     }

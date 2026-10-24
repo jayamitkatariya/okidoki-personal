@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
 import type { Memory } from "../types";
-import { Button, Chip, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea } from "../components/ui";
+import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, type ConfirmRequest } from "../components/ui";
 
 type Section = "aboutYou" | "rightNow";
 
@@ -27,14 +27,24 @@ export function MemoryPage() {
   const [text, setText] = useState("");
   const [editing, setEditing] = useState<Memory | null>(null);
   const [editText, setEditText] = useState("");
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const about = state.memories.filter((memory) => memory.section === "aboutYou");
   const now = state.memories.filter((memory) => memory.section === "rightNow");
   const calendar = state.connectors.find((connector) => connector.id === "calendar");
 
   const add = () => {
-    if (!text.trim()) return;
-    invoke("addMemory", { text: text.trim(), section });
-    notify("Noted", text.trim());
+    // mirror the native rules (OkidokiStore.addMemory) so the toast only claims what gets saved
+    const cleaned = text.trim().replace(/^[.,;: ]+|[.,;: ]+$/g, "");
+    if (cleaned.length <= 2) {
+      notify("Too short to remember", "Add a few more words", "warning");
+      return;
+    }
+    if (state.memories.some((memory) => memory.text.toLowerCase() === cleaned.toLowerCase())) {
+      notify("Already remembered", cleaned, "info");
+      return;
+    }
+    invoke("addMemory", { text: cleaned, section });
+    notify("Noted", cleaned);
     setText("");
   };
 
@@ -43,9 +53,16 @@ export function MemoryPage() {
     setEditText(memory.text);
   };
 
-  const remove = (id: string) => {
-    invoke("deleteMemory", { id });
-    notify("Forgotten", "Removed from memory", "info");
+  const remove = (memory: Memory) => {
+    setConfirm({
+      title: "Forget this memory?",
+      detail: memory.text,
+      action: "Forget",
+      onConfirm: () => {
+        invoke("deleteMemory", { id: memory.id });
+        notify("Forgotten", "Removed from memory", "info");
+      },
+    });
   };
 
   const fillExample = (target: Section) => {
@@ -161,8 +178,8 @@ export function MemoryPage() {
             disabled={!editText.trim()}
             onClick={() => {
               if (!editing) return;
-              invoke("updateMemory", { id: editing.id, text: editText });
-              notify("Memory updated", editText);
+              invoke("updateMemory", { id: editing.id, text: editText.trim() });
+              notify("Memory updated", editText.trim());
               setEditing(null);
             }}
           >
@@ -170,6 +187,7 @@ export function MemoryPage() {
           </Button>
         </div>
       </Modal>
+      <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
@@ -184,7 +202,7 @@ function MemoryList({
   section: Section;
   memories: Memory[];
   onEdit: (memory: Memory) => void;
-  onDelete: (id: string) => void;
+  onDelete: (memory: Memory) => void;
   onExample: (section: Section) => void;
 }) {
   const copy = SECTIONS[section];
@@ -207,7 +225,7 @@ function MemoryList({
               </button>
               <div className="memory-actions">
                 <IconButton icon="edit" label="Edit" size={14} onClick={() => onEdit(memory)} />
-                <IconButton icon="trash" label="Delete" size={14} onClick={() => onDelete(memory.id)} />
+                <IconButton icon="trash" label="Delete" size={14} onClick={() => onDelete(memory)} />
               </div>
             </div>
           ))}

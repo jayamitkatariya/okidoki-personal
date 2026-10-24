@@ -6,7 +6,7 @@
   gap: 14px;
 }
 .toolbox-page > .page-head {
-  margin-bottom: 10px;
+  margin-bottom: 18px;
 }
 
 /* top row: find + savings */
@@ -366,4 +366,9 @@
 }
 .tb-blurb + .tb-tool-foot {
   margin-top: auto;
+}
+
+/* suggestions sit under the lead, so the find card isn't an empty well above its search bar */
+.tb-suggest {
+  margin-top: 14px;
 }

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useDashboard } from "../store";
-import { cx, futureTime, relativeTime, scheduleLabel } from "../lib";
+import { clamp, cx, futureTime, relativeTime, scheduleLabel } from "../lib";
 import type { Cadence, Routine, Skill } from "../types";
-import { Button, Chip, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField } from "../components/ui";
+import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -18,22 +18,18 @@ export function SkillsPage() {
   const [hour, setHour] = useState(17);
   const [minute, setMinute] = useState(0);
   const [natural, setNatural] = useState("");
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
-  useEffect(() => {
-    if (!modalOpen) return;
-    if (!editing) {
-      setName("");
-      setPrompt("");
-      setCadence("weekly");
-      setWeekday(6);
-      setHour(17);
-      setMinute(0);
-      setNatural("");
-    }
-  }, [modalOpen, editing]);
-
+  // Reset here, not in an effect on open: an effect would also wipe what scheduleSkill fills in.
   const openNew = () => {
     setEditing(null);
+    setName("");
+    setPrompt("");
+    setCadence("weekly");
+    setWeekday(6);
+    setHour(17);
+    setMinute(0);
+    setNatural("");
     setModalOpen(true);
   };
 
@@ -56,35 +52,44 @@ export function SkillsPage() {
     setWeekday(6);
     setHour(17);
     setMinute(0);
+    setNatural("");
     setModalOpen(true);
   };
 
   const parseNatural = () => {
+    if (!natural.trim()) return;
     const lower = natural.toLowerCase();
-    const dayIndex = DAYS.findIndex((day) => lower.includes(day));
+    // whole words only, so "monitor" isn't Monday and "friend" isn't Friday
+    const dayMatch = lower.match(/\b(sun|mon|tue|wed|thu|fri|sat)(?:[a-z]*day|rs|s)?s?\b/);
     const timeMatch = lower.match(/at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
-    if (dayIndex >= 0) setWeekday(dayIndex + 1);
+    if (/\b(hourly|every hour)\b/.test(lower)) setCadence("hourly");
+    else if (/\bweekdays?\b/.test(lower)) setCadence("weekdays");
+    else if (/\b(daily|every day|each day|every morning|every evening|every night)\b/.test(lower)) setCadence("daily");
+    else if (dayMatch) setCadence("weekly");
+    if (dayMatch) setWeekday(DAYS.indexOf(dayMatch[1]) + 1);
     if (timeMatch) {
       let value = Number(timeMatch[1]);
       if (timeMatch[3] === "pm" && value < 12) value += 12;
       if (timeMatch[3] === "am" && value === 12) value = 0;
       if (!timeMatch[3] && value < 8) value += 12;
-      setHour(value);
-      setMinute(Number(timeMatch[2] ?? 0));
+      setHour(clamp(value, 0, 23));
+      setMinute(clamp(Number(timeMatch[2] ?? 0), 0, 59));
     }
     const comma = natural.indexOf(",");
     const action = comma >= 0 ? natural.slice(comma + 1).trim() : natural;
-    if (!name) setName(action.slice(0, 40) || "routine");
-    if (!prompt) setPrompt(natural);
+    setName(action.slice(0, 40) || "routine");
+    setPrompt(natural.trim());
     setNatural("");
   };
 
   const save = () => {
+    const title = name.trim() || "routine";
+    // enabled is left out: the snapshot from when the modal opened would undo a pause made since
     if (editing) {
-      invoke("updateRoutine", { id: editing.id, name, prompt, cadence, weekday, hour, minute, enabled: editing.enabled });
-      notify("Routine updated", name);
+      invoke("updateRoutine", { id: editing.id, name: title, prompt: prompt.trim(), cadence, weekday, hour, minute });
+      notify("Routine updated", title);
     } else {
-      invoke("addRoutine", { name: name || "routine", prompt, cadence, weekday, hour, minute });
+      invoke("addRoutine", { name: title, prompt: prompt.trim(), cadence, weekday, hour, minute });
       notify("Routine saved", scheduleLabel({ cadence, weekday, hour, minute }));
     }
     setModalOpen(false);
@@ -128,10 +133,17 @@ export function SkillsPage() {
                     label="Delete skill"
                     size={14}
                     className="skill-delete"
-                    onClick={() => {
-                      invoke("deleteSkill", { id: skill.id });
-                      notify("Skill removed", skill.name, "info");
-                    }}
+                    onClick={() =>
+                      setConfirm({
+                        title: "Delete this skill?",
+                        detail: `“${skill.name}” and its recorded steps will be gone.`,
+                        action: "Delete skill",
+                        onConfirm: () => {
+                          invoke("deleteSkill", { id: skill.id });
+                          notify("Skill removed", skill.name, "info");
+                        },
+                      })
+                    }
                   />
                 </header>
                 {skill.summary ? <p className="skill-summary">{skill.summary}</p> : null}
@@ -142,7 +154,7 @@ export function SkillsPage() {
                       <span>{step.text}</span>
                     </li>
                   ))}
-                  {skill.steps.length > 3 ? <li className="skill-more">+{skill.steps.length - 3} more steps</li> : null}
+                  {skill.steps.length > 3 ? <li className="skill-more">+{skill.steps.length - 3} more {skill.steps.length - 3 === 1 ? "step" : "steps"}</li> : null}
                 </ol>
                 <footer className="skill-actions">
                   <Button
@@ -221,10 +233,17 @@ export function SkillsPage() {
                     label="Delete routine"
                     size={14}
                     className="routine-hover"
-                    onClick={() => {
-                      invoke("deleteRoutine", { id: routine.id });
-                      notify("Routine removed", routine.name, "info");
-                    }}
+                    onClick={() =>
+                      setConfirm({
+                        title: "Delete this routine?",
+                        detail: `“${routine.name}” won't run again.`,
+                        action: "Delete routine",
+                        onConfirm: () => {
+                          invoke("deleteRoutine", { id: routine.id });
+                          notify("Routine removed", routine.name, "info");
+                        },
+                      })
+                    }
                   />
                   <IconButton
                     icon="play"
@@ -325,12 +344,12 @@ export function SkillsPage() {
               {cadence !== "hourly" ? (
                 <label className="routine-cell">
                   <span className="form-label">Hour</span>
-                  <input type="number" min={0} max={23} value={hour} onChange={(event) => setHour(Number(event.target.value))} />
+                  <input type="number" min={0} max={23} value={hour} onChange={(event) => setHour(clamp(Math.round(Number(event.target.value) || 0), 0, 23))} />
                 </label>
               ) : null}
               <label className="routine-cell">
                 <span className="form-label">Minute</span>
-                <input type="number" min={0} max={59} value={minute} onChange={(event) => setMinute(Number(event.target.value))} />
+                <input type="number" min={0} max={59} value={minute} onChange={(event) => setMinute(clamp(Math.round(Number(event.target.value) || 0), 0, 59))} />
               </label>
             </div>
           ) : null}
@@ -348,6 +367,7 @@ export function SkillsPage() {
           </Button>
         </footer>
       </Modal>
+      <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

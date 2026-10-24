@@ -528,19 +528,27 @@ struct OverlayTextField: NSViewRepresentable {
         field.cell?.wraps = false
         field.cell?.isScrollable = true
         field.delegate = context.coordinator
+        applyPlaceholder(to: field)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    private func applyPlaceholder(to field: NSTextField) {
         field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
             .font: field.font as Any,
             .foregroundColor: NSColor.placeholderTextColor,
         ])
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return field
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
         if field.stringValue != text {
             field.stringValue = text
+        }
+        // The placeholder changes with state ("Ask anything" → "Ask about this").
+        if field.placeholderAttributedString?.string != placeholder {
+            applyPlaceholder(to: field)
         }
         if context.coordinator.lastFocusTick != focusTick {
             context.coordinator.lastFocusTick = focusTick

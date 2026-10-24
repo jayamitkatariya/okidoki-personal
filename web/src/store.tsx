@@ -69,19 +69,22 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     nativeInvoke(type, payload);
   }, []);
 
-  const updateSettings = useCallback(
-    (patch: Partial<Settings>) => {
-      setSettings((current) => {
-        const next = { ...current, ...patch };
-        pendingUntil.current = Date.now() + 900;
-        nativeInvoke("updateSettings", { settings: next });
-        return next;
-      });
-    },
-    [],
-  );
+  // the latest settings, so a quick second change builds on the first instead of a stale render
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
+
+  const updateSettings = useCallback((patch: Partial<Settings>) => {
+    // side effects stay out of the state updater, which React may run more than once
+    const next = { ...latestSettings.current, ...patch };
+    latestSettings.current = next;
+    pendingUntil.current = Date.now() + 900;
+    setSettings(next);
+    // only the changed keys: native merges them, so settings it changed meanwhile aren't overwritten
+    nativeInvoke("updateSettings", { patch });
+  }, []);
 
   const updateManySettings = useCallback((next: Settings) => {
+    latestSettings.current = next;
     pendingUntil.current = Date.now() + 900;
     setSettings(next);
     nativeInvoke("updateSettings", { settings: next });

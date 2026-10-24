@@ -6,13 +6,13 @@ import OkidokiCore
 
 struct DashboardView: View {
     @EnvironmentObject private var env: AppEnvironment
-    @EnvironmentObject private var store: OkidokiStore
 
+    // No store observation or preferred scheme here: the web view must keep a stable identity
+    // (it is never rebuilt on a theme flip), and the controller already pushes state on change.
     var body: some View {
         WebDashboardView(environment: env)
-            .frame(minWidth: 1080, minHeight: 720)
-            .background(Color(hex: 0xF4F0E8))
-            .okPreferredScheme(store.settings.appearance)
+            .frame(minWidth: 900, minHeight: 600)
+            .background(Color(nsColor: .okDashboardBackground))
     }
 }
 
@@ -24,11 +24,16 @@ struct WebDashboardView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.sendState()
+        // State is pushed (debounced) by the coordinator's subscriptions.
     }
 
     func makeCoordinator() -> WebDashboardController {
         WebDashboardController(environment: environment)
+    }
+
+    static func dismantleNSView(_ webView: WKWebView, coordinator: WebDashboardController) {
+        // The user content controller retains its handler; break the cycle.
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "okidoki")
     }
 }
 
@@ -81,6 +86,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     private var cancellables = Set<AnyCancellable>()
     private var pushWork: DispatchWorkItem?
     private var didLoad = false
+    private var pendingAsk = false
 
     init(environment: AppEnvironment) {
         self.env = environment
@@ -104,7 +110,10 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.webView?.evaluateJavaScript("window.okidokiOpenAsk && window.okidokiOpenAsk();", completionHandler: nil)
+                guard let self else { return }
+                // On first open the page may still be loading; replay once it says it's ready.
+                guard self.didLoad else { self.pendingAsk = true; return }
+                self.webView?.evaluateJavaScript("window.okidokiOpenAsk && window.okidokiOpenAsk();", completionHandler: nil)
             }
             .store(in: &cancellables)
         environment.$dashboardRoute
@@ -120,6 +129,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 self?.focusRun(id)
             }
             .store(in: &cancellables)
+        // Permissions are granted in System Settings; refresh their labels when the user comes back.
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.schedulePush() }
+            .store(in: &cancellables)
     }
 
     func makeWebView() -> WKWebView {
@@ -128,8 +142,19 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
+        // Seed the first render with real state and the right theme; otherwise the page paints
+        // demo data in the light theme until the first native push lands.
+        let initialState = payloadJSON() ?? "null"
         let bootstrap = """
         (function() {
+          window.__okidokiState = \(initialState);
+          try {
+            var appearance = window.__okidokiState && window.__okidokiState.settings && window.__okidokiState.settings.appearance;
+            var theme = appearance === 'dark' || appearance === 'light' ? appearance
+              : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.dataset.theme = theme;
+            document.documentElement.style.colorScheme = theme;
+          } catch (e) {}
           window.okidokiInvoke = function(type, payload) {
             try { window.webkit.messageHandlers.okidoki.postMessage({ type: type, payload: payload || {} }); } catch (e) {}
           };
@@ -168,6 +193,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             return
         }
+        // Running bare (`swift run`) there's no bundle; use the repo build if it exists.
+        let repoBuild = URL(fileURLWithPath: "web/dist/index.html")
+        if FileManager.default.fileExists(atPath: repoBuild.path) {
+            webView.loadFileURL(repoBuild, allowingReadAccessTo: repoBuild.deletingLastPathComponent())
+            return
+        }
         let fallback = """
         <!doctype html><html><head><meta charset="utf-8"><style>
         @font-face{font-family:PP;src:url('fonts/PPNeueBit-Bold.otf')}
@@ -186,6 +217,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         didLoad = true
         sendState()
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Without this the dashboard stays blank until the app is relaunched.
+        didLoad = false
+        load(into: webView)
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -236,7 +273,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     }
 
     func sendState() {
-        guard let webView, didLoad, let env else { return }
+        guard let webView, didLoad, let json = payloadJSON() else { return }
+        webView.evaluateJavaScript("window.okidokiNative(\(json));", completionHandler: nil)
+    }
+
+    private func payloadJSON() -> String? {
+        guard let env else { return nil }
         let payload = DashboardPayload(
             accounts: env.store.accounts,
             currentAccountID: env.store.currentAccountID,
@@ -263,15 +305,15 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             onboardingOpen: env.onboardingOpen,
             dashboardOpen: env.dashboardOpen,
             sidecar: env.sidecar.status.label,
-            version: "0.9.0",
+            version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
             savings: env.store.savings,
             convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(payload),
-              let json = String(data: data, encoding: .utf8) else { return }
-        webView.evaluateJavaScript("window.okidokiNative(\(json));", completionHandler: nil)
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return json
     }
 
     // MARK: - Bridge actions
@@ -280,8 +322,14 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         guard let env else { return }
         switch type {
         case "ready", "getState":
+            // The page's listeners are live once it says so — usually before didFinish fires.
+            didLoad = true
             sendState()
             sendNavigation()
+            if pendingAsk {
+                pendingAsk = false
+                webView?.evaluateJavaScript("window.okidokiOpenAsk && window.okidokiOpenAsk();", completionHandler: nil)
+            }
         case "ask":
             if let text = payload["text"] as? String { env.askFromDashboard(text) }
         case "continueThread":
@@ -382,9 +430,25 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         case "deleteMemory":
             if let id = payload["id"] as? String { env.store.deleteMemory(id); env.store.saveNow() }
         case "updateSettings":
-            if let settingsPayload = payload["settings"] as? [String: Any],
+            // Dates go to the page as ISO 8601 (see payloadJSON), so they come back that way.
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let patch = payload["patch"] as? [String: Any] {
+                // Overlay only the keys the page changed, so native-side edits made meanwhile survive.
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                guard let currentData = try? encoder.encode(env.store.settings),
+                      var merged = (try? JSONSerialization.jsonObject(with: currentData)) as? [String: Any] else { break }
+                for (key, value) in patch { merged[key] = value }
+                if let data = try? JSONSerialization.data(withJSONObject: merged),
+                   let settings = try? decoder.decode(AppSettings.self, from: data) {
+                    env.store.settings = settings
+                    env.store.saveNow()
+                    env.refreshSync()
+                }
+            } else if let settingsPayload = payload["settings"] as? [String: Any],
                let data = try? JSONSerialization.data(withJSONObject: settingsPayload),
-               let settings = try? JSONDecoder().decode(AppSettings.self, from: data) {
+               let settings = try? decoder.decode(AppSettings.self, from: data) {
                 env.store.settings = settings
                 env.store.saveNow()
                 env.refreshSync()
@@ -403,6 +467,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "disconnectApple":
             if let id = payload["id"] as? String { env.disconnectApple(id) }
+        case "setConnector":
+            // Non-Apple connectors (Apify, MCP) have no permission probe; just record the switch.
+            if let id = payload["id"] as? String, let enabled = payload["enabled"] as? Bool {
+                env.store.setConnector(id, enabled: enabled)
+                env.store.saveNow()
+            }
         case "requestPermission":
             if let raw = payload["kind"] as? String, let kind = PermissionKind(rawValue: raw) {
                 Task {

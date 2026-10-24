@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { useDashboard } from "../store";
-import { cx, futureTime, money, relativeTime, scheduleLabel, timeOfDay, todayLabel } from "../lib";
+import { cx, futureTime, money, relativeTime, scheduleLabel, timeOfDay, todayLabel, toolPrice } from "../lib";
 import type { Run, RunKind, Settings } from "../types";
-import { Button, CountUp, KeyHint, PixelIcon, Progress, RiskBadge, Scramble, StatusBadge } from "../components/ui";
+import { Button, CountUp, KeyHint, PixelIcon, Progress, RiskBadge, StatusBadge } from "../components/ui";
 import type { Page } from "../components/Layout";
 import { PixelMark } from "../components/PixelMark";
 
@@ -28,9 +28,6 @@ export const kindGlyph: Record<RunKind, string> = {
   routine: "clock",
 };
 
-// Rough retail price of the paid app each free tool stands in for.
-const TOOL_VALUE: Record<string, number> = { mole: 39.95, ffmpeg: 79, pandoc: 49 };
-
 type ToggleKey = "okidokiEnabled" | "backgroundMode" | "screenBorrowing" | "voiceEnabled" | "captions" | "quietMode";
 
 const CONTROLS: { key: ToggleKey; icon: string; title: string; on: string; off: string }[] = [
@@ -38,7 +35,7 @@ const CONTROLS: { key: ToggleKey; icon: string; title: string; on: string; off: 
   { key: "quietMode", icon: "moon", title: "Quiet", on: "Silent", off: "Off" },
   { key: "voiceEnabled", icon: "mic", title: "Voice", on: "Spoken replies", off: "Off" },
   { key: "backgroundMode", icon: "runs", title: "Background", on: "Batch work", off: "Off" },
-  { key: "screenBorrowing", icon: "hand", title: "Borrow screen", on: "Asks first", off: "Off" },
+  { key: "screenBorrowing", icon: "hand", title: "Borrowing", on: "Asks first", off: "Off" },
   { key: "captions", icon: "eye", title: "Captions", on: "On", off: "Off" },
 ];
 
@@ -57,7 +54,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
   const routines = (state.routines ?? []).filter((routine) => routine.enabled);
   const memories = state.memories ?? [];
   const installedTools = (state.tools ?? []).filter((tool) => tool.installed);
-  const savings = state.savings || installedTools.reduce((sum, tool) => sum + (TOOL_VALUE[tool.id] ?? 0), 0);
+  const savings = state.savings || installedTools.reduce((sum, tool) => sum + toolPrice(tool.id), 0);
   const firstWord = account.name.split(" ")[0] || "there";
   const firstName = firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
 
@@ -74,13 +71,12 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
 
   return (
     <div className="home">
-      <PixelMark className="home-mark" />
       <div className="bento">
         <section className="tile hero span-8 reveal">
           <div className="hero-copy">
             <span className="hero-date">{todayLabel()}</span>
             <h1>
-              <Scramble text={`Good ${timeOfDay()}, ${firstName}`} />
+              Good {timeOfDay()}, {firstName}
             </h1>
             <p>
               {waiting.length ? (
@@ -142,7 +138,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           </div>
         </section>
 
-        <section className="tile span-7 reveal reveal-2">
+        <section className="tile span-8 reveal reveal-2">
           <header className="tile-head">
             <h2>Needs you</h2>
             {waiting.length ? <span className="tile-count is-hot">{waiting.length}</span> : null}
@@ -202,7 +198,35 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           )}
         </section>
 
-        <section className="tile span-5 reveal reveal-3">
+        <section className="tile span-4 reveal reveal-2">
+          <header className="tile-head">
+            <h2>Live</h2>
+            {live.length ? <span className="tile-count">{live.length}</span> : null}
+            <button className="tile-link" onClick={() => go("runs")}>
+              Runs <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          {live.length ? (
+            <div>
+              {live.slice(0, 2).map((run) => (
+                <LiveItem
+                  key={run.id}
+                  run={run}
+                  onOpen={() => openRun(run.id)}
+                  onPause={() => invoke("pauseRun", { id: run.id })}
+                  onStop={() => invoke("stopRun", { id: run.id })}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="tile-empty">
+              <strong>Nothing running</strong>
+              Background work and agents show progress here.
+            </div>
+          )}
+        </section>
+
+        <section className="tile span-12 reveal reveal-3">
           <header className="tile-head">
             <h2>Controls</h2>
             <button className="tile-link" onClick={() => go("settings")}>
@@ -233,104 +257,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           </div>
         </section>
 
-        <section className="tile span-4 reveal reveal-3">
-          <header className="tile-head">
-            <h2>Live</h2>
-            {live.length ? <span className="tile-count">{live.length}</span> : null}
-            <button className="tile-link" onClick={() => go("runs")}>
-              Runs <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {live.length ? (
-            <div>
-              {live.slice(0, 2).map((run) => (
-                <LiveItem
-                  key={run.id}
-                  run={run}
-                  onOpen={() => openRun(run.id)}
-                  onPause={() => invoke("pauseRun", { id: run.id })}
-                  onStop={() => invoke("stopRun", { id: run.id })}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <strong>Nothing running</strong>
-              Background work and agents show progress here.
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-4 reveal reveal-3">
-          <header className="tile-head">
-            <h2>Routines</h2>
-            <button className="tile-link" onClick={() => go("skills")}>
-              Manage <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {routines.length ? (
-            <div className="rows">
-              {routines.slice(0, 3).map((routine) => (
-                <div className="row" key={routine.id}>
-                  <span className="kind-icon small">
-                    <PixelIcon name="clock" size={14} />
-                  </span>
-                  <span className="row-copy">
-                    <strong>{routine.name}</strong>
-                    <em>
-                      {scheduleLabel(routine)}
-                      {routine.nextRunAt ? ` · ${futureTime(routine.nextRunAt)}` : ""}
-                    </em>
-                  </span>
-                  <button
-                    className="icon-btn"
-                    aria-label={`Run ${routine.name} now`}
-                    title="Run now"
-                    onClick={() => {
-                      invoke("runRoutine", { id: routine.id });
-                      notify("Routine started", routine.name);
-                    }}
-                  >
-                    <PixelIcon name="play" size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <strong>No routines yet</strong>
-              Try “every Friday at 5, clean my Downloads.”
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-4 reveal reveal-4">
-          <header className="tile-head">
-            <h2>Memory</h2>
-            <button className="tile-link" onClick={() => go("memory")}>
-              Edit <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {memories.length ? (
-            <div className="rows">
-              {memories.slice(0, 3).map((memory) => (
-                <div className="row" key={memory.id}>
-                  <span className="row-dot" />
-                  <span className="row-copy">
-                    <strong className="wrap">{memory.text}</strong>
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <strong>Nothing remembered yet</strong>
-              Tell okidoki about yourself once. Edit it anytime.
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-8 reveal reveal-4">
+        <section className="tile span-8 reveal reveal-3">
           <header className="tile-head">
             <h2>Recent</h2>
             <button className="tile-link" onClick={() => go("history")}>
@@ -345,8 +272,8 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                     <PixelIcon name={kindGlyph[run.kind] ?? "spark"} size={14} />
                   </span>
                   <span className="row-copy">
-                    <strong>{run.title}</strong>
-                    <em>{run.summary || run.prompt}</em>
+                    <strong className="sentence">{run.title}</strong>
+                    <em className="sentence">{run.summary || run.prompt}</em>
                   </span>
                   <span className="row-meta">{relativeTime(run.endedAt ?? run.createdAt)}</span>
                   <StatusBadge status={run.status} />
@@ -361,7 +288,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           )}
         </section>
 
-        <section className="tile span-4 reveal reveal-4">
+        <section className="tile span-4 reveal reveal-3">
           <header className="tile-head">
             <h2>Toolbox</h2>
             <button className="tile-link" onClick={() => go("toolbox")}>
@@ -389,12 +316,82 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
             </div>
           )}
         </section>
+        <section className="tile span-6 reveal reveal-4">
+          <header className="tile-head">
+            <h2>Routines</h2>
+            <button className="tile-link" onClick={() => go("skills")}>
+              Manage <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          {routines.length ? (
+            <div className="rows">
+              {routines.slice(0, 3).map((routine) => (
+                <div className="row" key={routine.id}>
+                  <span className="kind-icon small">
+                    <PixelIcon name="clock" size={14} />
+                  </span>
+                  <span className="row-copy">
+                    <strong className="sentence">{routine.name}</strong>
+                    <em>
+                      {scheduleLabel(routine)}
+                      {routine.nextRunAt ? ` · ${futureTime(routine.nextRunAt)}` : ""}
+                    </em>
+                  </span>
+                  <button
+                    className="icon-btn"
+                    aria-label={`Run ${routine.name} now`}
+                    title="Run now"
+                    onClick={() => {
+                      invoke("runRoutine", { id: routine.id });
+                      notify("Routine started", routine.name);
+                    }}
+                  >
+                    <PixelIcon name="play" size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="tile-empty">
+              <strong>No routines yet</strong>
+              Try “every Friday at 5, clean my Downloads.”
+            </div>
+          )}
+        </section>
+
+        <section className="tile span-6 reveal reveal-4">
+          <header className="tile-head">
+            <h2>Memory</h2>
+            <button className="tile-link" onClick={() => go("memory")}>
+              Edit <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          {memories.length ? (
+            <div className="rows">
+              {memories.slice(0, 3).map((memory) => (
+                <div className="row" key={memory.id}>
+                  <span className="row-dot" />
+                  <span className="row-copy">
+                    <strong className="wrap sentence">{memory.text}</strong>
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="tile-empty">
+              <strong>Nothing remembered yet</strong>
+              Tell okidoki about yourself once. Edit it anytime.
+            </div>
+          )}
+        </section>
+
       </div>
 
       <footer className="home-footer">
         <PixelIcon name="lock" size={13} />
         Private by design. Keys stay in your Keychain, screenshots are never stored.
       </footer>
+      <PixelMark className="home-mark" />
     </div>
   );
 }

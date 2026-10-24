@@ -498,7 +498,7 @@ export const demoState: NativeState = {
   onboardingOpen: false,
   dashboardOpen: true,
   sidecar: "ready",
-  version: "0.9.0",
-  savings: 197.95,
+  version: "0.9.1",
+  savings: 167.95,
   convexConfigured: false,
 };

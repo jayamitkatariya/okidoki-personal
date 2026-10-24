@@ -89,7 +89,8 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
         control.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         control.isMovableByWindowBackground = true
         control.isReleasedWhenClosed = false
-        control.contentView = NSHostingView(rootView: SimControlView(model: model,
+        // First-mouse hosting so "close" works on the first click while another app is active.
+        control.contentView = OverlayHostingView(rootView: SimControlView(model: model,
                                                                      onClose: { [weak self] in self?.dismiss() })
             .environmentObject(env))
         lastControlOrigin = control.frame.origin

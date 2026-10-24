@@ -160,8 +160,10 @@ extension NSScreen {
         return NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main ?? NSScreen.screens.first
     }
 
+    /// The notched screen, else the menu-bar screen. Not `NSScreen.main` (the screen with the
+    /// key window), which changes with focus and made the notch pill hop between displays.
     static var okidokiPrimary: NSScreen {
-        NSScreen.screens.first(where: { $0.okidokiHasNotch }) ?? NSScreen.main ?? NSScreen.screens.first!
+        NSScreen.screens.first(where: { $0.okidokiHasNotch }) ?? NSScreen.screens.first ?? NSScreen.main!
     }
 
     var okidokiHasNotch: Bool {

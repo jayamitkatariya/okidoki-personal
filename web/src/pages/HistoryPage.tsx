@@ -21,11 +21,14 @@ export function HistoryPage({ go }: { go: (page: Page) => void }) {
   const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
-    const id = (window as unknown as { __okidokiOpenThread?: string }).__okidokiOpenThread;
-    if (id) setOpenThread(id);
+    // a one-shot hand-off from Runs: take it, then clear it so the next visit doesn't reopen it
+    const pending = window as unknown as { __okidokiOpenThread?: string };
+    if (pending.__okidokiOpenThread) setOpenThread(pending.__okidokiOpenThread);
+    delete pending.__okidokiOpenThread;
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
       if (detail) setOpenThread(detail);
+      delete pending.__okidokiOpenThread;
     };
     window.addEventListener("okidoki-open-thread", handler);
     return () => window.removeEventListener("okidoki-open-thread", handler);

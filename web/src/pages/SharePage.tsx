@@ -54,8 +54,11 @@ export function SharePage({ token }: { token: string }) {
       { token },
       (value: unknown) => {
         const payload = value as { run?: Run; accountName?: string } | null;
-        if (payload?.run) setData({ run: payload.run, accountName: payload.accountName });
-        else setError("This link is private, expired, or hasn't synced yet.");
+        if (payload?.run) {
+          // a link opened before the run synced recovers when it arrives
+          setError("");
+          setData({ run: payload.run, accountName: payload.accountName });
+        } else setError("This link is private, expired, or hasn't synced yet.");
       },
       () => setError("Couldn't connect. Check your connection and try again."),
     );

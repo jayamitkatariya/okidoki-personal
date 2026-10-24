@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import { Button, IconButton, Modal, PageTitle, PixelIcon, Switch, TextField } from "../components/ui";
+import { Button, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const PROVIDERS = [
   {
@@ -50,6 +50,14 @@ export function KeysPage() {
   const { state, settings, updateSettings, invoke, notify, convexConnected } = useDashboard();
   const [editing, setEditing] = useState<(typeof PROVIDERS)[number] | null>(null);
   const [value, setValue] = useState("");
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  // A local draft, committed on blur or Enter, so typing doesn't save, sync and reconnect on every key.
+  const [urlDraft, setUrlDraft] = useState(settings.convexSiteURL);
+  useEffect(() => setUrlDraft(settings.convexSiteURL), [settings.convexSiteURL]);
+  const commitURL = () => {
+    const next = urlDraft.trim();
+    if (next !== settings.convexSiteURL) updateSettings({ convexSiteURL: next });
+  };
 
   const open = (provider: (typeof PROVIDERS)[number]) => {
     setEditing(provider);
@@ -107,10 +115,17 @@ export function KeysPage() {
                         icon="trash"
                         label={`Remove ${provider.name} key`}
                         className="keys-remove"
-                        onClick={() => {
-                          invoke("deleteKey", { provider: provider.id });
-                          notify("Key removed", provider.name, "info");
-                        }}
+                        onClick={() =>
+                          setConfirm({
+                            title: `Remove the ${provider.name} key?`,
+                            detail: "It's deleted from your Keychain. You'll need to paste it again to use it.",
+                            action: "Remove key",
+                            onConfirm: () => {
+                              invoke("deleteKey", { provider: provider.id });
+                              notify("Key removed", provider.name, "info");
+                            },
+                          })
+                        }
                       />
                     </>
                   ) : (
@@ -145,7 +160,13 @@ export function KeysPage() {
               variant="secondary"
               size="sm"
               icon="refresh"
+              disabled={!settings.syncEnabled}
+              title={settings.syncEnabled ? undefined : "Turn on sync first"}
               onClick={() => {
+                if (!state.keys.convex) {
+                  notify("Add a sync secret first", "Convex sync secret, above", "warning");
+                  return;
+                }
                 invoke("syncNow");
                 notify("Syncing", "Pushing this Mac's state", "info");
               }}
@@ -178,8 +199,10 @@ export function KeysPage() {
               <em>Your Convex HTTP actions URL</em>
             </span>
             <TextField
-              value={settings.convexSiteURL}
-              onChange={(value) => updateSettings({ convexSiteURL: value })}
+              value={urlDraft}
+              onChange={setUrlDraft}
+              onBlur={commitURL}
+              onEnter={commitURL}
               placeholder="http://127.0.0.1:3211"
               icon="link"
               className="keys-url"
@@ -256,6 +279,7 @@ export function KeysPage() {
           </>
         ) : null}
       </Modal>
+      <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

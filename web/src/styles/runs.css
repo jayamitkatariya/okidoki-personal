@@ -40,7 +40,8 @@
 }
 .runs-filters .segment {
   flex: 1 1 auto;
-  padding: 0 6px;
+  min-width: 0;
+  padding: 0 4px;
 }
 .runs-scroll {
   flex: 1;
@@ -755,6 +756,15 @@
   }
 }
 
+@media (max-width: 980px) {
+  .runs-list {
+    width: 264px;
+    flex-basis: 264px;
+  }
+  .runs-filters .segment {
+    font-size: 11.5px;
+  }
+}
 @media (min-width: 1360px) {
   .runs-list {
     width: 328px;

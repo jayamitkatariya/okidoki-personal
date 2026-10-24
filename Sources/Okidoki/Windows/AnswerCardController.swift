@@ -325,7 +325,10 @@ private struct AnswerCardRoot: View {
                                controller.submitFollowUp(from: card, text: text)
                            })
                 .id(state.card.id)
-                .transition(.opacity)
+                // The outgoing card leaves almost at once: a full crossfade overlapped two cards'
+                // text and held the window at the taller card's height until it finished.
+                .transition(.asymmetric(insertion: .opacity,
+                                        removal: .opacity.animation(.easeOut(duration: 0.06))))
         }
     }
 }

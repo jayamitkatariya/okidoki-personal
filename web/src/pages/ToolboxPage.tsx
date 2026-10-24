@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useDashboard } from "../store";
-import { cx, copyText, money } from "../lib";
+import { cx, copyText, money, toolPrice } from "../lib";
 import type { Tool } from "../types";
 import { Button, Modal, PageTitle, PixelIcon, Switch, TextField } from "../components/ui";
 
@@ -45,7 +45,7 @@ export function ToolboxPage() {
   const [findQuery, setFindQuery] = useState("");
   const [docs, setDocs] = useState<Tool | null>(null);
   const installed = state.tools.filter((tool) => tool.installed);
-  const savings = state.savings || installed.reduce((sum, tool) => sum + price(tool.id), 0);
+  const savings = state.savings || installed.reduce((sum, tool) => sum + toolPrice(tool.id), 0);
   const tools = useMemo(() => {
     if (!query.trim()) return state.tools;
     const q = query.toLowerCase();
@@ -82,6 +82,20 @@ export function ToolboxPage() {
             <h2>Find a free tool</h2>
           </header>
           <p className="tb-lead">Describe the job. okidoki ranks open-source options by popularity, upkeep and license.</p>
+          {!findQuery.trim() ? (
+            <div className="tb-examples tb-suggest">
+              {state.tools
+                .slice(0, 3)
+                .map((tool) => tool.examples[0])
+                .filter(Boolean)
+                .map((example) => (
+                  <button key={example} className="tb-example" onClick={() => setFindQuery(example)}>
+                    <PixelIcon name="search" size={12} />
+                    <span>{example}</span>
+                  </button>
+                ))}
+            </div>
+          ) : null}
           <div className="tb-find-bar">
             <TextField
               value={findQuery}
@@ -135,7 +149,7 @@ export function ToolboxPage() {
               {installed.slice(0, 4).map((tool) => (
                 <div className="tb-savings-row" key={tool.id}>
                   <span>{tool.name}</span>
-                  <strong>{money(price(tool.id))}</strong>
+                  <strong>{money(toolPrice(tool.id))}</strong>
                 </div>
               ))}
               {installed.length > 4 ? <div className="tb-savings-more">+{installed.length - 4} more</div> : null}
@@ -163,7 +177,8 @@ export function ToolboxPage() {
                 className={cx("tb-agent", selected && "is-selected", !isInstalled && "is-missing")}
                 onClick={() => {
                   updateSettings({ selectedAgent: agent.id as typeof settings.selectedAgent });
-                  notify("Default agent", agent.name);
+                  if (isInstalled) notify("Default agent", agent.name);
+                  else notify(`${agent.name} isn't installed yet`, `Coding tasks need it first: ${agent.install}`, "warning");
                 }}
               >
                 <span className="tb-agent-top">
@@ -284,7 +299,8 @@ export function ToolboxPage() {
                     invoke(value ? "connectApple" : "disconnectApple", { id: connector.id });
                     notify(value ? "Connecting" : "Disconnected", connector.name, "info");
                   } else {
-                    notify("Connector updated", connector.name, "info");
+                    invoke("setConnector", { id: connector.id, enabled: value });
+                    notify(value ? "Connector on" : "Connector off", connector.name, "info");
                   }
                 }}
               />
@@ -301,9 +317,10 @@ export function ToolboxPage() {
               <Button
                 variant="ghost"
                 icon="copy"
+                disabled={!docs.docs}
                 onClick={() => {
-                  copyText(docs.docs);
-                  notify("Copied", `${docs.name} docs`);
+                  const name = docs.name;
+                  void copyText(docs.docs).then((ok) => (ok ? notify("Copied", `${name} docs`) : notify("Couldn't copy", "The clipboard isn't available here", "warning")));
                 }}
               >
                 Copy
@@ -334,7 +351,3 @@ function markStyle(id: string): React.CSSProperties {
   return { background: tone.bg, color: tone.fg };
 }
 
-function price(id: string): number {
-  const map: Record<string, number> = { mole: 39.95, ffmpeg: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59, handbrake: 79 };
-  return map[id] ?? 0;
-}

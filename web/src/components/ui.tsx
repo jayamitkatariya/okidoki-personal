@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import type { Account, Risk, RunStatus, Toast } from "../types";
 import { cx } from "../lib";
@@ -134,30 +134,46 @@ export function PixelFill({ cols = 10, rows = 3 }: { cols?: number; rows?: numbe
   );
 }
 
-/** Eases a number up from zero the first time it scrolls into view. Honours reduced motion. */
+/** Eases a number up from zero once, the first time it scrolls into view. Later changes
+ *  glide from the shown value to the new one instead of restarting at zero. */
 export function CountUp({ end, duration = 1100, prefix = "", suffix = "" }: { end: number; duration?: number; prefix?: string; suffix?: string }) {
   const [value, setValue] = useState(0);
+  const shown = useRef(0);
+  const seen = useRef(false);
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setValue(end);
-      return;
-    }
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let frame = 0;
-    let started = -1;
-    const tick = (now: number) => {
-      if (started < 0) started = now;
-      const progress = Math.min((now - started) / duration, 1);
-      setValue(progress < 1 ? (1 - Math.pow(1 - progress, 4)) * end : end);
-      if (progress < 1) frame = requestAnimationFrame(tick);
+    const animate = (from: number, length: number) => {
+      if (reduced || from === end) {
+        shown.current = end;
+        setValue(end);
+        return;
+      }
+      let started = -1;
+      const tick = (now: number) => {
+        if (started < 0) started = now;
+        const progress = Math.min((now - started) / length, 1);
+        const next = progress < 1 ? from + (1 - Math.pow(1 - progress, 4)) * (end - from) : end;
+        shown.current = next;
+        setValue(next);
+        if (progress < 1) frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
     };
+    if (seen.current) {
+      animate(shown.current, Math.min(duration, 500));
+      return () => cancelAnimationFrame(frame);
+    }
+    // first showing: hold at zero until visible, then count up
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry.isIntersecting) return;
         observer.disconnect();
-        frame = requestAnimationFrame(tick);
+        seen.current = true;
+        animate(0, duration);
       },
       { threshold: 0.3 },
     );
@@ -168,7 +184,7 @@ export function CountUp({ end, duration = 1100, prefix = "", suffix = "" }: { en
     };
   }, [end, duration]);
   return (
-    <span ref={ref}>
+    <span ref={ref} className="count-up">
       {prefix}
       {Math.round(value).toLocaleString("en-US")}
       {suffix}
@@ -291,34 +307,6 @@ export function SectionLabel({ children, color }: { children: React.ReactNode; c
   );
 }
 
-export function Scramble({ text, className }: { text: string; className?: string }) {
-  const [display, setDisplay] = useState(text);
-  const frame = useRef(0);
-  useEffect(() => {
-    const glyphs = "abcdefghijklmnopqrstuvwxyz#%&*+";
-    frame.current = 0;
-    const timer = window.setInterval(() => {
-      frame.current += 1;
-      if (frame.current > 8) {
-        setDisplay(text);
-        window.clearInterval(timer);
-        return;
-      }
-      setDisplay(
-        [...text]
-          .map((char, index) => {
-            if (char === " ") return " ";
-            const threshold = (index / Math.max(1, text.length)) * 5;
-            return frame.current > threshold + 2 ? char : glyphs[(index * 7 + frame.current * 5) % glyphs.length];
-          })
-          .join(""),
-      );
-    }, 28);
-    return () => window.clearInterval(timer);
-  }, [text]);
-  return <span className={cx("scramble", className)}>{display}</span>;
-}
-
 export function PageTitle({
   icon,
   title,
@@ -429,6 +417,12 @@ function inline(text: string): React.ReactNode {
   });
 }
 
+/** True while an input method (Japanese, Chinese…) is composing; WebKit reports keyCode 229 for the committing key. */
+export function isComposing(event: React.KeyboardEvent | KeyboardEvent): boolean {
+  const native = "nativeEvent" in event ? event.nativeEvent : event;
+  return native.isComposing || native.keyCode === 229;
+}
+
 export function TextField({
   value,
   onChange,
@@ -437,6 +431,7 @@ export function TextField({
   type = "text",
   autoFocus = false,
   onEnter,
+  onBlur,
   className,
 }: {
   value: string;
@@ -446,6 +441,7 @@ export function TextField({
   type?: string;
   autoFocus?: boolean;
   onEnter?: () => void;
+  onBlur?: () => void;
   className?: string;
 }) {
   return (
@@ -457,8 +453,9 @@ export function TextField({
         autoFocus={autoFocus}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && onEnter) onEnter();
+          if (event.key === "Enter" && onEnter && !isComposing(event)) onEnter();
         }}
       />
     </label>
@@ -526,13 +523,15 @@ export function Modal({
   useEffect(() => {
     if (!open) return;
     const handler = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      // skip an Escape that cancels IME composition or was already handled by a layer above (the palette)
+      if (event.key === "Escape" && !event.defaultPrevented && !isComposing(event)) onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
-  return (
+  // portal to <body> so the scrim covers the whole window, not just the panel the page lives in
+  return createPortal(
     <AnimatePresence>
       {open ? (
         <motion.div
@@ -563,7 +562,38 @@ export function Modal({
           </motion.div>
         </motion.div>
       ) : null}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/** A small yes/no for destructive actions. Open while `request` is set; confirm runs it, then closes. */
+export interface ConfirmRequest {
+  title: string;
+  detail?: string;
+  action: string;
+  onConfirm: () => void;
+}
+
+export function ConfirmModal({ request, onClose }: { request: ConfirmRequest | null; onClose: () => void }) {
+  return (
+    <Modal open={Boolean(request)} onClose={onClose} title={request?.title ?? ""} subtitle={request?.detail} width={420}>
+      <footer className="modal-actions">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          autoFocus
+          onClick={() => {
+            request?.onConfirm();
+            onClose();
+          }}
+        >
+          {request?.action ?? "Delete"}
+        </Button>
+      </footer>
+    </Modal>
   );
 }
 
@@ -656,71 +686,6 @@ export function ThemeToggle({ onToggle }: { onToggle: (next: "light" | "dark") =
     <button ref={ref} className="theme-toggle" onClick={handle} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} title={dark ? "Light" : "Dark"}>
       <PixelIcon name={dark ? "sun" : "moon"} size={14} />
     </button>
-  );
-}
-
-/** Route change: tiles pop in to cover the page, then pop out to reveal the next. */
-const WIPE_TILE = 56;
-export function PixelWipe({ trigger }: { trigger: string }) {
-  const previous = useRef(trigger);
-  const [phase, setPhase] = useState<"idle" | "cover" | "reveal">("idle");
-  const [run, setRun] = useState(0);
-  const [armed, setArmed] = useState(false);
-
-  useEffect(() => {
-    // compare values, not a first-run flag, so StrictMode's double effect doesn't wipe on load
-    if (previous.current === trigger) return;
-    previous.current = trigger;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    setRun((value) => value + 1);
-    setPhase("cover");
-    const reveal = window.setTimeout(() => setPhase("reveal"), 260);
-    const done = window.setTimeout(() => setPhase("idle"), 260 + 320 + 100);
-    return () => {
-      window.clearTimeout(reveal);
-      window.clearTimeout(done);
-    };
-  }, [trigger]);
-
-  const tiles = useMemo(() => {
-    const cols = Math.ceil(window.innerWidth / WIPE_TILE);
-    const rows = Math.ceil(window.innerHeight / WIPE_TILE);
-    const count = cols * rows;
-    return {
-      cols,
-      cover: Array.from({ length: count }, () => Math.random() * 220),
-      reveal: Array.from({ length: count }, () => Math.random() * 320),
-    };
-  }, [run]);
-
-  useEffect(() => {
-    if (phase === "idle") {
-      setArmed(false);
-      return;
-    }
-    if (phase !== "cover") return;
-    // two steps so the cover starts from opacity 0
-    const frame = requestAnimationFrame(() => setArmed(true));
-    return () => cancelAnimationFrame(frame);
-  }, [phase]);
-
-  if (phase === "idle") return null;
-
-  return (
-    <div aria-hidden="true" className="pixel-wipe" style={{ gridTemplateColumns: `repeat(${tiles.cols}, ${WIPE_TILE}px)`, gridAutoRows: `${WIPE_TILE}px` }}>
-      {tiles.cover.map((delay, i) => {
-        const on = phase === "cover" && armed;
-        return (
-          <span
-            key={i}
-            style={{
-              opacity: on ? 1 : 0,
-              transition: `opacity 60ms steps(1) ${phase === "cover" ? delay : tiles.reveal[i]}ms`,
-            }}
-          />
-        );
-      })}
-    </div>
   );
 }
 

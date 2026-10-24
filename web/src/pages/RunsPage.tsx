@@ -85,14 +85,23 @@ export function RunsPage() {
       });
   }, [state.runs, filter, query]);
 
-  const current = state.runs.find((run) => run.id === selected) ?? runs[0] ?? null;
+  // the selection always comes from the visible list, so the highlighted row and the detail agree
+  const current = runs.find((run) => run.id === selected) ?? runs[0] ?? null;
 
   useEffect(() => {
-    const focus = (window as unknown as { __okidokiFocusRun?: string }).__okidokiFocusRun;
-    if (focus) setSelected(focus);
+    const focusRun = (id: string) => {
+      setFilter("all");
+      setQuery("");
+      setSelected(id);
+    };
+    // a one-shot hand-off from Home or History: take it, then clear it so later visits start fresh
+    const pending = window as unknown as { __okidokiFocusRun?: string };
+    if (pending.__okidokiFocusRun) focusRun(pending.__okidokiFocusRun);
+    delete pending.__okidokiFocusRun;
     const onFocus = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;
-      if (id) setSelected(id);
+      if (id) focusRun(id);
+      delete pending.__okidokiFocusRun;
     };
     window.addEventListener("okidoki-focus-run", onFocus);
     return () => window.removeEventListener("okidoki-focus-run", onFocus);
@@ -103,10 +112,6 @@ export function RunsPage() {
     detailRef.current?.scrollTo({ top: 0 });
   }, [current?.id]);
 
-  useEffect(() => {
-    if (current && !state.runs.some((run) => run.id === current.id)) setSelected(runs[0]?.id ?? null);
-    if (!current && runs[0]) setSelected(runs[0].id);
-  }, [runs, current, state.runs]);
 
   return (
     <div className="runs">
@@ -283,7 +288,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
               title="Open thread"
               onClick={() => {
                 (window as unknown as { __okidokiOpenThread?: string }).__okidokiOpenThread = thread.id;
-                window.dispatchEvent(new CustomEvent("okidoki-open-thread", { detail: thread.id }));
+                (window as unknown as { okidokiNavigate?: (page: string) => void }).okidokiNavigate?.("history");
               }}
             >
               <PixelIcon name="link" size={13} />
