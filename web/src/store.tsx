@@ -27,7 +27,7 @@ function resolveTheme(appearance: Settings["appearance"]): "light" | "dark" {
 }
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
-  const { state: nativeState, connected } = useNativeState();
+  const { state: nativeState, connected, native } = useNativeState();
   const base = nativeState ?? demoState;
   const convex = useConvexSnapshot(
     nativeState?.currentAccountID ?? demoState.currentAccountID,
@@ -98,7 +98,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     state: { ...state, settings },
     settings,
     account,
-    native: Boolean(nativeState),
+    native,
     connected,
     convexConnected: convex.connected,
     toasts,

@@ -90,10 +90,6 @@ public final class OkidokiStore: ObservableObject {
         activeRuns.filter { $0.status == .waiting }.sorted { $0.createdAt > $1.createdAt }
     }
 
-    public var recentRuns: [AgentRun] {
-        activeRuns.sorted { $0.createdAt > $1.createdAt }
-    }
-
     public var activeRoutines: [Routine] {
         routines.filter { $0.accountID == currentAccountID }
     }
@@ -102,16 +98,8 @@ public final class OkidokiStore: ObservableObject {
         skills.filter { $0.accountID == currentAccountID }
     }
 
-    public var memoriesForActive: [MemoryItem] {
-        memories.filter { _ in true }
-    }
-
     public func memories(_ section: MemorySection) -> [MemoryItem] {
         memories.filter { $0.section == section }.sorted { $0.updatedAt > $1.updatedAt }
-    }
-
-    public var installedToolCount: Int {
-        ToolCatalog.tools.filter { toolInstalled[$0.id] == true }.count
     }
 
     public var savings: Double {
@@ -124,7 +112,6 @@ public final class OkidokiStore: ObservableObject {
     public func thread(_ id: String) -> ChatThread? { threads.first { $0.id == id } }
     public func skill(_ id: String) -> Skill? { skills.first { $0.id == id } }
     public func routine(_ id: String) -> Routine? { routines.first { $0.id == id } }
-    public func connector(_ id: String) -> Connector? { connectors.first { $0.id == id } }
 
     // MARK: - Accounts
 
@@ -197,11 +184,6 @@ public final class OkidokiStore: ObservableObject {
 
     public func deleteThread(_ id: String) {
         threads.removeAll { $0.id == id }
-    }
-
-    public func renameThread(_ id: String, title: String) {
-        guard let index = threads.firstIndex(where: { $0.id == id }) else { return }
-        threads[index].title = title
     }
 
     private func threadTitle(for app: String, topic: String) -> String {
@@ -307,9 +289,14 @@ public final class OkidokiStore: ObservableObject {
     }
 
     public func deleteSkill(_ id: String) { skills.removeAll { $0.id == id } }
-    public func incrementSkillRun(_ id: String) {
+    public func incrementSkillRun(_ id: String, by count: Int = 1) {
         guard let index = skills.firstIndex(where: { $0.id == id }) else { return }
-        skills[index].runCount += 1
+        skills[index].runCount += max(1, count)
+    }
+    public func updateSkill(_ id: String, name: String? = nil, summary: String? = nil) {
+        guard let index = skills.firstIndex(where: { $0.id == id }) else { return }
+        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty { skills[index].name = name }
+        if let summary { skills[index].summary = summary }
     }
 
     @discardableResult
@@ -391,22 +378,6 @@ public final class OkidokiStore: ObservableObject {
         } catch {
             loadError = "couldn't save: \(error.localizedDescription)"
         }
-    }
-
-    public func resetEverything() {
-        accounts = []
-        threads = []
-        runs = []
-        skills = []
-        routines = []
-        memories = []
-        settings = AppSettings()
-        let account = Account(name: NSFullUserName().split(separator: " ").first.map(String.init) ?? "you",
-                              email: "", kind: .personal)
-        accounts = [account]
-        currentAccountID = account.id
-        connectors = Self.mergeConnectors([])
-        saveNow()
     }
 
     public func stateForSync() -> AppState {

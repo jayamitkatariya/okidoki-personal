@@ -23,6 +23,8 @@ public enum ToolCatalog {
               mo status           live system health
               mo purge            remove project build artifacts
             Always run a dry run first. Never pass --force without the person's explicit approval.
+            Run `sudo -v` before `mo clean` so system caches are included; okidoki shows a native password dialog.
+            `mo analyze` and `mo status` are full-screen tools; they open in a Terminal window.
             Summarise the freed space in plain English; never dump raw terminal output into a card.
             """,
             license: "MIT",
@@ -226,20 +228,4 @@ public enum ToolCatalog {
                   installCommand: "",
                   docs: "MCP servers are configured in Settings → Keys and Toolbox. Always show which server a tool belongs to."),
     ]
-
-    public static func findTools(for query: String) -> [ToolSpec] {
-        let q = query.lowercased()
-        let tokens = q.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 2 }
-        return tools
-            .map { tool -> (ToolSpec, Int) in
-                var score = 0
-                let haystack = (tool.name + " " + tool.replaces + " " + tool.blurb + " " + tool.examples.joined(separator: " ") + " " + tool.category).lowercased()
-                for token in tokens where haystack.contains(token) { score += 3 }
-                if haystack.contains(q) { score += 8 }
-                score += tool.popularity / 20
-                return (tool, score)
-            }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
-    }
 }

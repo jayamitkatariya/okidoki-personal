@@ -30,8 +30,7 @@ final class ComputerUseDriver {
     private var driving = false
     private var escLocal: Any?
     private var escGlobal: Any?
-    private var moveMonitor: Any?
-    private var anchor = CGPoint.zero
+    private var blindVision = 0
 
     private let service = ComputerUseService.shared
 
@@ -44,6 +43,7 @@ final class ComputerUseDriver {
         runID = run.id
         cancelled = false
         driving = false
+        blindVision = 0
         model.goal = run.title
         model.stepText = "looking at the screen"
         model.stepIndex = 0
@@ -51,7 +51,7 @@ final class ComputerUseDriver {
 
         let screen = service.screenForAction()
         let width: CGFloat = 380
-        let height: CGFloat = 44
+        let height: CGFloat = 48
         let panel = DriverHUDPanel(contentRect: NSRect(x: screen.frame.midX - width / 2,
                                                       y: screen.visibleFrame.minY + 18,
                                                       width: width, height: height),
@@ -59,7 +59,7 @@ final class ComputerUseDriver {
                                    backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.level = .statusBar + 6
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .none
@@ -70,9 +70,8 @@ final class ComputerUseDriver {
         panel.orderFrontRegardless()
         self.panel = panel
 
-        anchor = NSEvent.mouseLocation
         installMonitors()
-        env.speak("taking over. Move your mouse to stop me.")
+        env.speak("On it. Press escape or stop if you want it back.")
         Task { await loop(run: run, screen: screen) }
     }
 
@@ -81,27 +80,44 @@ final class ComputerUseDriver {
     private func loop(run: AgentRun, screen initialScreen: NSScreen) async {
         defer { cleanupPanels() }
         var history: [[String: Any]] = []
-        let maxSteps = 40
+        var recent: [String] = []
+        // The screenshot from before the last action, so the model can see what changed.
+        var previous: Data?
+        var showPrevious = false
+        // A magnified crop requested last step, sent alongside the next screenshot.
+        var zoom: ComputerUseService.Zoom?
+        let maxSteps = 60
         for step in 0..<maxSteps {
             guard !cancelled, let env else { return }
             guard let current = env.store.run(run.id), current.status == .running else { return }
             let screen = service.screenForAction()
-            guard let shot = service.capture(screen: screen) else {
-                finish(success: false, summary: ComputerUseError.screenCapture.localizedDescription)
-                return
-            }
+            let shot = await service.capture(screen: screen)
+            let box = shot?.box ?? ScreenBox(x: 0, y: 0, width: screen.frame.width, height: screen.frame.height)
+            let imageWidth = shot?.imageWidth ?? box.width
+            let imageHeight = shot?.imageHeight ?? box.height
+            async let windowTitle = service.frontWindowTitle()
+            async let controls = service.visibleControls(box: box, imageWidth: imageWidth, imageHeight: imageHeight)
             var act: ComputerAction?
             if env.sidecar.status.isReady {
                 act = await BrainClient.shared.computer(goal: run.prompt, step: step,
                                                         appName: service.frontmost()?.name ?? "",
-                                                        screen: shot.box, imageWidth: shot.imageWidth,
-                                                        imageHeight: shot.imageHeight, history: history,
-                                                        screenshotPNG: shot.png,
+                                                        windowTitle: await windowTitle,
+                                                        screen: box, imageWidth: shot?.imageWidth ?? 0,
+                                                        imageHeight: shot?.imageHeight ?? 0, history: history,
+                                                        controls: await controls,
+                                                        screenshotPNG: shot?.png,
+                                                        previousPNG: showPrevious ? previous : nil,
+                                                        zoom: zoom,
+                                                        canClick: EventActuator.canPost,
+                                                        canSee: shot != nil,
                                                         model: env.store.settings.claudeModel)
             }
-            if act == nil { act = localPlan(goal: run.prompt, history: history) }
+            zoom = nil
+            previous = shot?.png
+            // The user may have taken over while the model was thinking.
+            guard !cancelled, env.store.run(run.id)?.status == .running else { return }
             guard var act else {
-                finish(success: false, summary: "the brain is offline — i can't drive apps right now.")
+                finish(success: false, summary: "the model didn't answer, so i stopped. an anthropic key has to be in keys, and the brain has to be running.")
                 return
             }
             if act.say?.isEmpty ?? true { act.say = fallbackSay(for: act) }
@@ -121,20 +137,61 @@ final class ComputerUseDriver {
                 return
             }
 
-            let result: String
+            let needsVision = ["click", "double_click", "triple_click", "right_click", "middle_click", "drag", "move", "scroll", "zoom"].contains(act.type)
+            showPrevious = needsVision || ["type", "key"].contains(act.type)
+            if shot == nil, needsVision {
+                blindVision += 1
+                let result = "no screenshot — use a script, open_app, or key instead"
+                history.append(act.dictionary.merging(["result": result]) { current, _ in current })
+                env.store.updateRun(run.id) { run in run.output += result + "\n" }
+                if blindVision >= 2 {
+                    finish(success: false, summary: ComputerUseError.screenCapture.localizedDescription)
+                    return
+                }
+                continue
+            }
+
+            var result: String
             driving = true
+            // Clicks aimed under the pill must reach the app, not the pill.
+            panel?.ignoresMouseEvents = true
             do {
-                result = try await service.perform(act, screen: shot.box,
-                                                    imageWidth: shot.imageWidth, imageHeight: shot.imageHeight)
+                result = try await service.perform(act, screen: box,
+                                                    imageWidth: shot?.imageWidth ?? 1, imageHeight: shot?.imageHeight ?? 1)
             } catch {
                 driving = false
+                panel?.ignoresMouseEvents = false
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 finish(success: false, summary: message)
                 return
             }
             driving = false
-            anchor = NSEvent.mouseLocation
+            panel?.ignoresMouseEvents = false
+            if act.type == "zoom", let shot, let x = act.x, let y = act.y {
+                zoom = await Task.detached(priority: .userInitiated) {
+                    ComputerUseService.zoom(shot, x: x, y: y, width: act.width, height: act.height)
+                }.value
+                if let zoom {
+                    result = String(format: "zoomed into x %.0f–%.0f, y %.0f–%.0f of the screenshot — it's attached to the next turn",
+                                    zoom.rect.minX, zoom.rect.maxX, zoom.rect.minY, zoom.rect.maxY)
+                } else {
+                    result = "couldn't zoom there"
+                }
+            }
             history.append(act.dictionary.merging(["result": result]) { current, _ in current })
+
+            // The same action with the same outcome over and over means the plan is stuck.
+            let signature = Self.signature(of: act, result: result)
+            recent.append(signature)
+            if recent.count > 6 { recent.removeFirst() }
+            let repeats = recent.filter { $0 == signature }.count
+            if repeats >= 5 {
+                finish(success: false, summary: "i kept trying the same thing and it never changed anything, so i stopped.")
+                return
+            }
+            if repeats == 3 {
+                history.append(["type": "note", "result": "that exact action has now run 3 times with the same result and nothing changed. do something different: another control, a script, a keyboard shortcut, or fail with the reason."])
+            }
             env.store.updateRun(run.id) { run in
                 run.output += result + "\n"
                 let index = min(history.count - 1, max(0, run.steps.count - 1))
@@ -151,27 +208,48 @@ final class ComputerUseDriver {
         finish(success: false, summary: "this was taking too many steps — stopping here so you stay in charge.")
     }
 
+    nonisolated static func signature(of act: ComputerAction, result: String) -> String {
+        let bits: [String] = [
+            act.type,
+            act.x.map { String(Int($0 / 12)) } ?? "", act.y.map { String(Int($0 / 12)) } ?? "",
+            act.target ?? "", act.key ?? "", act.app ?? "", act.modifiers ?? "",
+            String((act.text ?? act.script ?? "").prefix(60)),
+            String(result.prefix(80)),
+        ]
+        return bits.joined(separator: "|")
+    }
+
     private func pauseAfter(_ act: ComputerAction) -> Double {
         switch act.type {
-        case "open_app": return 1.4
-        case "activate": return 0.9
-        case "click": return 0.55
-        case "double_click", "right_click": return 0.6
-        case "drag": return 0.7
-        case "type": return 0.35
-        case "key": return 0.45
-        case "scroll": return 0.45
-        case "wait": return 0.15
-        default: return 0.4
+        case "open_app": return 1.1
+        case "activate": return 0.7
+        case "open_url": return 0.8
+        case "script", "shell", "applescript", "jxa": return 0.7
+        case "click": return 0.45
+        case "double_click", "triple_click", "right_click", "middle_click": return 0.5
+        case "zoom": return 0.05
+        case "drag": return 0.45
+        case "move": return 0.2
+        case "type": return 0.3
+        case "key": return 0.35
+        case "scroll": return 0.4
+        case "wait": return 0.1
+        default: return 0.35
         }
     }
 
     private func fallbackSay(for act: ComputerAction) -> String? {
         switch act.type {
         case "open_app": return "opening \(act.app ?? act.text ?? "the app")"
+        case "open_url": return "opening the link"
+        case "script", "shell", "applescript", "jxa": return "running a script"
         case "click": return "clicking"
         case "double_click": return "double-clicking"
+        case "triple_click": return "triple-clicking"
+        case "zoom": return "looking closer"
         case "right_click": return "right-clicking"
+        case "middle_click": return "middle-clicking"
+        case "move": return "moving"
         case "drag": return "dragging"
         case "type": return "typing"
         case "key": return "pressing \(act.key ?? "a key")"
@@ -180,29 +258,6 @@ final class ComputerUseDriver {
         case "done": return "done"
         default: return act.type
         }
-    }
-
-    /// Keyless / offline fallback: handles plain "open X" goals, otherwise gives up honestly.
-    private func localPlan(goal: String, history: [[String: Any]]) -> ComputerAction? {
-        if let opened = history.first(where: { ($0["type"] as? String) == "open_app" }) {
-            let app = (opened["app"] as? String) ?? (opened["text"] as? String) ?? "the app"
-            return ComputerAction(type: "done", summary: "opened \(app)", say: "done")
-        }
-        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let range = trimmed.range(of: #"^(please\s+)?(open|launch|start)\s+(the\s+)?([\w .+]+?)(\s+app)?[.!?]*$"#,
-                                     options: [.regularExpression, .caseInsensitive]) {
-            let match = trimmed[range]
-            let name = match
-                .replacingOccurrences(of: #"^(please\s+)?(open|launch|start)\s+(the\s+)?"#, with: "", options: [.regularExpression, .caseInsensitive])
-                .replacingOccurrences(of: #"(\s+app)?[.!?]*$"#, with: "", options: [.regularExpression, .caseInsensitive])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty {
-                return ComputerAction(type: "open_app", app: name, say: "opening \(name)")
-            }
-        }
-        return ComputerAction(type: "fail",
-                              reason: "driving apps end-to-end needs the brain and an Anthropic key. add one in keys and try again.",
-                              say: "need a key")
     }
 
     // MARK: Finish / cancel
@@ -256,30 +311,21 @@ final class ComputerUseDriver {
         panel = nil
         if let escLocal { NSEvent.removeMonitor(escLocal) }
         if let escGlobal { NSEvent.removeMonitor(escGlobal) }
-        if let moveMonitor { NSEvent.removeMonitor(moveMonitor) }
-        escLocal = nil; escGlobal = nil; moveMonitor = nil
+        escLocal = nil; escGlobal = nil
     }
 
     private func installMonitors() {
+        // Escape pressed by the model (to close a menu, say) must not stop the run.
         escLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {
+            if event.keyCode == 53, !EventActuator.isSynthetic(event) {
                 Task { @MainActor in self?.cancel(reason: "okay, stopping") }
                 return nil
             }
             return event
         }
         escGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {
+            if event.keyCode == 53, !EventActuator.isSynthetic(event) {
                 Task { @MainActor in self?.cancel(reason: "okay, stopping") }
-            }
-        }
-        moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.model.visible, !self.driving else { return }
-                let mouse = NSEvent.mouseLocation
-                if hypot(mouse.x - self.anchor.x, mouse.y - self.anchor.y) > 14 {
-                    self.cancel(reason: "you moved — control is yours")
-                }
             }
         }
     }
@@ -289,46 +335,27 @@ final class ComputerUseDriver {
 
 struct DriverHUDView: View {
     @ObservedObject var model: DriverModel
-    @EnvironmentObject private var env: AppEnvironment
     var onStop: () -> Void
-    @State private var pulse = false
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(Color(hex: 0x1FB57A).opacity(0.2)).frame(width: 20, height: 20)
-                    .scaleEffect(pulse ? 1.18 : 0.9)
-                    .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
-                Image(systemName: "cursorarrow.click.2")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color(hex: 0x1FB57A))
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                Text("okidoki is driving · step \(model.stepIndex + 1)")
-                    .font(.okBody(11, .medium))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Driving · \(model.stepIndex + 1)")
+                    .font(.okBody(12, .medium))
                     .foregroundStyle(Color.white.opacity(0.92))
-                Text("\(model.stepText) · esc or move your mouse to stop")
-                    .font(.okMono(8))
-                    .foregroundStyle(Color.white.opacity(0.42))
+                Text(model.stepText)
+                    .font(.okBody(11))
+                    .foregroundStyle(Color.white.opacity(0.5))
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            Button("stop") { onStop() }
+            Button("Stop", action: onStop)
                 .buttonStyle(.plain)
-                .font(.okMono(9, .semibold))
-                .foregroundStyle(Color(hex: 0x1A120E))
-                .padding(.horizontal, 10)
-                .frame(height: 24)
-                .background(Capsule().fill(Color(hex: 0x0F7A5C)))
+                .font(.okBody(12, .medium))
+                .foregroundStyle(Color.white.opacity(0.72))
         }
-        .padding(.horizontal, 11)
-        .frame(width: 380, height: 42)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(hex: 0x0B0B0C).opacity(0.96))
-                .shadow(color: .black.opacity(0.3), radius: 18, y: 7)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(hex: 0x1FB57A).opacity(0.25), lineWidth: 0.8))
-        .onAppear { pulse = true }
+        .padding(.horizontal, 16)
+        .frame(width: 380, height: 48)
+        .overlayGlass(cornerRadius: 24, veil: 0.42, tone: .dark)
     }
 }

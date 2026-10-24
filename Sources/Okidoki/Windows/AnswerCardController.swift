@@ -32,6 +32,8 @@ final class AnswerCardModel: ObservableObject {
     @Published var actions: [CardAction]
     @Published var isThinking = false
     @Published var followUpEnabled = true
+    @Published var terminalCommands: [String] = []
+    @Published var terminalOutput = ""
     @Published var draft = ""
     @Published var threadTitle: String?
     @Published var runID: String?
@@ -106,8 +108,6 @@ final class AnswerCardController {
             .store(in: &cancellables)
     }
 
-    var isVisible: Bool { overlay?.isShown ?? false }
-
     // MARK: - Show
 
     func show(_ model: AnswerCardModel, near cursor: CGPoint? = nil, makeKey: Bool = true) {
@@ -142,13 +142,17 @@ final class AnswerCardController {
         if let overlay { return overlay }
         guard let env else { return nil }
         let panel = CardPanel()
-        let overlay = OverlayWindow(panel: panel, width: Self.width, estimatedHeight: 180, radius: 20)
-        let root = OverlayRoot(radius: overlay.radius, onHeight: { [weak overlay] height in
+        let overlay = OverlayWindow(panel: panel, width: Self.width, estimatedHeight: 180, radius: 20,
+                                    surface: .liquid)
+        let root = OverlayRoot(radius: overlay.radius, veil: 0.30, bare: false,
+                               accent: OKBrand.mint,
+                               onHeight: { [weak overlay] height in
             overlay?.setContentHeight(height)
         }) {
             AnswerCardRoot(state: state, controller: self)
         }
         .environmentObject(env)
+        .environment(\.colorScheme, .dark)
         overlay.setContent(root)
         overlay.onFocused = { [weak self] in
             guard let self, self.state.card.followUpEnabled, !self.state.card.isThinking else { return }
@@ -224,20 +228,6 @@ final class AnswerCardController {
         return max(120, maxCard - 210)
     }
 
-    // MARK: - Position
-
-    func updatePosition() {
-        guard let overlay, overlay.isShown else { return }
-        let mouse = NSEvent.mouseLocation
-        guard let screen = OverlayPlacement.screen(containing: mouse) else { return }
-        var x = mouse.x + 22
-        if x + Self.width > screen.visibleFrame.maxX - OverlayPlacement.margin { x = mouse.x - 22 - Self.width }
-        let topLeft = CGPoint(x: x, y: mouse.y - 12)
-        state.bodyCap = bodyCap(on: screen)
-        overlay.move(topLeft: topLeft, on: screen)
-        remember(topLeft)
-    }
-
     // MARK: - Close
 
     func close(restoreApp: Bool = true) {
@@ -256,12 +246,6 @@ final class AnswerCardController {
             previousApp.activate(options: [])
         }
         previousApp = nil
-    }
-
-    func update(_ model: AnswerCardModel) {
-        guard overlay?.isShown == true else { current = model; return }
-        current = model
-        withAnimation(OKMotion.snappy) { state.card = model }
     }
 
     /// Drop the next result card(s) until the in-flight request finishes.
@@ -344,14 +328,15 @@ struct AnswerCardView: View {
     @Environment(\.colorScheme) private var scheme
     @State private var bodyHeight: CGFloat = 0
     @State private var copied = false
+    @State private var followUpFocused = false
 
     private var palette: OverlayPalette { OverlayPalette(scheme) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
+                .padding(.horizontal, 16)
+                .padding(.top, 13)
 
             content
                 .padding(.top, 4)
@@ -363,17 +348,26 @@ struct AnswerCardView: View {
             }
 
             if model.followUpEnabled && !model.isThinking {
-                followUpField
-                    .padding(.horizontal, 14)
+                Rectangle()
+                    .fill(palette.divider)
+                    .frame(height: 1)
                     .padding(.top, 14)
+                followUpField
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
             }
 
-            Rectangle().fill(palette.divider).frame(height: 1)
-                .padding(.top, 14)
-            footer
-                .frame(height: 30)
-                .padding(.horizontal, 16)
+            if !model.footnote.isEmpty {
+                Text(model.footnote.overlaySentenceCased)
+                    .font(.okBody(11))
+                    .foregroundStyle(palette.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
+            }
         }
+        .padding(.bottom, 12)
         .frame(width: AnswerCardController.width)
     }
 
@@ -381,15 +375,26 @@ struct AnswerCardView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            OKLogo(size: 16)
-            Text(model.threadTitle?.overlaySentenceCased ?? "okidoki")
-                .font(.okBody(12, .medium))
-                .foregroundStyle(palette.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            if let title = model.threadTitle, !title.isEmpty {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(palette.accent)
+                        .frame(width: 5, height: 5)
+                        .shadow(color: palette.accent.opacity(0.5), radius: 3, y: 0)
+                    Text(title.overlaySentenceCased)
+                        .font(.okBody(11.5, .medium))
+                        .tracking(0.2)
+                        .foregroundStyle(palette.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
             Spacer(minLength: 8)
             if !model.isThinking {
-                OverlayIconButton(symbol: copied ? "checkmark" : "doc.on.doc", help: copied ? "Copied" : "Copy answer", size: 24) {
+                OverlayIconButton(symbol: copied ? "checkmark" : "doc.on.doc",
+                                  help: copied ? "Copied" : "Copy answer",
+                                  size: 24,
+                                  tint: copied ? palette.accent : nil) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(model.text, forType: .string)
                     copied = true
@@ -401,12 +406,8 @@ struct AnswerCardView: View {
                                           speed: env.store.settings.voiceSpeed)
                     }
                 }
-                OverlayIconButton(symbol: "arrow.up.forward.app", help: "Open in dashboard", size: 24) {
-                    env.openDashboard(.home)
-                    env.requestAsk()
-                }
             }
-            OverlayIconButton(symbol: "xmark", help: "Close", size: 24) { onClose() }
+            OverlayIconButton(symbol: "xmark", help: "Close", size: 24, tint: palette.danger) { onClose() }
         }
     }
 
@@ -416,7 +417,7 @@ struct AnswerCardView: View {
         if model.isThinking {
             HStack(spacing: 10) {
                 OverlaySpinner(size: 14, color: palette.accent)
-                Text(model.title.isEmpty ? "Thinking…" : model.title.overlaySentenceCased)
+                Text(model.title.isEmpty ? "Thinking" : model.title.overlaySentenceCased)
                     .font(.okBody(14))
                     .foregroundStyle(palette.secondary)
             }
@@ -443,21 +444,38 @@ struct AnswerCardView: View {
 
     /// Title + markdown at natural height; measured so long answers switch to a capped scroll.
     private var answerText: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             if !model.title.isEmpty {
                 Text(model.title.overlaySentenceCased)
-                    .font(.okBody(17, .semibold))
+                    .font(.okBody(17.5, .semibold))
+                    .tracking(-0.2)
                     .foregroundStyle(palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !model.text.isEmpty {
-                OKMarkdown(text: model.text, size: 13.5, color: palette.ink)
+                OKMarkdown(text: model.text, size: 14, color: palette.ink, lineSpacing: 4.4)
                     .textSelection(.enabled)
+            }
+            if !model.terminalCommands.isEmpty {
+                DisclosureGroup("Show commands") {
+                    Text(model.terminalCommands.map { "$ " + $0 }.joined(separator: "\n\n"))
+                        .font(.okMono(11)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.okBody(12)).foregroundStyle(palette.ink)
+            }
+            if !model.terminalOutput.isEmpty {
+                DisclosureGroup("Show output") {
+                    Text(String(model.terminalOutput.suffix(6000)))
+                        .font(.okMono(11)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.okBody(12)).foregroundStyle(palette.ink)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
-        .padding(.top, 6)
+        .padding(.top, 7)
         .padding(.bottom, 2)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
@@ -472,8 +490,14 @@ struct AnswerCardView: View {
                 Button {
                     action.handler()
                 } label: {
-                    Text(action.title.overlaySentenceCased)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        if let glyph = action.glyph {
+                            Image(systemName: glyph)
+                                .font(.system(size: 10.5, weight: .semibold))
+                        }
+                        Text(action.title.overlaySentenceCased)
+                            .lineLimit(1)
+                    }
                 }
                 .buttonStyle(OverlayButtonStyle(kind: kind(action.kind)))
             }
@@ -481,48 +505,36 @@ struct AnswerCardView: View {
         }
     }
 
+    /// The composer. It lights up when it has focus, so you always know where
+    /// your keystrokes are going.
     private var followUpField: some View {
         HStack(spacing: 8) {
             OverlayTextField(text: $model.draft,
-                             placeholder: "Ask a follow-up",
+                             placeholder: "Follow up",
                              fontSize: 13,
                              focusTick: focusTick,
-                             onSubmit: submitFollowUp)
+                             onSubmit: submitFollowUp,
+                             onFocusChange: { followUpFocused = $0 })
                 .frame(maxWidth: .infinity)
             OverlaySendButton(enabled: !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                              help: "Send follow-up", action: submitFollowUp)
-                .scaleEffect(0.85)
+                              help: "Send follow-up",
+                              size: 24,
+                              action: submitFollowUp)
+                .scaleEffect(0.9)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 5)
-        .frame(height: 34)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.fill))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(palette.hairline, lineWidth: 1))
-    }
-
-    // MARK: Footer
-
-    private var footer: some View {
-        HStack(spacing: 14) {
-            if !model.footnote.isEmpty {
-                Text(model.footnote.overlaySentenceCased)
-                    .font(.okBody(11))
-                    .foregroundStyle(palette.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            } else if model.isThinking {
-                Text("Working on it")
-                    .font(.okBody(11))
-                    .foregroundStyle(palette.tertiary)
-            }
-            Spacer(minLength: 0)
-            if let primaryAction = model.primaryAction {
-                OverlayKeyHint(key: "⌘↵", label: primaryAction.title.overlaySentenceCased)
-            } else if model.followUpEnabled && !model.isThinking {
-                OverlayKeyHint(key: "↵", label: "Send")
-            }
-            OverlayKeyHint(key: "esc", label: "Close")
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .frame(height: 38)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(palette.fill.opacity(followUpFocused ? 1 : 0.65))
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(followUpFocused ? palette.accent.opacity(0.55) : .clear, lineWidth: 1.5)
+        }
+        .shadow(color: followUpFocused ? palette.accent.opacity(0.16) : .clear, radius: 10, y: 0)
+        .animation(OKMotion.snappy, value: followUpFocused)
     }
 
     private func submitFollowUp() {

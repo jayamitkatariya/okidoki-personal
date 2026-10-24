@@ -7,7 +7,9 @@ import OkidokiCore
 enum NotchMotion {
     /// Content reflow inside an open island (rows arriving, expand / collapse).
     static let content = Animation.spring(response: 0.38, dampingFraction: 0.86)
-    static let hover = Animation.easeOut(duration: 0.14)
+    /// Hover is a spring, not a fade. A fade reads as a still image that briefly
+    /// changed colour; a spring reads as a surface that responded to you.
+    static let hover = Animation.spring(response: 0.26, dampingFraction: 0.8)
     static let rowRemoval = Animation.easeOut(duration: 0.12)
 }
 
@@ -17,7 +19,6 @@ private enum NotchInk {
     static let tertiary = Color.white.opacity(0.4)
     static let onMint = Color(hex: 0x04130D)
     static let amber = Color(hex: 0xFFC95C)
-    static let sky = Color(hex: 0x8FB7FF)
     static let coral = Color(hex: 0xFF6B5E)
 }
 
@@ -47,7 +48,7 @@ struct NotchRootView: View {
     }
 
     private var openRadius: CGFloat {
-        model.hasBody ? 24 : (m.hasNotch ? 13 : 18)
+        model.hasBody ? 22 : (m.hasNotch ? 14 : 18)
     }
 
     private var island: some View {
@@ -70,11 +71,17 @@ struct NotchRootView: View {
             .opacity(presented ? 1 : 0)
             .blur(radius: presented ? 0 : 3)
             .frame(width: width, height: height, alignment: .top)
-            .background(NotchIslandBackground(bandHeight: m.bandHeight, hasNotch: m.hasNotch,
-                                              listening: model.listening && presented))
+            .background(NotchIslandBackground())
             .clipShape(shape)
-            .overlay(shape.stroke(Color.white.opacity(m.hasNotch ? 0 : 0.1), lineWidth: 1))
-            .shadow(color: .black.opacity(presented ? 0.42 : 0), radius: 18, y: 10)
+            .overlay {
+                // A lip only on the floating pill. The hardware notch stays flush with the menu bar.
+                if !m.hasNotch {
+                    shape.stroke(Color.white.opacity(presented ? 0.16 : 0.1), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: .black.opacity(presented ? 0.16 : 0), radius: presented ? 8 : 0, y: presented ? 3 : 0)
+            .shadow(color: .black.opacity(presented ? 0.30 : 0), radius: presented ? 32 : 0, y: presented ? 20 : 0)
             .opacity(m.hasNotch || presented ? 1 : 0)
             .animation(NotchMotion.content, value: model.layoutKey)
     }
@@ -119,71 +126,10 @@ struct NotchIslandShape: Shape {
     }
 }
 
-/// Grid anchored on the centre line so it doesn't slide while the island springs wider.
-private struct NotchGridLines: Shape {
-    var spacing: CGFloat = 22
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        var offset: CGFloat = 0
-        while rect.midX - offset >= rect.minX {
-            for x in Set([rect.midX - offset, rect.midX + offset]) {
-                path.move(to: CGPoint(x: x, y: rect.minY))
-                path.addLine(to: CGPoint(x: x, y: rect.maxY))
-            }
-            offset += spacing
-        }
-        var y = rect.minY
-        while y <= rect.maxY {
-            path.move(to: CGPoint(x: rect.minX, y: y))
-            path.addLine(to: CGPoint(x: rect.maxX, y: y))
-            y += spacing
-        }
-        return path
-    }
-}
-
-/// Pure black band (merges with the hardware notch), then a calm black body with a faint
-/// grid, grain and a whisper of mat green at the bottom.
+/// Flat black. The island is a continuation of the hardware notch, not a panel.
 private struct NotchIslandBackground: View {
-    var bandHeight: CGFloat
-    var hasNotch: Bool
-    var listening: Bool
-
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.black
-            ZStack {
-                NotchGridLines(spacing: 22)
-                    .stroke(Color.white.opacity(0.032), lineWidth: 0.5)
-                if let noise = OKNoise.image {
-                    Image(nsImage: noise)
-                        .resizable(resizingMode: .tile)
-                        .interpolation(.none)
-                        .opacity(0.22)
-                        .blendMode(.screen)
-                }
-                LinearGradient(colors: [OKBrand.mat.opacity(0), OKBrand.mat.opacity(0.2)],
-                               startPoint: .center, endPoint: .bottom)
-            }
-            .mask(
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 34)
-                    Color.black
-                }
-            )
-            .padding(.top, hasNotch ? bandHeight : 0)
-
-            if listening {
-                RadialGradient(colors: [OKBrand.mint.opacity(0.2), .clear],
-                               center: .top, startRadius: 0, endRadius: 140)
-                    .frame(height: 90)
-                    .padding(.top, hasNotch ? bandHeight - 12 : 0)
-                    .transition(.opacity)
-            }
-        }
-        .allowsHitTesting(false)
+        Color.black.allowsHitTesting(false)
     }
 }
 
@@ -194,55 +140,72 @@ private struct NotchContent: View {
     let env: AppEnvironment
 
     private var m: NotchMetrics { model.metrics }
-    private var inset: CGFloat { m.shoulder + 14 }
+    private var inset: CGFloat { m.shoulder + 18 }
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .center, spacing: 0) {
             band
             if model.hasBody {
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 1 / max(displayScale, 1))
+                    .padding(.horizontal, inset)
                 stage
                     .padding(.horizontal, inset)
-                    .padding(.top, m.hasNotch ? 10 : 2)
-                    .padding(.bottom, 14)
+                    .padding(.top, m.hasNotch ? 16 : 10)
+                    .padding(.bottom, 18)
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: Band
 
+    /// Logo and status sit against the camera, so the pair reads as one centered mark.
     @ViewBuilder private var band: some View {
         if m.hasNotch {
             HStack(spacing: 0) {
-                HStack(spacing: 7) {
-                    OKLogo(size: 16, glow: model.listening)
-                    if model.hasBody {
-                        Text("okidoki")
-                            .font(.okBody(12, .semibold))
-                            .foregroundStyle(NotchInk.primary)
-                            .lineLimit(1)
-                            .transition(.opacity)
-                    }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    OKLogo(size: 14)
+                        .padding(.trailing, 14)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Color.clear.frame(width: m.notchWidth)
-                statusIndicator
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                HStack(spacing: 0) {
+                    statusCluster
+                        .padding(.leading, 14)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.horizontal, m.shoulder + 12)
+            .padding(.horizontal, m.shoulder + 6)
             .frame(height: m.bandHeight)
         } else {
             HStack(spacing: 8) {
-                OKLogo(size: 16, glow: model.listening)
+                OKLogo(size: 14)
                 Text(statusText)
                     .font(.okBody(12, .medium))
-                    .foregroundStyle(NotchInk.primary)
+                    .foregroundStyle(NotchInk.secondary)
                     .lineLimit(1)
-                Spacer(minLength: 6)
                 statusIndicator
             }
-            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .frame(height: m.bandHeight)
+        }
+    }
+
+    /// One thing in the ear: a word when nothing is live, otherwise the live mark.
+    @ViewBuilder private var statusCluster: some View {
+        if model.listening || !model.waiting.isEmpty || !model.live.isEmpty {
+            statusIndicator
+        } else {
+            Text(statusText)
+                .font(.okBody(12, .medium))
+                .foregroundStyle(NotchInk.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -257,7 +220,7 @@ private struct NotchContent: View {
 
     @ViewBuilder private var statusIndicator: some View {
         if model.quiet {
-            PixelGlyph(name: "moon", size: 10, color: NotchInk.tertiary)
+            EmptyView()
         } else if model.listening {
             WaveformView(level: 0.5, active: model.presented, color: OKBrand.mint, bars: 7, height: 12)
                 .frame(width: 28)
@@ -271,11 +234,7 @@ private struct NotchContent: View {
             }
         } else if !model.live.isEmpty {
             HStack(spacing: 5) {
-                if model.presented {
-                    PixelSpinner(size: 11, color: OKBrand.mint)
-                } else {
-                    Circle().fill(OKBrand.mint).frame(width: 5, height: 5)
-                }
+                Circle().fill(OKBrand.mint).frame(width: 5, height: 5)
                 if model.live.count > 1 {
                     Text("\(model.live.count)")
                         .font(.okBody(12, .semibold))
@@ -309,11 +268,11 @@ private struct NotchContent: View {
     }
 
     private var stage: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .center, spacing: 0) {
             NotchScrollArea(maxHeight: m.maxBodyHeight) {
-                VStack(alignment: .leading, spacing: model.expanded ? 16 : 8) {
+                VStack(alignment: .center, spacing: model.expanded ? 18 : 8) {
                     if !shownWaiting.isEmpty {
-                        section(model.expanded ? "Needs you" : nil) {
+                        section(nil) {
                             ForEach(shownWaiting) { run in
                                 NotchApprovalCard(run: run, env: env, compact: !model.expanded)
                                     .transition(rowTransition)
@@ -324,7 +283,7 @@ private struct NotchContent: View {
                         }
                     }
                     if !shownToasts.isEmpty {
-                        section(model.expanded ? "Just now" : nil) {
+                        section(nil) {
                             ForEach(shownToasts) { toast in
                                 NotchToastRow(toast: toast, model: model, env: env)
                                     .transition(rowTransition)
@@ -332,7 +291,7 @@ private struct NotchContent: View {
                         }
                     }
                     if !shownLive.isEmpty {
-                        section(model.expanded ? "Working" : nil) {
+                        section(nil) {
                             ForEach(shownLive) { run in
                                 NotchLiveRow(run: run, env: env, detailed: model.expanded, animating: model.presented)
                                     .transition(rowTransition)
@@ -347,39 +306,16 @@ private struct NotchContent: View {
                     }
                 }
             }
-            if model.expanded {
-                footer.transition(.opacity)
-            }
         }
     }
 
     private var emptyState: some View {
-        HStack(spacing: 12) {
-            OKOrb(size: 40, intensity: 0.7)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.quiet ? "Quiet mode is on" : "Nothing needs you")
-                    .font(.okBody(14, .semibold))
-                    .foregroundStyle(NotchInk.primary)
-                Text("Shake your mouse anywhere to ask, do or learn.")
-                    .font(.okBody(12))
-                    .foregroundStyle(NotchInk.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var footer: some View {
-        HStack(spacing: 6) {
-            NotchButton(title: "Ask okidoki", glyph: "spark", kind: isEmpty ? .primary : .secondary) {
-                env.openDashboard(.home)
-                env.requestAsk()
-            }
-            Spacer(minLength: 0)
-            NotchIconButton(glyph: "grid", help: "Open dashboard") { env.openDashboard(.home) }
-            NotchIconButton(glyph: "gear", help: "Settings") { env.openDashboard(.settings) }
-        }
+        Text(model.quiet ? "Quiet" : "Shake to ask")
+            .font(.okBody(13))
+            .foregroundStyle(NotchInk.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
     }
 
     // MARK: Helpers
@@ -390,21 +326,24 @@ private struct NotchContent: View {
     }
 
     private func section<Content: View>(_ title: String?, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .center, spacing: 10) {
             if let title {
                 Text(title)
                     .font(.okBody(11.5, .medium))
                     .foregroundStyle(NotchInk.tertiary)
-                    .padding(.leading, 2)
                     .transition(.opacity)
             }
             content()
         }
+        .frame(maxWidth: .infinity)
     }
 
     private func moreLink(_ title: String, action: @escaping () -> Void) -> some View {
-        NotchButton(title: title, kind: .plain, action: action)
-            .padding(.leading, -4)
+        HStack {
+            Spacer(minLength: 0)
+            NotchButton(title: title, kind: .plain, action: action)
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -436,32 +375,8 @@ private struct NotchToastRow: View {
     let env: AppEnvironment
     @State private var hovering = false
 
-    private var color: Color {
-        switch toast.kind {
-        case .success: return OKBrand.mint
-        case .warning: return NotchInk.amber
-        case .approval: return OKBrand.green
-        case .info: return NotchInk.sky
-        }
-    }
-
-    private var glyph: String {
-        switch toast.kind {
-        case .success: return "check"
-        case .warning: return "bolt"
-        case .approval: return "hand"
-        case .info: return "spark"
-        }
-    }
-
     var body: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(color.opacity(0.15))
-                PixelGlyph(name: glyph, size: 10, color: color)
-            }
-            .frame(width: 26, height: 26)
-
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(toast.title.notchSentence)
                     .font(.okBody(13, .medium))
@@ -469,7 +384,7 @@ private struct NotchToastRow: View {
                     .lineLimit(1)
                 if !toast.detail.isEmpty {
                     Text(toast.detail.notchSentence)
-                        .font(.okBody(11.5))
+                        .font(.okBody(12))
                         .foregroundStyle(NotchInk.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -483,21 +398,22 @@ private struct NotchToastRow: View {
                 NotchButton(title: label.notchSentence, kind: .plain) { model.edit(toast.id) }
             }
             if let label = toast.undoLabel {
-                NotchButton(title: label.notchSentence, kind: .secondary) { model.undo(toast.id) }
+                NotchButton(title: label.notchSentence, kind: .plain) { model.undo(toast.id) }
             }
-            NotchIconButton(glyph: "x", help: "Dismiss", size: 22) { model.removeToast(toast.id) }
-                .opacity(hovering ? 1 : 0.45)
+            NotchIconButton(glyph: "x", help: "Dismiss", size: 22) {
+                model.removeToast(toast.id)
+            }
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 8)
+        .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .notchCard(hovered: hovering)
+        .notchRow()
         .onHover { hovering = $0 }
-        .animation(NotchMotion.hover, value: hovering)
     }
 
     private func open() {
-        if let runID = toast.runID { env.openDashboard(.runs, runID: runID) } else { env.openDashboard(.home) }
+        if let runID = toast.runID { env.openDashboard(.runs, runID: runID) }
     }
 }
 
@@ -506,60 +422,39 @@ private struct NotchLiveRow: View {
     let env: AppEnvironment
     var detailed: Bool
     var animating: Bool
-    @State private var hovering = false
 
     private var paused: Bool { run.status == .paused }
 
     var body: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(OKBrand.mint.opacity(0.13))
-                if animating && !paused {
-                    PixelSpinner(size: 11, color: OKBrand.mint)
-                } else {
-                    PixelGlyph(name: paused ? "pause" : "play", size: 9, color: OKBrand.mint)
-                }
-            }
-            .frame(width: 26, height: 26)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(run.title.notchSentence)
-                        .font(.okBody(13, .medium))
-                        .foregroundStyle(NotchInk.primary)
-                        .lineLimit(1)
-                    Text(paused ? "Paused" : run.kind.label.notchSentence)
-                        .font(.okBody(11))
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(run.title.notchSentence)
+                    .font(.okBody(13, .medium))
+                    .foregroundStyle(NotchInk.primary)
+                    .lineLimit(1)
+                if paused {
+                    Text("Paused")
+                        .font(.okBody(12))
                         .foregroundStyle(NotchInk.tertiary)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-                if detailed, !run.step.isEmpty {
+                } else if detailed, !run.step.isEmpty {
                     Text(run.step.notchSentence)
-                        .font(.okBody(11.5))
+                        .font(.okBody(12))
                         .foregroundStyle(NotchInk.secondary)
                         .lineLimit(1)
                 }
                 NotchProgressBar(active: animating && !paused)
+                    .padding(.top, 3)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture { env.openDashboard(.runs, runID: run.id) }
 
-            HStack(spacing: 2) {
-                NotchIconButton(glyph: paused ? "play" : "pause", help: paused ? "Resume" : "Pause", size: 22) {
-                    env.pauseRun(run.id)
-                }
-                NotchIconButton(glyph: "stop", help: "Stop", size: 22) { env.stopRun(run.id) }
-            }
-            .opacity(hovering ? 1 : 0.5)
+            NotchButton(title: paused ? "Resume" : "Pause", kind: .plain) { env.pauseRun(run.id) }
+            NotchButton(title: "Stop", kind: .plain) { env.stopRun(run.id) }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 8)
+        .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .notchCard(hovered: hovering)
-        .onHover { hovering = $0 }
-        .animation(NotchMotion.hover, value: hovering)
+        .notchRow()
     }
 }
 
@@ -579,60 +474,51 @@ private struct NotchApprovalCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(OKBrand.mint.opacity(0.13))
-                    PixelGlyph(name: run.kind == .borrow ? "hand" : "bolt", size: 11, color: OKBrand.mint)
-                }
-                .frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(run.title.notchSentence)
-                        .font(.okBody(13, .semibold))
-                        .foregroundStyle(NotchInk.primary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 6) {
-                        Text(run.kind.label.notchSentence)
-                            .foregroundStyle(NotchInk.tertiary)
-                        Circle().fill(riskColor).frame(width: 5, height: 5)
-                        Text("\(run.risk.label.notchSentence) risk")
-                            .foregroundStyle(riskColor.opacity(0.9))
-                    }
-                    .font(.okBody(11.5))
-                    .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
+        VStack(alignment: .center, spacing: 10) {
+            Text(run.title.notchSentence)
+                .font(.okBody(13, .medium))
+                .foregroundStyle(NotchInk.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
 
             if !run.summary.isEmpty {
                 Text(run.summary.notchSentence)
                     .font(.okBody(12))
                     .foregroundStyle(NotchInk.secondary)
+                    .multilineTextAlignment(.center)
                     .lineLimit(compact ? 2 : 4)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
             }
 
-            if !run.commands.isEmpty {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(riskColor)
+                    .frame(width: 4, height: 4)
+                    .opacity(run.risk == .low ? 0.55 : 1)
+                Text("\(run.risk.label.notchSentence) risk")
+            }
+            .font(.okBody(11))
+            .foregroundStyle(run.risk == .low ? NotchInk.tertiary : riskColor)
+
+            if !compact && !run.commands.isEmpty {
                 Button {
                     withAnimation(NotchMotion.content) { showCommands.toggle() }
                 } label: {
-                    HStack(spacing: 6) {
-                        PixelGlyph(name: "terminal", size: 9, color: NotchInk.tertiary)
-                        Text(showCommands ? "Hide commands" : "Show commands")
-                            .font(.okBody(11.5, .medium))
-                            .foregroundStyle(NotchInk.secondary)
-                    }
-                    .contentShape(Rectangle())
+                    Text(showCommands ? "Hide commands" : "Show commands")
+                        .font(.okBody(12))
+                        .foregroundStyle(NotchInk.secondary)
                 }
                 .buttonStyle(.plain)
 
                 if showCommands {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(run.commands.prefix(4).enumerated()), id: \.offset) { _, command in
-                            Text("$ " + command)
-                                .font(.okMono(10.5))
-                                .foregroundStyle(Color(hex: 0xD8E2DC))
+                            Text(command)
+                                .font(.okMono(11))
+                                .foregroundStyle(NotchInk.secondary)
                                 .lineLimit(2)
                                 .textSelection(.enabled)
                         }
@@ -642,28 +528,44 @@ private struct NotchApprovalCard: View {
                                 .foregroundStyle(NotchInk.tertiary)
                         }
                     }
-                    .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.6)))
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                     .transition(.opacity)
                 }
             }
 
-            HStack(spacing: 4) {
-                NotchButton(title: "Review", kind: .plain) { env.openDashboard(.runs, runID: run.id) }
-                NotchButton(title: "Always allow", kind: .plain) { env.allowAlways(run.id) }
-                Spacer(minLength: 6)
+            HStack(spacing: 8) {
                 NotchButton(title: "Not now", kind: .secondary) { env.denyRun(run.id) }
                 NotchButton(title: run.kind == .borrow ? "Allow once" : "Do it", kind: .primary) {
                     env.approveRun(run.id)
                 }
             }
-            .padding(.leading, -4)
+            .padding(.top, 2)
+
+            if !compact {
+                HStack(spacing: 16) {
+                    Button("Always allow") { env.allowAlways(run.id) }
+                        .buttonStyle(.plain)
+                    Button("Review") { env.openDashboard(.runs, runID: run.id) }
+                        .buttonStyle(.plain)
+                }
+                .font(.okBody(12))
+                .foregroundStyle(NotchInk.tertiary)
+            }
         }
-        .padding(12)
-        .notchCard(hovered: hovering, radius: 16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .background {
+            // A graded surface, not one flat sheet — the card should read as sitting
+            // above the island rather than being cut out of it.
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(hovering ? 0.06 : 0.032))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(hovering ? 0.15 : 0.07), lineWidth: 1)
+            }
+        }
+        .shadow(color: .black.opacity(hovering ? 0.32 : 0.18), radius: hovering ? 18 : 10, y: hovering ? 6 : 3)
         .onHover { hovering = $0 }
         .animation(NotchMotion.hover, value: hovering)
     }
@@ -673,6 +575,11 @@ private struct NotchApprovalCard: View {
 
 enum NotchButtonKind { case primary, secondary, plain }
 
+/// A button in the notch.
+///
+/// The primary action is the island's one moment of brand: it rests white and
+/// warms to mint under the pointer, throwing a soft glow. Secondary grows a
+/// surface and an edge. Plain stays quiet until you reach for it, then lifts.
 struct NotchButton: View {
     var title: String
     var glyph: String?
@@ -683,24 +590,8 @@ struct NotchButton: View {
     private var foreground: Color {
         switch kind {
         case .primary: return NotchInk.onMint
-        case .secondary: return NotchInk.primary
+        case .secondary: return hovering ? NotchInk.primary : NotchInk.secondary
         case .plain: return hovering ? NotchInk.primary : NotchInk.secondary
-        }
-    }
-
-    private var fill: Color {
-        switch kind {
-        case .primary: return hovering ? Color(hex: 0x5BE7AA) : OKBrand.mint
-        case .secondary: return Color.white.opacity(hovering ? 0.14 : 0.08)
-        case .plain: return Color.white.opacity(hovering ? 0.06 : 0)
-        }
-    }
-
-    private var stroke: Color {
-        switch kind {
-        case .primary: return .clear
-        case .secondary: return Color.white.opacity(hovering ? 0.5 : 0.1)
-        case .plain: return .clear
         }
     }
 
@@ -715,16 +606,32 @@ struct NotchButton: View {
                     .lineLimit(1)
             }
             .foregroundStyle(foreground)
-            .padding(.horizontal, kind == .plain ? 7 : 12)
-            .frame(height: 28)
-            .background(Capsule().fill(fill))
-            .overlay(Capsule().strokeBorder(stroke, lineWidth: 1))
+            .padding(.horizontal, kind == .plain ? 8 : 12)
+            .frame(height: kind == .plain ? 24 : 27)
+            .background { plate }
             .contentShape(Capsule())
         }
         .buttonStyle(NotchPressStyle())
-        .fixedSize()
+        .offset(y: hovering ? -1 : 0)
         .onHover { hovering = $0 }
         .animation(NotchMotion.hover, value: hovering)
+    }
+
+    @ViewBuilder private var plate: some View {
+        switch kind {
+        case .primary:
+            Capsule()
+                .fill(hovering ? OKBrand.mint : Color.white)
+                .overlay(Capsule().strokeBorder(Color.white.opacity(0.85), lineWidth: 0.5))
+                .shadow(color: (hovering ? OKBrand.mint : Color.white).opacity(hovering ? 0.5 : 0.16),
+                        radius: hovering ? 12 : 5, y: hovering ? 2 : 1)
+        case .secondary:
+            Capsule()
+                .fill(Color.white.opacity(hovering ? 0.12 : 0.05))
+                .overlay(Capsule().strokeBorder(Color.white.opacity(hovering ? 0.14 : 0), lineWidth: 1))
+        case .plain:
+            Capsule().fill(Color.white.opacity(hovering ? 0.07 : 0))
+        }
     }
 }
 
@@ -739,10 +646,15 @@ struct NotchIconButton: View {
         Button(action: action) {
             PixelGlyph(name: glyph, size: 10, color: hovering ? NotchInk.primary : NotchInk.secondary)
                 .frame(width: size, height: size)
-                .background(Circle().fill(Color.white.opacity(hovering ? 0.1 : 0)))
+                .background {
+                    Circle()
+                        .fill(Color.white.opacity(hovering ? 0.12 : 0))
+                        .overlay(Circle().strokeBorder(Color.white.opacity(hovering ? 0.12 : 0), lineWidth: 1))
+                }
                 .contentShape(Circle())
         }
         .buttonStyle(NotchPressStyle())
+        .scaleEffect(hovering ? 1.1 : 1)
         .onHover { hovering = $0 }
         .animation(NotchMotion.hover, value: hovering)
         .help(help)
@@ -762,37 +674,44 @@ private struct NotchProgressBar: View {
     var active: Bool
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.08))
-                if active {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                        let width = geo.size.width
-                        let segment = max(36, width * 0.35)
-                        let phase = CGFloat((timeline.date.timeIntervalSinceReferenceDate * 0.6)
-                            .truncatingRemainder(dividingBy: 1))
-                        Capsule()
-                            .fill(LinearGradient(colors: [OKBrand.mint.opacity(0), OKBrand.mint, OKBrand.mint.opacity(0)],
-                                                 startPoint: .leading, endPoint: .trailing))
-                            .frame(width: segment)
-                            .offset(x: -segment + phase * (width + segment))
-                    }
-                }
+        Capsule()
+            .fill(Color.white.opacity(0.1))
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(OKBrand.mint.opacity(active ? 0.9 : 0.25))
+                    .scaleEffect(x: active ? 1 : 0.2, anchor: .leading)
             }
-            // Clip the track, not the moving segment (the old bar only ever showed its left half).
-            .clipShape(Capsule())
-        }
-        .frame(height: 2)
+            .frame(height: 1.5)
+            .animation(.easeInOut(duration: 0.4), value: active)
     }
 }
 
 private extension View {
-    /// Card surface: faint fill, hairline edge; a crisp white hairline when hovered (Bucket-style focus).
-    func notchCard(hovered: Bool, radius: CGFloat = 14) -> some View {
-        self
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Color.white.opacity(hovered ? 0.07 : 0.045)))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(Color.white.opacity(hovered ? 0.85 : 0.08), lineWidth: 1))
+    /// A row lights up on hover: a soft surface, a hairline edge and a hair of lift.
+    /// No border at rest — borders made every line look like a widget.
+    func notchRow(hoverable: Bool = true) -> some View {
+        modifier(NotchRowModifier(enabled: hoverable))
+    }
+}
+
+/// Owns the hover state for a notch row, so every row answers the pointer the
+/// same way instead of each hand-rolling its own fill.
+private struct NotchRowModifier: ViewModifier {
+    var enabled: Bool = true
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(hovering ? 0.075 : 0))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.white.opacity(hovering ? 0.09 : 0), lineWidth: 1)
+                    }
+            }
+            .offset(y: hovering ? -1 : 0)
+            .animation(NotchMotion.hover, value: hovering)
+            .onHover { hovering = enabled && $0 }
     }
 }

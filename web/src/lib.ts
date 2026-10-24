@@ -102,14 +102,6 @@ export function scheduleLabel(routine: {
   }
 }
 
-export function riskLabel(risk: string | undefined): string {
-  return risk ?? "low";
-}
-
-export function greetingName(name: string): string {
-  return name.split(" ")[0] || name;
-}
-
 // Rough yearly price of the paid app each free tool stands in for. Mirrors ToolCatalog.paidAlternatives.
 const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59 };
 

@@ -2,6 +2,10 @@ import AppKit
 import Foundation
 import OkidokiCore
 
+enum BrainConnection {
+    static let token = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_TOKEN"] ?? UUID().uuidString
+}
+
 enum SidecarStatus: Equatable {
     case idle
     case starting
@@ -71,6 +75,9 @@ final class BrainSidecar: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["OKIDOKI_BRAIN_PORT"] = String(port)
         env["NODE_ENV"] = "production"
+        env["PATH"] = ShellRunner.shared.pathEnvironment + ":" + (env["PATH"] ?? "")
+        env["OKIDOKI_BRAIN_TOKEN"] = BrainConnection.token
+        if let askpass = AskPass.path { env["OKIDOKI_ASKPASS"] = askpass }
         process.environment = env
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -150,6 +157,7 @@ final class BrainSidecar: ObservableObject {
     @discardableResult
     func health() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("health"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 1
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -302,6 +310,7 @@ final class BrainClient {
                                               events: events, reminders: [], frontWindow: frontWindow)
         )
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("think"))
+        urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 90
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -337,6 +346,7 @@ final class BrainClient {
         if let agent { body["agent"] = agent.rawValue }
         if !extraArgs.isEmpty { body["extraArgs"] = extraArgs }
         var request = URLRequest(url: baseURL.appendingPathComponent("execute"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         request.httpMethod = "POST"
         request.timeoutInterval = 60 * 30
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -344,7 +354,9 @@ final class BrainClient {
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (bytes, response) = try await URLSession.shared.bytes(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return BrainExecResult(summary: "The execution service rejected this job. Review the plan and try again.", freedBytes: nil, success: false)
+            }
             var summary = ""
             var freed: Int64?
             var success = false
@@ -352,9 +364,9 @@ final class BrainClient {
             var currentEvent = ""
             for try await line in bytes.lines {
                 if line.hasPrefix("event:") {
-                    currentEvent = line.replacingOccurrences(of: "event:", with: "").trimmingCharacters(in: .whitespaces)
+                    currentEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
                 } else if line.hasPrefix("data:") {
-                    let dataString = line.replacingOccurrences(of: "data:", with: "").trimmingCharacters(in: .whitespaces)
+                    let dataString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
                     guard let data = dataString.data(using: .utf8),
                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
                     switch currentEvent {
@@ -373,6 +385,8 @@ final class BrainClient {
                         else if let number = json["freedBytes"] as? NSNumber { freed = number.int64Value }
                         success = true
                         onEvent(.done(summary: summary, freedBytes: freed, code: Int32(json["code"] as? Int ?? 0)))
+                    case "cancelled":
+                        failure = "stopped by you"
                     case "error":
                         failure = json["message"] as? String ?? "the run failed"
                         onEvent(.error(failure ?? "the run failed"))
@@ -382,9 +396,9 @@ final class BrainClient {
                 }
             }
             if let failure { return BrainExecResult(summary: failure, freedBytes: nil, success: false) }
-            return BrainExecResult(summary: summary, freedBytes: freed, success: success)
+            return BrainExecResult(summary: success ? summary : "The connection ended before the result arrived. Check this run before trying again.", freedBytes: freed, success: success)
         } catch {
-            return nil
+            return BrainExecResult(summary: "Lost connection to the job. It may still be running. Stop it or check its output before trying again.", freedBytes: nil, success: false)
         }
     }
 
@@ -400,23 +414,41 @@ final class BrainClient {
         var error: String?
     }
 
-    func computer(goal: String, step: Int, appName: String, screen box: OkidokiCore.ScreenBox,
+    func computer(goal: String, step: Int, appName: String, windowTitle: String = "",
+                  screen box: OkidokiCore.ScreenBox,
                   imageWidth: Double, imageHeight: Double, history: [[String: Any]],
-                  screenshotPNG: Data?, model: String) async -> ComputerAction? {
+                  controls: [[String: Any]] = [],
+                  screenshotPNG: Data?, previousPNG: Data? = nil,
+                  zoom: ComputerUseService.Zoom? = nil,
+                  canClick: Bool = true, canSee: Bool = true,
+                  model: String) async -> ComputerAction? {
         var body: [String: Any] = [
             "goal": goal,
             "step": step,
             "app": appName,
+            "windowTitle": windowTitle,
             "screen": ["x": box.x, "y": box.y, "width": box.width, "height": box.height],
             "imageWidth": imageWidth,
             "imageHeight": imageHeight,
             "history": history,
+            "controls": controls,
+            "canClick": canClick,
+            "canSee": canSee,
             "settings": ["claudeModel": model],
         ]
         if let screenshotPNG {
             body["screenshotBase64"] = screenshotPNG.base64EncodedString()
         }
+        if let previousPNG {
+            body["previousScreenshotBase64"] = previousPNG.base64EncodedString()
+        }
+        if let zoom {
+            body["zoomBase64"] = zoom.png.base64EncodedString()
+            body["zoom"] = ["x": zoom.rect.minX, "y": zoom.rect.minY, "width": zoom.rect.width, "height": zoom.rect.height,
+                            "imageWidth": zoom.width, "imageHeight": zoom.height]
+        }
         var request = URLRequest(url: baseURL.appendingPathComponent("computer"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         request.httpMethod = "POST"
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -434,6 +466,52 @@ final class BrainClient {
         }
     }
 
+    struct TeachStepEnvelope: Decodable {
+        var step: TeachLiveStep?
+        var usedModel: Bool?
+        var error: String?
+    }
+
+    /// One live tutoring step: the model looks at the screen and the log and points at the next thing.
+    func teachStep(_ request: TeachStepRequest) async -> TeachLiveStep? {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("teach/step"))
+        urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = 70
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let key = Keychain.get("anthropic"), !key.isEmpty {
+            urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
+        }
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(request)
+            let (data, response) = try await URLSession.shared.data(for: urlRequest)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return try JSONDecoder().decode(TeachStepEnvelope.self, from: data).step
+        } catch {
+            return nil
+        }
+    }
+
+    /// Zoomed second look at one control. `found == false` keeps the first guess.
+    func teachRefine(_ request: TeachRefineRequest) async -> TeachRefineResult? {
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("teach/refine"))
+        urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = 30
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let key = Keychain.get("anthropic"), !key.isEmpty {
+            urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
+        }
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(request)
+            let (data, response) = try await URLSession.shared.data(for: urlRequest)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return try JSONDecoder().decode(TeachRefineResult.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
     func pause(runID: String) {
         post("pause", body: ["runId": runID])
     }
@@ -444,19 +522,11 @@ final class BrainClient {
 
     private func post(_ path: String, body: [String: Any]) {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 5
         URLSession.shared.dataTask(with: request).resume()
-    }
-
-    func tools() async -> [[String: Any]] {
-        var request = URLRequest(url: baseURL.appendingPathComponent("tools"))
-        request.timeoutInterval = 5
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tools = json["tools"] as? [[String: Any]] else { return [] }
-        return tools
     }
 }

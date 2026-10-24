@@ -29,6 +29,16 @@ if command -v bun >/dev/null 2>&1 && [ -f web/package.json ]; then
   (cd web && bun run build >/dev/null)
 fi
 
+# Replacing the bundle under a running copy gets it killed for an invalid signature. Quit it first.
+if pgrep -fq "$ROOT/$APP/Contents/MacOS/Okidoki"; then
+  echo "▸ Quitting the running Okidoki…"
+  osascript -e 'tell application id "com.jaykatariya.okidoki" to quit' >/dev/null 2>&1 || true
+  for _ in $(seq 1 20); do
+    pgrep -fq "$ROOT/$APP/Contents/MacOS/Okidoki" || break
+    sleep 0.25
+  done
+fi
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Okidoki"

@@ -53,7 +53,16 @@ struct DashboardToolPayload: Encodable {
     var examples: [String]
 }
 
+struct DashboardWatchPayload: Encodable {
+    var recording: Bool
+    var startedAt: Date?
+    var name: String
+    var steps: [SkillStep]
+    var replaying: Bool
+}
+
 struct DashboardPayload: Encodable {
+    var watching: DashboardWatchPayload
     var accounts: [Account]
     var currentAccountID: String
     var settings: AppSettings
@@ -103,6 +112,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
         environment.sidecar.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.schedulePush() }
+            .store(in: &cancellables)
+        // Live step list while a skill is being recorded.
+        environment.watch.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
@@ -280,6 +294,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     private func payloadJSON() -> String? {
         guard let env else { return nil }
         let payload = DashboardPayload(
+            watching: DashboardWatchPayload(recording: env.watch.isRecording,
+                                            startedAt: env.watch.startedAt,
+                                            name: env.watch.pendingName,
+                                            steps: env.watch.isRecording ? env.watch.steps.map(\.step) : [],
+                                            replaying: env.replayer.isActive),
             accounts: env.store.accounts,
             currentAccountID: env.store.currentAccountID,
             settings: env.store.settings,
@@ -382,7 +401,20 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 env.redirectRun(id, instruction: text)
             }
         case "replaySkill":
-            if let id = payload["id"] as? String, let skill = env.store.skill(id) { env.replaySkill(skill) }
+            if let id = payload["id"] as? String, let skill = env.store.skill(id) {
+                env.replaySkill(skill, times: payload["times"] as? Int ?? 1)
+            }
+        case "startWatching":
+            env.startTeaching(name: payload["name"] as? String ?? "")
+        case "stopWatching":
+            env.stopWatching()
+        case "discardWatching":
+            env.discardWatching()
+        case "renameSkill":
+            if let id = payload["id"] as? String {
+                env.store.updateSkill(id, name: payload["name"] as? String, summary: payload["summary"] as? String)
+                env.store.saveNow()
+            }
         case "startSkill":
             if let id = payload["id"] as? String, let skill = env.store.skill(id) { env.startSkillWalkthrough(skill) }
         case "runRoutine":

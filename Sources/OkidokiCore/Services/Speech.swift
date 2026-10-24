@@ -24,14 +24,6 @@ public final class SpeechRecognizer: ObservableObject {
 
     public init() {}
 
-    public func requestPermission() async -> Bool {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
-        }
-    }
-
     public func start() {
         guard !isListening else { return }
         transcript = ""

@@ -99,25 +99,6 @@ public final class AppleBridge: @unchecked Sendable {
         _ = try await runJXA(script, args: [id])
     }
 
-    public func listReminders(limit: Int = 8) async throws -> [String] {
-        let script = """
-        function run(argv) {
-            const app = Application("Reminders");
-            const items = app.reminders();
-            const out = [];
-            for (let i = 0; i < Math.min(items.length, Number(argv[0])); i++) {
-                const r = items[i];
-                let due = "";
-                try { if (r.dueDate()) due = r.dueDate().toISOString(); } catch (e) {}
-                out.push({ title: r.name(), due: due, completed: r.completed() });
-            }
-            return JSON.stringify(out);
-        }
-        """
-        let raw = try await runJXA(script, args: [String(limit)])
-        return [raw]
-    }
-
     // MARK: - Calendar
 
     public func addEvent(title: String, start: Date, end: Date) async throws -> String {
@@ -279,13 +260,6 @@ public final class AppleBridge: @unchecked Sendable {
         }
         """
         _ = try await runJXA(script, args: [id])
-    }
-
-    public func noteFromClipboard() async throws -> String {
-        let pasteboard = NSPasteboard.general.string(forType: .string) ?? ""
-        guard !pasteboard.isEmpty else { throw AppleError.scriptFailed("Your clipboard is empty.") }
-        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
-        return try await addNote(title: "okidoki · \(stamp)", body: pasteboard)
     }
 
     // MARK: - Keynote batch export

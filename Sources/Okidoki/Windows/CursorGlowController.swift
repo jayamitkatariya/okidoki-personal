@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 private let companionMarkSize: CGFloat = 24
@@ -39,17 +40,16 @@ final class GlowPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// Moves a tiny click-through panel with the pointer. Mouse monitors give instant updates;
-/// a display-rate timer catches anything they miss (drags inside our own windows,
-/// other spaces), so the mark never gets left behind — on any screen.
+/// Moves a tiny click-through panel with the pointer. A display-linked spring eases the
+/// mark onto the cursor so it glides instead of stepping, and catches up when you flick.
 @MainActor
 final class CursorGlowController {
     let model = GlowModel()
     private var panel: GlowPanel?
-    private var timer: Timer?
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
-    private var lastMouse = CGPoint(x: CGFloat.nan, y: .nan)
+    private var tracker: GlowTracker?
+    private var shown = CGPoint.zero
+    private var velocity = CGPoint.zero
+    private var primed = false
     private var hideGeneration = 0
 
     init() {}
@@ -79,8 +79,13 @@ final class CursorGlowController {
         install()
         hideGeneration += 1
         model.listening = listening
-        lastMouse = CGPoint(x: CGFloat.nan, y: .nan)
-        track()
+        if let panel {
+            let origin = Self.origin(for: NSEvent.mouseLocation, panelSide: panel.frame.width)
+            shown = origin
+            velocity = .zero
+            primed = true
+            panel.setFrameOrigin(origin)
+        }
         panel?.orderFrontRegardless()
         model.active = true
         startTracking()
@@ -106,43 +111,67 @@ final class CursorGlowController {
     // MARK: Tracking
 
     private func startTracking() {
-        guard timer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.track() }
+        guard let view = panel?.contentView else { return }
+        if tracker == nil {
+            let tracker = GlowTracker()
+            tracker.controller = self
+            self.tracker = tracker
         }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-            MainActor.assumeIsolated { self?.track() }
-        }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            MainActor.assumeIsolated { self?.track() }
-            return event
-        }
+        tracker?.start(on: view)
     }
 
     private func stopTracking() {
-        timer?.invalidate()
-        timer = nil
-        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
-        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
-        globalMonitor = nil
-        localMonitor = nil
+        tracker?.stop()
+        primed = false
+        velocity = .zero
     }
 
-    private func track() {
+    /// One display frame of a critically damped spring toward the pointer.
+    fileprivate func integrate(dt raw: CFTimeInterval) {
         guard let panel else { return }
-        let mouse = NSEvent.mouseLocation
-        guard mouse != lastMouse else { return }
-        lastMouse = mouse
-        panel.setFrameOrigin(Self.origin(for: mouse, panelSide: panel.frame.width))
+        let target = Self.origin(for: NSEvent.mouseLocation, panelSide: panel.frame.width)
+        guard primed else {
+            primed = true
+            shown = target
+            velocity = .zero
+            panel.setFrameOrigin(target)
+            return
+        }
+        let error = hypot(target.x - shown.x, target.y - shown.y)
+        // A screen-edge flip, or the pointer warping, should not streak the mark across the display.
+        if error > 180 {
+            shown = target
+            velocity = .zero
+            panel.setFrameOrigin(target)
+            return
+        }
+        if error < 0.15 && hypot(velocity.x, velocity.y) < 0.4 { return }
+
+        let dt = min(max(CGFloat(raw), 1.0 / 240.0), 1.0 / 30.0)
+        // Close in, glide. Far behind (a fast flick), stiffen so the mark doesn't lag off the cursor.
+        let response: CGFloat = error > 28 ? 0.038 : 0.062
+        let omega = 2 * CGFloat.pi / response
+        let stiffness = omega * omega
+        let damping = 2 * omega
+        var remaining = dt
+        let substep: CGFloat = 1.0 / 480.0
+        while remaining > 0 {
+            let h = min(substep, remaining)
+            let ax = -stiffness * (shown.x - target.x) - damping * velocity.x
+            let ay = -stiffness * (shown.y - target.y) - damping * velocity.y
+            velocity.x += ax * h
+            velocity.y += ay * h
+            shown.x += velocity.x * h
+            shown.y += velocity.y * h
+            remaining -= h
+        }
+        panel.setFrameOrigin(shown)
     }
 
     /// Lower-right of the pointer, flipping left/up near a screen edge.
     static func origin(for mouse: CGPoint, panelSide: CGFloat) -> CGPoint {
-        let gapX: CGFloat = 10
-        let gapY: CGFloat = 12
+        let gapX: CGFloat = 8
+        let gapY: CGFloat = 10
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })?.frame
             ?? CGRect(origin: .zero, size: CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude))
         var x = mouse.x + gapX - companionPad
@@ -153,13 +182,36 @@ final class CursorGlowController {
     }
 }
 
-extension NSScreen {
-    static var okidokiTarget: NSScreen? {
-        if let notched = NSScreen.screens.first(where: { $0.okidokiHasNotch }) { return notched }
-        let mouse = NSEvent.mouseLocation
-        return NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main ?? NSScreen.screens.first
+/// Display-linked driver. `CADisplayLink` needs an `NSObject` target; the controller stays the owner.
+@MainActor
+private final class GlowTracker: NSObject {
+    weak var controller: CursorGlowController?
+    private var link: CADisplayLink?
+    private var lastTimestamp: CFTimeInterval = 0
+
+    func start(on view: NSView) {
+        guard link == nil else { return }
+        lastTimestamp = 0
+        let link = view.displayLink(target: self, selector: #selector(step(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
     }
 
+    func stop() {
+        link?.invalidate()
+        link = nil
+        lastTimestamp = 0
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let dt = lastTimestamp == 0 ? 1.0 / 120.0 : now - lastTimestamp
+        lastTimestamp = now
+        controller?.integrate(dt: dt)
+    }
+}
+
+extension NSScreen {
     /// The notched screen, else the menu-bar screen. Not `NSScreen.main` (the screen with the
     /// key window), which changes with focus and made the notch pill hop between displays.
     static var okidokiPrimary: NSScreen {

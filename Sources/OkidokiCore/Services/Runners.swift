@@ -35,10 +35,14 @@ public enum PlaceholderFiller {
         let base = fileURL?.deletingPathExtension().lastPathComponent ?? "output"
         let filled = commands.map { command in
             var value = command
-            value = value.replacingOccurrences(of: "{{file}}", with: fileURL.map { shellQuote($0.path) } ?? shellQuote(""))
-            value = value.replacingOccurrences(of: "{{dir}}", with: folder.map { shellQuote($0.path) } ?? (fileURL.map { shellQuote($0.deletingLastPathComponent().path) } ?? "''"))
+            for token in ["file", "dir", "outputDir", "basename"] {
+                value = value.replacingOccurrences(of: "\"{{\(token)}}\"", with: "{{\(token)}}")
+                value = value.replacingOccurrences(of: "'{{\(token)}}'", with: "{{\(token)}}")
+            }
+            value = value.replacingOccurrences(of: "{{file}}", with: fileURL.map { shellQuote($0.path) } ?? "{{file}}")
+            value = value.replacingOccurrences(of: "{{dir}}", with: folder.map { shellQuote($0.path) } ?? (fileURL.map { shellQuote($0.deletingLastPathComponent().path) } ?? "{{dir}}"))
             value = value.replacingOccurrences(of: "{{outputDir}}", with: shellQuote(outputDir?.path ?? NSHomeDirectory()))
-            value = value.replacingOccurrences(of: "{{basename}}", with: base.replacingOccurrences(of: "'", with: ""))
+            value = value.replacingOccurrences(of: "{{basename}}", with: shellQuote(base))
             return value
         }
         return filled
@@ -78,15 +82,6 @@ public enum OutputInsights {
 }
 
 public enum SafetyPolicy {
-    public static func requiresApproval(commands: [String], settings: AppSettings) -> Bool {
-        for command in commands {
-            let risk = CommandRisk.classify(command)
-            if risk != .low { return true }
-            if settings.alwaysAsk.contains(where: { command.lowercased().contains($0.lowercased()) }) { return true }
-        }
-        return false
-    }
-
     public static func blocked(commands: [String], settings: AppSettings) -> String? {
         for command in commands {
             if CommandRisk.isBlocked(command) { return "that command could destroy your Mac. i won't run it." }
@@ -95,13 +90,6 @@ public enum SafetyPolicy {
             }
         }
         return nil
-    }
-
-    public static func isAlwaysAllowed(commands: [String], settings: AppSettings) -> Bool {
-        guard !commands.isEmpty else { return false }
-        return commands.allSatisfy { command in
-            settings.alwaysAllow.contains(where: { command.lowercased().hasPrefix($0.lowercased()) })
-        }
     }
 }
 

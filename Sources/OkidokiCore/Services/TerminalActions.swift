@@ -1,0 +1,459 @@
+import Foundation
+
+/// Something people ask to install, update or open by name: runtimes, coding agents, and the
+/// tools in the catalog. Recipes chain through `needs`, so "install claude code" on a fresh Mac
+/// becomes one reviewable plan that also sets up Homebrew.
+public struct SetupRecipe: Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var aliases: [String]
+    public var binary: String
+    public var install: [String]
+    public var needs: [String]
+    public var update: [String]
+    /// A command that needs a real terminal (a chat UI or a full-screen tool).
+    public var launch: String?
+    /// Whether the launch should start inside a project folder the person picks.
+    public var launchInFolder: Bool
+    public var blurb: String
+
+    public init(id: String, name: String, aliases: [String], binary: String, install: [String],
+                needs: [String] = [], update: [String] = [], launch: String? = nil,
+                launchInFolder: Bool = false, blurb: String) {
+        self.id = id; self.name = name; self.aliases = aliases; self.binary = binary
+        self.install = install; self.needs = needs; self.update = update
+        self.launch = launch; self.launchInFolder = launchInFolder; self.blurb = blurb
+    }
+}
+
+public enum SetupRecipes {
+    static let download = #"curl -fsSL --retry 3 %@ -o "${TMPDIR:-/tmp}/okidoki-%@.sh" && /bin/bash "${TMPDIR:-/tmp}/okidoki-%@.sh""#
+    static func script(_ url: String, _ slug: String) -> String { String(format: download, url, slug, slug) }
+
+    public static let all: [SetupRecipe] = [
+        SetupRecipe(id: "homebrew", name: "Homebrew", aliases: ["homebrew", "brew"], binary: "brew",
+                    install: [script("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh", "homebrew"),
+                              #"test -x /opt/homebrew/bin/brew && { grep -qs 'brew shellenv' "$HOME/.zprofile" || printf '\neval "$(/opt/homebrew/bin/brew shellenv)"\n' >> "$HOME/.zprofile"; }; true"#],
+                    update: ["brew update", "brew upgrade"],
+                    blurb: "The Mac package manager almost every free tool installs through."),
+        SetupRecipe(id: "git", name: "Git", aliases: ["git"], binary: "git",
+                    install: ["brew install git"], needs: ["homebrew"], update: ["brew upgrade git"],
+                    blurb: "Version control, and what downloads most open-source projects."),
+        SetupRecipe(id: "node", name: "Node.js", aliases: ["node", "nodejs", "node.js", "npm"], binary: "node",
+                    install: ["brew install node"], needs: ["homebrew"], update: ["brew upgrade node"],
+                    blurb: "The JavaScript runtime; many command-line tools are installed with npm."),
+        SetupRecipe(id: "python", name: "Python", aliases: ["python", "python3", "pip", "pip3"], binary: "python3",
+                    install: ["brew install python"], needs: ["homebrew"], update: ["brew upgrade python"],
+                    blurb: "Python 3, with pip."),
+        SetupRecipe(id: "uv", name: "uv", aliases: ["uv", "uvx"], binary: "uv",
+                    install: ["brew install uv"], needs: ["homebrew"], update: ["brew upgrade uv"],
+                    blurb: "Fast Python package and project manager."),
+        SetupRecipe(id: "pipx", name: "pipx", aliases: ["pipx"], binary: "pipx",
+                    install: ["brew install pipx", "pipx ensurepath"], needs: ["homebrew"], update: ["brew upgrade pipx"],
+                    blurb: "Installs Python command-line apps in their own sandboxes."),
+        SetupRecipe(id: "bun", name: "Bun", aliases: ["bun"], binary: "bun",
+                    install: ["brew install oven-sh/bun/bun"], needs: ["homebrew"], update: ["brew upgrade oven-sh/bun/bun"],
+                    blurb: "Fast JavaScript runtime and package manager."),
+        SetupRecipe(id: "claude", name: "Claude Code", aliases: ["claude code", "claude-code", "claudecode"], binary: "claude",
+                    install: [script("https://claude.ai/install.sh", "claude-code")],
+                    update: ["claude update"], launch: "claude", launchInFolder: true,
+                    blurb: "Anthropic's coding agent for the terminal."),
+        SetupRecipe(id: "opencode", name: "OpenCode", aliases: ["opencode", "open code", "open-code"], binary: "opencode",
+                    install: ["brew install opencode"], needs: ["homebrew"], update: ["brew upgrade opencode"],
+                    launch: "opencode", launchInFolder: true,
+                    blurb: "Open-source coding agent that works with any model provider."),
+        SetupRecipe(id: "omp", name: "omp", aliases: ["omp"], binary: "omp",
+                    install: [script("https://omp.sh/install", "omp")], launch: "omp", launchInFolder: true,
+                    blurb: "Autonomous coding agent for long-running work."),
+        SetupRecipe(id: "hermes", name: "Hermes Agent", aliases: ["hermes agent", "hermes-agent", "hermes"], binary: "hermes",
+                    install: [script("https://hermes-agent.nousresearch.com/install.sh", "hermes")],
+                    update: ["hermes update"], launch: "hermes", launchInFolder: false,
+                    blurb: "Nous Research's self-improving agent with tools, memory and messaging."),
+        SetupRecipe(id: "ollama", name: "Ollama", aliases: ["ollama"], binary: "ollama",
+                    install: ["brew install --cask ollama"], needs: ["homebrew"], update: ["brew upgrade --cask ollama"],
+                    blurb: "Runs open models locally on your Mac."),
+        SetupRecipe(id: "mole", name: "Mole", aliases: ["mole", "mo"], binary: "mo",
+                    install: ["brew install mole"], needs: ["homebrew"], update: ["brew upgrade mole"],
+                    launch: "mo analyze",
+                    blurb: "Deep-cleans caches, logs and leftovers. Visual disk explorer included."),
+        SetupRecipe(id: "ffmpeg", name: "ffmpeg", aliases: ["ffmpeg"], binary: "ffmpeg",
+                    install: ["brew install ffmpeg"], needs: ["homebrew"], update: ["brew upgrade ffmpeg"],
+                    blurb: "Compress, trim, convert and stitch video."),
+        SetupRecipe(id: "handbrake", name: "HandBrake", aliases: ["handbrake", "handbrakecli"], binary: "HandBrakeCLI",
+                    install: ["brew install --cask handbrake"], needs: ["homebrew"],
+                    blurb: "Batch-friendly video transcoding."),
+        SetupRecipe(id: "pandoc", name: "Pandoc", aliases: ["pandoc"], binary: "pandoc",
+                    install: ["brew install pandoc"], needs: ["homebrew"], update: ["brew upgrade pandoc"],
+                    blurb: "Converts between document formats."),
+        SetupRecipe(id: "ocrmypdf", name: "OCRmyPDF", aliases: ["ocrmypdf", "ocr my pdf"], binary: "ocrmypdf",
+                    install: ["brew install ocrmypdf"], needs: ["homebrew"], update: ["brew upgrade ocrmypdf"],
+                    blurb: "Adds a searchable text layer to scanned PDFs."),
+        SetupRecipe(id: "imagemagick", name: "ImageMagick", aliases: ["imagemagick", "image magick", "magick"], binary: "magick",
+                    install: ["brew install imagemagick"], needs: ["homebrew"], update: ["brew upgrade imagemagick"],
+                    blurb: "Resize, convert and crop whole folders of images."),
+        SetupRecipe(id: "rclone", name: "rclone", aliases: ["rclone"], binary: "rclone",
+                    install: ["brew install rclone"], needs: ["homebrew"], update: ["brew upgrade rclone"],
+                    blurb: "Syncs almost any cloud drive from the terminal."),
+        SetupRecipe(id: "yt-dlp", name: "yt-dlp", aliases: ["yt-dlp", "ytdlp", "youtube-dl", "youtube downloader"], binary: "yt-dlp",
+                    install: ["brew install yt-dlp"], needs: ["homebrew"], update: ["brew upgrade yt-dlp"],
+                    blurb: "Downloads video and audio from most websites."),
+        SetupRecipe(id: "gh", name: "GitHub CLI", aliases: ["gh", "github cli"], binary: "gh",
+                    install: ["brew install gh"], needs: ["homebrew"], update: ["brew upgrade gh"],
+                    blurb: "GitHub from the terminal."),
+        SetupRecipe(id: "docker", name: "Docker Desktop", aliases: ["docker"], binary: "docker",
+                    install: ["brew install --cask docker"], needs: ["homebrew"],
+                    blurb: "Runs apps in containers."),
+    ]
+
+    public static func recipe(id: String) -> SetupRecipe? { all.first { $0.id == id } }
+
+    /// The recipe whose binary runs at a command position in the given command line.
+    public static func recipe(forBinary binary: String) -> SetupRecipe? {
+        all.first { $0.binary == binary } ?? (binary == "mole" ? recipe(id: "mole") : nil)
+    }
+
+    /// The recipe named in free text, preferring longer aliases ("claude code" over "claude").
+    public static func match(in text: String) -> SetupRecipe? {
+        let lower = text.lowercased()
+        var best: (SetupRecipe, Int)?
+        for recipe in all {
+            for alias in recipe.aliases {
+                let pattern = #"(?<![\w.-])"# + NSRegularExpression.escapedPattern(for: alias) + #"(?![\w-])"#
+                if lower.range(of: pattern, options: .regularExpression) != nil, alias.count > (best?.1 ?? 0) {
+                    best = (recipe, alias.count)
+                }
+            }
+        }
+        return best?.0
+    }
+
+    /// Install steps for a recipe and everything it needs that isn't on this Mac yet.
+    public static func installPlan(for recipe: SetupRecipe, installed: (String) -> Bool) -> [(recipe: SetupRecipe, command: String)] {
+        var seen: Set<String> = []
+        var plan: [(SetupRecipe, String)] = []
+        func visit(_ recipe: SetupRecipe) {
+            guard !seen.contains(recipe.id), !installed(recipe.binary) else { return }
+            seen.insert(recipe.id)
+            for need in recipe.needs.compactMap(SetupRecipes.recipe(id:)) { visit(need) }
+            for command in recipe.install { plan.append((recipe, command)) }
+        }
+        visit(recipe)
+        return plan
+    }
+}
+
+/// Small useful jobs remain available offline. Broader requests use the model planner.
+public enum TerminalActions {
+    public static let launchBuiltin = "terminal-app"
+
+    public static func decide(_ text: String, installed: (String) -> Bool = { ShellRunner.which($0) != nil }) -> BrainDecision? {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = raw.lowercased()
+        if t.hasPrefix("teach") || t.hasPrefix("how ") || t.hasPrefix("what ") || t.hasPrefix("why ") || t.contains("?") { return nil }
+        func plan(_ title: String, _ summary: String, _ commands: [String], pick: String? = nil,
+                  steps: [String] = [], risk: RiskLevel = .low, builtin: String? = nil) -> BrainDecision {
+            let labels = steps.isEmpty ? commands.map { command -> String in
+                if command.hasPrefix("test ") { return "check that the output doesn't already exist" }
+                if command.hasPrefix("mkdir ") { return "make a folder for the copies" }
+                if command.hasPrefix("brew ") { return title }
+                if command.hasPrefix("command -v ") { return "check the installation" }
+                return title
+            } : steps
+            return BrainDecision(kind: .terminal, title: title, answer: summary + " I'll show the result here.",
+                          risk: risk, previewSummary: summary, previewSteps: labels,
+                          commands: commands, apps: [], pickFile: pick, builtin: builtin)
+        }
+
+        // Setting things up: "install claude code", "set up python", "get homebrew".
+        if t.range(of: #"^(please |can you |could you )?(install|set ?up|setup|get|download) "#, options: .regularExpression) != nil,
+           !t.contains("github.com"), let recipe = SetupRecipes.match(in: t) {
+            let steps = SetupRecipes.installPlan(for: recipe, installed: installed)
+            if steps.isEmpty {
+                return BrainDecision(kind: .answer, title: "\(recipe.name) is ready",
+                                     answer: "\(recipe.name) is already installed on this Mac." + (recipe.launch == nil ? "" : " Say “open \(recipe.name.lowercased())” and I'll start it for you."))
+            }
+            let labels = steps.map { step -> String in
+                step.command.hasPrefix("test -x /opt/homebrew") ? "put Homebrew on your path"
+                    : step.command.hasPrefix("pipx ensurepath") ? "put pipx apps on your path"
+                    : "install \(step.recipe.name)" + (step.recipe.id == "homebrew" ? " (asks for your Mac password)" : "")
+            }
+            let names = Array(NSOrderedSet(array: steps.map(\.recipe.name))) as? [String] ?? [recipe.name]
+            let summary = names.count > 1
+                ? "Install \(recipe.name). It needs \(names.dropLast().joined(separator: " and ")) first, so I'll set those up too."
+                : "Install \(recipe.name) and check it's ready."
+            return plan("install \(recipe.name)", summary,
+                        steps.map(\.command) + ["command -v \(shellQuote(recipe.binary))"],
+                        steps: labels + ["check the installation"], risk: .medium)
+        }
+
+        // Opening interactive tools: "open claude code in my project", "start hermes", "run mole".
+        if t.range(of: #"^(please )?(open|start|launch|run|use|chat with|talk to) "#, options: .regularExpression) != nil,
+           let recipe = SetupRecipes.match(in: t), let launch = recipe.launch {
+            let installs = SetupRecipes.installPlan(for: recipe, installed: installed)
+            let pick = recipe.launchInFolder ? "folder" : nil
+            let summary = (installs.isEmpty ? "" : "Install \(recipe.name) first, then ")
+                + (installs.isEmpty ? "Open" : "open") + " \(recipe.name) in a Terminal window"
+                + (recipe.launchInFolder ? " inside the project folder you choose." : ".")
+            return plan("open \(recipe.name)", summary, installs.map(\.command) + [launch], pick: pick,
+                        steps: installs.map { "install \($0.recipe.name)" } + ["open \(recipe.name) in Terminal"],
+                        risk: installs.isEmpty ? .low : .medium, builtin: launchBuiltin)
+        }
+
+        // Keeping things current: "update everything", "upgrade ffmpeg".
+        if t.range(of: #"^(please )?(update|upgrade) "#, options: .regularExpression) != nil {
+            if t.range(of: #"\b(everything|all|my tools|homebrew|brew|my mac)\b"#, options: .regularExpression) != nil {
+                return plan("update your tools", "Update Homebrew and every tool installed with it.",
+                            ["brew update", "brew upgrade", "brew cleanup"],
+                            steps: ["refresh the package list", "upgrade installed tools", "remove old versions"], risk: .medium)
+            }
+            if let recipe = SetupRecipes.match(in: t), !recipe.update.isEmpty {
+                return plan("update \(recipe.name)", "Update \(recipe.name) to the latest version.", recipe.update,
+                            steps: recipe.update.map { _ in "update \(recipe.name)" }, risk: .medium)
+            }
+        }
+
+        if t.range(of: #"\b(what|which)('s| is| are)? (tools?|agents?) (do i have|are installed|is installed)\b"#, options: .regularExpression) != nil
+            || t == "list my tools" || t == "list installed tools" {
+            let have = SetupRecipes.all.filter { installed($0.binary) }.map(\.name)
+            let missing = SetupRecipes.all.filter { !installed($0.binary) }.map(\.name)
+            return BrainDecision(kind: .answer, title: "your tools",
+                                 answer: (have.isEmpty ? "Nothing from the toolbox is installed yet." : "Installed: " + have.joined(separator: ", ") + ".")
+                                    + (missing.isEmpty ? "" : "\n\nNot yet: " + missing.joined(separator: ", ") + ". Say “install …” and I'll set it up."))
+        }
+
+        if (t.contains("compress") || t.contains("smaller")) && (t.contains("video") || t.contains("movie")) {
+            return plan("make video smaller", "Choose a video. I'll save a smaller MP4 beside it and keep the original.",
+                        ["test ! -e {{outputDir}}/{{basename}}-small.mp4", #"ffmpeg -nostdin -n -i {{file}} -vf "scale='min(1280,iw)':-2" -c:v libx264 -crf 28 -preset medium -c:a aac -b:a 128k -movflags +faststart {{outputDir}}/{{basename}}-small.mp4"#], pick: "video")
+        }
+        if t.contains("ocr") || t.contains("searchable") || t.contains("scanned pdf") {
+            return plan("make PDF searchable", "Choose a PDF. I'll save a searchable copy beside the original.",
+                        ["ocrmypdf --skip-text {{file}} {{outputDir}}/{{basename}}-searchable.pdf"], pick: "pdf")
+        }
+        if t.contains("convert") && t.contains("word") {
+            return plan("convert to Word", "Choose a document. I'll make a Word copy beside it.",
+                        ["test ! -e {{outputDir}}/{{basename}}.docx", "pandoc {{file}} -o {{outputDir}}/{{basename}}.docx"], pick: "document")
+        }
+        if t.contains("resize") && ["image", "photo", "picture"].contains(where: t.contains) {
+            return plan("resize photos", "Choose a folder. I'll save copies at up to 1600 pixels in a new folder.",
+                        ["test ! -e {{outputDir}}", "mkdir -p {{outputDir}}", "magick mogrify -resize '1600x1600>' -path {{outputDir}} {{dir}}/*.(jpg|jpeg|png|heic|JPG|JPEG|PNG|HEIC)(N)"], pick: "images")
+        }
+        if t.contains("zip") && !t.contains("unzip") && (t.contains("folder") || t.contains("compress")) {
+            return plan("zip a folder", "Choose a folder. I'll make a ZIP beside it.",
+                        ["test ! -e {{dir}}.zip", "ditto -c -k --sequesterRsrc --keepParent {{dir}} {{dir}}.zip"], pick: "folder")
+        }
+        if (t.contains("disk") || t.contains("storage") || t.contains("space")) &&
+            ["check", "show", "how much", "available", "left", "free space"].contains(where: t.contains) &&
+            !["clean", "free up", "out of"].contains(where: t.contains) {
+            return plan("check storage", "Check how much storage is available on your Mac.", ["df -h \"$HOME\""])
+        }
+        if t.range(of: #"\b(clean|clean up|free up|tidy)\b.*\b(mac|space|storage|disk|caches?)\b|\bout of (space|storage)\b"#, options: .regularExpression) != nil {
+            let installs = SetupRecipes.installPlan(for: SetupRecipes.recipe(id: "mole")!, installed: installed)
+            return plan("free up space", "Preview what Mole can clean, then clean caches, logs and trash. Nothing of yours is touched. It asks for your Mac password so system caches count too.",
+                        installs.map(\.command) + ["sudo -v", "mo clean --dry-run", "mo clean"],
+                        steps: installs.map { "install \($0.recipe.name)" } + ["ask for your Mac password", "preview what would be removed", "clean caches, logs and trash"], risk: .medium)
+        }
+        if t.contains("system info") || t.contains("mac version") {
+            return plan("about this Mac", "Check your macOS version and processor.", ["sw_vers", "uname -m"])
+        }
+        if t.contains("git status") || t.contains("uncommitted") {
+            return plan("check project changes", "Choose a project. I'll show its changed files.", ["git status --short --branch"], pick: "folder")
+        }
+        if let range = raw.range(of: #"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?"#, options: .regularExpression),
+           ["clone", "download", "get this repo", "install"].contains(where: t.contains) {
+            let url = String(raw[range]).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            return plan("download repository", "Choose where to save the project. I'll download it with Git.",
+                        ["git clone -- \(shellQuote(url))"], pick: "folder", risk: .medium)
+        }
+        return nil
+    }
+
+    public struct PreparedPlan: Sendable {
+        public var commands: [String]
+        public var installs: [(label: String, command: String)]
+        /// True when a step may ask for the Mac login password through the native dialog.
+        public var asksForPassword: Bool
+    }
+
+    /// Add missing, known dependencies to the same reviewable plan, before approval.
+    /// A Mac without Homebrew gets it installed as the first step instead of a dead end.
+    public static func preparePlan(_ commands: [String], installed: (String) -> Bool = { ShellRunner.which($0) != nil }) throws -> PreparedPlan {
+        guard !commands.isEmpty, commands.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw TerminalPlanError("I couldn't prepare any steps. Tell me what you'd like to do and I'll try again.")
+        }
+        if commands.contains(where: { $0.range(of: #"\{\{[^}]+\}\}"#, options: .regularExpression) != nil }) {
+            throw TerminalPlanError("Choose the file or folder before running this job.")
+        }
+        var installs: [(String, String)] = []
+        var added: Set<String> = []
+        func add(_ recipe: SetupRecipe) {
+            for step in SetupRecipes.installPlan(for: recipe, installed: installed) where !added.contains(step.command) && !commands.contains(step.command) {
+                added.insert(step.command)
+                installs.append(("install \(step.recipe.name)" + (step.recipe.id == "homebrew" ? " (asks for your Mac password)" : ""), step.command))
+            }
+        }
+        for recipe in SetupRecipes.all where !installed(recipe.binary) {
+            // Match executable positions, not filenames or words inside arguments.
+            let pattern = #"(?:^|[;|&\n]\s*|\$\(\s*)\s*"# + NSRegularExpression.escapedPattern(for: recipe.binary) + #"(?:\s|$)"#
+            if commands.contains(where: { $0.range(of: pattern, options: .regularExpression) != nil }) { add(recipe) }
+        }
+        let usesBrew = (commands + installs.map(\.1)).contains { $0.range(of: #"(?:^|[;&|\n]\s*)\s*brew\s"#, options: .regularExpression) != nil }
+        if usesBrew, !installed("brew"), !added.contains(where: { $0.contains("Homebrew/install") }), let brew = SetupRecipes.recipe(id: "homebrew") {
+            let steps = SetupRecipes.installPlan(for: brew, installed: installed)
+            installs.insert(contentsOf: steps.map { ("install Homebrew (asks for your Mac password)", $0.command) }, at: 0)
+        }
+        let all = installs.map(\.1) + commands
+        let password = all.contains { $0.range(of: #"(?:^|[;&|\n]\s*)\s*sudo\s"#, options: .regularExpression) != nil || $0.contains("Homebrew/install") }
+        return PreparedPlan(commands: all, installs: installs.map { (label: $0.0, command: $0.1) }, asksForPassword: password)
+    }
+
+    public static func prepare(_ commands: [String], installed: (String) -> Bool = { ShellRunner.which($0) != nil }) throws -> [String] {
+        try preparePlan(commands, installed: installed).commands
+    }
+
+    public static func script(_ commands: [String]) -> String {
+        (["set -o pipefail"] + commands.flatMap { command in
+            ["printf '%s\\n' \(shellQuote("$ " + command))", "eval \(shellQuote(command))", "okidoki_step_code=$?", "if [ \"$okidoki_step_code\" -ne 0 ]; then exit \"$okidoki_step_code\"; fi"]
+        }).joined(separator: "\n")
+    }
+
+    // MARK: - Interactive tools
+
+    private static let interactivePrograms: Set<String> = [
+        "vim", "vi", "nvim", "nano", "emacs", "less", "more", "top", "htop", "btop", "man", "ssh", "tmux", "screen",
+        "irb", "lua", "sqlite3", "psql", "mysql", "lazygit", "ranger", "nnn", "gdb", "lldb",
+    ]
+
+    /// True when a command is a chat UI, editor or full-screen tool that needs a real terminal window.
+    public static func needsRealTerminal(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("|") else { return false }
+        var words = trimmed.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        while let first = words.first, first.contains("="), !first.hasPrefix("-") { words.removeFirst() }
+        if words.first == "env" { words.removeFirst() }
+        guard let program = words.first.map({ URL(fileURLWithPath: $0).lastPathComponent }) else { return false }
+        let args = Array(words.dropFirst())
+        if args.contains("--tui") { return true }
+        if interactivePrograms.contains(program) { return true }
+        switch program {
+        case "claude": return !args.contains { ["-p", "--print", "-v", "--version", "-h", "--help", "update", "doctor", "install"].contains($0) }
+        case "opencode": return args.isEmpty || !["run", "serve", "auth", "upgrade", "--version", "-v", "--help", "models", "export", "import", "web", "acp", "mcp", "agent", "session"].contains(args[0])
+        case "omp": return !args.contains { ["-p", "--print", "--version", "-v", "-h", "--help", "update"].contains($0) }
+        case "hermes":
+            if args.isEmpty { return true }
+            if args.contains(where: { ["-z", "--oneshot", "-q", "--query", "--version", "-V", "-h", "--help"].contains($0) }) { return false }
+            return ["chat", "setup", "model", "tui", "login", "auth", "config", "gateway"].contains(args[0])
+        case "mo", "mole": return args.first.map { ["analyze", "status", "touchid", "uninstall", "optimize", "installer", "slim", "remove"].contains($0) && !args.contains("--dry-run") && !args.contains("-n") } ?? true
+        case "ollama": return args.first == "run" && args.count == 2
+        case "python", "python3", "node", "bun", "deno", "ruby":
+            return args.isEmpty || args == ["repl"]
+        default: return false
+        }
+    }
+
+    /// A double-clickable script Terminal.app runs in its own window, so chat UIs and
+    /// full-screen tools get a real terminal and the person sees everything.
+    public static func launcherScript(title: String, commands: [String], workingDirectory: String) -> String {
+        let body = commands.map { command in
+            "printf '\\n%s\\n' \(shellQuote("$ " + command))\n\(command)\nokidoki_step_code=$?\nif [ \"$okidoki_step_code\" -ne 0 ]; then printf '\\nThat step stopped (exit %s). You can close this window.\\n' \"$okidoki_step_code\"; exit \"$okidoki_step_code\"; fi"
+        }.joined(separator: "\n")
+        return """
+        #!/bin/zsh
+        # okidoki · \(title)
+        export PATH=\(shellQuote(ShellRunner.shared.pathEnvironment))":$PATH"
+        export HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1
+        cd \(shellQuote(workingDirectory)) || exit 1
+        clear
+        printf 'okidoki · %s\\n' \(shellQuote(title))
+        \(body)
+        printf '\\nDone. You can close this window.\\n'
+        """
+    }
+
+    // MARK: - Diagnosis
+
+    public struct Diagnosis: Sendable, Equatable {
+        /// Plain-language explanation, written for someone who has never used a terminal.
+        public var message: String
+        /// Commands that fix the cause, if the cause is known. Empty when the model (or the person) should decide.
+        public var fixCommands: [String]
+        public var fixLabels: [String]
+        /// Whether the original steps should run again after the fix.
+        public var retry: Bool
+        public init(message: String, fixCommands: [String] = [], fixLabels: [String] = [], retry: Bool = false) {
+            self.message = message; self.fixCommands = fixCommands; self.fixLabels = fixLabels; self.retry = retry
+        }
+    }
+
+    /// Turn a failed step's output into something a person can act on without reading it.
+    public static func diagnose(output: String, command: String, installed: (String) -> Bool = { ShellRunner.which($0) != nil }) -> Diagnosis {
+        let lower = output.lowercased()
+        let tail = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("$ ") }.suffix(3).joined(separator: "\n")
+        if let name = firstCapture(in: output, patterns: [#"command not found: ([\w.+-]+)"#, #"(?:^|\s)([\w.+-]+): command not found"#, #"No such file or directory: '?([\w.+-]+)'?\s*$"#].prefix(2)) {
+            if let recipe = SetupRecipes.recipe(forBinary: name) ?? SetupRecipes.match(in: name) {
+                let steps = SetupRecipes.installPlan(for: recipe, installed: installed)
+                return Diagnosis(message: "\(recipe.name) isn't installed yet, so that step couldn't run. I can install it and try again.",
+                                 fixCommands: steps.map(\.command), fixLabels: steps.map { "install \($0.recipe.name)" }, retry: true)
+            }
+            return Diagnosis(message: "A tool called “\(name)” isn't installed, so that step couldn't run.")
+        }
+        if lower.contains("invalid active developer path") || lower.contains("xcode-select --install") || lower.contains("command line tools") && lower.contains("not installed") {
+            return Diagnosis(message: "Apple's command line tools are missing. I'll open Apple's installer; click Install in the window that appears, wait for it to finish, then ask me again.",
+                             fixCommands: ["xcode-select --install 2>&1 || true"], fixLabels: ["open Apple's installer"], retry: false)
+        }
+        if lower.contains("externally-managed-environment") {
+            let rewritten = command.replacingOccurrences(of: #"\bpip3?\s+install\b"#, with: "pipx install", options: .regularExpression)
+            let needs = SetupRecipes.installPlan(for: SetupRecipes.recipe(id: "pipx")!, installed: installed)
+            return Diagnosis(message: "macOS protects its built-in Python, so pip refused. pipx installs Python apps safely; I'll use that instead.",
+                             fixCommands: needs.map(\.command) + [rewritten], fixLabels: needs.map { "install \($0.recipe.name)" } + ["install with pipx"], retry: false)
+        }
+        if lower.contains("eacces") && lower.contains("npm") {
+            return Diagnosis(message: "npm doesn't have permission to install there. Installing Node with Homebrew fixes that, so global installs go into a folder you own.",
+                             fixCommands: ["brew install node"], fixLabels: ["install Node.js with Homebrew"], retry: true)
+        }
+        if lower.contains("no available formula") || lower.contains("no formulae or casks found") || lower.contains("no formulae found") {
+            return Diagnosis(message: "Homebrew doesn't know a package by that name. The tool may be called something else; tell me what it does and I'll find it.")
+        }
+        if lower.contains("incorrect password attempts") || lower.contains("sudo: a password is required") || lower.contains("sudo: a terminal is required") || lower.contains("no askpass program") {
+            return Diagnosis(message: "This step needs your Mac login password. Try again and type it in the dialog when it appears.", fixCommands: [], retry: true)
+        }
+        if lower.contains("could not resolve host") || lower.contains("network is unreachable") || lower.contains("failed to connect") || lower.contains("curl: (6)") || lower.contains("curl: (7)") || lower.contains("curl: (28)") || lower.contains("enotfound") || lower.contains("temporary failure in name resolution") {
+            return Diagnosis(message: "This step needs the internet and couldn't reach it. Check your connection and try again.", retry: true)
+        }
+        if lower.contains("no space left on device") {
+            return Diagnosis(message: "Your disk is full, so nothing more can be written. Ask me to free up space, then try again.")
+        }
+        if lower.contains("operation not permitted") {
+            return Diagnosis(message: "macOS blocked access to a protected folder. Open System Settings → Privacy & Security → Full Disk Access and allow Okidoki, then try again.", retry: true)
+        }
+        if lower.contains("permission denied") {
+            return Diagnosis(message: "A file or folder in this job isn't writable by you. Choose a folder inside your home folder (Desktop, Documents, Downloads) and try again.")
+        }
+        if lower.contains("no such file or directory") {
+            return Diagnosis(message: "A file or folder this job expected doesn't exist. It may have moved; choose it again and I'll retry.")
+        }
+        if lower.contains("already exists") || lower.contains("file exists") {
+            return Diagnosis(message: "The result already exists, so I didn't overwrite it. Move or rename the existing file if you want a fresh copy.")
+        }
+        if lower.contains("30 minute limit") {
+            return Diagnosis(message: "This job ran for 30 minutes and was stopped. Try a smaller batch or ask me to run it in the background.")
+        }
+        return Diagnosis(message: tail.isEmpty ? "That step stopped without saying why." : "That step stopped. The last thing it said:\n\n\(tail)")
+    }
+
+    private static func firstCapture(in text: String, patterns: some Collection<String>) -> String? {
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  match.numberOfRanges > 1, let range = Range(match.range(at: 1), in: text) else { continue }
+            return String(text[range])
+        }
+        return nil
+    }
+}
+
+public struct TerminalPlanError: LocalizedError {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
+}

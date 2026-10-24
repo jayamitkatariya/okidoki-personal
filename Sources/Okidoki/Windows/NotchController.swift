@@ -73,8 +73,8 @@ struct NotchMetrics: Equatable {
 
     var maxWidth: CGFloat { max(280, screenWidth - 48) }
     var maxBodyHeight: CGFloat { min(420, max(220, screenHeight * 0.5)) }
-    var maxIslandHeight: CGFloat { bandHeight + maxBodyHeight + 90 }
-    var expandedWidth: CGFloat { clampWidth(470 + shoulder * 2) }
+    var maxIslandHeight: CGFloat { bandHeight + maxBodyHeight + 40 }
+    var expandedWidth: CGFloat { clampWidth(392 + shoulder * 2) }
 
     static func even(_ value: CGFloat) -> CGFloat { (value / 2).rounded(.up) * 2 }
 
@@ -87,7 +87,6 @@ final class NotchModel: ObservableObject {
     @Published var expanded = false
     @Published var listening = false
     @Published var quiet = false
-    @Published var hoveredRunID: String?
 
     /// True while the island is open (drives the open / close spring).
     @Published var presented = false
@@ -180,7 +179,7 @@ final class NotchModel: ObservableObject {
     var islandWidth: CGFloat {
         let m = metrics
         if expanded { return m.expandedWidth }
-        if hasBody { return m.clampWidth(412 + m.shoulder * 2) }
+        if hasBody { return m.clampWidth(360 + m.shoulder * 2) }
         return m.clampWidth(m.hasNotch ? m.notchWidth + m.shoulder * 2 + 148 : 236)
     }
 
