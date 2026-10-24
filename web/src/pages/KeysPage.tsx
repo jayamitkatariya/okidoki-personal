@@ -24,7 +24,7 @@ const PROVIDERS = [
     id: "moss",
     name: "Moss",
     blurb: "Semantic search across your threads and memory.",
-    placeholder: "moss_…",
+    placeholder: "project-id:project-key",
     url: "https://moss.dev",
     required: false,
   },

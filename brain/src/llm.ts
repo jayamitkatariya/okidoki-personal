@@ -2,6 +2,7 @@ import type { Decision, ThinkRequest } from "./types";
 import { localRouter } from "./router";
 import { toolDocs } from "./catalog";
 import { checkConnectorDecision, connectorPrompt, mcpCatalog, type McpCatalogEntry } from "./connectors";
+import { recall, recallPrompt } from "./memory";
 
 const responseTool = {
   name: "okidoki_respond",
@@ -136,7 +137,7 @@ function normalize(input: Record<string, unknown>): Decision {
   return mapped as unknown as Decision;
 }
 
-function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[]): string {
+function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalled: string): string {
   const memory = request.memory?.length ? request.memory.map((m) => `· ${m}`).join("\n") : "nothing yet.";
   const docs = toolDocs(request.installedTools ?? []);
   const native = request.nativeContext;
@@ -177,6 +178,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[]): string
     ``,
     `What you remember:`,
     memory,
+    recalled ? `\n${recalled}` : "",
     request.settings?.customInstructions ? `\nTheir custom instructions:\n${request.settings.customInstructions}` : "",
     request.account?.name ? `\nThey are ${request.account.name} (${request.account.kind}).` : "",
     `Current app: ${request.appName || "unknown"}`,
@@ -220,7 +222,11 @@ export async function think(request: ThinkRequest, apiKey: string | undefined): 
     messages.pop();
   }
   // Cached after the first listing, so this is usually instant; a slow server is left out rather than stalling.
-  const catalog = request.connectors?.mcpServers?.length ? await mcpCatalog(request.connectors.mcpServers, 4_000) : [];
+  // Both are quick (cached servers, in-process index) and run side by side; either can come back empty.
+  const [catalog, recalled] = await Promise.all([
+    request.connectors?.mcpServers?.length ? mcpCatalog(request.connectors.mcpServers, 4_000) : Promise.resolve([]),
+    recall(request.text, request.accountId),
+  ]);
   const content: unknown[] = [];
   if (request.screenshotBase64) {
     content.push({
@@ -238,7 +244,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined): 
   const body = {
     model,
     max_tokens: 1600,
-    system: systemPrompt(request, catalog),
+    system: systemPrompt(request, catalog, recallPrompt(recalled)),
     messages,
     tools: [responseTool],
     tool_choice: { type: "tool", name: "okidoki_respond" },

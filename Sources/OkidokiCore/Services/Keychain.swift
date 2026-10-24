@@ -71,7 +71,7 @@ public enum KeyProviders {
                         placeholder: "sk_car_…", url: "https://play.cartesia.ai/console"),
         KeyProviderSpec(id: "moss", name: "Moss",
                         blurb: "Semantic search across your threads and memory.",
-                        placeholder: "moss_…", url: "https://moss.dev", optional: true),
+                        placeholder: "project-id:project-key", url: "https://moss.dev", optional: true),
         KeyProviderSpec(id: "apify", name: "Apify",
                         blurb: "Live web scraping and ready-made actors.",
                         placeholder: "apify_api_…", url: "https://console.apify.com/account/integrations", optional: true),

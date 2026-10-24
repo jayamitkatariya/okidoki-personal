@@ -153,6 +153,28 @@ export interface ThinkRequest {
   installedTools?: string[];
   nativeContext?: NativeContext;
   connectors?: ConnectorsContext;
+  /** The current okidoki account, so recall stays within it (plus shared memories). */
+  accountId?: string;
+}
+
+/** What the Mac sends to keep the memory index current: its own items, as stored. */
+export interface MemorySyncRequest {
+  projectId: string;
+  projectKey: string;
+  cacheDir?: string;
+  memories?: { id: string; text: string; section?: string; updatedAt?: string }[];
+  threads?: { id: string; accountID?: string; title?: string; messages?: { id: string; role?: string; text?: string; createdAt?: string }[] }[];
+  runs?: { id: string; accountID?: string; kind?: string; title?: string; prompt?: string; summary?: string; output?: string; status?: string; createdAt?: string }[];
+  skills?: { id: string; accountID?: string; name?: string; summary?: string; steps?: { text?: string }[]; createdAt?: string }[];
+  routines?: { id: string; accountID?: string; name?: string; prompt?: string; cadence?: string; createdAt?: string }[];
+}
+
+export interface RecalledItem {
+  type: string;
+  text: string;
+  title: string;
+  date: string;
+  score: number;
 }
 
 export interface ThinkResponse {

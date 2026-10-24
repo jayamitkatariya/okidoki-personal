@@ -12,5 +12,8 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@moss-js/moss": "1.21.0"
   }
 }

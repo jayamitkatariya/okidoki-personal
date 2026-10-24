@@ -5,7 +5,8 @@ import { computerAct } from "./computer";
 import { checkToken } from "./apify";
 import { closeAll, forget } from "./mcp";
 import { mcpCatalog, runConnector } from "./connectors";
-import type { ComputerRequest, ConnectorRunRequest, ExecuteRequest, McpServerConfig, ThinkRequest } from "./types";
+import { memoryStatus, syncMemory } from "./memory";
+import type { ComputerRequest, ConnectorRunRequest, ExecuteRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4319);
 
@@ -156,6 +157,21 @@ const server = Bun.serve({
       const { id } = await body<{ id: string }>(request);
       forget(id);
       return json({ ok: true });
+    }
+
+    // The Mac sends its memories, conversations, runs, skills and routines; only changes get embedded.
+    if (url.pathname === "/memory/sync" && request.method === "POST") {
+      try {
+        const payload = await body<MemorySyncRequest>(request);
+        if (!payload.projectId || !payload.projectKey) return json({ error: "Moss project id and key required" }, 400);
+        return json(await syncMemory(payload));
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    if (url.pathname === "/memory/status" && request.method === "GET") {
+      return json(memoryStatus());
     }
 
     if (url.pathname === "/apify/check" && request.method === "POST") {

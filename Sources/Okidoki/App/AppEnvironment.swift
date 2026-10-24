@@ -100,6 +100,9 @@ final class AppEnvironment: ObservableObject {
     /// Approved-later connector calls by run id: the brain's call JSON, handed back untouched when the run starts.
     private var pendingConnectorCalls: [String: String] = [:]
     private var syncWork: DispatchWorkItem?
+    private var memoryWork: DispatchWorkItem?
+    /// Hash of the last memory payload the brain accepted, so an unchanged store isn't re-sent.
+    private var lastMemoryHash: Int?
     private var callTimer: Timer?
     private var nudgeTimer: Timer?
     private var nudgedEvents: Set<String> = []
@@ -143,7 +146,10 @@ final class AppEnvironment: ObservableObject {
 
         store.objectWillChange
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.scheduleSync() }
+            .sink { [weak self] _ in
+                self?.scheduleSync()
+                self?.scheduleMemoryIndex()
+            }
             .store(in: &cancellables)
     }
 
@@ -171,7 +177,12 @@ final class AppEnvironment: ObservableObject {
             .removeDuplicates()
             .filter(\.isReady)
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshMCP() }
+            .sink { [weak self] _ in
+                self?.refreshMCP()
+                // A fresh brain has an empty index in memory; resend so it loads and catches up.
+                self?.lastMemoryHash = nil
+                self?.scheduleMemoryIndex(after: 1)
+            }
             .store(in: &cancellables)
 
         callTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
@@ -1593,6 +1604,11 @@ final class AppEnvironment: ObservableObject {
             Keychain.set(trimmed, for: provider)
             toast(title: "key saved", detail: "\(provider) · stored in the keychain", kind: .success,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            if provider == "moss" {
+                // New credentials: build the memory index now rather than on the next change.
+                lastMemoryHash = nil
+                scheduleMemoryIndex(after: 1)
+            }
             if provider == "apify", sidecar.status.isReady {
                 // Catch a mistyped key now rather than on the first scrape.
                 Task { [weak self] in
@@ -1849,6 +1865,51 @@ final class AppEnvironment: ObservableObject {
                           self?.openDashboard(.keys)
                       }, runID: id)
             }
+        }
+    }
+
+    // MARK: - Memory index (Moss)
+
+    /// Moss credentials from Keys, saved as "projectId:projectKey".
+    private func mossCredentials() -> (projectId: String, projectKey: String)? {
+        guard let raw = Keychain.get("moss")?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        let parts = raw.split(maxSplits: 1, whereSeparator: { $0 == ":" || $0.isWhitespace }).map(String.init)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return (parts[0], parts[1].trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Keeps the brain's memory index current, a few seconds after the store settles.
+    private func scheduleMemoryIndex(after delay: Double = 5) {
+        guard mossCredentials() != nil else { return }
+        memoryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { await self?.pushMemoryIndex() }
+        }
+        memoryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func pushMemoryIndex() async {
+        guard sidecar.status.isReady, let credentials = mossCredentials() else { return }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // Only the tail of each run's output is indexed; the full log stays in the store.
+        let runs = store.runs.map { run -> AgentRun in
+            var run = run
+            run.output = String(run.output.suffix(1_500))
+            return run
+        }
+        let payload = BrainMemorySyncPayload(
+            projectId: credentials.projectId, projectKey: credentials.projectKey,
+            cacheDir: support.appendingPathComponent("Okidoki/moss", isDirectory: true).path,
+            memories: store.memories, threads: store.threads, runs: runs,
+            skills: store.skills, routines: store.routines)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(payload) else { return }
+        let hash = data.hashValue
+        guard hash != lastMemoryHash else { return }
+        if await BrainClient.shared.memorySync(payload) {
+            lastMemoryHash = hash
         }
     }
 

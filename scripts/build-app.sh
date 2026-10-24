@@ -14,9 +14,18 @@ APP="build/Okidoki.app"
 # --- brain sidecar (TypeScript, Bun) ---
 if command -v bun >/dev/null 2>&1 && [ -f brain/src/server.ts ]; then
   echo "▸ Bundling the TypeScript brain…"
-  (cd brain && bun build src/server.ts --outfile dist/server.js --target=bun >/dev/null)
-  mkdir -p Resources/brain
+  if [ ! -d brain/node_modules ]; then
+    (cd brain && bun install >/dev/null)
+  fi
+  # Moss ships a native binary per platform, which can't live inside the bundle: keep it external
+  # and copy its packages next to server.js, where Bun resolves them at runtime.
+  (cd brain && bun build src/server.ts --outfile dist/server.js --target=bun --external @moss-js/moss >/dev/null)
+  rm -rf Resources/brain
+  mkdir -p Resources/brain/node_modules
   cp brain/dist/server.js Resources/brain/server.js
+  if [ -d brain/node_modules/@moss-js ]; then
+    cp -R brain/node_modules/@moss-js Resources/brain/node_modules/@moss-js
+  fi
 fi
 
 # --- react control panel ---

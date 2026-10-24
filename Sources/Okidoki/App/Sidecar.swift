@@ -284,6 +284,20 @@ struct BrainThinkPayload: Encodable {
     var installedTools: [String]
     var nativeContext: BrainNativeContext
     var connectors: BrainConnectorsPayload
+    /// The current account, so the brain's recall stays within it (plus shared memories).
+    var accountId: String
+}
+
+/// What the brain's Moss memory index is built from: the Mac's own items, as stored.
+struct BrainMemorySyncPayload: Encodable {
+    var projectId: String
+    var projectKey: String
+    var cacheDir: String
+    var memories: [MemoryItem]
+    var threads: [ChatThread]
+    var runs: [AgentRun]
+    var skills: [Skill]
+    var routines: [Routine]
 }
 
 enum BrainExecEvent {
@@ -340,7 +354,8 @@ final class BrainClient {
             installedTools: installedTools,
             nativeContext: BrainNativeContext(now: ISO8601DateFormatter().string(from: Date()),
                                               events: events, reminders: [], frontWindow: frontWindow),
-            connectors: connectors
+            connectors: connectors,
+            accountId: account.id
         )
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("think"))
         urlRequest.httpMethod = "POST"
@@ -508,6 +523,22 @@ final class BrainClient {
         } catch {
             return nil
         }
+    }
+
+    /// Sends the Mac's items to the brain's memory index; the brain embeds only what changed.
+    func memorySync(_ payload: BrainMemorySyncPayload) async -> Bool {
+        var request = URLRequest(url: baseURL.appendingPathComponent("memory/sync"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let body = try? encoder.encode(payload) else { return false }
+        request.httpBody = body
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return json["ok"] as? Bool == true
     }
 
     func forgetMCP(id: String) {
