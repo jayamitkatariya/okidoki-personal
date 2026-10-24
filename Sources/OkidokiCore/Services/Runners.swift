@@ -96,6 +96,25 @@ public enum OutputInsights {
 }
 
 public enum SafetyPolicy {
+    /// Switches may have changed since this connector job was planned.
+    public static func connectorUnavailable(callJSON: String, connectors: [Connector], settings: AppSettings,
+                                            hasApifyKey: Bool) -> String? {
+        guard let data = callJSON.data(using: .utf8),
+              let call = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let kind = call["connector"] as? String, ["apify", "mcp"].contains(kind) else {
+            return "This connector plan is invalid. Ask again to prepare a new one."
+        }
+        guard connectors.contains(where: { $0.id == kind && $0.enabled }) else {
+            return "\(kind == "mcp" ? "MCP" : "Apify") is off in Toolbox. Turn it on and ask again."
+        }
+        if kind == "apify" { return hasApifyKey ? nil : "Add an Apify key in Keys first." }
+        guard let id = call["server"] as? String,
+              let server = settings.mcpServers.first(where: { $0.id == id && $0.enabled }) else {
+            return "This MCP server is off or was removed. Check Toolbox and ask again."
+        }
+        return blocked(commands: [server.name, server.command], settings: settings)
+    }
+
     public static func blocked(commands: [String], settings: AppSettings) -> String? {
         for command in commands {
             if CommandRisk.isBlocked(command) { return "that command could destroy your Mac. i won't run it." }
@@ -188,7 +207,7 @@ public final class ConvexSyncService: ObservableObject {
             return
         }
         guard let secret = KeyStore.get("convex"), !secret.isEmpty else {
-            status = "add a sync secret in keys"
+            status = "sync secret missing"
             return
         }
         isSyncing = true

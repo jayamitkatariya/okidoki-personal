@@ -519,7 +519,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
         </div>
         <p className="home-footer-note">
           <PixelIcon name="lock" size={13} />
-          A little peace of mind. Your keys stay on your Mac.
+          Voice uses Cartesia. Recent context uses Moss. Your account lives in Convex.
         </p>
       </footer>
     </div>

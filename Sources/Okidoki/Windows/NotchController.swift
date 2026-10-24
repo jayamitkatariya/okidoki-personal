@@ -44,6 +44,13 @@ struct NotchRunItem: Identifiable, Equatable {
     }
 }
 
+/// A skill being recorded right now. Replaces the generic live row for the `.watch` run.
+struct NotchRecording: Equatable {
+    var name: String
+    var startedAt: Date
+    var steps: Int
+}
+
 /// Geometry of the screen the notch lives on. Recomputed whenever displays change.
 struct NotchMetrics: Equatable {
     var hasNotch: Bool
@@ -94,6 +101,7 @@ final class NotchModel: ObservableObject {
     @Published var presented = false
     @Published var waiting: [NotchRunItem] = []
     @Published var live: [NotchRunItem] = []
+    @Published var recording: NotchRecording?
     @Published var metrics: NotchMetrics
 
     var undoActions: [String: () -> Void] = [:]
@@ -175,8 +183,8 @@ final class NotchModel: ObservableObject {
 
     // MARK: Derived layout
 
-    var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || listening || caption != nil }
-    var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || caption != nil }
+    var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || recording != nil || listening || caption != nil }
+    var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || recording != nil || caption != nil }
 
     var islandWidth: CGFloat {
         let m = metrics
@@ -187,7 +195,8 @@ final class NotchModel: ObservableObject {
 
     /// Anything that changes the island's shape. Drives the content spring.
     var layoutKey: [String] {
-        [expanded ? "x" : "c", listening ? "l" : "", quiet ? "q" : "", caption == nil ? "" : "s"]
+        // The recording row's presence changes the shape; its ticking counters don't.
+        [expanded ? "x" : "c", listening ? "l" : "", quiet ? "q" : "", caption == nil ? "" : "s", recording == nil ? "" : "r"]
             + toasts.map(\.id)
             + waiting.map(\.id)
             + live.map { $0.id + $0.status.rawValue }
@@ -282,8 +291,10 @@ final class NotchController {
     private(set) var isVisible = false
 
     /// Transparent margin around the island so its shadow isn't clipped by the window.
-    private let marginX: CGFloat = 28
-    private let marginBottom: CGFloat = 36
+    /// The soft shadow (radius 32, offset 20) still has visible weight 40pt out; cutting it
+    /// short paints a faint rectangle the size of the window around the island.
+    private let marginX: CGFloat = 64
+    private let marginBottom: CGFloat = 92
 
     static let openSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
     static let closeSpring = Animation.spring(response: 0.3, dampingFraction: 1)
@@ -320,7 +331,7 @@ final class NotchController {
         panel.isMovableByWindowBackground = false
         panel.animationBehavior = .none
         panel.isReleasedWhenClosed = false
-        panel.sharingType = .none
+        panel.sharingType = ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" ? .readOnly : .none
         panel.acceptsMouseMovedEvents = true
 
         let host = HoverHostingView(rootView: NotchRootView(model: model, env: env))
@@ -369,6 +380,9 @@ final class NotchController {
         env.store.objectWillChange
             .sink { [weak self] _ in self?.scheduleRefresh() }
             .store(in: &cancellables)
+        env.watch.objectWillChange
+            .sink { [weak self] _ in self?.scheduleRefresh() }
+            .store(in: &cancellables)
         env.store.$settings
             .receive(on: RunLoop.main)
             .sink { [weak self] settings in
@@ -411,17 +425,40 @@ final class NotchController {
         if !enabled, model.expanded { setExpanded(false, refreshAfter: false) }
         let shouldShow = enabled && (model.expanded || (!model.quiet && model.hasContent))
         if shouldShow { present() } else { dismiss() }
+        reconcileRecordingHUD()
+    }
+
+    /// True when a recording in progress is visible here, so the separate HUD pill can stay away.
+    var showsRecording: Bool {
+        env.store.settings.notchEnabled && !model.quiet
+    }
+
+    /// The HUD pill and the island share the top-centre of the screen. Exactly one of them
+    /// shows the recording: the island when it can, the pill when the notch is off or quiet.
+    private func reconcileRecordingHUD() {
+        guard env.watch.isRecording else { return }
+        if showsRecording {
+            if env.watchHUD.model.visible { env.watchHUD.hide() }
+        } else if !env.watchHUD.model.visible {
+            env.watchHUD.show()
+        }
     }
 
     /// Copies only what the notch renders out of the store. `liveRuns` also contains
     /// previewing / waiting runs, which the live row can't show (the old empty-panel bug).
+    /// The `.watch` run is left out: a recording gets its own row with Save / Discard
+    /// instead of a Pause / Stop pair that can't control the recorder.
     private func syncRuns() {
         let waiting = env.store.waitingRuns.map(NotchRunItem.init)
         let live = env.store.liveRuns
-            .filter { $0.status == .running || $0.status == .paused }
+            .filter { ($0.status == .running || $0.status == .paused) && $0.kind != .watch }
             .map(NotchRunItem.init)
         if model.waiting != waiting { model.waiting = waiting }
         if model.live != live { model.live = live }
+        let recording: NotchRecording? = env.watch.isRecording
+            ? NotchRecording(name: env.watch.pendingName, startedAt: env.watch.startedAt ?? Date(), steps: env.watch.steps.count)
+            : nil
+        if model.recording != recording { model.recording = recording }
     }
 
     private func present() {

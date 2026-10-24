@@ -89,7 +89,7 @@ export function CloudSignIn() {
         ) : null}
         <div className="auth-note">
           <PixelIcon name="lock" size={12} />
-          Your own Convex deployment. API keys never leave your Mac.
+          Sign-in is on Convex. This login is the only one that can read what syncs.
         </div>
       </div>
     </div>
@@ -97,18 +97,15 @@ export function CloudSignIn() {
 }
 
 /** Settings › Sync login inside the Mac app: link this Mac's accounts to a login. */
-export function SyncLogin({ onOpenKeys }: { onOpenKeys: () => void }) {
+export function SyncLogin() {
   const { cloud, state } = useDashboard();
   if (cloud.status === "off") {
     return (
       <div className="pref-row is-stack cloud-card">
         <span className="pref-copy">
           <strong>Sync is off</strong>
-          <em>Turn on sync in Keys first. A login lets you see this Mac's runs and history from a browser.</em>
+          <em>Accounts, threads and runs sync to Convex once this Mac is connected.</em>
         </span>
-        <Button variant="secondary" size="sm" icon="key" onClick={onOpenKeys}>
-          Open Keys
-        </Button>
       </div>
     );
   }

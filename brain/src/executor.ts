@@ -1,7 +1,8 @@
 import type { ExecuteRequest } from "./types";
+import { splitCommand } from "../../shared/commandLine";
 
 export type Emit = (event: string, data: Record<string, unknown>) => void;
-type Job = { proc?: ReturnType<typeof Bun.spawn>; cancelled: boolean; paused: boolean };
+type Job = { proc?: ReturnType<typeof Bun.spawn>; cancelled: boolean; paused: boolean; killTimer?: ReturnType<typeof setTimeout> };
 const active = new Map<string, Job>();
 const ansi = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
@@ -37,6 +38,7 @@ export function validateExecution(value: unknown): string | undefined {
   if (r.kind === "coding") {
     if (typeof r.prompt !== "string" || !r.prompt.trim()) return "coding prompt required";
     if (r.agent && !["claude", "opencode", "omp", "hermes"].includes(r.agent)) return "unknown coding agent";
+    if (r.extraArgs !== undefined && (typeof r.extraArgs !== "string" || r.extraArgs.includes("\0") || splitCommand(r.extraArgs) === null)) return "coding agent options contain an incomplete quote or escape";
   } else if (!Array.isArray(r.commands) || !r.commands.length || r.commands.length > 50 ||
     r.commands.some(c => typeof c !== "string" || !c.trim() || c.includes("\0") || /\{\{[^}]+\}\}/.test(c))) {
     return "provide 1–50 complete commands; choose any requested files first";
@@ -44,14 +46,17 @@ export function validateExecution(value: unknown): string | undefined {
   if ((r.commands ?? []).some(isBlocked)) return "that command could destroy the Mac. I won't run it.";
 }
 
-function agentCommand(request: ExecuteRequest): string[] {
+export function agentCommand(request: ExecuteRequest): string[] {
   const prompt = request.prompt!;
-  switch (request.agent) {
-    case "opencode": return ["opencode", "run", "--auto", prompt];
-    case "omp": return ["omp", "-p", "--auto-approve", prompt];
-    case "hermes": return ["hermes", "-z", prompt];
-    default: return ["claude", "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits"];
-  }
+  const commands = {
+    opencode: ["opencode", "run", "--auto", prompt],
+    omp: ["omp", "-p", "--auto-approve", prompt],
+    hermes: ["hermes", "-z", prompt],
+    claude: ["claude", "-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits"],
+  };
+  const extra = splitCommand(request.extraArgs ?? "");
+  if (!extra) throw new Error("coding agent options contain an incomplete quote or escape");
+  return [...commands[request.agent ?? "claude"], ...extra];
 }
 
 // One shell owns the entire plan: cd, variables and exports survive between steps.
@@ -71,10 +76,11 @@ function signal(job: Job, sig: NodeJS.Signals): void {
   try { process.kill(-job.proc.pid, sig); } catch { try { job.proc.kill(sig); } catch {} }
 }
 function terminate(job: Job): void {
+  if (job.killTimer) return;
   signal(job, "SIGCONT");
   signal(job, "SIGTERM");
-  const timer = setTimeout(() => signal(job, "SIGKILL"), 750);
-  timer.unref();
+  job.killTimer = setTimeout(() => signal(job, "SIGKILL"), 750);
+  job.killTimer.unref();
 }
 
 export async function execute(request: ExecuteRequest, emit: Emit): Promise<void> {
@@ -143,6 +149,7 @@ export async function execute(request: ExecuteRequest, emit: Emit): Promise<void
     emit("error", { message: error instanceof Error ? error.message : "could not start this job" });
   } finally {
     if (timer) clearTimeout(timer);
+    if (job.killTimer) clearTimeout(job.killTimer);
     if (active.get(request.runId) === job) active.delete(request.runId);
   }
 }

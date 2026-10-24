@@ -72,7 +72,7 @@ export function MemoryPage() {
 
   return (
     <div className="memory-page">
-      <PageTitle title="Memory" subtitle="What okidoki knows about you. Only what you tell it, and you can change any of it." />
+      <PageTitle title="Memory" subtitle="About you stays with your account. Right now is short-term memory, searched with Moss." />
 
       <div className="memory-top">
         <section className="tile memory-compose reveal">

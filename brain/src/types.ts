@@ -40,8 +40,9 @@ export interface TeachLogEntry {
   outcome: string;
 }
 
-/** A control the Mac can see through accessibility, with its center in screenshot pixels. */
+/** A control the Mac can see, with its center in screenshot pixels and the number drawn on its marker. */
 export interface TeachControlHint {
+  id: number;
   label: string;
   role: string;
   x: number;
@@ -60,7 +61,38 @@ export interface TeachStepRequest {
   imageHeight: number;
   screenshotBase64?: string;
   controls?: TeachControlHint[];
+  /** "guide" (they do it), "show" (okidoki does it) or "practice" (hints held back). */
+  mode?: string;
+  /** What this person already knows in this app. */
+  known?: string[];
+  milestones?: string[];
+  language?: string;
   model?: string;
+}
+
+export type TeachAction = "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "look" | "open_app" | "done";
+
+export interface TeachAnnotation {
+  kind: "callout" | "badge" | "bracket" | "underline" | "flow" | "measure" | "spotlight" | "lens" | "sketch" | "ghost" | "typing" | "scroll";
+  text?: string;
+  element?: number;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  to_x?: number;
+  to_y?: number;
+  n?: number;
+}
+
+export interface TeachNextGuess {
+  say: string;
+  action: TeachAction;
+  label?: string;
+  element?: number;
+  x?: number;
+  y?: number;
+  key?: string;
 }
 
 /** Zoomed second look at one control, to land the ring on the exact pixels. */
@@ -75,10 +107,12 @@ export interface TeachRefineRequest {
 /** One live tutoring step. Coordinates are pixels in the screenshot, origin top-left. */
 export interface TeachStep {
   previous_done: boolean;
-  action: "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "look" | "open_app" | "done";
+  waiting: boolean;
+  action: TeachAction;
   say: string;
   why?: string;
   label?: string;
+  element?: number;
   x?: number;
   y?: number;
   w?: number;
@@ -87,10 +121,12 @@ export interface TeachStep {
   from_y?: number;
   to_x?: number;
   to_y?: number;
+  to_element?: number;
   target?: string;
   key?: string;
   text?: string;
   app?: string;
+  risky: boolean;
   summary?: string;
   remaining?: number;
   /** An optional second region worth a glance, e.g. where the result will appear. */
@@ -99,6 +135,10 @@ export interface TeachStep {
   also_w?: number;
   also_h?: number;
   also_label?: string;
+  annotations: TeachAnnotation[];
+  next?: TeachNextGuess;
+  milestones?: string[];
+  milestone?: number;
 }
 
 export interface QuickAction {
@@ -134,6 +174,8 @@ export interface Decision {
   pickFile?: "video" | "pdf" | "document" | "images" | "folder";
   builtin?: string;
   teachPlan?: TeachPlanStep[];
+  /** For teach: "app" walks through the app on screen, "concept" explains with a 2D/3D stage. */
+  lessonKind?: "app" | "concept";
   overlayHTML?: string;
   overlayTitle?: string;
   overlayWidth?: number;
@@ -292,6 +334,8 @@ export interface ComputerRequest {
   history: ComputerHistoryEntry[];
   /** Clickable controls of the frontmost app, centers in screenshot pixels. */
   controls?: ComputerControl[];
+  /** Abridged AppleScript dictionary of the frontmost app, or empty. */
+  scripting?: string;
   /** The screen as it was before the last action. */
   previousScreenshotBase64?: string;
   /** A magnified crop requested by the last zoom action. */
@@ -359,4 +403,63 @@ export interface ToolSpec {
   docs: string;
   license: string;
   category: string;
+}
+
+// MARK: concept lessons (2D/3D stage)
+
+export interface ConceptRequest {
+  topic: string;
+  /** What's on screen / the page they're looking at. */
+  context?: string;
+  pageTitle?: string;
+  pageURL?: string;
+  screenshotBase64?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  language?: string;
+  model?: string;
+}
+
+export interface ConceptBeat {
+  say: string;
+  caption?: string;
+  duration?: number;
+  /** Fractions of the display the tutor wants circled while this beat plays. */
+  points: [number, number][];
+}
+
+export interface ConceptPhoto {
+  title: string;
+  caption: string;
+  dataURL: string;
+  credit: string;
+}
+
+export interface ConceptLesson {
+  title: string;
+  intro: string;
+  mode: "3d" | "2d";
+  /** The stage scene (parts + beats) as a JSON string, handed to the web runtime untouched. */
+  sceneJSON: string;
+  beats: ConceptBeat[];
+  photo?: ConceptPhoto;
+  parts: string[];
+}
+
+export interface ConceptFollowRequest {
+  topic: string;
+  question: string;
+  partId?: string;
+  partName?: string;
+  /** Short description of the current scene: part ids and names, beats said so far. */
+  sceneSummary: string;
+  language?: string;
+  model?: string;
+}
+
+export interface ConceptFollowUp {
+  answer: string;
+  /** {parts?, beats?} JSON for stage.append */
+  appendJSON: string;
+  beats: ConceptBeat[];
 }

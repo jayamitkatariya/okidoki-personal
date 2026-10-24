@@ -47,7 +47,7 @@ final class SkillReplayer {
                 for (index, step) in steps.enumerated() {
                     if Task.isCancelled { break outer }
                     self.markStep(index, status: .running, pass: pass, of: passes, total: steps.count, text: step.text)
-                    let wait = min(max(step.delay ?? 0.6, 0.45), 2.5)
+                    let wait = SkillReplayGeometry.pause(for: step)
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     if Task.isCancelled { break outer }
                     if let problem = await self.perform(step) {
@@ -91,7 +91,7 @@ final class SkillReplayer {
     /// Returns a reason when the step couldn't be done.
     private func perform(_ step: SkillStep) async -> String? {
         let action = step.action ?? "click"
-        let hasApp = !step.app.isEmpty && step.app != "mac" && step.app != "app"
+        let hasApp = SkillReplayGeometry.isRealApp(step.app)
         if action == "switch" {
             guard hasApp else { return nil }
             return await activate(step.app) ? nil : "couldn't open \(step.app)"
@@ -136,8 +136,7 @@ final class SkillReplayer {
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 650_000_000)
             model.clicking = true
-            let button = action == "right-click" ? "right" : (action == "middle-click" ? "middle" : "left")
-            let count = action == "double-click" ? 2 : 1
+            let (button, count) = SkillReplayGeometry.clickShape(action)
             let ok = await offMain { AccessibilityActions.click(at: point, button: button, count: count) }
             try? await Task.sleep(nanoseconds: 350_000_000)
             model.clicking = false
@@ -190,23 +189,11 @@ final class SkillReplayer {
     }
 
     private func targetLabel(_ step: SkillStep) -> String {
-        if let label = step.label, !label.isEmpty { return label }
-        guard step.action == nil else { return "" }
-        // Legacy steps only have the sentence; pull the quoted part out of “…”.
-        if let open = step.text.firstIndex(of: "“"), let close = step.text[open...].dropFirst().firstIndex(of: "”") {
-            return String(step.text[step.text.index(after: open)..<close])
-        }
-        return ""
+        SkillReplayGeometry.targetLabel(step)
     }
 
     private func recordedPoint(_ step: SkillStep) -> CGPoint? {
-        guard let x = step.x, let y = step.y else { return nil }
-        if step.action == nil {
-            // Legacy recordings stored AppKit points (bottom-left origin).
-            let height = NSScreen.screens.first?.frame.height ?? 0
-            return CGPoint(x: x, y: height - y)
-        }
-        return CGPoint(x: x, y: y)
+        SkillReplayGeometry.recordedPoint(step, mainDisplayHeight: Double(NSScreen.screens.first?.frame.height ?? 0))
     }
 
     // MARK: - Ghost

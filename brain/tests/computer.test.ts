@@ -108,3 +108,42 @@ test("transient model errors are retried, a bad key is not", async () => {
   await computerAct(base, "sk-test", spy);
   expect(sentModel).toBe("claude-sonnet-5-5");
 });
+
+import { actionFromText } from "../src/computer";
+
+test("an action written as JSON inside prose is salvaged", () => {
+  expect(actionFromText('Sure. {"type":"click","x":10,"y":20,"say":"clicking"} done')).toEqual({ type: "click", x: 10, y: 20, say: "clicking" });
+  expect(actionFromText('{"type":"wait","seconds":2}')?.say).toBe("wait");
+  expect(actionFromText("I'll click the button at {x: 10}")).toBeUndefined();
+  expect(actionFromText('{"type":"nonsense"}')).toBeUndefined();
+  expect(actionFromText("no json here")).toBeUndefined();
+});
+
+test("a prose-only reply gets one correction turn, then the action", async () => {
+  const bodies: { messages: { role: string; content: unknown }[] }[] = [];
+  const chatty = (async (_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    if (bodies.length === 1) return Response.json({ content: [{ type: "text", text: "Let me open Notes first." }] });
+    return Response.json({ content: [{ type: "tool_use", input: { type: "open_app", app: "Notes", say: "opening notes" } }] });
+  }) as unknown as typeof fetch;
+  const result = await computerAct(base, "sk-test", chatty);
+  expect(result.usedModel).toBe(true);
+  expect(result.action.type).toBe("open_app");
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1].messages).toHaveLength(3);
+  expect(bodies[1].messages[1]).toEqual({ role: "assistant", content: "Let me open Notes first." });
+
+  let calls = 0;
+  const stubborn = (async () => { calls++; return Response.json({ content: [{ type: "text", text: "Just words." }] }); }) as unknown as typeof fetch;
+  const failed = await computerAct(base, "sk-test", stubborn);
+  expect(calls).toBe(2);
+  expect(failed.action.type).toBe("fail");
+  expect(failed.action.reason).toContain("text without an action");
+});
+
+test("the scripting dictionary is shown when present", () => {
+  const prompt = systemPrompt({ ...base, scripting: "Notes Suite: classes — note (name, body)" });
+  expect(prompt).toContain("AppleScript dictionary of WhatsApp (abridged)");
+  expect(prompt).toContain("note (name, body)");
+  expect(systemPrompt(base)).not.toContain("AppleScript dictionary of");
+});

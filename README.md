@@ -22,6 +22,13 @@ make test     # Swift tests
 
 Copy `backend/.env.local.example` to `backend/.env.local` only if you run the sync backend.
 Keys are kept in a private file on your Mac (`~/Library/Application Support/Okidoki/keys.json`), not in the repository or the Keychain.
+Okidoki never reads, writes, or migrates Keychain credentials. On a new installation,
+add keys in the app's Keys page; the local key file is readable only by its owner.
+
+Built-in service credentials (Anthropic, Cartesia, Moss, the Convex sync secret) are never
+compiled in. Put them in a gitignored `.env` at the repo root (`ANTHROPIC_API_KEY=…` and so on);
+`make app` copies it into the bundle as `service.env`. The launch environment, `OKIDOKI_ENV_FILE`,
+or `~/Library/Application Support/Okidoki/service.env` override it.
 
 ## License
 
@@ -73,6 +80,12 @@ The app can also plan and execute terminal jobs natively when its Bun sidecar is
 Terminal checks: `bun test brain/tests` and `swift test --filter TerminalActionsTests`.
 The native suite also exercises real video compression when ffmpeg is installed.
 
+Run `make verify-terminal` to check terminal execution together with Toolbox persistence,
+install dependencies, blocked tools, MCP discovery/calls/reconnect/removal, cancellation,
+and command argument round trips. MCP tests use local fixture processes and in-memory
+HTTP endpoints; they do not spend API credits or install software. GUI permissions and
+live provider credentials still need a smoke check in the running app.
+
 ## Computer use
 
 Ask for a result (“send mom a message on WhatsApp”, “export this as PDF”) and okidoki
@@ -96,6 +109,14 @@ subfolders, by bundle id, or through Spotlight. On more than one display, the on
 the frontmost window is used. A step repeated three times with no effect gets a nudge;
 five times stops the run. Transient model errors are retried; driving uses Sonnet unless
 you picked another non-Haiku model in Keys.
+
+While it drives, the pointer glides to each target (Settings › Appearance › Driving pace),
+a green ring and label follow it, clicks ripple, and key presses show beside it. The pill
+at the bottom shows the kind of step, the first line of a running script, and a thumbnail
+of what the model saw with a mark where it aimed. The **Live** page in the dashboard
+keeps the whole timeline: every screenshot, aim mark, script, zoom crop and result, with
+a Stop button. Scriptable apps also hand the model an abridged AppleScript dictionary so
+scripts use the app's real commands.
 
 Needs Accessibility and Screen Recording. Checks: `swift test --filter ComputerUseTests`
 and `bun test brain/tests`.

@@ -75,5 +75,5 @@ test("auto mode never treats a prose-only reply as a computer action", async () 
   const result = await computerAct({ goal: "open Notes", step: 0, screen: { x: 0, y: 0, width: 800, height: 600 }, imageWidth: 800, imageHeight: 600, history: [] }, "test-key", api);
   expect(result.usedModel).toBe(false);
   expect(result.action.type).toBe("fail");
-  expect(result.error).toBe("empty model response");
+  expect(result.error).toBe("the model answered in text without an action");
 });

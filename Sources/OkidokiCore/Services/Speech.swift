@@ -223,7 +223,7 @@ public final class VoiceSpeaker: NSObject, ObservableObject, AVSpeechSynthesizer
     /// What went wrong, in words that say what to do about it.
     private static func cartesiaProblem(status: Int) -> String {
         switch status {
-        case 401, 403: return "Cartesia rejected the key. Check it in Keys."
+        case 401, 403: return "Cartesia rejected the key."
         case 402: return "Your Cartesia account is out of credits."
         case 404: return "Cartesia doesn't have that voice any more. Pick another in Settings."
         case 429: return "Cartesia is rate limiting right now."

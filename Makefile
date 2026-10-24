@@ -1,10 +1,15 @@
-.PHONY: build test app run demo install clean backend
+.PHONY: build test verify-terminal app run demo install clean backend
 
 build:
 	swift build
 
 test:
 	swift test
+
+verify-terminal:
+	cd brain && bun run typecheck && bun test tests/terminal.test.ts tests/http.test.ts tests/connectors.test.ts
+	cd web && bun test && bun run build
+	swift test --filter 'TerminalActionsTests|ToolboxTests'
 
 app:
 	./scripts/build-app.sh

@@ -249,7 +249,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
               </Button>
             ) : null}
             <IconButton icon="share" label="Share run" onClick={onShare} size={15} />
-            {run.status === "running" || run.status === "paused" ? (
+            {run.kind !== "connector" && run.kind !== "watch" && (run.status === "running" || run.status === "paused") ? (
               <Button
                 variant="secondary"
                 size="sm"

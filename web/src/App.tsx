@@ -4,11 +4,11 @@ import { DashboardProvider, useDashboard } from "./store";
 import { AppShell, AuthGate, type Page } from "./components/Layout";
 import { HomePage } from "./pages/HomePage";
 import { RunsPage } from "./pages/RunsPage";
+import { LivePage } from "./pages/LivePage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ToolboxPage } from "./pages/ToolboxPage";
-import { KeysPage } from "./pages/KeysPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SharePage } from "./pages/SharePage";
 import { ToastStack } from "./components/ui";
@@ -28,7 +28,8 @@ export default function App() {
 
 function Root() {
   const { state, toasts, dismissToast, hosted, cloud } = useDashboard();
-  const initial = (window.location.hash.replace("#/", "") as Page) || "home";
+  const raw = window.location.hash.replace("#/", "");
+  const initial = raw === "keys" ? "settings" : raw;
   const [page, setPage] = useState<Page>(isPage(initial) ? initial : "home");
   const [askOpen, setAskOpen] = useState(false);
 
@@ -39,6 +40,10 @@ function Root() {
   useEffect(() => {
     const onHash = () => {
       const next = window.location.hash.replace("#/", "");
+      if (next === "keys") {
+        setPage("settings");
+        return;
+      }
       if (isPage(next)) setPage(next);
     };
     window.addEventListener("hashchange", onHash);
@@ -68,16 +73,16 @@ function Root() {
     <AppShell page={page} setPage={setPage} askOpen={askOpen} setAskOpen={setAskOpen}>
       {page === "home" ? <HomePage go={setPage} /> : null}
       {page === "runs" ? <RunsPage /> : null}
+      {page === "live" ? <LivePage /> : null}
       {page === "history" ? <HistoryPage go={setPage} /> : null}
       {page === "memory" ? <MemoryPage /> : null}
       {page === "skills" ? <SkillsPage /> : null}
       {page === "toolbox" ? <ToolboxPage /> : null}
-      {page === "keys" ? <KeysPage /> : null}
       {page === "settings" ? <SettingsPage /> : null}
     </AppShell>
   );
 }
 
 function isPage(value: string): value is Page {
-  return ["home", "runs", "history", "memory", "skills", "toolbox", "keys", "settings"].includes(value);
+  return ["home", "runs", "live", "history", "memory", "skills", "toolbox", "settings"].includes(value);
 }

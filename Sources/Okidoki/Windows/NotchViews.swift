@@ -199,7 +199,7 @@ private struct NotchContent: View {
 
     /// One thing in the ear: a word when nothing is live, otherwise the live mark.
     @ViewBuilder private var statusCluster: some View {
-        if model.listening || !model.waiting.isEmpty || !model.live.isEmpty {
+        if model.listening || model.recording != nil || !model.waiting.isEmpty || !model.live.isEmpty {
             statusIndicator
         } else {
             Text(statusText)
@@ -212,6 +212,7 @@ private struct NotchContent: View {
     private var statusText: String {
         if model.quiet { return "Quiet" }
         if model.listening { return "Listening" }
+        if model.recording != nil { return "Recording" }
         if model.caption != nil { return "Speaking" }
         if !model.waiting.isEmpty { return "Needs you" }
         if !model.live.isEmpty { return "Working" }
@@ -225,6 +226,17 @@ private struct NotchContent: View {
         } else if model.listening {
             WaveformView(level: 0.5, active: model.presented, color: OKBrand.mint, bars: 7, height: 12)
                 .frame(width: 28)
+        } else if let recording = model.recording {
+            HStack(spacing: 5) {
+                RecordingDot(size: 6)
+                if recording.steps > 0 {
+                    Text("\(recording.steps)")
+                        .font(.okBody(12, .semibold))
+                        .foregroundStyle(NotchInk.coral)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+            }
         } else if !model.waiting.isEmpty {
             HStack(spacing: 5) {
                 Circle().fill(OKBrand.mint).frame(width: 5, height: 5)
@@ -253,7 +265,7 @@ private struct NotchContent: View {
     // over anything else. Compact shows one surface: an approval takes the stage (with the
     // newest toast queued under it), else the toast stack, else the top live run.
 
-    private var isEmpty: Bool { model.waiting.isEmpty && model.toasts.isEmpty && model.live.isEmpty }
+    private var isEmpty: Bool { model.waiting.isEmpty && model.toasts.isEmpty && model.live.isEmpty && model.recording == nil }
 
     private var shownWaiting: [NotchRunItem] { Array(model.waiting.prefix(model.expanded ? 3 : 1)) }
 
@@ -265,7 +277,7 @@ private struct NotchContent: View {
 
     private var shownLive: [NotchRunItem] {
         if model.expanded { return Array(model.live.prefix(4)) }
-        return model.waiting.isEmpty && model.toasts.isEmpty ? Array(model.live.prefix(1)) : []
+        return model.waiting.isEmpty && model.toasts.isEmpty && model.recording == nil ? Array(model.live.prefix(1)) : []
     }
 
     private var stage: some View {
@@ -280,6 +292,12 @@ private struct NotchContent: View {
                             .lineLimit(model.expanded ? 8 : 3)
                             .fixedSize(horizontal: false, vertical: true)
                             .transition(rowTransition)
+                    }
+                    if let recording = model.recording {
+                        section(nil) {
+                            NotchRecordingRow(recording: recording, env: env, detailed: model.expanded)
+                                .transition(rowTransition)
+                        }
                     }
                     if !shownWaiting.isEmpty {
                         section(nil) {
@@ -424,6 +442,72 @@ private struct NotchToastRow: View {
 
     private func open() {
         if let runID = toast.runID { env.openDashboard(.runs, runID: runID) }
+    }
+}
+
+/// A skill being recorded: red dot, running clock and step count, Save / Discard.
+/// Save is the primary action — stopping is what the user is reaching for.
+private struct NotchRecordingRow: View {
+    var recording: NotchRecording
+    let env: AppEnvironment
+    var detailed: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            RecordingDot(size: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(recording.name.isEmpty ? "Recording" : "Recording · \(recording.name)")
+                    .font(.okBody(13, .medium))
+                    .foregroundStyle(NotchInk.primary)
+                    .lineLimit(1)
+                TimelineView(.periodic(from: recording.startedAt, by: 1)) { context in
+                    Text("\(Self.clock(since: recording.startedAt, now: context.date)) · \(recording.steps) \(recording.steps == 1 ? "step" : "steps")")
+                        .font(.okBody(12))
+                        .foregroundStyle(NotchInk.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                if detailed {
+                    Text("Do it once at a normal pace. Shake or press Save when you're done.")
+                        .font(.okBody(12))
+                        .foregroundStyle(NotchInk.tertiary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { env.openDashboard(.skills) }
+
+            NotchButton(title: "Discard", kind: .plain) { env.discardWatching() }
+            NotchButton(title: "Save", glyph: "stop", kind: .primary) { env.stopWatching() }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .notchRow()
+    }
+
+    private static func clock(since start: Date, now: Date) -> String {
+        let total = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// The red "live" dot. Breathes on its own so it reads as recording even in the closed band.
+private struct RecordingDot: View {
+    var size: CGFloat
+    @State private var bright = false
+
+    var body: some View {
+        Circle()
+            .fill(NotchInk.coral)
+            .frame(width: size, height: size)
+            .shadow(color: NotchInk.coral.opacity(bright ? 0.7 : 0.15), radius: bright ? size * 0.9 : 1)
+            .opacity(bright ? 1 : 0.65)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { bright = true }
+            }
+            .accessibilityLabel("Recording")
     }
 }
 

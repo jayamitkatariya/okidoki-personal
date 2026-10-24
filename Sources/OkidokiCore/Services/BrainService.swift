@@ -33,9 +33,9 @@ public final class BrainService {
     }
 
     public static func needsKeyDecision() -> BrainDecision {
-        BrainDecision(kind: .answer, title: "add a key",
-                      answer: "okidoki needs an anthropic key before it can answer, teach, or do anything. add one in keys.",
-                      actions: ["add key"])
+        BrainDecision(kind: .answer, title: "model unavailable",
+                      answer: "okidoki needs an anthropic key before it can answer, teach, or do anything.",
+                      actions: [])
     }
 
     public func think(_ request: BrainRequest) async -> BrainResult {
@@ -54,7 +54,7 @@ public final class BrainService {
     private func stopped(_ error: Error) -> BrainDecision {
         if let brain = error as? BrainError, case .invalidKey = brain {
             return BrainDecision(kind: .answer, title: "key rejected",
-                                 answer: "that anthropic key was rejected. add a new one in keys.")
+                                 answer: "that anthropic key was rejected.")
         }
         return BrainDecision(kind: .answer, title: "model unavailable",
                              answer: "the model didn't answer, so i stopped instead of guessing. \(friendlyError(error)).")

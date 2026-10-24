@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Okidoki Stage — dev</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d10; color: #e6e8eb; font: 13px -apple-system, system-ui, sans-serif; }
+  body { display: flex; }
+  #side { width: 230px; padding: 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; background: #14171c; border-right: 1px solid #262a31; overflow-y: auto; }
+  #side h3 { margin: 8px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8b93a3; }
+  button { background: #1f242c; color: #e6e8eb; border: 1px solid #2d333d; border-radius: 7px; padding: 7px 10px; cursor: pointer; text-align: left; font: inherit; }
+  button:hover { background: #2a303a; }
+  button.active { border-color: #44E45E; color: #44E45E; }
+  .row { display: flex; gap: 6px; }
+  .row button { flex: 1; text-align: center; }
+  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; box-sizing: border-box; gap: 10px; min-width: 0; }
+  #panel { flex: 1; position: relative; border-radius: 18px; background: linear-gradient(160deg, rgba(34,38,46,.95), rgba(16,18,22,.95)); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 20px 60px rgba(0,0,0,.5); overflow: hidden; }
+  #stage { position: absolute; inset: 0; }
+  #caption { position: absolute; left: 16px; bottom: 14px; right: 16px; pointer-events: none; }
+  #caption .say { font-size: 15px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  #caption .cap { font-size: 12px; color: #44E45E; margin-bottom: 4px; }
+  #log { height: 140px; overflow: auto; background: #0f1115; border: 1px solid #262a31; border-radius: 10px; padding: 8px; font: 11px ui-monospace, Menlo, monospace; color: #9aa3b2; white-space: pre; }
+  input[type=range] { width: 100%; }
+  label { color: #8b93a3; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="side">
+  <h3>Samples</h3>
+  <div id="samples"></div>
+  <h3>Beats</h3>
+  <div class="row"><button id="back">◀ Back</button><button id="next">Next ▶</button></div>
+  <div id="beatInfo" style="color:#8b93a3">no scene</div>
+  <div class="row"><button id="pause">Pause</button><button id="resume">Resume</button></div>
+  <label>Speed <span id="speedVal">1.0</span>×</label>
+  <input id="speed" type="range" min="0.5" max="2" step="0.1" value="1">
+  <h3>View</h3>
+  <button id="reset">Reset view</button>
+  <button id="shot">Screenshot (opens tab)</button>
+  <button id="accent">Toggle accent color</button>
+  <h3>Append test</h3>
+  <button id="append">Append a part + beat</button>
+</div>
+<div id="main">
+  <div id="panel">
+    <div id="stage"></div>
+    <div id="caption"><div class="cap"></div><div class="say"></div></div>
+  </div>
+  <div id="log"></div>
+</div>
+<script type="module">
+  import './stage.js';
+  import { SAMPLES } from './samples.js';
+  const stage = window.okidokiStage;
+  const log = document.getElementById('log');
+  const logLine = (s) => { log.textContent += s + '\n'; log.scrollTop = log.scrollHeight; };
+  window.addEventListener('okidoki-stage', (e) => {
+    const d = e.detail;
+    if (d.type === 'partHover') return;
+    logLine(JSON.stringify(d));
+    if (d.type === 'beatStart') {
+      document.querySelector('#caption .cap').textContent = d.caption ?? '';
+      document.querySelector('#caption .say').textContent = d.say ?? '';
+    }
+  });
+
+  let current = -1, total = 0, playing = false;
+  const info = document.getElementById('beatInfo');
+  const refresh = () => { info.textContent = total ? `beat ${current + 1} / ${total}` : 'no scene'; };
+  const playBeat = async (i) => {
+    if (i < 0 || i >= total) return;
+    current = i; refresh();
+    playing = true;
+    await stage.play(i);
+    playing = false;
+  };
+
+  const samplesEl = document.getElementById('samples');
+  for (const name of Object.keys(SAMPLES)) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = () => {
+      document.querySelectorAll('#samples button').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      const res = stage.load(SAMPLES[name]);
+      logLine('load → ' + JSON.stringify(res));
+      total = stage.beatCount; current = -1; refresh();
+      document.querySelector('#caption .cap').textContent = SAMPLES[name].title;
+      document.querySelector('#caption .say').textContent = 'Press Next ▶';
+      playBeat(0);
+    };
+    samplesEl.appendChild(b);
+  }
+  document.getElementById('next').onclick = () => playBeat(current + 1);
+  document.getElementById('back').onclick = () => { if (current > 0) { stage.restoreTo(current - 1); playBeat(current - 1); } };
+  document.getElementById('pause').onclick = () => stage.pause();
+  document.getElementById('resume').onclick = () => stage.resume();
+  document.getElementById('speed').oninput = (e) => { stage.setSpeed(+e.target.value); document.getElementById('speedVal').textContent = (+e.target.value).toFixed(1); };
+  document.getElementById('reset').onclick = () => stage.resetView();
+  document.getElementById('shot').onclick = () => { const url = stage.screenshot(); const w = window.open(); if (w) w.document.write(`<img src="${url}" style="max-width:100%">`); else logLine('popup blocked; data URL length ' + url.length); };
+  let alt = false;
+  document.getElementById('accent').onclick = () => { alt = !alt; stage.setAccent(alt ? '#5BA8FF' : '#44E45E'); };
+  document.getElementById('append').onclick = () => {
+    const id = 'extra_' + Date.now();
+    const n = stage.append({
+      parts: [{ id, type: 'torus', name: 'Appended torus', radius: 0.8, tube: 0.15, position: [0, 3, 0], color: '#F472B6', visible: false }],
+      beats: [{ say: 'Here is an appended part.', caption: 'Appended', actions: [{ type: 'show', ids: [id], effect: 'drop' }, { type: 'pulse', ids: [id] }] }],
+    });
+    total = n; refresh(); logLine('append → beats=' + n);
+  };
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') document.getElementById('next').click();
+    if (e.key === 'ArrowLeft') document.getElementById('back').click();
+  });
+  document.querySelector('#samples button')?.click();
+</script>
+</body>
+</html>

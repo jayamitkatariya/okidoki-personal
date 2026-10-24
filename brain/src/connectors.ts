@@ -61,10 +61,10 @@ export function connectorPrompt(context: ConnectorsContext | undefined, catalog:
 export function checkConnectorDecision(decision: Decision, context: ConnectorsContext | undefined, catalog: McpCatalogEntry[]): Decision {
   if (decision.kind !== "connector") return decision;
   const call = decision.connectorCall as ConnectorCall | undefined;
-  const refuse = (why: string): Decision => ({ ...decision, kind: "answer", answer: `${decision.answer ? `${decision.answer}\n\n` : ""}${why}`, connectorCall: undefined });
+  const refuse = (why: string): Decision => ({ ...decision, kind: "answer", answer: `${decision.answer ? `${decision.answer}\n\n` : ""}${why}`, connectorCall: undefined, connectorCallJSON: undefined });
   if (!call) return refuse("i meant to use a connector here, but didn't say which one.");
   if (call.connector === "apify") {
-    if (!context?.apify) return refuse("that needs Apify. turn it on in toolbox and add an Apify key in keys.");
+    if (!context?.apify) return refuse("that needs Apify. turn it on in toolbox once a key is configured.");
     if (!call.actor) return refuse("i didn't pick an Apify actor for that.");
     call.input = isObject(call.input) ? call.input : {};
   } else if (call.connector === "mcp") {
@@ -83,6 +83,42 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 export async function runConnector(request: ConnectorRunRequest, apiKey: string | undefined): Promise<ConnectorRunResult> {
+  const invalid = validateConnectorRun(request);
+  const failure = (error: string): ConnectorRunResult => ({ ok: false, answer: error, summary: error, output: "", error });
+  if (invalid) return failure(invalid);
+  if (active.has(request.runId)) return failure("this connector job is already running");
+  const controller = new AbortController();
+  active.set(request.runId, controller);
+  try {
+    return await executeConnector(request, apiKey, controller.signal);
+  } finally {
+    active.delete(request.runId);
+  }
+}
+
+const active = new Map<string, AbortController>();
+
+export function stopConnector(runId: string): boolean {
+  const controller = active.get(runId);
+  if (!controller) return false;
+  controller.abort(new Error("stopped by you"));
+  return true;
+}
+
+export function stopAllConnectors(): void {
+  for (const id of active.keys()) stopConnector(id);
+}
+
+export function validateConnectorRun(value: unknown): string | undefined {
+  if (!isObject(value) || typeof value.runId !== "string" || !/^[\w-]{1,128}$/.test(value.runId)) return "valid runId required";
+  const call = value.call;
+  if (!isObject(call) || !["mcp", "apify"].includes(call.connector as string)) return "valid connector call required";
+  if (call.connector === "apify" && (typeof call.actor !== "string" || !call.actor.trim())) return "actor required";
+  if (call.connector === "mcp" && (typeof call.server !== "string" || !call.server || typeof call.tool !== "string" || !call.tool)) return "server and tool required";
+  if (call.input !== undefined && !isObject(call.input) || call.arguments !== undefined && !isObject(call.arguments)) return "connector arguments must be an object";
+}
+
+async function executeConnector(request: ConnectorRunRequest, apiKey: string | undefined, signal: AbortSignal): Promise<ConnectorRunResult> {
   const call = request.call;
   let data: string;
   let count: number | null = null;
@@ -91,30 +127,31 @@ export async function runConnector(request: ConnectorRunRequest, apiKey: string 
     if (call.connector === "apify") {
       if (!request.apifyToken) throw new Error("Add an Apify key in Keys first.");
       source = call.actor;
-      const run = await runActor(request.apifyToken, call.actor, call.input ?? {}, { maxChargeUsd: request.spendingLimit });
+      const run = await runActor(request.apifyToken, call.actor, call.input ?? {}, { maxChargeUsd: request.spendingLimit, signal });
       count = run.items.length;
       data = JSON.stringify(run.items, null, 2);
     } else {
       const server = (request.mcpServers ?? []).find((item) => item.id === call.server);
       if (!server) throw new Error(`The MCP server ${call.server} isn't connected any more.`);
       source = `${server.name} · ${call.tool}`;
-      const result = await callTool(server, call.tool, call.arguments ?? {});
+      const result = await callTool(server, call.tool, call.arguments ?? {}, 120_000, signal);
       if (result.isError) throw new Error(result.text.slice(0, 300) || `${call.tool} failed`);
       data = result.text;
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "the connector failed";
+    const message = signal.aborted ? "stopped by you" : error instanceof Error ? error.message : "the connector failed";
     return { ok: false, answer: message, summary: message, output: "", error: message };
   }
   const output = data.length > 40_000 ? `${data.slice(0, 40_000)}\n…(truncated)` : data;
   const summary = count === null ? `${source} answered` : `${count} result${count === 1 ? "" : "s"} from ${source}`;
   if (count === 0) return { ok: true, answer: `nothing came back from ${source}. try different words or a wider search.`, summary, output };
-  const answer = (await writeUp(request, output, source, apiKey)) ?? fallbackAnswer(summary, output);
+  const answer = (await writeUp(request, output, source, apiKey, signal)) ?? fallbackAnswer(summary, output);
+  if (signal.aborted) return { ok: false, answer: "stopped by you", summary: "stopped by you", output, error: "stopped by you" };
   return { ok: true, answer, summary, output };
 }
 
 // One plain model call that reads the raw results and answers the original request.
-async function writeUp(request: ConnectorRunRequest, data: string, source: string, apiKey: string | undefined): Promise<string | null> {
+async function writeUp(request: ConnectorRunRequest, data: string, source: string, apiKey: string | undefined, signal: AbortSignal): Promise<string | null> {
   if (!apiKey) return null;
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -127,7 +164,7 @@ async function writeUp(request: ConnectorRunRequest, data: string, source: strin
           "You are Okidoki. You just ran a tool for the person. Answer their request from the results only: short, warm, concrete, markdown allowed, under 150 words unless they asked for a list. Link sources when the results have URLs. If the results don't answer it, say so plainly. Never invent data.",
         messages: [{ role: "user", content: `Request: ${request.prompt}\n\nResults from ${source}:\n${data.slice(0, 30_000)}` }],
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
     });
     if (!response.ok) return null;
     const json = (await response.json()) as { content?: { type: string; text?: string }[] };

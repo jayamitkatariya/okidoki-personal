@@ -64,11 +64,17 @@ public final class WatchRecorder: ObservableObject {
     private var scrollApp = ""
     private var scrollFlush: DispatchWorkItem?
 
+    /// Overridable so the event pipeline can be driven in tests without a real screen.
+    var frontAppProvider: () -> String = { NSWorkspace.shared.frontmostApplication?.localizedName ?? "mac" }
+    var labelProvider: (CGPoint) -> String = WatchRecorder.systemLabel(at:)
+    /// Typing idle gap before the buffered text becomes a step.
+    var typingIdle: TimeInterval = 2.5
+    /// Idle gap that ends a scroll gesture.
+    var scrollIdle: TimeInterval = 0.8
+
     public init() {}
 
-    public var frontApp: String {
-        NSWorkspace.shared.frontmostApplication?.localizedName ?? "mac"
-    }
+    public var frontApp: String { frontAppProvider() }
 
     public func start(name: String = "") {
         guard !isRecording else { return }
@@ -168,7 +174,7 @@ public final class WatchRecorder: ObservableObject {
 
     // MARK: - Events
 
-    private func mouseDown(type: NSEvent.EventType, at point: CGPoint, clickCount: Int) {
+    func mouseDown(type: NSEvent.EventType, at point: CGPoint, clickCount: Int) {
         guard isRecording else { return }
         flushTyping()
         flushScroll()
@@ -187,7 +193,7 @@ public final class WatchRecorder: ObservableObject {
             return
         }
 
-        let label = accessibilityLabel(at: point)
+        let label = labelProvider(point)
         let where_ = label.isEmpty ? "at \(Int(point.x)), \(Int(point.y))" : "“\(label)”"
         let action: String
         switch type {
@@ -203,7 +209,7 @@ public final class WatchRecorder: ObservableObject {
         }
     }
 
-    private func mouseUp(at point: CGPoint) {
+    func mouseUp(at point: CGPoint) {
         guard isRecording, let from = mouseDownPoint, let index = mouseDownIndex else { return }
         mouseDownPoint = nil
         mouseDownIndex = nil
@@ -219,7 +225,7 @@ public final class WatchRecorder: ObservableObject {
         steps[index] = step
     }
 
-    private func keyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags, chars: String, plain: String, repeated: Bool) {
+    func keyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags, chars: String, plain: String, repeated: Bool) {
         guard isRecording else { return }
         let app = frontApp
         let modified = flags.contains(.command) || flags.contains(.control) || flags.contains(.option)
@@ -246,10 +252,10 @@ public final class WatchRecorder: ObservableObject {
         typingFlush?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.flushTyping() }
         typingFlush = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + typingIdle, execute: work)
     }
 
-    private func scrolled(at point: CGPoint, shown: Double, device: Double) {
+    func scrolled(at point: CGPoint, shown: Double, device: Double) {
         guard isRecording else { return }
         flushTyping()
         if scrollPoint == nil {
@@ -263,10 +269,10 @@ public final class WatchRecorder: ObservableObject {
         scrollFlush?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.flushScroll() }
         scrollFlush = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + scrollIdle, execute: work)
     }
 
-    private func appSwitched(to app: String, own: Bool) {
+    func appSwitched(to app: String, own: Bool) {
         guard isRecording, !own else { return }
         flushTyping()
         flushScroll()
@@ -277,7 +283,7 @@ public final class WatchRecorder: ObservableObject {
         }
     }
 
-    private func flushTyping() {
+    func flushTyping() {
         typingFlush?.cancel()
         typingFlush = nil
         guard !typing.isEmpty else { return }
@@ -287,7 +293,7 @@ public final class WatchRecorder: ObservableObject {
         append(WatchedStep(app: typingApp, action: "type", detail: "in \(typingApp), type “\(shown)”", input: text))
     }
 
-    private func flushScroll() {
+    func flushScroll() {
         scrollFlush?.cancel()
         scrollFlush = nil
         guard let point = scrollPoint else { return }
@@ -323,7 +329,7 @@ public final class WatchRecorder: ObservableObject {
         return CGPoint(x: p.x, y: height - p.y)
     }
 
-    private func accessibilityLabel(at point: CGPoint) -> String {
+    nonisolated private static func systemLabel(at point: CGPoint) -> String {
         guard AXIsProcessTrusted() else { return "" }
         let system = AXUIElementCreateSystemWide()
         var element: AXUIElement?

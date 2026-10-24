@@ -353,7 +353,7 @@ export function localRouter(request: ThinkRequest): Decision {
     return {
       kind: "answer",
       title: "simulation",
-      answer: "i can render a live simulation right on your screen — physics, flow, anything — but building one needs an Anthropic key. add one in keys and ask again.",
+      answer: "i can render a live simulation right on your screen — physics, flow, anything — but building one needs an Anthropic key. ask again in a moment.",
       actions: ["add key"],
     };
   }
@@ -577,7 +577,7 @@ export function localRouter(request: ThinkRequest): Decision {
     const clip = request.clipboardText ?? "";
     if (clip) return { kind: "answer", title: "looks like", answer: explainError(clip), actions: ["explain more", "fix it"] };
     if (request.screenshotBase64) {
-      return { kind: "answer", title: "what i see", answer: "i have the screen area but no model key to read it. add an Anthropic key in keys, or paste the error. without it i can still walk you through common fixes.", actions: ["add key"] };
+      return { kind: "answer", title: "what i see", answer: "i have the screen area but no model key to read it. paste the error and i can still walk you through common fixes.", actions: [] };
     }
     return { kind: "answer", title: "show me", answer: "circle the error — press the pencil when you summon me — or copy it and ask again. i'll read the whole thing.", actions: ["circle it"] };
   }
@@ -605,11 +605,11 @@ export function localRouter(request: ThinkRequest): Decision {
   }
 
   if (/install|terminal|command|open.source|repository|download|convert|ffmpeg|brew|python|npm/.test(t)) {
-    return { kind: "answer", title: "connect a model", answer: "I need an Anthropic key to plan this request. Add one in Keys, then ask again. You can already ask me to compress a video, resize photos, zip a folder, check storage, or install a tool from the toolbox.", actions: ["add key"] };
+    return { kind: "answer", title: "connect a model", answer: "I need an Anthropic key to plan this request. You can already ask me to compress a video, resize photos, zip a folder, check storage, or install a tool from the toolbox.", actions: [] };
   }
 
   if (request.screenshotBase64) {
-    return { kind: "answer", title: "what i see", answer: "i have the screen area, but reading it needs an Anthropic key. paste the text here, or add a key in keys and ask again.", actions: ["add key"] };
+    return { kind: "answer", title: "what i see", answer: "i have the screen area, but reading it needs an Anthropic key. paste the text here and ask again.", actions: [] };
   }
 
   const app = request.appName ?? "";

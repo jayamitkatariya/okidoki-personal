@@ -111,3 +111,14 @@ test("simultaneous duplicate run IDs cannot execute twice", async () => {
   expect(events).toEqual(["error"]);
   stop(runId); await first;
 });
+
+test("coding agent options and literal prompts survive the sidecar argument boundary", async () => {
+  const { agentCommand } = await import("../src/executor");
+  const prompt = "fix a file; $(touch SHOULD_NOT_RUN) 'quoted'";
+  const request = { runId: "options", kind: "coding" as const, prompt, agent: "claude" as const, extraArgs: '--model "test model" --directory=some\\ folder' };
+  expect(validateExecution(request)).toBeUndefined();
+  const args = agentCommand(request);
+  expect(args[2]).toBe(prompt);
+  expect(args.slice(-3)).toEqual(["--model", "test model", "--directory=some folder"]);
+  expect(validateExecution({ ...request, extraArgs: '--model "unfinished' })).toBeString();
+});

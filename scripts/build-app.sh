@@ -5,11 +5,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 CONFIG="${1:-release}"
+# OKIDOKI_SCRATCH lets a second builder work alongside another swift build on .build.
+SCRATCH="${OKIDOKI_SCRATCH:-.build}"
 echo "▸ Building Okidoki ($CONFIG)…"
-swift build -c "$CONFIG"
+swift build -c "$CONFIG" --scratch-path "$SCRATCH"
 
-BIN=".build/$CONFIG/Okidoki"
-APP="build/Okidoki.app"
+BIN="$SCRATCH/$CONFIG/Okidoki"
+APP="${OKIDOKI_APP_DIR:-build/Okidoki.app}"
 
 # --- brain sidecar (TypeScript, Bun) ---
 if command -v bun >/dev/null 2>&1 && [ -f brain/src/server.ts ]; then
@@ -54,8 +56,19 @@ cp "$BIN" "$APP/Contents/MacOS/Okidoki"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
 cp Resources/BrandMark.png "$APP/Contents/Resources/BrandMark.png"
+# Service credentials live in the gitignored .env; the app reads them from service.env in its bundle.
+if [ -f .env ]; then
+  cp .env "$APP/Contents/Resources/service.env"
+  chmod 600 "$APP/Contents/Resources/service.env"
+fi
 if [ -d Resources/brain ]; then
   cp -R Resources/brain "$APP/Contents/Resources/brain"
+fi
+if [ -d Resources/stage ]; then
+  mkdir -p "$APP/Contents/Resources/stage"
+  for f in stage.html stage.js parts.js labels.js expr.js three.module.js three.core.js OrbitControls.js RoomEnvironment.js THREE_LICENSE; do
+    [ -f "Resources/stage/$f" ] && cp "Resources/stage/$f" "$APP/Contents/Resources/stage/$f"
+  done
 fi
 if [ -d web/dist ]; then
   cp -R web/dist "$APP/Contents/Resources/web"
@@ -76,13 +89,9 @@ if [ ! -f build/AppIcon.icns ]; then
 fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')"
-if [ -z "${IDENTITY:-}" ]; then
-  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)"/\1/')"
-fi
-if [ -z "${IDENTITY:-}" ]; then
-  IDENTITY="-"
-fi
+# Local builds use ad-hoc signing without looking up identities in the Keychain.
+# A certificate is used only when the builder explicitly selects one.
+IDENTITY="${OKIDOKI_CODESIGN_IDENTITY:--}"
 
 echo "▸ Signing with: $IDENTITY"
 codesign --force --deep --options runtime --entitlements Resources/Okidoki.entitlements --sign "$IDENTITY" "$APP"

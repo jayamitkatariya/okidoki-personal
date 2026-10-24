@@ -22,15 +22,26 @@ public final class OkidokiStore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let stateURL: URL
 
-    public init(seedDemo: Bool = false) {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    public init(seedDemo: Bool = false, stateURL: URL? = nil) {
+        let support = stateURL?.deletingLastPathComponent() ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Okidoki", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        self.stateURL = support.appendingPathComponent("state.json")
+        self.stateURL = stateURL ?? support.appendingPathComponent("state.json")
 
         var loaded: AppState?
-        if !seedDemo, let data = try? Data(contentsOf: stateURL) {
-            do { loaded = try JSONDecoder().decode(AppState.self, from: data) }
+        if !seedDemo, let data = try? Data(contentsOf: self.stateURL) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .custom { decoder in
+                let value = try decoder.singleValueContainer()
+                if let seconds = try? value.decode(Double.self) { return Date(timeIntervalSinceReferenceDate: seconds) }
+                let text = try value.decode(String.self)
+                let formatter = ISO8601DateFormatter()
+                if let date = formatter.date(from: text) { return date }
+                formatter.formatOptions.insert(.withFractionalSeconds)
+                if let date = formatter.date(from: text) { return date }
+                throw DecodingError.dataCorruptedError(in: value, debugDescription: "Invalid saved date")
+            }
+            do { loaded = try decoder.decode(AppState.self, from: data) }
             catch { loadError = "couldn't read saved state: \(error.localizedDescription)" }
         }
 
@@ -52,7 +63,7 @@ public final class OkidokiStore: ObservableObject {
         self.settings = state.settings
         self.threads = state.threads
         self.memories = state.memories
-        self.runs = state.runs
+        self.runs = state.runs.map { $0.recoveredAfterRestart() }
         self.skills = state.skills
         self.routines = state.routines
         self.connectors = Self.mergeConnectors(state.connectors)

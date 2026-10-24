@@ -35,16 +35,24 @@ export const CLOUD_OFF: CloudState = {
   signOut: async () => {},
 };
 
-/** The Convex URL a hosted build was given, if any. */
+export const CONVEX_CLOUD_URL = "https://wonderful-rook-611.convex.cloud";
+
+/** The Convex client URL. Dev preview stays local unless VITE_CONVEX_URL is set. */
 export function hostedConvexUrl(): string {
-  return (import.meta.env.VITE_CONVEX_URL as string | undefined)?.trim() ?? "";
+  const fromEnv = (import.meta.env.VITE_CONVEX_URL as string | undefined)?.trim() ?? "";
+  if (fromEnv) return fromEnv;
+  if (import.meta.env.DEV) return "";
+  return CONVEX_CLOUD_URL;
 }
 
-/** Inside the Mac app: the deployment from Keys › Sync, while sync is on. */
+/** Inside the Mac app: the deployment's client URL, while sync is on. */
 export function nativeConvexUrl(state: NativeState | null): string {
   if (!state?.settings.syncEnabled || !state.settings.convexSiteURL) return "";
-  // The Mac stores the HTTP actions URL (:3211); the client talks to the API (:3210).
-  return state.settings.convexSiteURL.replace(":3211", ":3210").replace(/\/$/, "");
+  const site = state.settings.convexSiteURL.replace(/\/$/, "");
+  // Cloud HTTP actions live on .convex.site; the client talks to .convex.cloud.
+  if (site.includes(".convex.site")) return site.replace(".convex.site", ".convex.cloud");
+  // Self-hosted: the Mac stores the HTTP actions port (:3211); the client uses :3210.
+  return site.replace(":3211", ":3210");
 }
 
 // One client per deployment for the page's lifetime. Closing it on unmount breaks React's

@@ -80,15 +80,22 @@ public final class ShellRunner: @unchecked Sendable {
         let directory = cwd ?? NSHomeDirectory()
         let pid: pid_t
         let readEnd: Int32
+        lock.lock()
+        guard jobs[id] == nil else {
+            lock.unlock()
+            onOutput("this job is already running\n")
+            completion(127)
+            return id
+        }
         do {
             (pid, readEnd) = try Self.spawn(arguments: ["/bin/zsh", "-c", command], directory: directory, environment: jobEnvironment())
         } catch {
+            lock.unlock()
             onOutput("couldn't start: \(error.localizedDescription)\n")
             completion(127)
             return id
         }
 
-        lock.lock()
         jobs[id] = pid
         lock.unlock()
 

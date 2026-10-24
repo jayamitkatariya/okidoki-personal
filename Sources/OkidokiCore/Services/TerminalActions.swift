@@ -362,10 +362,45 @@ public enum TerminalActions {
         try preparePlan(commands, installed: installed).commands
     }
 
-    public static func script(_ commands: [String]) -> String {
-        (["set -o pipefail"] + commands.flatMap { command in
-            ["printf '%s\\n' \(shellQuote("$ " + command))", "eval \(shellQuote(command))", "okidoki_step_code=$?", "if [ \"$okidoki_step_code\" -ne 0 ]; then exit \"$okidoki_step_code\"; fi"]
+    public static func script(_ commands: [String], progressMarker: String? = nil) -> String {
+        (["set -o pipefail"] + commands.enumerated().flatMap { index, command -> [String] in
+            var lines: [String] = []
+            if let marker = progressMarker { lines.append("printf '\\036\(marker):start:\(index)\\037\\n'") }
+            lines += ["printf '%s\\n' \(shellQuote("$ " + command))", "eval \(shellQuote(command))", "okidoki_step_code=$?"]
+            if let marker = progressMarker { lines.append("printf '\\036\(marker):end:\(index):%s\\037\\n' \"$okidoki_step_code\"") }
+            lines.append("if [ \"$okidoki_step_code\" -ne 0 ]; then exit \"$okidoki_step_code\"; fi")
+            return lines
         }).joined(separator: "\n")
+    }
+
+    public struct Progress {
+        public var output: String
+        public var currentStep: Int
+        public var completed: Set<Int>
+        public var failed: Int?
+    }
+
+    /// Private frames distinguish progress from arbitrary command output, including lines starting with "$ ".
+    public static func progress(in output: String, marker: String, commandCount: Int) -> Progress {
+        let pattern = "\u{1e}" + NSRegularExpression.escapedPattern(for: marker) + #":(start|end):(\d+)(?::(\d+))?"# + "\u{1f}\n"
+        let regex = try! NSRegularExpression(pattern: pattern)
+        let range = NSRange(output.startIndex..., in: output)
+        var progress = Progress(output: output, currentStep: 0, completed: [], failed: nil)
+        for match in regex.matches(in: output, range: range) {
+            guard let indexRange = Range(match.range(at: 2), in: output),
+                  let index = Int(output[indexRange]), (0..<commandCount).contains(index) else { continue }
+            progress.currentStep = index
+            if let codeRange = Range(match.range(at: 3), in: output) {
+                if output[codeRange] == "0" { progress.completed.insert(index) }
+                else { progress.failed = index }
+            }
+        }
+        progress.output = regex.stringByReplacingMatches(in: output, range: range, withTemplate: "")
+        // A chunk may end inside a frame; don't expose that partial frame to the page.
+        if let partial = progress.output.range(of: "\u{1e}" + marker, options: .backwards) {
+            progress.output.removeSubrange(partial.lowerBound...)
+        }
+        return progress
     }
 
     // MARK: - Interactive tools
