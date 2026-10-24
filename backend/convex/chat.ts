@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { createJob, mentionsAgent } from "./jobs";
 import { peopleIn, requireSpaceMember, spaceAccess } from "./spaces";
 
 // The group chat inside a space. Members read and write; the agent and system lines have no author.
@@ -54,6 +55,9 @@ export const send = mutation({
       createdAt: now,
     });
     await ctx.db.patch(access.space._id, { lastMessageAt: now, lastMessage: cleaned.slice(0, 120) });
+    // Mentioning the agent hands it the message as a job; the reply is a run card in the chat.
+    const jobId = mentionsAgent(cleaned) ? await createJob(ctx, access.space, access.userId, cleaned) : null;
     await ctx.db.patch(access.member._id, { lastReadAt: now });
+    return { jobId };
   },
 });

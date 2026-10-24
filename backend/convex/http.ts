@@ -245,6 +245,73 @@ http.route({
   }),
 });
 
+// ---- Worker: a Mac work account that runs the agent's jobs for its spaces. Same secret as sync. ----
+
+for (const path of ["/api/worker/poll", "/api/worker/accept", "/api/worker/update"]) {
+  http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
+}
+
+// Heartbeat plus the queue: jobs this worker may take, and decisions on the ones it holds.
+http.route({
+  path: "/api/worker/poll",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<{ accountId?: unknown; device?: unknown; kind?: unknown; enabled?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    if (!isId(body.accountId)) return json({ error: "accountId required" }, 400);
+    const device = typeof body.device === "string" ? body.device : "mac";
+    const kind = body.kind === "privateMac" ? "privateMac" : "thisMac";
+    const enabled = body.enabled !== false;
+    const beat = await ctx.runMutation(internal.jobs.heartbeat, { accountId: body.accountId, device, kind, enabled });
+    if (!beat.ok) return json({ ok: false, reason: beat.reason, jobs: [], held: [] });
+    if (!enabled) return json({ ok: true, jobs: [], held: [] });
+    const queue = await ctx.runQuery(internal.jobs.poll, { accountId: body.accountId, kind });
+    return json({ ok: true, ...queue });
+  }),
+});
+
+http.route({
+  path: "/api/worker/accept",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<{ accountId?: unknown; jobId?: unknown; device?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    if (!isId(body.accountId) || !isId(body.jobId)) return json({ error: "accountId and jobId required" }, 400);
+    const job = await ctx.runMutation(internal.jobs.accept, { accountId: body.accountId, jobId: body.jobId as any, device: typeof body.device === "string" ? body.device : "mac" });
+    return json({ job });
+  }),
+});
+
+http.route({
+  path: "/api/worker/update",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<Record<string, unknown>>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    if (!isId(body.accountId) || !isId(body.jobId)) return json({ error: "accountId and jobId required" }, 400);
+    const str = (value: unknown) => (typeof value === "string" ? value : undefined);
+    const result = await ctx.runMutation(internal.jobs.update, {
+      accountId: body.accountId,
+      jobId: body.jobId as any,
+      status: str(body.status),
+      runClientId: str(body.runClientId),
+      title: str(body.title),
+      summary: str(body.summary),
+      output: str(body.output),
+      steps: Array.isArray(body.steps) ? body.steps : undefined,
+      preview: body.preview !== undefined ? body.preview : undefined,
+      say: str(body.say),
+    });
+    return json(result);
+  }),
+});
+
 http.route({
   path: "/health",
   method: "GET",

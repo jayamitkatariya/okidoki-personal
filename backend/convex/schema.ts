@@ -217,6 +217,48 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_space_time", ["spaceId", "createdAt"]),
 
+  // Work handed to the agent in a space. A member's Mac (the worker) accepts it and runs it as an ordinary run.
+  spaceRuns: defineTable({
+    spaceId: v.id("spaces"),
+    orgId: v.id("organizations"),
+    requestedBy: v.id("users"),
+    prompt: v.string(),
+    // queued · accepted · running · waiting · done · failed · cancelled
+    status: v.string(),
+    // "" · approve · decline — the chat's answer to a run that's waiting for approval.
+    decision: v.string(),
+    workerAccountId: v.union(v.string(), v.null()),
+    workerDevice: v.string(),
+    workerName: v.string(),
+    runClientId: v.union(v.string(), v.null()),
+    title: v.string(),
+    summary: v.string(),
+    output: v.string(),
+    steps: v.any(),
+    preview: v.any(),
+    messageId: v.union(v.id("spaceMessages"), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    startedAt: v.union(v.number(), v.null()),
+    endedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_space", ["spaceId", "createdAt"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_worker", ["workerAccountId", "status"]),
+
+  // One row per Mac work account that accepts jobs. `lastSeenAt` is its heartbeat.
+  workers: defineTable({
+    accountClientId: v.string(),
+    userId: v.id("users"),
+    orgId: v.id("organizations"),
+    device: v.string(),
+    kind: v.string(), // thisMac · privateMac
+    enabled: v.boolean(),
+    lastSeenAt: v.number(),
+  })
+    .index("by_account", ["accountClientId"])
+    .index("by_org", ["orgId"]),
+
   joinCodes: defineTable({
     code: v.string(),
     orgId: v.id("organizations"),

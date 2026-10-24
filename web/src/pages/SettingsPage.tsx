@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { AccountKind, AgentStatus, CodingAgentID, PrivateMacPhase, PrivateMacState, Toast } from "../types";
+import type { AccountKind, AgentStatus, CodingAgentID, PrivateMacPhase, PrivateMacState, Toast, WorkerState } from "../types";
 import type { Page } from "../nav";
 import { SyncLogin } from "../components/CloudAuth";
 import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
@@ -40,6 +40,7 @@ const SECTIONS = [
   { id: "appearance", label: "Appearance", icon: "sun" },
   { id: "account", label: "Account", icon: "user" },
   { id: "organization", label: "Organization", icon: "building" },
+  { id: "worker", label: "Worker", icon: "bolt" },
   { id: "sync-login", label: "Sync login", icon: "link" },
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
@@ -116,7 +117,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.filter((section) => (native || section.id !== "sync-login") && (account.kind === "work" || section.id !== "organization")).map((section) => (
+          {SECTIONS.filter((section) => (native || section.id !== "sync-login") && (account.kind === "work" || !["organization", "worker"].includes(section.id))).map((section) => (
             <button key={section.id} className={cx("settings-nav-item", active === section.id && "is-active")} onClick={() => jump(section.id)}>
               <PixelIcon name={section.icon} size={15} />
               {section.label}
@@ -537,6 +538,24 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </SettingsSection>
           ) : null}
 
+          {account.kind === "work" ? (
+            <SettingsSection id="worker" title="Worker" description="When a space hands okidoki work, a member's Mac does it. Let this one take jobs, and it runs them like any request — asking in the chat before anything risky.">
+              <div className="pref-group">
+                <PrefRow title="Accept jobs from my spaces" detail={workerDetail(state.worker, settings.workerEnabled === true, native)}>
+                  <Switch checked={settings.workerEnabled === true} onChange={(value) => updateSettings({ workerEnabled: value })} />
+                </PrefRow>
+                <PrefRow title="Runs jobs on" detail={settings.computerTarget === "vm" ? "Your private Mac, in a window. Spaces set to Private Mac pick this Mac." : "This Mac. Spaces set to Private Mac skip it until one is set up below."}>
+                  <Button size="sm" variant="secondary" onClick={() => jump("private-mac")}>
+                    {settings.computerTarget === "vm" ? "Private Mac" : "This Mac"}
+                  </Button>
+                </PrefRow>
+                <PrefRow title="Hosted VM" detail="A Mac in the cloud that works for the whole space. Coming soon.">
+                  <span className="pref-status">Soon</span>
+                </PrefRow>
+              </div>
+            </SettingsSection>
+          ) : null}
+
           {/* Sync login: only inside the Mac app; the hosted panel signs in at its front door. */}
           {native ? (
             <SettingsSection id="sync-login" title="Sync login" description="Link this Mac's accounts to a login on your own Convex deployment. Only that login can read what syncs.">
@@ -640,6 +659,16 @@ function SettingsSection({ id, title, description, children }: { id: string; tit
       {children}
     </section>
   );
+}
+
+function workerDetail(worker: WorkerState | null | undefined, enabled: boolean, native: boolean): string {
+  if (!native) return "Switch this on in okidoki on the Mac that should do the work.";
+  if (!enabled) return "Off. Jobs from your spaces wait for another Mac.";
+  if (!worker) return "Starting…";
+  if (worker.activeJob) return `Working on “${worker.activeJob}”${worker.activeSpace ? ` for ${worker.activeSpace}` : ""}`;
+  if (worker.status === "idle") return `Ready as ${worker.device}${worker.lastPollAt ? ` · checked ${relativeTime(worker.lastPollAt)}` : ""}${worker.jobsDone ? ` · ${worker.jobsDone} done` : ""}`;
+  if (worker.status === "off") return "Needs sync on and this work account linked to an organization.";
+  return worker.status;
 }
 
 function formatBytes(bytes: number): string {

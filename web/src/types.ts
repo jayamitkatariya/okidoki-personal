@@ -83,6 +83,18 @@ export interface Settings {
   drivePace: "calm" | "fast";
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
+  /** Enterprise: this Mac takes jobs the agent is given in the work account's spaces. Missing on older builds. */
+  workerEnabled?: boolean;
+}
+
+/** Enterprise: this Mac as a worker for its spaces. Missing on Convex snapshots and in the demo. */
+export interface WorkerState {
+  status: string;
+  activeJob?: string | null;
+  activeSpace?: string | null;
+  lastPollAt?: string | null;
+  jobsDone: number;
+  device: string;
 }
 
 export type PrivateMacPhase = "unsupported" | "notSetUp" | "downloading" | "installing" | "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -354,6 +366,7 @@ export interface NativeState {
   mcpSecretNames?: Record<string, string[]>;
   /** Missing on Convex snapshots and in the demo, where there is no VM to report on. */
   privateMac?: PrivateMacState | null;
+  worker?: WorkerState | null;
 }
 
 export interface Toast {

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
-import { clockLabel, cx, dayLabel, relativeTime } from "../lib";
+import { clockLabel, cx, dayLabel, duration, relativeTime } from "../lib";
 import type { Page } from "../nav";
-import type { Account } from "../types";
-import type { Space, SpaceMember, SpaceMessage, WorkerPolicy } from "../enterprise";
-import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, isComposing, Markdown, Modal, PageTitle, PixelIcon, Segmented, TextField, type ConfirmRequest } from "../components/ui";
+import type { Account, RunStatus } from "../types";
+import type { Job, JobStatus, Space, SpaceMember, SpaceMessage, WorkerPolicy } from "../enterprise";
+import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, isComposing, Markdown, Modal, PageTitle, PixelIcon, RiskBadge, Segmented, StatusBadge, TextField, type ConfirmRequest } from "../components/ui";
 
 const WORKER_LABEL: Record<WorkerPolicy, string> = { thisMac: "This Mac", privateMac: "Private Mac", hostedVM: "Hosted VM" };
 const WORKER_HINT: Record<WorkerPolicy, string> = {
@@ -73,12 +73,12 @@ export function SpacesPage({ go }: { go: (page: Page) => void }) {
       </Button>,
     );
   }
-  return <SpacesLayout />;
+  return <SpacesLayout go={go} />;
 }
 
-function SpacesLayout() {
+function SpacesLayout({ go }: { go: (page: Page) => void }) {
   const { enterprise, spaceId, selectSpace, notify } = useDashboard();
-  const { spaces, messages } = enterprise;
+  const { spaces, messages, jobs } = enterprise;
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -145,7 +145,7 @@ function SpacesLayout() {
       <section className="spaces-chat">
         {current ? (
           current.joined ? (
-            <SpaceChat space={current} messages={messages} />
+            <SpaceChat space={current} messages={messages} jobs={jobs} go={go} />
           ) : (
             <div className="spaces-chat-empty">
               <Empty
@@ -197,8 +197,11 @@ function SpacesLayout() {
   );
 }
 
-function SpaceChat({ space, messages }: { space: Space; messages: SpaceMessage[] }) {
+function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: SpaceMessage[]; jobs: Job[]; go: (page: Page) => void }) {
   const { enterprise, selectSpace, notify, state } = useDashboard();
+  const jobById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
+  const online = enterprise.workers.filter((worker) => worker.online && space.members.some((member) => member.userId === worker.userId));
+  const workersLine = online.length ? `${online.length} ${online.length === 1 ? "Mac" : "Macs"} ready` : "no worker online";
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -257,7 +260,7 @@ function SpaceChat({ space, messages }: { space: Space; messages: SpaceMessage[]
         <div className="space-head-copy">
           <h2>{space.name}</h2>
           <p>
-            {space.members.length} {space.members.length === 1 ? "member" : "members"} · worker: {WORKER_LABEL[worker]}
+            {space.members.length} {space.members.length === 1 ? "member" : "members"} · {WORKER_LABEL[worker]} · {workersLine}
           </p>
         </div>
         <div className="space-head-people" aria-label="Members">
@@ -298,11 +301,15 @@ function SpaceChat({ space, messages }: { space: Space; messages: SpaceMessage[]
                   <strong>{group.author === "agent" ? "okidoki" : group.isYou ? "You" : group.name}</strong>
                   <time>{clockLabel(iso(group.messages[0].createdAt))}</time>
                 </div>
-                {group.messages.map((message) => (
-                  <div className={cx("space-bubble", message.kind !== "text" && `is-${message.kind}`)} key={message.id}>
-                    <Markdown text={message.text} />
-                  </div>
-                ))}
+                {group.messages.map((message) =>
+                  message.kind === "run" ? (
+                    <JobCard key={message.id} job={message.runId ? jobById.get(message.runId) : undefined} go={go} />
+                  ) : (
+                    <div className={cx("space-bubble", message.kind !== "text" && `is-${message.kind}`)} key={message.id}>
+                      <Markdown text={message.text} />
+                    </div>
+                  ),
+                )}
               </div>
             </div>
           ),
@@ -365,6 +372,132 @@ function SpaceChat({ space, messages }: { space: Space; messages: SpaceMessage[]
       />
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </>
+  );
+}
+
+const JOB_TO_RUN: Record<JobStatus, RunStatus> = {
+  queued: "previewing",
+  accepted: "previewing",
+  running: "running",
+  waiting: "waiting",
+  done: "done",
+  failed: "failed",
+  cancelled: "cancelled",
+};
+
+function JobCard({ job, go }: { job: Job | undefined; go: (page: Page) => void }) {
+  const { enterprise, notify, state, native } = useDashboard();
+  const [busy, setBusy] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
+  if (!job) {
+    return (
+      <div className="space-bubble job-card is-ghost">
+        <em>Working on it…</em>
+      </div>
+    );
+  }
+  const act = async (task: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await task();
+    } catch (error) {
+      notify("That didn't work", error instanceof Error ? error.message : String(error), "warning");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const active = !["done", "failed", "cancelled"].includes(job.status);
+  // The run exists on this Mac when it's the worker: the Runs page can show every line of it.
+  const local = native && job.runClientId ? state.runs.find((run) => run.id === job.runClientId) : undefined;
+  const where =
+    job.status === "queued"
+      ? "waiting for a worker Mac"
+      : `${job.workerName ? `on ${job.workerName}'s Mac` : "on a worker"}${job.workerDevice ? ` · ${job.workerDevice}` : ""}`;
+  const took = job.startedAt ? duration(iso(job.startedAt), job.endedAt ? iso(job.endedAt) : null) : null;
+  const doneSteps = job.steps.filter((step) => step.status === "done").length;
+
+  return (
+    <div className={cx("space-bubble job-card", `is-${job.status}`)}>
+      <div className="job-head">
+        <StatusBadge status={JOB_TO_RUN[job.status]} />
+        <strong>{job.title || job.prompt}</strong>
+        {took ? <time>{took}</time> : null}
+      </div>
+      <p className="job-meta">
+        Asked by {job.requestedBy} · {where}
+      </p>
+      {job.summary && job.status !== "waiting" ? <p className="job-summary">{job.summary}</p> : null}
+
+      {job.status === "waiting" && job.preview ? (
+        <div className="job-approval">
+          <div className="job-approval-head">
+            <RiskBadge risk={job.preview.risk} />
+            <span>{job.preview.summary}</span>
+          </div>
+          {job.preview.steps?.length ? (
+            <ol className="job-plan">
+              {job.preview.steps.slice(0, 8).map((step, index) => (
+                <li key={index}>{step}</li>
+              ))}
+            </ol>
+          ) : null}
+          {job.decision ? (
+            <em className="job-decided">{job.decision === "approve" ? "Approved — going ahead." : "Declined."}</em>
+          ) : (
+            <div className="job-actions">
+              <Button size="sm" variant="primary" disabled={busy} onClick={() => void act(() => enterprise.actions.decide(job.id, "approve"))}>
+                Do it
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => enterprise.actions.decide(job.id, "decline"))}>
+                Not now
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {job.steps.length ? (
+        <details className="job-steps" open={active}>
+          <summary>
+            {doneSteps} of {job.steps.length} steps
+          </summary>
+          <ul>
+            {job.steps.map((step, index) => (
+              <li key={index} className={cx(step.status && `is-${step.status}`)}>
+                <PixelIcon name={step.status === "done" ? "check" : step.status === "failed" ? "x" : step.status === "running" ? "spinner" : "minus"} size={12} />
+                <span>{step.title}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      {job.output ? (
+        <details className="job-output" open={showOutput} onToggle={(event) => setShowOutput((event.target as HTMLDetailsElement).open)}>
+          <summary>Output</summary>
+          <pre>{job.output}</pre>
+        </details>
+      ) : null}
+
+      <div className="job-foot">
+        {local ? (
+          <button
+            className="job-link"
+            onClick={() => {
+              (window as unknown as { __okidokiFocusRun?: string }).__okidokiFocusRun = local.id;
+              go("runs");
+            }}
+          >
+            Open in Runs <PixelIcon name="arrow" size={12} />
+          </button>
+        ) : null}
+        {active ? (
+          <button className="job-link is-danger" disabled={busy} onClick={() => void act(() => enterprise.actions.cancelJob(job.id))}>
+            Cancel
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

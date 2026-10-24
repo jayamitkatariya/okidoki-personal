@@ -95,7 +95,57 @@ export interface SpaceMessage {
   isYou: boolean;
 }
 
+export type JobStatus = "queued" | "accepted" | "running" | "waiting" | "done" | "failed" | "cancelled";
+
+export interface JobStep {
+  title: string;
+  detail?: string;
+  status?: string;
+}
+
+export interface JobPreview {
+  summary: string;
+  risk: "low" | "medium" | "high";
+  steps?: string[];
+  commands?: string[];
+  apps?: string[];
+}
+
+export interface Job {
+  id: string;
+  spaceId: string;
+  requestedBy: string;
+  prompt: string;
+  status: JobStatus;
+  decision: "" | "approve" | "decline";
+  workerName: string;
+  workerDevice: string;
+  runClientId: string | null;
+  title: string;
+  summary: string;
+  output: string;
+  steps: JobStep[];
+  preview: JobPreview | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  endedAt: number | null;
+}
+
+export interface WorkerInfo {
+  accountId: string;
+  userId: string;
+  name: string;
+  device: string;
+  kind: "thisMac" | "privateMac";
+  online: boolean;
+  isYou: boolean;
+  lastSeenAt: number;
+}
+
 export interface EnterpriseActions {
+  decide: (jobId: string, decision: "approve" | "decline") => Promise<void>;
+  cancelJob: (jobId: string) => Promise<void>;
   createSpace: (name: string) => Promise<{ spaceId: string }>;
   joinSpace: (spaceId: string) => Promise<void>;
   leaveSpace: (spaceId: string) => Promise<void>;
@@ -130,6 +180,10 @@ export interface EnterpriseState {
   spaces: Space[];
   /** The open space's chat, oldest first. Empty until a space is selected. */
   messages: SpaceMessage[];
+  /** The open space's jobs for the agent, newest first. */
+  jobs: Job[];
+  /** Macs in the organization that take jobs, and whether they're online right now. */
+  workers: WorkerInfo[];
   actions: EnterpriseActions;
 }
 
@@ -144,7 +198,11 @@ export const ENTERPRISE_OFF: EnterpriseState = {
   domainOrg: null,
   spaces: [],
   messages: [],
+  jobs: [],
+  workers: [],
   actions: {
+    decide: unavailable,
+    cancelJob: unavailable,
     createSpace: unavailable,
     joinSpace: unavailable,
     leaveSpace: unavailable,
@@ -176,7 +234,11 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
   const linked = Boolean(view);
   const spaces = useQuery(anyApi.spaces.list, isAuthenticated && accountId && linked ? { accountId } : "skip") as Space[] | undefined;
   const messages = useQuery(anyApi.chat.messages, isAuthenticated && linked && spaceId ? { spaceId } : "skip") as SpaceMessage[] | undefined;
+  const jobs = useQuery(anyApi.jobs.forSpace, isAuthenticated && linked && spaceId ? { spaceId } : "skip") as Job[] | undefined;
+  const workers = useQuery(anyApi.jobs.workersFor, isAuthenticated && accountId && linked ? { accountId } : "skip") as WorkerInfo[] | undefined;
 
+  const decide = useMutation(anyApi.jobs.decide);
+  const cancelJob = useMutation(anyApi.jobs.cancel);
   const createSpace = useMutation(anyApi.spaces.create);
   const joinSpace = useMutation(anyApi.spaces.join);
   const leaveSpace = useMutation(anyApi.spaces.leave);
@@ -209,6 +271,8 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
     };
     const wrap = <T,>(run: () => Promise<T>): Promise<T> => run().catch((error) => Promise.reject(new Error(friendlyError(error))));
     return {
+      decide: (jobId, decision) => wrap(async () => void (await decide({ jobId, decision }))),
+      cancelJob: (jobId) => wrap(async () => void (await cancelJob({ jobId }))),
       createSpace: (name) => wrap(() => createSpace({ accountId: account(), name }) as Promise<{ spaceId: string }>),
       joinSpace: (spaceId) => wrap(async () => void (await joinSpace({ spaceId }))),
       leaveSpace: (spaceId) => wrap(async () => void (await leaveSpace({ spaceId }))),
@@ -237,7 +301,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
       createCode: (orgId, days, maxUses) => wrap(() => createCode({ orgId, days, maxUses }) as Promise<{ code: string }>),
       revokeCode: (codeId) => wrap(async () => void (await revokeCode({ codeId }))),
     };
-  }, [createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
+  }, [decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
 
   const status: EnterpriseStatus = isLoading
     ? "loading"
@@ -248,8 +312,8 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
         : "ready";
 
   useEffect(() => {
-    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], actions });
-  }, [status, view, memberships, domainOrg, spaces, messages, actions, onChange]);
+    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], actions });
+  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, actions, onChange]);
 
   return null;
 }

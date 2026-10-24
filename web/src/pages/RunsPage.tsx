@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, clockLabel, copyText, formatBytes, relativeTime } from "../lib";
 import type { Run, RunKind, RunStatus } from "../types";
-import { Button, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
+import { Button, Chip, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
 
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
@@ -244,6 +244,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
             {kindName[run.kind] ?? run.kind}
           </span>
           <StatusBadge status={run.status} />
+          {thread?.app === "space" ? <Chip tone="green">space job</Chip> : null}
           <span className="spacer" />
           <div className="run-tools">
             {live ? (

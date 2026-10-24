@@ -18,6 +18,8 @@ final class AppEnvironment: ObservableObject {
     let watch: WatchRecorder
     let glows: CursorGlowController
     let convex: ConvexSyncService
+    /// Enterprise: runs the agent's jobs from the work account's spaces on this Mac.
+    let worker = SpaceWorkerService()
 
     private(set) var summon: SummonController!
     private(set) var draw: DrawingController!
@@ -119,6 +121,16 @@ final class AppEnvironment: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+
+        // Space jobs go through the same pipeline as a typed request, in their own thread, with no card or voice here.
+        worker.runJob = { [weak self] prompt, threadID in await self?.askFromSpace(prompt, threadID: threadID) }
+        worker.approveRun = { [weak self] id in self?.approveRun(id) }
+        worker.cancelRun = { [weak self] id in self?.cancelRun(id) }
+        worker.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        worker.start(store: store)
 
         store.$settings
             .receive(on: RunLoop.main)
@@ -502,6 +514,16 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// A job from a space: a colleague's request, run here. Typed, so nothing is spoken aloud.
+    func askFromSpace(_ text: String, threadID: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        noteSpokenInput(false)
+        await handleRequest(text: trimmed, appName: "mac", bundleID: "", threadID: threadID,
+                            screenshot: nil, selection: nil, attachmentName: "",
+                            documentText: "", source: "space")
+    }
+
     func requestAsk() {
         askPulse += 1
         if !dashboardOpen { openDashboard(.home) }
@@ -732,7 +754,8 @@ final class AppEnvironment: ObservableObject {
     }
 
     private func present(_ card: AnswerCardModel, source: String) {
-        guard source != "routine" else { return }
+        // Routines and space jobs report elsewhere; a card at the cursor would interrupt whoever's at this Mac.
+        guard source != "routine", source != "space" else { return }
         if card.onClose == nil {
             card.onClose = { [weak self] in self?.answerController.close() }
         }

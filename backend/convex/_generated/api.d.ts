@@ -13,6 +13,7 @@ import type * as auth from "../auth.js";
 import type * as chat from "../chat.js";
 import type * as dashboard from "../dashboard.js";
 import type * as http from "../http.js";
+import type * as jobs from "../jobs.js";
 import type * as orgs from "../orgs.js";
 import type * as share from "../share.js";
 import type * as spaces from "../spaces.js";
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   chat: typeof chat;
   dashboard: typeof dashboard;
   http: typeof http;
+  jobs: typeof jobs;
   orgs: typeof orgs;
   share: typeof share;
   spaces: typeof spaces;

@@ -9,6 +9,9 @@ import schema from "../convex/schema";
 const modules = import.meta.glob("../convex/**/*.ts");
 const api = anyApi as any;
 
+// Unread counts compare timestamps, so let the clock move between messages.
+const tick = () => new Promise((resolve) => setTimeout(resolve, 3));
+
 async function setup() {
   const t = convexTest(schema, modules);
   const people: Record<string, { as: ReturnType<typeof t.withIdentity>; accountId: string }> = {};
@@ -92,6 +95,116 @@ describe("organizations", () => {
   });
 });
 
+describe("agent jobs and the worker", () => {
+  const secret = "test-sync-secret";
+  const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
+
+  async function team() {
+    const { t, login } = await setup();
+    process.env.OKIDOKI_SYNC_SECRET = secret;
+    const jay = await login("jay", "jay@acme.com");
+    const sam = await login("sam", "sam@acme.com");
+    await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
+    await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
+    const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Ops" });
+    await sam.as.mutation(api.spaces.join, { spaceId });
+    const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
+    return { t, jay, sam, spaceId, post };
+  }
+
+  test("mentioning @okidoki queues a job with a run card; a member's Mac accepts and reports it", async () => {
+    const { jay, sam, spaceId, post } = await team();
+    const sent = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki compress the launch video for Discord" });
+    expect(sent.jobId).toBeTruthy();
+    const messages = await jay.as.query(api.chat.messages, { spaceId });
+    expect(messages.map((m: any) => [m.author, m.kind])).toEqual([
+      ["system", "system"],
+      ["system", "system"],
+      ["user", "text"],
+      ["agent", "run"],
+    ]);
+    let jobs = await jay.as.query(api.jobs.forSpace, { spaceId });
+    expect(jobs[0].status).toBe("queued");
+    expect(jobs[0].prompt).toBe("compress the launch video for Discord");
+
+    // Sam's Mac polls: it's a member, so it sees the job; the heartbeat registers it as a worker.
+    const polled = await post("/api/worker/poll", { accountId: sam.accountId, device: "Sam's MacBook", kind: "thisMac", enabled: true });
+    expect(polled.ok).toBe(true);
+    expect(polled.jobs.map((j: any) => j.spaceName)).toEqual(["Ops"]);
+    const workers = await jay.as.query(api.jobs.workersFor, { accountId: jay.accountId });
+    expect(workers.map((w: any) => [w.name, w.online])).toEqual([["sam", true]]);
+
+    const accepted = await post("/api/worker/accept", { accountId: sam.accountId, jobId: sent.jobId, device: "Sam's MacBook" });
+    expect(accepted.job.prompt).toBe("compress the launch video for Discord");
+    // second taker loses
+    const again = await post("/api/worker/accept", { accountId: jay.accountId, jobId: sent.jobId, device: "Jay's Mac" });
+    expect(again.job).toBeNull();
+
+    await post("/api/worker/update", { accountId: sam.accountId, jobId: sent.jobId, status: "running", runClientId: "run-1", title: "Compress video", steps: [{ title: "ffmpeg" }] });
+    await post("/api/worker/update", { accountId: sam.accountId, jobId: sent.jobId, status: "done", summary: "Saved launch-discord.mp4 (7.9 MB)", say: "Done: launch-discord.mp4 is 7.9 MB." });
+    jobs = await jay.as.query(api.jobs.forSpace, { spaceId });
+    expect([jobs[0].status, jobs[0].workerName, jobs[0].summary]).toEqual(["done", "sam", "Saved launch-discord.mp4 (7.9 MB)"]);
+    const lines = (await jay.as.query(api.chat.messages, { spaceId })).filter((m: any) => m.author === "agent" && m.kind === "text").map((m: any) => m.text);
+    expect(lines[0]).toMatch(/running on sam's Mac/);
+    expect(lines[1]).toBe("Done: launch-discord.mp4 is 7.9 MB.");
+
+    // a finished job ignores late updates, and a stranger's "update" does nothing
+    await post("/api/worker/update", { accountId: sam.accountId, jobId: sent.jobId, status: "failed" });
+    await post("/api/worker/update", { accountId: jay.accountId, jobId: sent.jobId, status: "failed" });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("done");
+  });
+
+  test("approvals flow through the chat, and the wrong kind of worker is skipped", async () => {
+    const { jay, sam, spaceId, post } = await team();
+    const { jobId } = await sam.as.mutation(api.chat.send, { spaceId, text: "hey @okidoki, clean up my mac" });
+    await post("/api/worker/accept", { accountId: jay.accountId, jobId, device: "Jay's Mac" });
+    await post("/api/worker/update", { accountId: jay.accountId, jobId, status: "waiting", preview: { summary: "Empty caches", risk: "medium" } });
+    await expect(sam.as.mutation(api.jobs.decide, { jobId, decision: "maybe" })).rejects.toThrow(/unknown decision/);
+    await sam.as.mutation(api.jobs.decide, { jobId, decision: "approve" });
+    const polled = await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "thisMac", enabled: true });
+    expect(polled.held).toEqual([{ id: jobId, status: "waiting", decision: "approve", runClientId: null }]);
+    // a second wait asks again
+    await post("/api/worker/update", { accountId: jay.accountId, jobId, status: "running" });
+    await post("/api/worker/update", { accountId: jay.accountId, jobId, status: "waiting" });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].decision).toBe("");
+
+    // a private-Mac space only hands jobs to private-Mac workers
+    await jay.as.mutation(api.spaces.update, { spaceId, workerPolicy: "privateMac" });
+    await sam.as.mutation(api.chat.send, { spaceId, text: "@okidoki export the deck as PDF" });
+    const plain = await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "thisMac", enabled: true });
+    expect(plain.jobs).toEqual([]);
+    const vm = await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "privateMac", enabled: true });
+    expect(vm.jobs.map((j: any) => j.prompt)).toEqual(["export the deck as PDF"]);
+
+    // a worker that switched itself off drops out of the online list and gets no jobs
+    const off = await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "thisMac", enabled: false });
+    expect(off.jobs).toEqual([]);
+    expect((await sam.as.query(api.jobs.workersFor, { accountId: sam.accountId })).find((w: any) => w.name === "jay").online).toBe(false);
+
+    // an outsider's Mac is refused at the door
+    const stranger = await post("/api/worker/poll", { accountId: "acct-nobody", device: "x", kind: "thisMac", enabled: true });
+    expect(stranger.ok).toBe(false);
+    const unauthorized = await (await import("convex-test")).convexTest(schema, modules).fetch("/api/worker/poll", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(unauthorized.status).toBe(401);
+  });
+
+  test("cancelling a queued job ends it; cancelling a held one tells the worker to stop", async () => {
+    const { jay, sam, spaceId, post } = await team();
+    const { jobId } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki zip the reports folder" });
+    await sam.as.mutation(api.jobs.cancel, { jobId });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("cancelled");
+    expect((await post("/api/worker/poll", { accountId: sam.accountId, device: "m", kind: "thisMac", enabled: true })).jobs).toEqual([]);
+
+    const { jobId: second } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki zip it again" });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId: second, device: "m" });
+    await jay.as.mutation(api.jobs.cancel, { jobId: second });
+    const polled = await post("/api/worker/poll", { accountId: sam.accountId, device: "m", kind: "thisMac", enabled: true });
+    expect(polled.held[0]).toMatchObject({ id: second, status: "accepted", decision: "decline" });
+  });
+});
+
 describe("spaces and chat", () => {
   test("members of the organization see a space, but only those who joined read its chat", async () => {
     const { login } = await setup();
@@ -111,6 +224,7 @@ describe("spaces and chat", () => {
     expect(await sam.as.query(api.chat.messages, { spaceId })).toEqual([]);
     await expect(sam.as.mutation(api.chat.send, { spaceId, text: "hi" })).rejects.toThrow(/join the space/);
 
+    await tick();
     await sam.as.mutation(api.spaces.join, { spaceId });
     const texts = (await sam.as.query(api.chat.messages, { spaceId })).map((m: any) => [m.author, m.text]);
     expect(texts).toEqual([
@@ -118,6 +232,7 @@ describe("spaces and chat", () => {
       ["user", "Welcome to Finance"],
       ["system", "sam joined"],
     ]);
+    await tick();
     await sam.as.mutation(api.chat.send, { spaceId, text: "Thanks!" });
 
     // unread counts follow lastReadAt; sending marks your own chat read

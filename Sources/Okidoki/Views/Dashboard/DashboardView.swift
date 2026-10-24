@@ -104,6 +104,17 @@ struct DashboardPayload: Encodable {
     var live: DashboardLivePayload?
     /// okidoki's private Mac: whether this Mac can run one, and where setup or the VM is right now.
     var privateMac: DashboardPrivateMacPayload
+    /// Enterprise: this Mac as a worker for its spaces.
+    var worker: DashboardWorkerPayload
+}
+
+struct DashboardWorkerPayload: Encodable {
+    var status: String
+    var activeJob: String?
+    var activeSpace: String?
+    var lastPollAt: Date?
+    var jobsDone: Int
+    var device: String
 }
 
 struct DashboardPrivateMacPayload: Encodable {
@@ -409,7 +420,14 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 cpuCount: env.privateMac.cpuCount,
                 memoryGB: Int(env.privateMac.memoryBytes / (1024 * 1024 * 1024)),
                 bytesOnDisk: env.privateMac.isSetUp || env.privateMac.restoreImageDownloaded ? PrivateMacSpec.bytesOnDisk() : 0,
-                downloadGB: Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000))
+                downloadGB: Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)),
+            worker: DashboardWorkerPayload(
+                status: env.worker.status,
+                activeJob: env.worker.activeJob?.prompt,
+                activeSpace: env.worker.activeJob?.spaceName,
+                lastPollAt: env.worker.lastPollAt,
+                jobsDone: env.worker.jobsDone,
+                device: Host.current().localizedName ?? "mac")
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

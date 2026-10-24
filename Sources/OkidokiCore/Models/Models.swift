@@ -128,6 +128,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var drivePace: String = "calm"
     /// Where computer-use runs happen: "mac" is this Mac, "vm" is okidoki's private Mac (a macOS VM).
     public var computerTarget: String = "mac"
+    /// Enterprise: this Mac takes jobs the agent is given in the work account's spaces.
+    public var workerEnabled: Bool = false
 
     /// Voice during lessons, remembered separately from the app-wide voice switch.
     public var teachVoice: Bool = true
@@ -149,7 +151,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
         case convexSiteURL, syncEnabled, lastSyncAt, onboardingComplete, tourComplete, showedWelcome
         case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace, computerTarget
-        case teachVoice, autoConnectAgents, screenContext
+        case teachVoice, autoConnectAgents, screenContext, workerEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -203,6 +205,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
         drivePace = string(.drivePace, "calm")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
+        workerEnabled = bool(.workerEnabled, false)
         teachVoice = bool(.teachVoice, true)
         screenContext = bool(.screenContext, true)
     }
