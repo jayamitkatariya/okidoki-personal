@@ -223,9 +223,10 @@ export const update = mutation({
 export const remove = mutation({
   args: { spaceId: v.id("spaces") },
   handler: async (ctx, { spaceId }) => {
-    const access = await requireSpaceMember(ctx, spaceId);
+    const access = await spaceAccess(ctx, spaceId);
+    if (!access) throw new Error("you're not in that organization");
     const orgRole = await activeMembership(ctx, access.space.orgId);
-    const mayDelete = access.member.role === "owner" || orgRole?.role === "owner" || orgRole?.role === "admin";
+    const mayDelete = access.member?.role === "owner" || orgRole?.role === "owner" || orgRole?.role === "admin";
     if (!mayDelete) throw new Error("only the space's owner or an organization admin can delete it");
     const members = await ctx.db
       .query("spaceMembers")

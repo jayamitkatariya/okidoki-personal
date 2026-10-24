@@ -8,6 +8,7 @@
     "deploy": "convex deploy",
     "codegen": "convex codegen",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "setup-auth": "node scripts/setup-auth.mjs"
   },
   "dependencies": {
@@ -16,7 +17,10 @@
     "convex": "^1.48.0"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^26.6.5",
-    "typescript": "~5.8.2"
+    "convex-test": "^0.0.65",
+    "typescript": "~5.8.2",
+    "vitest": "^5.0.5"
   }
 }
