@@ -11,7 +11,7 @@
     "setup-auth": "node scripts/setup-auth.mjs"
   },
   "dependencies": {
-    "@auth/core": "0.41.1",
+    "@auth/core": "0.41.3",
     "@convex-dev/auth": "0.0.96",
     "convex": "^1.48.0"
   },
