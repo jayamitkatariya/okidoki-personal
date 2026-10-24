@@ -152,7 +152,12 @@ public final class SpaceWorkerService: ObservableObject {
     private func accept(_ job: Job) async {
         guard let store else { return }
         guard let reply = await post("/api/worker/accept", ["accountId": store.currentAccountID, "jobId": job.id, "device": device]),
-              reply["job"] is [String: Any] else { return }
+              let accepted = reply["job"] as? [String: Any] else { return }
+        // The space's shared skills come with the job, so "replay …" finds them even on a Mac that never recorded them.
+        for shared in accepted["sharedSkills"] as? [[String: Any]] ?? [] {
+            guard let id = shared["id"] as? String, let name = shared["name"] as? String, let steps = shared["steps"] else { continue }
+            store.importSkill(sharedID: id, name: name, summary: shared["summary"] as? String ?? "", stepsJSON: steps, version: shared["version"] as? Int ?? 1)
+        }
         let thread = store.createThread(title: "\(job.spaceName) · \(job.prompt.prefix(48))", app: "space", topic: job.spaceId)
         tracked = Tracked(job: job, threadID: thread.id)
         activeJob = job

@@ -337,6 +337,29 @@ public final class OkidokiStore: ObservableObject {
         return skill
     }
 
+    /// A skill shared by a colleague, brought onto this Mac for the current account. Steps arrive as
+    /// JSON from the dashboard or the worker; a skill with the same shared id is replaced, not duplicated.
+    /// Shared recordings carry no screen pictures, so replay works from labels and the brain's look.
+    @discardableResult
+    public func importSkill(sharedID: String, name: String, summary: String, stepsJSON: Any, version: Int) -> Skill? {
+        guard JSONSerialization.isValidJSONObject(stepsJSON),
+              let data = try? JSONSerialization.data(withJSONObject: stepsJSON),
+              let steps = try? JSONDecoder().decode([SkillStep].self, from: data), !steps.isEmpty else { return nil }
+        let source = "shared:\(sharedID)"
+        let cleaned = steps.map { step -> SkillStep in
+            var step = step
+            step.frameX = nil; step.frameY = nil; step.frameW = nil; step.frameH = nil
+            return step
+        }
+        if let index = skills.firstIndex(where: { $0.source == source && $0.accountID == currentAccountID }) {
+            skills[index].name = name
+            skills[index].summary = summary
+            skills[index].steps = cleaned
+            return skills[index]
+        }
+        return createSkill(name: name, summary: summary.isEmpty ? "shared by a colleague · v\(version)" : summary, steps: cleaned, source: source)
+    }
+
     public func deleteSkill(_ id: String) {
         if let skill = skills.first(where: { $0.id == id }) { SkillFrames.remove(skill: skill) }
         skills.removeAll { $0.id == id }

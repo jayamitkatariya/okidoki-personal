@@ -30,6 +30,29 @@ final class SpaceWorkerTests: XCTestCase {
     }
 
     @MainActor
+    func testImportingASharedSkillReplacesTheSameOneAndDropsScreenPictures() {
+        let store = OkidokiStore(seedDemo: false)
+        let steps: [[String: Any]] = [
+            ["id": "s1", "text": "Open Numbers", "app": "Numbers", "action": "click", "label": "Numbers", "frameX": 1, "frameY": 2, "frameW": 3, "frameH": 4],
+            ["id": "s2", "text": "Save", "app": "Numbers", "action": "key", "input": "cmd+s"],
+        ]
+        let first = store.importSkill(sharedID: "shared-1", name: "Invoice flow", summary: "", stepsJSON: steps, version: 1)
+        XCTAssertEqual(first?.source, "shared:shared-1")
+        XCTAssertEqual(first?.summary, "shared by a colleague · v1")
+        XCTAssertNil(first?.steps.first?.frameX)
+        XCTAssertEqual(first?.steps.last?.input, "cmd+s")
+
+        let second = store.importSkill(sharedID: "shared-1", name: "Invoice flow v2", summary: "Bills a client", stepsJSON: [steps[1]], version: 2)
+        XCTAssertEqual(second?.id, first?.id)
+        XCTAssertEqual(store.skills.filter { $0.source == "shared:shared-1" }.count, 1)
+        XCTAssertEqual(second?.name, "Invoice flow v2")
+        XCTAssertEqual(second?.steps.count, 1)
+
+        XCTAssertNil(store.importSkill(sharedID: "shared-2", name: "Empty", summary: "", stepsJSON: [], version: 1))
+        XCTAssertNil(store.importSkill(sharedID: "shared-3", name: "Broken", summary: "", stepsJSON: "not steps", version: 1))
+    }
+
+    @MainActor
     func testWorkerStaysOffWithoutSyncOrAWorkAccount() async {
         let store = OkidokiStore(seedDemo: false)
         let worker = SpaceWorkerService()

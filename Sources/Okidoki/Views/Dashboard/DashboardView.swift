@@ -528,6 +528,15 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String { env.store.deleteRoutine(id); env.store.saveNow() }
         case "deleteSkill":
             if let id = payload["id"] as? String { env.store.deleteSkill(id); env.store.saveNow() }
+        case "importSkill":
+            // A colleague's shared skill, pulled onto this Mac; optionally replayed straight away.
+            if let sharedID = payload["sharedId"] as? String, let name = payload["name"] as? String, let steps = payload["steps"] {
+                if let skill = env.store.importSkill(sharedID: sharedID, name: name, summary: payload["summary"] as? String ?? "",
+                                                     stepsJSON: steps, version: payload["version"] as? Int ?? 1) {
+                    env.store.saveNow()
+                    if payload["replay"] as? Bool == true { env.replaySkill(skill, times: payload["times"] as? Int ?? 1) }
+                }
+            }
         case "addRoutine":
             let name = payload["name"] as? String ?? "routine"
             let prompt = payload["prompt"] as? String ?? ""

@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { skillsForWorker } from "./sharedSkills";
 import { peopleIn, requireSpaceMember, spaceAccess } from "./spaces";
 
 // Jobs for the agent in a space. The panel creates them from chat (`@okidoki …`) and answers
@@ -262,7 +263,9 @@ export const accept = internalMutation({
     const now = Date.now();
     await ctx.db.patch(job._id, { status: "accepted", workerAccountId: accountId, workerDevice: device.slice(0, 120), workerName, startedAt: now, updatedAt: now });
     await postAgentLine(ctx, job, `On it — running on ${workerName}'s Mac${device ? ` (${device.slice(0, 40)})` : ""}.`);
-    return { id: job._id, spaceId: job.spaceId, prompt: job.prompt };
+    // The space's shared skills ride along, so "replay the expense report" works on a Mac that never recorded it.
+    const sharedSkills = await skillsForWorker(ctx, job.orgId, job.spaceId);
+    return { id: job._id, spaceId: job.spaceId, prompt: job.prompt, sharedSkills };
   },
 });
 

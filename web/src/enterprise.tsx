@@ -143,7 +143,32 @@ export interface WorkerInfo {
   lastSeenAt: number;
 }
 
+export interface SharedSkill {
+  id: string;
+  spaceId: string | null;
+  spaceName: string;
+  sourceSkillId: string;
+  name: string;
+  summary: string;
+  steps: unknown[];
+  stepCount: number;
+  requires: string[];
+  params: string[];
+  publishedBy: string;
+  isMine: boolean;
+  canUnpublish: boolean;
+  version: number;
+  versions: number;
+  runCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface EnterpriseActions {
+  publishSkill: (spaceId: string | null, skill: { id: string; name: string; summary: string; steps: unknown[] }) => Promise<{ id: string; version: number }>;
+  unpublishSkill: (sharedId: string) => Promise<void>;
+  rollbackSkill: (sharedId: string) => Promise<void>;
+  recordSkillRun: (sharedId: string) => Promise<void>;
   decide: (jobId: string, decision: "approve" | "decline") => Promise<void>;
   cancelJob: (jobId: string) => Promise<void>;
   createSpace: (name: string) => Promise<{ spaceId: string }>;
@@ -184,6 +209,8 @@ export interface EnterpriseState {
   jobs: Job[];
   /** Macs in the organization that take jobs, and whether they're online right now. */
   workers: WorkerInfo[];
+  /** Skills published to the organization or its spaces. */
+  sharedSkills: SharedSkill[];
   actions: EnterpriseActions;
 }
 
@@ -200,7 +227,12 @@ export const ENTERPRISE_OFF: EnterpriseState = {
   messages: [],
   jobs: [],
   workers: [],
+  sharedSkills: [],
   actions: {
+    publishSkill: unavailable,
+    unpublishSkill: unavailable,
+    rollbackSkill: unavailable,
+    recordSkillRun: unavailable,
     decide: unavailable,
     cancelJob: unavailable,
     createSpace: unavailable,
@@ -237,6 +269,12 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
   const jobs = useQuery(anyApi.jobs.forSpace, isAuthenticated && linked && spaceId ? { spaceId } : "skip") as Job[] | undefined;
   const workers = useQuery(anyApi.jobs.workersFor, isAuthenticated && accountId && linked ? { accountId } : "skip") as WorkerInfo[] | undefined;
 
+  const sharedSkills = useQuery(anyApi.sharedSkills.list, isAuthenticated && accountId && linked ? { accountId } : "skip") as SharedSkill[] | undefined;
+
+  const publishSkill = useMutation(anyApi.sharedSkills.publish);
+  const unpublishSkill = useMutation(anyApi.sharedSkills.unpublish);
+  const rollbackSkill = useMutation(anyApi.sharedSkills.rollback);
+  const recordSkillRun = useMutation(anyApi.sharedSkills.recordRun);
   const decide = useMutation(anyApi.jobs.decide);
   const cancelJob = useMutation(anyApi.jobs.cancel);
   const createSpace = useMutation(anyApi.spaces.create);
@@ -271,6 +309,10 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
     };
     const wrap = <T,>(run: () => Promise<T>): Promise<T> => run().catch((error) => Promise.reject(new Error(friendlyError(error))));
     return {
+      publishSkill: (spaceId, skill) => wrap(() => publishSkill({ accountId: account(), spaceId, skill }) as Promise<{ id: string; version: number }>),
+      unpublishSkill: (sharedId) => wrap(async () => void (await unpublishSkill({ sharedId }))),
+      rollbackSkill: (sharedId) => wrap(async () => void (await rollbackSkill({ sharedId }))),
+      recordSkillRun: (sharedId) => wrap(async () => void (await recordSkillRun({ sharedId }))),
       decide: (jobId, decision) => wrap(async () => void (await decide({ jobId, decision }))),
       cancelJob: (jobId) => wrap(async () => void (await cancelJob({ jobId }))),
       createSpace: (name) => wrap(() => createSpace({ accountId: account(), name }) as Promise<{ spaceId: string }>),
@@ -301,7 +343,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
       createCode: (orgId, days, maxUses) => wrap(() => createCode({ orgId, days, maxUses }) as Promise<{ code: string }>),
       revokeCode: (codeId) => wrap(async () => void (await revokeCode({ codeId }))),
     };
-  }, [decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
+  }, [publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
 
   const status: EnterpriseStatus = isLoading
     ? "loading"
@@ -312,8 +354,8 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
         : "ready";
 
   useEffect(() => {
-    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], actions });
-  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, actions, onChange]);
+    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], actions });
+  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, sharedSkills, actions, onChange]);
 
   return null;
 }

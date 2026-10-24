@@ -259,6 +259,29 @@ export default defineSchema({
     .index("by_account", ["accountClientId"])
     .index("by_org", ["orgId"]),
 
+  // A skill published to a space or to the whole organization. Members pull it onto their Macs to replay it.
+  spaceSkills: defineTable({
+    orgId: v.id("organizations"),
+    spaceId: v.union(v.id("spaces"), v.null()),
+    // The Mac skill it was published from, so republishing bumps the version instead of duplicating.
+    sourceSkillId: v.string(),
+    name: v.string(),
+    summary: v.string(),
+    steps: v.any(),
+    // Apps the recording touched, so a colleague sees what they need before replaying.
+    requires: v.array(v.string()),
+    publishedBy: v.id("users"),
+    version: v.number(),
+    runCount: v.number(),
+    // Earlier versions' steps, newest first, capped.
+    history: v.any(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_space", ["spaceId"])
+    .index("by_source", ["sourceSkillId"]),
+
   joinCodes: defineTable({
     code: v.string(),
     orgId: v.id("organizations"),

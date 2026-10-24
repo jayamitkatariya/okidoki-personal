@@ -205,6 +205,69 @@ describe("agent jobs and the worker", () => {
   });
 });
 
+describe("shared skills", () => {
+  const steps = [
+    { id: "s1", text: "Open Numbers", app: "Numbers", action: "click", label: "Numbers" },
+    { id: "s2", text: "Type the client", app: "Numbers", action: "type", input: "{{client name}}" },
+    { id: "s3", text: "Save", app: "Numbers", action: "key", input: "cmd+s" },
+    { id: "s4", text: "Switch to Mail", app: "Mail", action: "switch" },
+  ];
+
+  async function org() {
+    const { t, login } = await setup();
+    process.env.OKIDOKI_SYNC_SECRET = "s";
+    const jay = await login("jay", "jay@acme.com");
+    const sam = await login("sam", "sam@acme.com");
+    await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
+    await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
+    const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Finance" });
+    const post = (path: string, body: unknown) =>
+      t.fetch(path, { method: "POST", headers: { authorization: "Bearer s", "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    return { t, jay, sam, spaceId, post };
+  }
+
+  test("publishing lists the apps it needs and its parameters; republishing bumps the version and keeps history", async () => {
+    const { jay, sam, spaceId } = await org();
+    const first = await sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId: null, skill: { id: "skill-1", name: "Invoice flow", summary: "Bills a client", steps } });
+    expect(first.version).toBe(1);
+    let shared = await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId });
+    expect(shared).toHaveLength(1);
+    expect(shared[0]).toMatchObject({ name: "Invoice flow", publishedBy: "sam", requires: ["Mail", "Numbers"], params: ["client name"], stepCount: 4, spaceName: "", isMine: false, canUnpublish: true });
+
+    const second = await sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId: null, skill: { id: "skill-1", name: "Invoice flow v2", summary: "", steps: steps.slice(0, 2) } });
+    expect(second.version).toBe(2);
+    shared = await sam.as.query(api.sharedSkills.list, { accountId: sam.accountId });
+    expect(shared).toHaveLength(1);
+    expect(shared[0]).toMatchObject({ name: "Invoice flow v2", version: 2, versions: 2, stepCount: 2, isMine: true });
+
+    await sam.as.mutation(api.sharedSkills.rollback, { sharedId: shared[0].id });
+    shared = await sam.as.query(api.sharedSkills.list, { accountId: sam.accountId });
+    expect(shared[0]).toMatchObject({ version: 3, stepCount: 4, requires: ["Mail", "Numbers"] });
+  });
+
+  test("space skills need membership; a plain member can't unpublish someone else's, an admin can", async () => {
+    const { jay, sam, spaceId, post } = await org();
+    await expect(sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId, skill: { id: "skill-2", name: "Close the books", summary: "", steps } })).rejects.toThrow(/join the space/);
+    await sam.as.mutation(api.spaces.join, { spaceId });
+    await sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId, skill: { id: "skill-2", name: "Close the books", summary: "", steps } });
+    const listed = await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId });
+    expect(listed[0]).toMatchObject({ spaceName: "Finance", canUnpublish: true });
+    await jay.as.mutation(api.sharedSkills.recordRun, { sharedId: listed[0].id });
+    expect((await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId }))[0].runCount).toBe(1);
+
+    // the worker gets the space's skills along with its job
+    const { jobId } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki replay close the books" });
+    const accepted = await post("/api/worker/accept", { accountId: sam.accountId, jobId, device: "m" });
+    expect(accepted.job.sharedSkills.map((s: any) => [s.name, s.steps.length, s.version])).toEqual([["Close the books", 4, 1]]);
+
+    await expect(sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId, skill: { id: "skill-2", name: "x", summary: "", steps: [] } })).rejects.toThrow(/no steps/);
+    await jay.as.mutation(api.sharedSkills.unpublish, { sharedId: listed[0].id });
+    expect(await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId })).toEqual([]);
+  });
+});
+
 describe("spaces and chat", () => {
   test("members of the organization see a space, but only those who joined read its chat", async () => {
     const { login } = await setup();

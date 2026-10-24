@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useDashboard } from "../store";
 import { clamp, cx, futureTime, relativeTime, scheduleLabel } from "../lib";
 import type { Cadence, Routine, Skill, SkillStep, Watching } from "../types";
-import { Button, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
+import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -33,9 +33,13 @@ function elapsedLabel(startedAt: string | null | undefined, now: number): string
 }
 
 export function SkillsPage() {
-  const { state, invoke, notify } = useDashboard();
+  const { state, account, enterprise, invoke, notify } = useDashboard();
   const watching = state.watching ?? IDLE_WATCHING;
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+
+  // share (work accounts linked to an organization)
+  const canShare = account.kind === "work" && enterprise.status === "ready" && Boolean(enterprise.view);
+  const [sharing, setSharing] = useState<Skill | null>(null);
 
   // teach
   const [teachOpen, setTeachOpen] = useState(false);
@@ -268,6 +272,7 @@ export function SkillsPage() {
                       }}
                     />
                     <IconButton icon="clock" label="Replay on a schedule" size={14} onClick={() => scheduleSkill(skill)} />
+                    {canShare ? <IconButton icon="share" label="Share with your organization" size={14} onClick={() => setSharing(skill)} /> : null}
                     <IconButton
                       icon="trash"
                       label="Delete skill"
@@ -372,6 +377,8 @@ export function SkillsPage() {
           </div>
         ) : null}
       </section>
+
+      {canShare ? <SharedSkillsSection replaying={watching.recording || watching.replaying} setConfirm={setConfirm} /> : null}
 
       <section className="skills-section routines-section">
         <div className="section-head">
@@ -648,7 +655,197 @@ export function SkillsPage() {
           </Button>
         </footer>
       </Modal>
+      {canShare ? <ShareSkillModal skill={sharing} onClose={() => setSharing(null)} /> : null}
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
+  );
+}
+
+// Publish one of my skills to the whole organization or to one of my spaces.
+function ShareSkillModal({ skill, onClose }: { skill: Skill | null; onClose: () => void }) {
+  const { enterprise, notify } = useDashboard();
+  const joined = enterprise.spaces.filter((space) => space.joined);
+  const [target, setTarget] = useState<string>("org");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (skill) setTarget("org");
+  }, [skill]);
+  const already = skill ? enterprise.sharedSkills.find((shared) => shared.sourceSkillId === skill.id && (shared.spaceId ?? "org") === target) : null;
+
+  const publish = async () => {
+    if (!skill) return;
+    setBusy(true);
+    try {
+      const result = await enterprise.actions.publishSkill(target === "org" ? null : target, { id: skill.id, name: skill.name, summary: skill.summary, steps: skill.steps });
+      notify(result.version > 1 ? `Updated to v${result.version}` : "Shared", `${skill.name} · ${target === "org" ? enterprise.view?.org.name ?? "organization" : joined.find((space) => space.id === target)?.name ?? "space"}`);
+      onClose();
+    } catch (error) {
+      notify("That didn't work", error instanceof Error ? error.message : String(error), "warning");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={Boolean(skill)} onClose={onClose} title="Share this skill" subtitle="Colleagues pull it onto their own Macs and replay it there. Typed secrets were never recorded." width={460}>
+      {skill ? (
+        <div className="form-stack">
+          <label className="form-label">With</label>
+          <div className="share-targets">
+            <button className={cx("share-target", target === "org" && "is-selected")} onClick={() => setTarget("org")}>
+              <PixelIcon name="building" size={15} />
+              <span>
+                <strong>Everyone at {enterprise.view?.org.name ?? "the organization"}</strong>
+                <em>Every member sees it under Skills</em>
+              </span>
+            </button>
+            {joined.map((space) => (
+              <button key={space.id} className={cx("share-target", target === space.id && "is-selected")} onClick={() => setTarget(space.id)}>
+                <PixelIcon name="chat" size={15} />
+                <span>
+                  <strong>{space.name}</strong>
+                  <em>
+                    {space.members.length} {space.members.length === 1 ? "member" : "members"}
+                  </em>
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="form-hint">
+            {skill.steps.length} {skill.steps.length === 1 ? "step" : "steps"}
+            {already ? ` · already shared here as v${already.version}; this publishes v${already.version + 1}` : ""}
+          </p>
+        </div>
+      ) : null}
+      <footer className="modal-actions">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={busy || !skill} onClick={() => void publish()}>
+          {already ? "Publish update" : "Share"}
+        </Button>
+      </footer>
+    </Modal>
+  );
+}
+
+// Skills colleagues have shared. Replay pulls the skill onto this Mac first; it stays under "Learned skills" after.
+function SharedSkillsSection({ replaying, setConfirm }: { replaying: boolean; setConfirm: (request: ConfirmRequest) => void }) {
+  const { state, enterprise, invoke, notify, native } = useDashboard();
+  const [scope, setScope] = useState<"all" | "org" | "space">("all");
+  const shared = enterprise.sharedSkills.filter((skill) => (scope === "all" ? true : scope === "org" ? !skill.spaceId : Boolean(skill.spaceId)));
+  const orgName = enterprise.view?.org.name ?? "your organization";
+  const localFor = (sharedId: string) => state.skills.find((skill) => skill.source === `shared:${sharedId}`);
+
+  const pull = (skill: (typeof shared)[number], replay: boolean) => {
+    if (!native) {
+      notify("Do this on your Mac", "Shared skills replay on the Mac that has okidoki.", "info");
+      return;
+    }
+    invoke("importSkill", { sharedId: skill.id, name: skill.name, summary: skill.summary, steps: skill.steps, version: skill.version, replay });
+    if (replay) {
+      void enterprise.actions.recordSkillRun(skill.id).catch(() => {});
+      notify("Ready to replay", "Approve the preview to run it");
+    } else {
+      notify("Added to your skills", skill.name);
+    }
+  };
+
+  const totalRuns = enterprise.sharedSkills.reduce((sum, skill) => sum + skill.runCount, 0);
+
+  return (
+    <section className="skills-section shared-section">
+      <div className="section-head">
+        <h2 className="skills-heading">Shared at {orgName}</h2>
+        {enterprise.sharedSkills.length ? <span className="tile-count">{enterprise.sharedSkills.length}</span> : null}
+        <span className="spacer" />
+        {totalRuns ? (
+          <span className="section-note">
+            {totalRuns.toLocaleString("en-US")} {totalRuns === 1 ? "replay" : "replays"} across the team
+          </span>
+        ) : null}
+        <Segmented
+          compact
+          options={[
+            { value: "all", label: "All" },
+            { value: "org", label: "Org-wide" },
+            { value: "space", label: "By space" },
+          ]}
+          value={scope}
+          onChange={setScope}
+        />
+      </div>
+      {shared.length ? (
+        <div className="skills-grid">
+          {shared.map((skill) => {
+            const local = localFor(skill.id);
+            const missing = skill.requires.filter((app) => !state.tools.some((tool) => tool.name.toLowerCase() === app.toLowerCase()));
+            return (
+              <article className="tile skill-tile shared-tile reveal" key={skill.id}>
+                <header className="skill-head">
+                  <span className="kind-icon">
+                    <PixelIcon name={skill.spaceId ? "chat" : "building"} size={16} />
+                  </span>
+                  <div className="skill-title">
+                    <h3>{skill.name}</h3>
+                    <span>
+                      {skill.stepCount} {skill.stepCount === 1 ? "step" : "steps"} · v{skill.version} · by {skill.isMine ? "you" : skill.publishedBy} · {skill.spaceId ? skill.spaceName : "everyone"} · {skill.runCount.toLocaleString("en-US")}{" "}
+                      {skill.runCount === 1 ? "replay" : "replays"}
+                    </span>
+                  </div>
+                  <div className="skill-tools">
+                    {skill.canUnpublish && skill.versions > 1 ? (
+                      <IconButton icon="refresh" label="Roll back to the previous version" size={14} onClick={() => void enterprise.actions.rollbackSkill(skill.id).then(() => notify("Rolled back", skill.name)).catch((error: Error) => notify("That didn't work", error.message, "warning"))} />
+                    ) : null}
+                    {skill.canUnpublish ? (
+                      <IconButton
+                        icon="trash"
+                        label="Unshare"
+                        size={14}
+                        onClick={() =>
+                          setConfirm({
+                            title: "Stop sharing this skill?",
+                            detail: `“${skill.name}” disappears for everyone at ${orgName}. Copies already pulled onto Macs stay there.`,
+                            action: "Unshare",
+                            onConfirm: () => void enterprise.actions.unpublishSkill(skill.id).then(() => notify("Unshared", skill.name, "info")).catch((error: Error) => notify("That didn't work", error.message, "warning")),
+                          })
+                        }
+                      />
+                    ) : null}
+                  </div>
+                </header>
+                {skill.summary ? <p className="skill-summary">{skill.summary}</p> : null}
+                <div className="shared-needs">
+                  {skill.requires.map((app) => (
+                    <Chip key={app} tone={missing.includes(app) ? "amber" : "green"}>
+                      {app}
+                    </Chip>
+                  ))}
+                  {skill.params.map((param) => (
+                    <Chip key={`p-${param}`} tone="blue">
+                      {`{{${param}}}`}
+                    </Chip>
+                  ))}
+                </div>
+                <footer className="skill-actions">
+                  <Button variant="primary" size="sm" icon="play" disabled={replaying} onClick={() => pull(skill, true)}>
+                    Replay here
+                  </Button>
+                  <Button variant="secondary" size="sm" icon="download" onClick={() => pull(skill, false)}>
+                    {local ? "Update my copy" : "Add to my skills"}
+                  </Button>
+                </footer>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="tile skills-empty">
+          <p className="recording-hint">
+            {enterprise.sharedSkills.length ? "Nothing in this view." : `Nobody at ${orgName} has shared a skill yet. Share one of yours with the share button on its card.`}
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
