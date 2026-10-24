@@ -256,7 +256,9 @@ final class OverlayWindow {
                 // on top — a heavy tint turns the whole panel into a flat dark sheet.
                 glass.tintColor = NSColor(srgbRed: 0.05, green: 0.06, blue: 0.06, alpha: 0.34)
                 if #available(macOS 27.0, *) {
-                    glass.effectIsInteractive = true
+                    // Keep the container stable during text selections and drags.
+                    // Individual controls already supply their own press feedback.
+                    glass.effectIsInteractive = false
                 }
                 glass.autoresizingMask = [.width, .height]
                 backdrop = glass
