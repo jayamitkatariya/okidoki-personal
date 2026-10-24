@@ -78,6 +78,9 @@ final class BrainSidecar: ObservableObject {
         env["PATH"] = ShellRunner.shared.pathEnvironment + ":" + (env["PATH"] ?? "")
         env["OKIDOKI_BRAIN_TOKEN"] = BrainConnection.token
         if let askpass = AskPass.path { env["OKIDOKI_ASKPASS"] = askpass }
+        for (name, value) in ServiceSecrets.brainEnvironment where !value.isEmpty {
+            env[name] = value
+        }
         process.environment = env
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -474,6 +477,7 @@ final class BrainClient {
                   screen box: OkidokiCore.ScreenBox,
                   imageWidth: Double, imageHeight: Double, history: [[String: Any]],
                   controls: [[String: Any]] = [],
+                  scripting: String = "",
                   screenshotPNG: Data?, previousPNG: Data? = nil,
                   zoom: ComputerUseService.Zoom? = nil,
                   canClick: Bool = true, canSee: Bool = true,
@@ -488,6 +492,7 @@ final class BrainClient {
             "imageHeight": imageHeight,
             "history": history,
             "controls": controls,
+            "scripting": scripting,
             "canClick": canClick,
             "canSee": canSee,
             "settings": ["claudeModel": model],
@@ -568,6 +573,60 @@ final class BrainClient {
         }
     }
 
+    struct ConceptEnvelope: Decodable {
+        var lesson: ConceptLesson?
+        var error: String?
+        var warnings: [String]?
+    }
+
+    struct ConceptFollowEnvelope: Decodable {
+        var follow: ConceptFollowUp?
+        var error: String?
+    }
+
+    /// A narrated 2D/3D lesson for the stage. The sidecar also fetches real molecule data and a photo card.
+    func teachConcept(topic: String, context: String, pageTitle: String?, pageURL: String?,
+                      screenshotBase64: String?, imageWidth: Double, imageHeight: Double,
+                      language: String?, model: String) async -> (lesson: ConceptLesson?, error: String?) {
+        var body: [String: Any] = ["topic": topic, "context": context, "imageWidth": imageWidth, "imageHeight": imageHeight, "model": model]
+        if let pageTitle { body["pageTitle"] = pageTitle }
+        if let pageURL { body["pageURL"] = pageURL }
+        if let screenshotBase64 { body["screenshotBase64"] = screenshotBase64 }
+        if let language { body["language"] = language }
+        guard let data = await postJSON("teach/concept", body: body, timeout: 120) else { return (nil, "the brain didn't answer") }
+        guard let envelope = try? JSONDecoder().decode(ConceptEnvelope.self, from: data) else { return (nil, "bad reply") }
+        return (envelope.lesson, envelope.error)
+    }
+
+    func teachConceptFollow(topic: String, question: String, partID: String?, partName: String?,
+                            sceneSummary: String, language: String?, model: String) async -> ConceptFollowUp? {
+        var body: [String: Any] = ["topic": topic, "question": question, "sceneSummary": sceneSummary, "model": model]
+        if let partID { body["partId"] = partID }
+        if let partName { body["partName"] = partName }
+        if let language { body["language"] = language }
+        guard let data = await postJSON("teach/concept/follow", body: body, timeout: 70) else { return nil }
+        return (try? JSONDecoder().decode(ConceptFollowEnvelope.self, from: data))?.follow
+    }
+
+    private func postJSON(_ path: String, body: [String: Any], timeout: TimeInterval) async -> Data? {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
+            request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
+        }
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            return data
+        } catch {
+            return nil
+        }
+    }
+
     func pause(runID: String) {
         post("pause", body: ["runId": runID])
     }
@@ -588,7 +647,7 @@ final class BrainClient {
 
     // MARK: - Connectors
 
-    func mcpTools(servers: [BrainMCPServerPayload]) async -> [MCPServerStatus]? {
+    func mcpTools(servers: [BrainMCPServerPayload], reconnect: Bool = false) async -> [MCPServerStatus]? {
         struct Envelope: Decodable { var servers: [MCPServerStatus] }
         var request = URLRequest(url: baseURL.appendingPathComponent("mcp/tools"))
         request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
@@ -596,7 +655,8 @@ final class BrainClient {
         request.timeoutInterval = 45
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         do {
-            request.httpBody = try JSONEncoder().encode(["servers": servers])
+            let list = try JSONSerialization.jsonObject(with: JSONEncoder().encode(servers))
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["servers": list, "reconnect": reconnect])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
             return try JSONDecoder().decode(Envelope.self, from: data).servers
@@ -620,10 +680,6 @@ final class BrainClient {
               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         return json["ok"] as? Bool == true
-    }
-
-    func forgetMCP(id: String) {
-        post("mcp/forget", body: ["id": id])
     }
 
     func checkApify(token: String) async -> (ok: Bool, detail: String) {

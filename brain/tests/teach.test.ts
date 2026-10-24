@@ -36,15 +36,15 @@ test("the tutor prompt carries the outline, the log, the image size and the cont
     stepNumber: 2,
     imageWidth: 1568,
     imageHeight: 980,
-    controls: [{ label: "Auto layout", role: "button", x: 1402, y: 331, w: 28, h: 22 }],
+    controls: [{ id: 7, label: "Auto layout", role: "button", x: 1402, y: 331, w: 28, h: 22 }],
   });
   expect(prompt).toContain('learning "auto layout" in Figma');
   expect(prompt).toContain("1. select the frame");
   expect(prompt).toContain("clicked the target “frame” at 300,200");
   expect(prompt).toContain("1568x980");
   expect(prompt).toContain("exactly ONE step");
-  expect(prompt).toContain("“Auto layout” (button) at 1402,331 28x22");
-  expect(prompt).toContain("copy its label into target exactly");
+  expect(prompt).toContain("#7 “Auto layout” (button) at 1402,331 28x22");
+  expect(prompt).toContain("answer with element (its number)");
 });
 
 test("a second region and its label survive normalizing", () => {

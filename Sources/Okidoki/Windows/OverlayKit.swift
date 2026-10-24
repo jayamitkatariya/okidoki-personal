@@ -15,9 +15,6 @@ class OverlayPanel: NSPanel {
     var onKeyDown: ((NSEvent) -> Bool)?
     /// ⌘-shortcuts. Return true to swallow.
     var onKeyEquivalent: ((NSEvent) -> Bool)?
-    /// The panel's corner radius. The window shadow is shaped with it — a borderless
-    /// transparent window otherwise wears a square halo around a rounded panel.
-    var cornerRadius: CGFloat = 0
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 320, height: 60),
@@ -25,7 +22,10 @@ class OverlayPanel: NSPanel {
                    backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        // The window server shapes a transparent window's shadow from what it thinks is
+        // opaque, and treats the glass backdrop as a full rectangle: the result is a square
+        // rim around a rounded panel. `OverlayWindow` draws a rounded shadow of its own.
+        hasShadow = false
         level = .statusBar + 4
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
@@ -95,6 +95,96 @@ final class OverlayHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// A transparent, click-through window that sits directly under an overlay panel and
+/// carries its shadow. The panel itself can't: a layer shadow is clipped to its own
+/// window, and the glass body's Auto Layout fights any transparent margin inside it.
+final class OverlayShadowWindow: NSWindow {
+    /// Room around the body for its shadow (radius 14, offset 5).
+    static let inset: CGFloat = 32
+
+    private let shadowView: OverlayShadowView
+
+    init(cornerRadius: CGFloat, like panel: NSPanel) {
+        shadowView = OverlayShadowView(cornerRadius: cornerRadius)
+        super.init(contentRect: NSRect(x: 0, y: 0, width: Self.inset * 2 + 1, height: Self.inset * 2 + 1),
+                   styleMask: .borderless, backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        level = panel.level
+        collectionBehavior = panel.collectionBehavior
+        sharingType = panel.sharingType
+        animationBehavior = .none
+        isReleasedWhenClosed = false
+        alphaValue = 0
+
+        let canvas = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        canvas.wantsLayer = true
+        shadowView.frame = canvas.bounds.insetBy(dx: Self.inset, dy: Self.inset)
+        shadowView.autoresizingMask = [.width, .height]
+        canvas.addSubview(shadowView)
+        contentView = canvas
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    /// The body is kept on screen by `OverlayPlacement`; the margin may hang past the edge.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+
+    /// Track a body frame (screen coordinates).
+    func follow(_ body: NSRect) {
+        let frame = body.insetBy(dx: -Self.inset, dy: -Self.inset)
+        if self.frame != frame { setFrame(frame, display: true) }
+    }
+}
+
+/// Draws nothing but a rounded shadow, exactly the shape of the body above it.
+final class OverlayShadowView: NSView {
+    var cornerRadius: CGFloat = 0 { didSet { needsLayout = true } }
+
+    init(cornerRadius: CGFloat) {
+        self.cornerRadius = cornerRadius
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func makeBackingLayer() -> CALayer {
+        let layer = CALayer()
+        layer.backgroundColor = NSColor.clear.cgColor
+        layer.masksToBounds = false
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = 0.42
+        layer.shadowRadius = 14
+        layer.shadowOffset = CGSize(width: 0, height: -5)
+        return layer
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateShadowPath()
+    }
+
+    override func layout() {
+        super.layout()
+        updateShadowPath()
+    }
+
+    private func updateShadowPath() {
+        let size = bounds.size
+        guard size.width > 0, size.height > 0 else { layer?.shadowPath = nil; return }
+        let radius = min(cornerRadius, size.width / 2, size.height / 2)
+        layer?.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: size),
+                                   cornerWidth: radius, cornerHeight: radius, transform: nil)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 // MARK: - Spring frame animator
 
 /// Drives a window's frame with a damped spring on the display link, so size changes
@@ -110,9 +200,8 @@ final class OverlayFrameAnimator: NSObject {
 
     var response: CGFloat = 0.36
     var dampingFraction: CGFloat = 0.9
-    /// The panel's corner radius. The window shadow is shaped with it, so the
-    /// overlay never wears a square halo around a rounded body.
-    var cornerRadius: CGFloat = 0
+    /// Called with every frame the window is given (companions follow it here).
+    var onFrame: ((NSRect) -> Void)?
 
     init(window: NSWindow) {
         self.window = window
@@ -129,7 +218,7 @@ final class OverlayFrameAnimator: NSObject {
             value = target
             velocity = [0, 0, 0, 0]
             if window.frame != frame { window.setFrame(frame, display: true) }
-            shapeShadow()
+            onFrame?(frame)
             return
         }
         if link == nil {
@@ -146,23 +235,6 @@ final class OverlayFrameAnimator: NSObject {
     func stop() {
         link?.invalidate()
         link = nil
-    }
-
-    /// AppKit draws a borderless transparent window's shadow from its frame, which
-    /// leaves a square halo around a rounded panel. Point the shadow at the
-    /// panel's own rounded outline so the halo follows the shape.
-    private func shapeShadow() {
-        guard let window, cornerRadius > 0, let view = window.contentView else { return }
-        let size = view.bounds.size
-        guard size.width > 0, size.height > 0 else { return }
-        view.layer?.masksToBounds = false
-        view.layer?.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: size),
-                                        cornerWidth: cornerRadius, cornerHeight: cornerRadius,
-                                        transform: nil)
-        view.layer?.shadowColor = NSColor.black.cgColor
-        view.layer?.shadowOpacity = 0.42
-        view.layer?.shadowRadius = 14
-        view.layer?.shadowOffset = CGSize(width: 0, height: -5)
     }
 
     @objc private func step(_ link: CADisplayLink) {
@@ -196,9 +268,9 @@ final class OverlayFrameAnimator: NSObject {
             velocity = [0, 0, 0, 0]
             stop()
         }
-        window.setFrame(NSRect(x: value[0], y: value[1], width: value[2], height: value[3]), display: true)
-        shapeShadow()
-        if settled { window.invalidateShadow() }
+        let frame = NSRect(x: value[0], y: value[1], width: value[2], height: value[3])
+        window.setFrame(frame, display: true)
+        onFrame?(frame)
     }
 }
 
@@ -213,7 +285,8 @@ enum OverlaySurface {
 }
 
 /// Owns one overlay panel: frosted-glass container, content-hugging height,
-/// top-left anchoring, flash-free show/hide.
+/// top-left anchoring, flash-free show/hide. A click-through shadow window rides
+/// underneath it so the shadow follows the panel's rounded shape instead of its frame.
 @MainActor
 final class OverlayWindow {
     let panel: OverlayPanel
@@ -221,6 +294,7 @@ final class OverlayWindow {
     /// True when the panel itself is system liquid glass, so SwiftUI should not paint a wash over it.
     let isLiquidGlass: Bool
     private let animator: OverlayFrameAnimator
+    private let shadow: OverlayShadowWindow
     private let backdrop: NSView
     private var hosting: NSView?
 
@@ -242,8 +316,7 @@ final class OverlayWindow {
         self.contentHeight = estimatedHeight
         self.radius = radius
         self.animator = OverlayFrameAnimator(window: panel)
-        self.animator.cornerRadius = radius
-        panel.cornerRadius = radius
+        self.shadow = OverlayShadowWindow(cornerRadius: radius, like: panel)
 
         switch surface {
         case .liquid, .liquidClear:
@@ -264,8 +337,16 @@ final class OverlayWindow {
                 backdrop = glass
                 isLiquidGlass = true
                 panel.appearance = NSAppearance(named: .darkAqua)
-                panel.hasShadow = true
-                panel.contentView = glass
+                // The material is rounded, but the view blurs its whole rectangle: over
+                // anything but a flat colour that shows as a square haze past the corners.
+                // Clip from a parent; masking the glass's own layer switches the blur off.
+                let clip = NSView(frame: glass.bounds)
+                clip.wantsLayer = true
+                clip.layer?.cornerRadius = radius
+                clip.layer?.cornerCurve = .continuous
+                clip.layer?.masksToBounds = true
+                clip.addSubview(glass)
+                panel.contentView = clip
             } else {
                 backdrop = Self.blurView(material: .popover, radius: radius)
                 isLiquidGlass = false
@@ -276,6 +357,11 @@ final class OverlayWindow {
             isLiquidGlass = false
             panel.contentView = backdrop
         }
+
+        // The shadow is a child window: it orders, moves and hides with the panel, and
+        // follows every frame the spring hands out.
+        panel.addChildWindow(shadow, ordered: .below)
+        animator.onFrame = { [shadow] frame in shadow.follow(frame) }
     }
 
     private static func blurView(material: NSVisualEffectView.Material, radius: CGFloat) -> NSVisualEffectView {
@@ -340,8 +426,10 @@ final class OverlayWindow {
         revealed = false
         animator.stop()
         panel.alphaValue = 0
+        shadow.alphaValue = 0
         animator.set(targetFrame().offsetBy(dx: 0, dy: -8), animated: false)
         panel.orderFrontRegardless()
+        shadow.order(.below, relativeTo: panel.windowNumber)
         if makeKey { focus() }
         hosting?.layoutSubtreeIfNeeded()
         // Reveal a couple of turns later, once SwiftUI has settled on its real height.
@@ -352,7 +440,6 @@ final class OverlayWindow {
             self.animator.set(self.targetFrame().offsetBy(dx: 0, dy: -8), animated: false)
             self.animator.set(self.targetFrame(), animated: true)
             self.fadeIn()
-            self.panel.invalidateShadow()
           }
         }
     }
@@ -367,7 +454,8 @@ final class OverlayWindow {
         if !animated || panel.alphaValue < 0.01 {
             animator.stop()
             panel.alphaValue = 0
-            panel.orderOut(nil)
+            shadow.alphaValue = 0
+            orderOut()
             completion?()
             return
         }
@@ -375,14 +463,20 @@ final class OverlayWindow {
             context.duration = 0.14
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
+            shadow.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.generation == gen else { return }
                 self.animator.stop()
-                self.panel.orderOut(nil)
+                self.orderOut()
                 completion?()
             }
         })
+    }
+
+    private func orderOut() {
+        shadow.orderOut(nil)
+        panel.orderOut(nil)
     }
 
     func focus() {
@@ -425,6 +519,7 @@ final class OverlayWindow {
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
+            shadow.animator().alphaValue = 1
         }
     }
 

@@ -355,6 +355,68 @@ final class ComputerUseTests: XCTestCase {
         XCTAssertEqual(AppResolver.resolve(name: "com.apple.Notes")?.bundleID, "com.apple.Notes")
     }
 
+    func testGlideIsVisibleButBounded() {
+        XCTAssertEqual(EventActuator.glideDuration(distance: 0, pace: 1), 0)
+        XCTAssertEqual(EventActuator.glideDuration(distance: 400, pace: 0), 0)
+        let short = EventActuator.glideDuration(distance: 40, pace: 1)
+        let medium = EventActuator.glideDuration(distance: 500, pace: 1)
+        let far = EventActuator.glideDuration(distance: 3000, pace: 1)
+        XCTAssertEqual(short, 0.14, accuracy: 0.001)
+        XCTAssertGreaterThan(medium, short)
+        XCTAssertEqual(far, 0.6, accuracy: 0.001)
+        XCTAssertEqual(EventActuator.glideDuration(distance: 500, pace: 0.45), medium * 0.45, accuracy: 0.001)
+
+        let points = EventActuator.glidePoints(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 50), steps: 10)
+        XCTAssertEqual(points.count, 10)
+        XCTAssertEqual(points.last, CGPoint(x: 100, y: 50))
+        // Eased: the first step is short, the middle step is the longest.
+        XCTAssertLessThan(points[0].x, 5)
+        XCTAssertGreaterThan(points[5].x - points[4].x, points[1].x - points[0].x)
+        XCTAssertTrue(points.map(\.x).elementsEqual(points.map(\.x).sorted()))
+    }
+
+    func testSDEFSummaryListsClassesAndCommands() {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <dictionary>
+          <suite name="Standard Suite" code="????">
+            <command name="open" code="aevtodoc"><direct-parameter type="file"/></command>
+            <command name="quit" code="aevtquit"/>
+            <class name="application" code="capp"><property name="name" code="pnam" type="text"/></class>
+          </suite>
+          <suite name="Notes Suite" code="note">
+            <class name="note" code="note" plural="notes">
+              <property name="name" code="pnam" type="text"/>
+              <property name="body" code="body" type="text"/>
+              <property name="secret" code="scrt" type="text" hidden="yes"/>
+              <element type="attachment"/>
+            </class>
+            <class name="folder" code="fold"><property name="name" code="pnam" type="text"/><element type="note"/></class>
+            <command name="show" code="noteshow"><direct-parameter type="note"/></command>
+            <command name="make" code="corecrel"><parameter name="new" code="kocl" type="type"/><parameter name="with properties" code="prdt" type="record"/></command>
+          </suite>
+        </dictionary>
+        """.data(using: .utf8)!
+        let summary = ScriptHints.summarize(sdefXML: xml, appName: "Notes")
+        XCTAssertTrue(summary.contains("Standard Suite commands: open, quit"), summary)
+        XCTAssertTrue(summary.contains("note (name, body; contains attachment)"), summary)
+        XCTAssertFalse(summary.contains("secret"), summary)
+        XCTAssertTrue(summary.contains("show [note]"), summary)
+        XCTAssertTrue(summary.contains("make [new, with properties]"), summary)
+        XCTAssertEqual(ScriptHints.summarize(sdefXML: Data("not xml".utf8), appName: "x"), "")
+    }
+
+    func testSDEFOfARealScriptableApp() async {
+        let notes = URL(fileURLWithPath: "/System/Applications/Notes.app")
+        guard FileManager.default.fileExists(atPath: notes.path) else { return }
+        let summary = await ScriptHints.summary(appURL: notes)
+        XCTAssertTrue(summary.lowercased().contains("note"), summary)
+        XCTAssertLessThanOrEqual(summary.count, ScriptHints.maxLength + 1)
+        // Cached: the second call is instant and identical.
+        let again = await ScriptHints.summary(appURL: notes)
+        XCTAssertEqual(again, summary)
+    }
+
     func testScriptActionDecodesLanguageAlias() throws {
         let json = #"{"type":"script","language":"shell","script":"echo hi","say":"running"}"#.data(using: .utf8)!
         let action = try JSONDecoder().decode(ComputerAction.self, from: json)

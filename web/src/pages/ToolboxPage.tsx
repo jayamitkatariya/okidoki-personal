@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
+import { joinCommand, splitCommand, parseServerJSON } from "../mcp";
 import { cx, copyText, findTools, money, toolBlocked, toolPrice } from "../lib";
 import type { Connector, McpServer, Tool } from "../types";
 import { Button, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField } from "../components/ui";
@@ -41,6 +42,7 @@ const CONNECTOR_ICON: Record<string, string> = {
 
 export function ToolboxPage() {
   const { state, settings, updateSettings, invoke, notify } = useDashboard();
+  useEffect(() => { invoke("refreshTools"); }, [invoke]);
   const [query, setQuery] = useState("");
   const [findQuery, setFindQuery] = useState("");
   const [docs, setDocs] = useState<Tool | null>(null);
@@ -206,6 +208,7 @@ export function ToolboxPage() {
           <span className="section-count">
             {installed.length} of {state.tools.length} installed
           </span>
+          <IconButton icon="refresh" label="Refresh installed tools" onClick={() => invoke("refreshTools")} />
           <span className="spacer" />
           <TextField value={query} onChange={setQuery} placeholder="Search tools" icon="search" className="tb-search" />
         </div>
@@ -315,7 +318,7 @@ function ConnectorRow({ connector }: { connector: Connector }) {
   const needsKey = connector.id === "apify" && !state.keys.apify;
   const toggle = (value: boolean) => {
     if (value && needsKey) {
-      notify("Add an Apify key first", "Keys › Apify", "warning");
+      notify("Apify isn't configured", "It stays off until a key is set", "warning");
       return;
     }
     if (connector.kind === "apple") {
@@ -338,14 +341,7 @@ function ConnectorRow({ connector }: { connector: Connector }) {
             {connector.blurb}
             {connector.kind === "apple" ? " Uses Apple Events." : ""}
             {connector.id === "apify" && !needsKey ? " Every run shows a preview first and uses your Apify credits." : ""}
-            {needsKey ? (
-              <>
-                {" Needs an Apify key. "}
-                <button className="text-link" onClick={() => (window.location.hash = "#/keys")}>
-                  Add key
-                </button>
-              </>
-            ) : null}
+            {needsKey ? " Apify isn't configured." : null}
           </em>
         </span>
         <Switch label={connector.name} checked={connector.enabled && !needsKey} onChange={toggle} />
@@ -385,7 +381,6 @@ function McpServers() {
               checked={server.enabled}
               onChange={(value) => {
                 updateSettings({ mcpServers: servers.map((item) => (item.id === server.id ? { ...item, enabled: value } : item)) });
-                if (value) invoke("refreshMcp");
               }}
             />
             <IconButton icon="edit" label={`Edit ${server.name}`} onClick={() => setEditing(server)} />
@@ -415,38 +410,6 @@ function McpServers() {
       <McpServerModal server={editing} onClose={() => setEditing(null)} />
     </div>
   );
-}
-
-// Joins words back into a command line, quoting any with spaces so splitCommand reads them back the same.
-function joinCommand(words: string[]): string {
-  return words.map((word) => (/\s/.test(word) ? `"${word}"` : word)).join(" ");
-}
-
-// Splits a command line into words, keeping quoted parts together.
-function splitCommand(line: string): string[] {
-  const words: string[] = [];
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(line))) words.push(match[1] ?? match[2] ?? match[3]);
-  return words;
-}
-
-// Accepts the JSON snippets MCP READMEs hand out: a bare server, or {"mcpServers": {"name": {...}}}.
-function parseServerJSON(text: string): { name?: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string> } | null {
-  try {
-    let value = JSON.parse(text) as Record<string, any>;
-    let name: string | undefined;
-    if (value.mcpServers) value = value.mcpServers;
-    if (!value.command && !value.url) {
-      const first = Object.entries(value)[0];
-      if (!first) return null;
-      [name, value] = first;
-    }
-    if (!value.command && !value.url) return null;
-    return { name, command: value.command, args: value.args, url: value.url, env: value.env, headers: value.headers };
-  } catch {
-    return null;
-  }
 }
 
 function parsePairs(text: string, separator: "=" | ":"): Record<string, string> {
@@ -500,15 +463,15 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
   };
 
   const words = splitCommand(target.trim());
-  const valid = name.trim() && (transport === "http" ? /^https?:\/\/\S+$/.test(target.trim()) : words.length > 0);
+  const valid = name.trim() && (transport === "http" ? /^https?:\/\/\S+$/.test(target.trim()) : !target.trim().startsWith("{") && words !== null && Boolean(words[0]));
   const save = () => {
-    if (!valid) return;
+    if (!valid || (transport === "stdio" && !words)) return;
     const next: McpServer = {
       id: existing?.id ?? `mcp-${Math.random().toString(16).slice(2, 10)}`,
       name: name.trim(),
       transport,
-      command: transport === "stdio" ? words[0] : "",
-      args: transport === "stdio" ? words.slice(1) : [],
+      command: transport === "stdio" ? words![0] : "",
+      args: transport === "stdio" ? words!.slice(1) : [],
       url: transport === "http" ? target.trim() : "",
       enabled: existing?.enabled ?? true,
     };

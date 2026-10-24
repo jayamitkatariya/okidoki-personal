@@ -1,6 +1,8 @@
 import { test, expect } from "bun:test";
 const token = crypto.randomUUID();
 process.env.OKIDOKI_BRAIN_TOKEN = token;
+// These cases assert the no-key path. A developer .env must not satisfy them.
+delete process.env.ANTHROPIC_API_KEY;
 const { handleRequest } = await import("../src/server");
 const base = "http://127.0.0.1:4319";
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -84,4 +86,68 @@ test("HTTP rejects malformed commands before opening an event stream", async () 
     const response = await fetch(base + "/execute", { method: "POST", headers, body: JSON.stringify(body) });
     expect(response.status).toBe(400);
   }
+});
+
+test("malformed connector requests are rejected before invoking a service", async () => {
+  for (const payload of [null, {}, { runId: "job", call: { connector: "unknown" } }, { runId: "job", call: { connector: "mcp", server: "missing" } }, { runId: "job", call: { connector: "apify", actor: "" } }]) {
+    const response = await fetch(base + "/connector/run", { method: "POST", headers, body: JSON.stringify(payload) });
+    expect(response.status).toBe(400);
+  }
+});
+
+test("MCP toolbox discovery, reconnect, invocation and removal work through HTTP routes", async () => {
+  const server = { id: "http-route-fixture", name: "Route fixture", transport: "stdio", command: process.execPath, args: [new URL("fixtures/mcp-server.ts", import.meta.url).pathname] };
+  const post = (path: string, payload: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(payload) });
+  try {
+    const discovery = await (await post("/mcp/tools", { servers: [server], reconnect: true })).json() as any;
+    expect(discovery.servers[0].ok).toBe(true);
+    expect(discovery.servers[0].tools[0].name).toBe("echo");
+    const run = await (await post("/connector/run", { runId: "route-echo", prompt: "echo", call: { connector: "mcp", server: server.id, tool: "echo", arguments: { message: "route output" } }, mcpServers: [server] })).json() as any;
+    expect(run.ok).toBe(true);
+    expect(run.output).toContain("route output");
+    const pid = JSON.parse(run.output).pid;
+    expect((await post("/mcp/tools", { servers: [] })).ok).toBe(true);
+    await Bun.sleep(30);
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally { (await import("../src/mcp")).closeAll(); }
+});
+
+test("bad MCP configurations cannot close working connections or produce ambiguous status ids", async () => {
+  for (const servers of [[null], [{ id: "bad", name: "bad", transport: "other" }], [{ id: "bad", name: "bad", transport: "stdio", command: "node", args: [42] }], [{ id: "bad", name: "bad", transport: "http", url: "file:///tmp/mcp" }]]) {
+    const response = await fetch(base + "/mcp/tools", { method: "POST", headers, body: JSON.stringify({ servers }) });
+    expect(response.status).toBe(400);
+  }
+  const server = { id: "duplicate", name: "fixture", transport: "stdio", command: "node" };
+  expect((await fetch(base + "/mcp/tools", { method: "POST", headers, body: JSON.stringify({ servers: [server, server] }) })).status).toBe(400);
+});
+
+test("HTTP terminal controls pause, resume and stop the streamed job and its child", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "okidoki-http-stop-"));
+  const runId = crypto.randomUUID();
+  const post = (path: string, payload: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(payload) });
+  try {
+    const response = await post("/execute", { runId, kind: "terminal", workingDirectory: dir, commands: ["sleep 5; touch later"] });
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect((await (await post("/pause", { runId })).json() as any).paused).toBe(true);
+    expect((await (await post("/resume", { runId })).json() as any).resumed).toBe(true);
+    expect((await (await post("/stop", { runId })).json() as any).stopped).toBe(true);
+    const events = await response.text();
+    expect(events).toContain("event: cancelled");
+    expect(events).not.toContain("event: done");
+    expect(await Bun.file(join(dir, "later")).exists()).toBe(false);
+  } finally { (await import("../src/executor")).stop(runId); await rm(dir, { recursive: true, force: true }); }
+});
+
+test("connector Stop works through the same dashboard control endpoint", async () => {
+  const server = { id: "stop-route", name: "Stop fixture", transport: "stdio", command: process.execPath, args: [new URL("fixtures/mcp-server.ts", import.meta.url).pathname] };
+  const post = (path: string, payload: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(payload) });
+  try {
+    await post("/mcp/tools", { servers: [server] });
+    const running = post("/connector/run", { runId: "route-stop", prompt: "wait", call: { connector: "mcp", server: server.id, tool: "echo", arguments: { delay: 1000 } }, mcpServers: [server] });
+    expect((await (await post("/stop", { runId: "route-stop" })).json() as any).stopped).toBe(true);
+    expect((await (await running).json() as any).error).toBe("stopped by you");
+  } finally { (await import("../src/mcp")).closeAll(); }
 });

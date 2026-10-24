@@ -8,10 +8,10 @@ import type { McpServerConfig, McpToolInfo } from "./types";
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "okidoki", version: "0.9.1" };
 
-type JsonRpcResponse = { id?: number; result?: any; error?: { code: number; message: string } };
+type JsonRpcResponse = { id?: number; method?: string; result?: any; error?: { code: number; message: string } };
 
 interface Transport {
-  request(method: string, params: unknown, timeoutMs: number): Promise<any>;
+  request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<any>;
   notify(method: string, params?: unknown): Promise<void>;
   close(): void;
 }
@@ -22,14 +22,16 @@ class StdioTransport implements Transport {
   private buffer = "";
   private stderr = "";
   private exited: string | null = null;
+  private closed = false;
   private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 
-  constructor(server: McpServerConfig) {
+  constructor(server: McpServerConfig, onExit: () => void) {
     const home = process.env.HOME ?? "";
-    const extraPath = ["/opt/homebrew/bin", "/usr/local/bin", `${home}/.local/bin`, `${home}/.bun/bin`, `${home}/.cargo/bin`];
-    this.proc = spawn(server.command ?? "", server.args ?? [], {
+    const extraPath = ["/opt/homebrew/bin", "/usr/local/bin", `${home}/.local/bin`, `${home}/.opencode/bin`, `${home}/.hermes/bin`, `${home}/.bun/bin`, `${home}/.cargo/bin`, `${home}/bin`];
+    this.proc = spawn((server.command ?? "").replace(/^~(?=\/)/, home), server.args ?? [], {
       env: { ...process.env, PATH: [...extraPath, process.env.PATH ?? ""].join(delimiter), ...(server.env ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
     });
     this.proc.stdout?.setEncoding("utf8");
     this.proc.stdout?.on("data", (chunk: string) => this.onData(chunk));
@@ -41,9 +43,11 @@ class StdioTransport implements Transport {
       this.exited = reason;
       for (const { reject } of this.pending.values()) reject(new Error(reason));
       this.pending.clear();
+      onExit();
     };
     this.proc.on("error", (error) => fail(`couldn't start ${server.command}: ${error.message}`));
     this.proc.on("exit", (code) => fail(`${server.name} exited (${code ?? "signal"})${this.stderr ? `: ${this.stderr.trim().split("\n").pop()}` : ""}`));
+    this.proc.stdin?.on("error", (error) => fail(`${server.name} closed its input: ${error.message}`));
   }
 
   private onData(chunk: string) {
@@ -59,11 +63,22 @@ class StdioTransport implements Transport {
       } catch {
         continue; // servers sometimes log to stdout; skip anything that isn't JSON-RPC
       }
+      if (!message || typeof message !== "object") continue;
+      if (message.method) {
+        if (message.id !== undefined) {
+          try {
+            this.write({ jsonrpc: "2.0", id: message.id, ...(message.method === "ping"
+              ? { result: {} } : { error: { code: -32601, message: "Unsupported client method" } }) });
+          } catch {}
+        }
+        continue;
+      }
       if (typeof message.id !== "number") continue;
       const waiter = this.pending.get(message.id);
       if (!waiter) continue;
       this.pending.delete(message.id);
       if (message.error) waiter.reject(new Error(message.error.message));
+      else if (!Object.hasOwn(message, "result")) waiter.reject(new Error("Invalid JSON-RPC response"));
       else waiter.resolve(message.result);
     }
   }
@@ -73,27 +88,39 @@ class StdioTransport implements Transport {
     this.proc.stdin?.write(JSON.stringify(message) + "\n");
   }
 
-  request(method: string, params: unknown, timeoutMs: number): Promise<any> {
+  request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<any> {
+    signal?.throwIfAborted();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const abort = () => {
+        const waiter = this.pending.get(id);
         this.pending.delete(id);
-        reject(new Error(`${method} timed out`));
+        try { this.write({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Stopped by you" } }); } catch {}
+        waiter?.reject(new Error("stopped by you"));
+      };
+      const timer = setTimeout(() => {
+        const waiter = this.pending.get(id);
+        this.pending.delete(id);
+        waiter?.reject(new Error(`${method} timed out`));
       }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
           resolve(value);
         },
         reject: (error) => {
           clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
           reject(error);
         },
       });
+      signal?.addEventListener("abort", abort, { once: true });
       try {
         this.write({ jsonrpc: "2.0", id, method, params });
       } catch (error) {
         this.pending.get(id)?.reject(error as Error);
+        this.pending.delete(id);
       }
     });
   }
@@ -103,34 +130,45 @@ class StdioTransport implements Transport {
   }
 
   close() {
-    this.proc.kill();
+    if (this.closed) return;
+    this.closed = true;
+    this.exited = "MCP connection closed";
+    for (const { reject } of this.pending.values()) reject(new Error(this.exited));
+    this.pending.clear();
+    if (this.proc.pid) {
+      try { process.kill(-this.proc.pid, "SIGTERM"); } catch { this.proc.kill(); }
+      const timer = setTimeout(() => {
+        try { process.kill(-this.proc.pid!, "SIGKILL"); } catch {}
+      }, 750);
+      timer.unref();
+      this.proc.once("close", () => clearTimeout(timer));
+    }
   }
 }
 
 class HttpTransport implements Transport {
   private nextId = 1;
   private sessionId: string | null = null;
-  private negotiated = false;
+  private protocolVersion: string | null = null;
+  private lifetime = new AbortController();
 
   constructor(private server: McpServerConfig) {}
 
-  private headers(): Record<string, string> {
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      ...(this.server.headers ?? {}),
-    };
-    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
-    if (this.negotiated) headers["mcp-protocol-version"] = PROTOCOL_VERSION;
+  private headers(): Headers {
+    const headers = new Headers(this.server.headers);
+    headers.set("content-type", "application/json");
+    headers.set("accept", "application/json, text/event-stream");
+    if (this.sessionId) headers.set("mcp-session-id", this.sessionId);
+    if (this.protocolVersion) headers.set("mcp-protocol-version", this.protocolVersion);
     return headers;
   }
 
-  private async post(message: Record<string, unknown>, timeoutMs: number): Promise<Response> {
+  private async post(message: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
     const response = await fetch(this.server.url ?? "", {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify(message),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]),
     });
     const session = response.headers.get("mcp-session-id");
     if (session) this.sessionId = session;
@@ -139,24 +177,29 @@ class HttpTransport implements Transport {
     return response;
   }
 
-  async request(method: string, params: unknown, timeoutMs: number): Promise<any> {
+  async request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<any> {
     const id = this.nextId++;
-    const response = await this.post({ jsonrpc: "2.0", id, method, params }, timeoutMs);
-    if (method === "initialize") this.negotiated = true;
+    const response = await this.post({ jsonrpc: "2.0", id, method, params }, timeoutMs, signal);
     const type = response.headers.get("content-type") ?? "";
     const message = type.includes("text/event-stream") ? await readEvent(response, id) : ((await response.json()) as JsonRpcResponse);
+    if (!message || message.id !== id) throw new Error(`${this.server.name} returned an invalid response id`);
     if (message.error) throw new Error(message.error.message);
+    if (!Object.hasOwn(message, "result")) throw new Error(`${this.server.name} returned an invalid JSON-RPC response`);
+    if (method === "initialize") this.protocolVersion = message.result?.protocolVersion || PROTOCOL_VERSION;
     return message.result;
   }
 
   async notify(method: string, params?: unknown) {
-    await this.post({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }, 10_000);
+    const response = await this.post({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }, 10_000);
+    await response.body?.cancel();
   }
 
   close() {
+    if (this.lifetime.signal.aborted) return;
+    this.lifetime.abort(new Error("MCP connection closed"));
     if (!this.sessionId) return;
     // Polite session teardown; servers that don't support it just ignore the request.
-    fetch(this.server.url ?? "", { method: "DELETE", headers: this.headers() }).catch(() => {});
+    fetch(this.server.url ?? "", { method: "DELETE", headers: this.headers(), signal: AbortSignal.timeout(5000) }).catch(() => {});
   }
 }
 
@@ -170,7 +213,7 @@ async function readEvent(response: Response, id: number): Promise<JsonRpcRespons
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
         const event = buffer.slice(0, boundary);
@@ -208,11 +251,15 @@ function configKey(server: McpServerConfig): string {
 }
 
 function connect(server: McpServerConfig): Connection {
+  const invalid = validateMcpServer(server);
+  if (invalid) throw new Error(invalid);
   const key = configKey(server);
   const existing = connections.get(server.id);
   if (existing && existing.key === key) return existing;
   existing?.transport.close();
-  const transport: Transport = server.transport === "http" ? new HttpTransport(server) : new StdioTransport(server);
+  const transport: Transport = server.transport === "http" ? new HttpTransport(server) : new StdioTransport(server, () => {
+    if (connections.get(server.id)?.transport === transport) connections.delete(server.id);
+  });
   const ready = (async () => {
     await transport.request("initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: CLIENT_INFO }, 30_000);
     await transport.notify("notifications/initialized");
@@ -234,23 +281,39 @@ export async function listTools(server: McpServerConfig, timeoutMs = 30_000): Pr
     await connection.ready;
     const tools: McpToolInfo[] = [];
     let cursor: string | undefined;
+    const cursors = new Set<string>();
     do {
       const page = await connection.transport.request("tools/list", cursor ? { cursor } : {}, timeoutMs);
       for (const tool of page?.tools ?? []) {
         tools.push({ name: String(tool.name), description: tool.description ? String(tool.description) : "", inputSchema: tool.inputSchema ?? {} });
       }
       cursor = page?.nextCursor;
+      if (cursor && cursors.has(cursor)) throw new Error(`${server.name} repeated a tool-list cursor`);
+      if (cursor) cursors.add(cursor);
     } while (cursor);
     connection.tools = tools;
     return tools;
   })();
-  return withTimeout(work, timeoutMs, `${server.name} took too long to list its tools`);
+  try {
+    return await withTimeout(work, timeoutMs, `${server.name} took too long to list its tools`);
+  } catch (error) {
+    if (connections.get(server.id) === connection) forget(server.id);
+    throw error;
+  }
 }
 
-export async function callTool(server: McpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 120_000): Promise<{ text: string; isError: boolean }> {
+export async function callTool(server: McpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 120_000, signal?: AbortSignal): Promise<{ text: string; isError: boolean }> {
+  signal?.throwIfAborted();
   const connection = connect(server);
-  await withTimeout(connection.ready, 30_000, `${server.name} didn't start`);
-  const result = await connection.transport.request("tools/call", { name, arguments: args }, timeoutMs);
+  await withTimeout(connection.ready, 30_000, `${server.name} didn't start`, signal);
+  signal?.throwIfAborted();
+  let result;
+  try {
+    result = await connection.transport.request("tools/call", { name, arguments: args }, timeoutMs, signal);
+  } catch (error) {
+    if (!signal?.aborted && connections.get(server.id) === connection) forget(server.id);
+    throw error;
+  }
   const parts: string[] = [];
   for (const block of result?.content ?? []) {
     if (block.type === "text") parts.push(String(block.text));
@@ -266,21 +329,49 @@ export function forget(id: string) {
   connections.delete(id);
 }
 
+/** The dashboard sends its complete enabled set, including an empty set when MCP is off. */
+export function reconcile(servers: McpServerConfig[], reconnect = false) {
+  const keep = new Set(servers.map(server => server.id));
+  for (const id of connections.keys()) {
+    if (reconnect || !keep.has(id)) forget(id);
+  }
+}
+
+export function validateMcpServer(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return "MCP server configuration required";
+  const server = value as McpServerConfig;
+  if (typeof server.id !== "string" || !server.id.trim() || typeof server.name !== "string" || !server.name.trim()) return "MCP server id and name required";
+  if (server.transport === "stdio") {
+    if (typeof server.command !== "string" || !server.command.trim() || server.command.includes("\0")) return "MCP command required";
+    if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some(arg => typeof arg !== "string" || arg.includes("\0")))) return "MCP arguments must be strings";
+  } else if (server.transport === "http") {
+    try { if (!["http:", "https:"].includes(new URL(server.url ?? "").protocol)) return "MCP URL must use HTTP or HTTPS"; }
+    catch { return "MCP server URL is invalid"; }
+  } else return "MCP transport must be stdio or http";
+  for (const pairs of [server.env, server.headers]) {
+    if (pairs !== undefined && (!pairs || typeof pairs !== "object" || Array.isArray(pairs) || Object.values(pairs).some(value => typeof value !== "string"))) return "MCP environment and headers must contain strings";
+  }
+}
+
 export function closeAll() {
   for (const connection of connections.values()) connection.transport.close();
   connections.clear();
 }
 
-function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+function withTimeout<T>(work: Promise<T>, ms: number, message: string, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    const abort = () => { clearTimeout(timer); reject(new Error("stopped by you")); };
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error(message)); }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     work.then(
       (value) => {
-        clearTimeout(timer);
+        cleanup();
         resolve(value);
       },
       (error) => {
-        clearTimeout(timer);
+        cleanup();
         reject(error);
       },
     );

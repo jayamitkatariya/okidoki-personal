@@ -126,6 +126,13 @@ export function systemPrompt(request: ComputerRequest): string {
         ].join("\n")
       : `The frontmost app reports no accessible controls — rely on the screenshot.`,
     ``,
+    request.scripting
+      ? [
+          `AppleScript dictionary of ${request.app || "the frontmost app"} (abridged). Use these real classes and commands in scripts:`,
+          request.scripting,
+          ``,
+        ].join("\n")
+      : "",
     `Pointer details:`,
     `- click selects; double_click opens files, folders, and list items; triple_click selects a line or paragraph; right_click opens context menus; middle_click opens links in new tabs. drag needs from_x, from_y, to_x, to_y.`,
     `- modifiers on a click: "cmd" to multi-select or open in a new tab, "shift" to select a range, "opt" for alternates.`,
@@ -175,6 +182,40 @@ function needModel(detail: string): ComputerAct {
   return { type: "fail", reason: detail, say: "stopped" };
 }
 
+const ACTION_TYPES = new Set([
+  "open_app", "activate", "open_url", "script", "shell", "applescript", "jxa",
+  "click", "double_click", "triple_click", "right_click", "middle_click", "move", "drag",
+  "type", "key", "scroll", "zoom", "wait", "done", "fail",
+]);
+
+/** With tool_choice auto the model may answer in prose. Salvage an action written as JSON in it. */
+export function actionFromText(text: string): ComputerAct | undefined {
+  const start = text.indexOf("{");
+  if (start < 0) return undefined;
+  for (let end = text.lastIndexOf("}"); end > start; end = text.lastIndexOf("}", end - 1)) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+      if (typeof parsed.type === "string" && ACTION_TYPES.has(parsed.type)) {
+        if (typeof parsed.say !== "string") parsed.say = parsed.type;
+        return parsed as unknown as ComputerAct;
+      }
+    } catch {
+      // keep shrinking
+    }
+  }
+  return undefined;
+}
+
+type ModelBlock = { type: string; text?: string; input?: Record<string, unknown> };
+
+function pickAction(blocks: ModelBlock[]): { action?: ComputerAct; text: string } {
+  const text = blocks.filter((b) => b.type === "text" && typeof b.text === "string").map((b) => b.text as string).join("\n");
+  for (const block of blocks) {
+    if (block.type === "tool_use" && block.input) return { action: block.input as unknown as ComputerAct, text };
+  }
+  return { action: actionFromText(text), text };
+}
+
 const RETRY_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 
 export async function computerAct(
@@ -184,24 +225,27 @@ export async function computerAct(
 ): Promise<{ action: ComputerAct; usedModel: boolean; error?: string }> {
   if (!apiKey) {
     return {
-      action: needModel("okidoki needs an anthropic key before it can drive an app. add one in keys."),
+      action: needModel("okidoki needs an anthropic key before it can drive an app."),
       usedModel: false,
       error: "anthropic key required",
     };
   }
   const model = drivingModel(request.settings?.claudeModel);
-  const body = {
+  const messages: { role: "user" | "assistant"; content: unknown }[] = [{ role: "user", content: messageContent(request) }];
+  const makeBody = () => ({
     model,
     max_tokens: 1400,
-    messages: [{ role: "user", content: messageContent(request) }],
+    messages,
     tools: [actTool],
     // Driving switches Haiku to Sonnet 5.5, which only supports auto/none.
     tool_choice: { type: "auto" },
-  };
+  });
 
   let lastError = "model unavailable";
+  // One correction turn is allowed when the model answers in prose instead of an action.
+  let corrected = false;
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+    if (attempt > 0 && !corrected) await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
     try {
       const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -210,25 +254,29 @@ export async function computerAct(
           "anthropic-version": "2023-06-01",
           "content-type": "application/json",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(makeBody()),
         signal: AbortSignal.timeout(75_000),
       });
       if (!response.ok) {
         const detail = (await response.text()).slice(0, 160);
         lastError = `model ${response.status}: ${detail}`;
         if (response.status === 401) {
-          return { action: needModel("that anthropic key was rejected. add a new one in keys."), usedModel: false, error: lastError };
+          return { action: needModel("that anthropic key was rejected."), usedModel: false, error: lastError };
         }
         if (RETRY_STATUSES.has(response.status)) continue;
         return { action: needModel(`the model didn't answer, so i stopped. ${lastError}`), usedModel: false, error: lastError };
       }
-      const json = (await response.json()) as { content?: { type: string; input?: Record<string, unknown> }[] };
-      for (const block of json.content ?? []) {
-        if (block.type === "tool_use" && block.input) {
-          return { action: block.input as unknown as ComputerAct, usedModel: true };
-        }
+      const json = (await response.json()) as { content?: ModelBlock[] };
+      const picked = pickAction(json.content ?? []);
+      if (picked.action) return { action: picked.action, usedModel: true };
+      if (picked.text.trim() && !corrected) {
+        corrected = true;
+        messages.push({ role: "assistant", content: picked.text });
+        messages.push({ role: "user", content: "That was prose. Reply with exactly one okidoki_act tool call for the next action and nothing else." });
+        continue;
       }
-      lastError = "empty model response";
+      lastError = picked.text.trim() ? "the model answered in text without an action" : "empty model response";
+      if (corrected) break;
     } catch (error) {
       lastError = error instanceof Error ? error.message : "model unavailable";
       // A timed-out request already used the whole budget; a retry would outlast the app's own timeout.

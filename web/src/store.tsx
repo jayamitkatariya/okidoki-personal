@@ -82,7 +82,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const { state: nativeState, connected, native: bridged } = useNativeState();
   // A real Mac app is on the other end (not the demo fallback) and has sent its state.
   const native = bridged && Boolean(nativeState);
-  const hostedUrl = native ? "" : hostedConvexUrl();
+  // The bridge exists before the first snapshot. Don't treat that gap as the hosted sign-in screen.
+  const hostedUrl = bridged ? "" : hostedConvexUrl();
   const hosted = Boolean(hostedUrl);
   const cloudUrl = native ? nativeConvexUrl(nativeState) : hostedUrl;
 

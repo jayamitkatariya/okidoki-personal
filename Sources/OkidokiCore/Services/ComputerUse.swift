@@ -299,10 +299,19 @@ public enum EventActuator {
     /// and lands it on the old cursor position. Zero keeps every posted event.
     /// Built off the main thread: creating a CGEvent source on the main thread can
     /// deadlock against the window server.
+    /// One source for the life of the process. Creating and releasing a source per event
+    /// churns window-server state and has deadlocked inside SkyLight.
+    nonisolated(unsafe) private static var cachedSource: CGEventSource?
+    nonisolated private static let sourceLock = NSLock()
+
     nonisolated static func makeSource() -> CGEventSource {
+        sourceLock.lock()
+        defer { sourceLock.unlock() }
+        if let cachedSource { return cachedSource }
         let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .combinedSessionState)!
         source.localEventsSuppressionInterval = 0
         source.userData = syntheticTag
+        cachedSource = source
         return source
     }
 
@@ -375,10 +384,59 @@ public enum EventActuator {
         return events
     }
 
+    /// How long pointer travel takes: 1 is a calm, visible glide; smaller is quicker; 0 jumps.
+    public static var pace: Double = 1
+
+    public static func setPace(_ name: String) {
+        switch name {
+        case "fast": pace = 0.45
+        case "instant": pace = 0
+        default: pace = 1
+        }
+    }
+
+    /// Travel time for a glide, scaled by distance so short hops stay snappy and long
+    /// trips across the screen are easy to follow.
+    nonisolated static func glideDuration(distance: Double, pace: Double) -> Double {
+        guard pace > 0, distance >= 2 else { return 0 }
+        let base = 0.12 + distance / 2600
+        return min(max(base, 0.14), 0.6) * pace
+    }
+
+    /// Eased path from `origin` to `target`: slow start, slow finish, like a hand moving a mouse.
+    nonisolated static func glidePoints(from origin: CGPoint, to target: CGPoint, steps: Int) -> [CGPoint] {
+        guard steps > 0 else { return [target] }
+        return (1...steps).map { index in
+            let t = Double(index) / Double(steps)
+            let eased = t * t * (3 - 2 * t)
+            return CGPoint(x: origin.x + (target.x - origin.x) * eased,
+                           y: origin.y + (target.y - origin.y) * eased)
+        }
+    }
+
+    /// Moves the real pointer to `target` with mouse-moved events along the way, so the user
+    /// can see where it's going and apps get their hover states.
+    nonisolated static func glide(to target: CGPoint, pace: Double) {
+        let origin = CGEvent(source: nil)?.location ?? target
+        let distance = hypot(target.x - origin.x, target.y - origin.y)
+        let duration = glideDuration(distance: Double(distance), pace: pace)
+        if duration > 0 {
+            let steps = max(6, Int(duration * 120))
+            let slice = duration / Double(steps)
+            let source = makeSource()
+            for point in glidePoints(from: origin, to: target, steps: steps) {
+                post(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left))
+                pause(slice)
+            }
+        }
+        placeCursor(target)
+    }
+
     public static func move(to point: CGPoint) async {
         guard canPost else { return }
+        let pace = pace
         await Task.detached(priority: .userInitiated) {
-            placeCursor(point)
+            glide(to: point, pace: pace)
             if !cursorIsNear(point) { placeCursor(point) }
             pause(0.03)
         }.value
@@ -400,7 +458,10 @@ public enum EventActuator {
     public static func click(at point: CGPoint, button: CGMouseButton = .left, count: Int = 1,
                              held: [(code: CGKeyCode, flag: CGEventFlags)] = []) async {
         guard canPost else { return }
+        let pace = pace
         await Task.detached(priority: .userInitiated) {
+            glide(to: point, pace: pace)
+            pause(0.04)
             let source = makeSource()
             var flags: CGEventFlags = []
             for modifier in held {
@@ -434,13 +495,18 @@ public enum EventActuator {
         }.value
     }
 
+    /// Parts of a key combo, for display: "cmd+shift+a" → ["cmd", "shift", "a"].
+    public nonisolated static func keyPieces(_ combo: String) -> [String] { VirtualKeys.pieces(of: combo) }
+
     /// True while a password field (or anything else using secure input) owns the keyboard.
     public nonisolated static var secureInputActive: Bool { IsSecureEventInputEnabled() }
 
     public static func drag(from origin: CGPoint, to target: CGPoint, duration: Double = 0.55) async {
         guard canPost else { return }
+        let pace = pace
         await Task.detached(priority: .userInitiated) {
-            placeCursor(origin)
+            glide(to: origin, pace: pace)
+            pause(0.05)
             let steps = max(12, Int(duration * 60))
             let events = makeDragEvents(from: origin, to: target, steps: steps)
             let slice = duration / Double(max(events.count, 1))
@@ -1502,6 +1568,14 @@ public final class ComputerUseService {
     }
 
     // MARK: What the model gets to know
+
+    /// Abridged AppleScript dictionary of the frontmost app, or empty when it isn't scriptable.
+    public func scriptingHints() async -> String {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let url = front.bundleURL else { return "" }
+        return await ScriptHints.summary(appURL: url)
+    }
 
     /// Title of the frontmost window, or empty.
     public func frontWindowTitle() async -> String {

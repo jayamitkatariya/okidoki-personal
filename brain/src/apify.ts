@@ -35,7 +35,7 @@ export async function runActor(
   token: string,
   actor: string,
   input: Record<string, unknown>,
-  options: { limit?: number; timeoutSecs?: number; maxChargeUsd?: number } = {},
+  options: { limit?: number; timeoutSecs?: number; maxChargeUsd?: number; signal?: AbortSignal } = {},
 ): Promise<ApifyRun> {
   const limit = options.limit ?? 50;
   const timeoutSecs = options.timeoutSecs ?? 240;
@@ -46,7 +46,7 @@ export async function runActor(
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(input ?? {}),
-    signal: AbortSignal.timeout((timeoutSecs + 30) * 1000),
+    signal: AbortSignal.any([AbortSignal.timeout((timeoutSecs + 30) * 1000), ...(options.signal ? [options.signal] : [])]),
   });
   if (response.status === 401) throw new Error("Apify rejected the key. Check it in Keys.");
   if (response.status === 404) throw new Error(`Apify has no actor called ${actor}.`);

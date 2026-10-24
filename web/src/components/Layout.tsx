@@ -22,11 +22,11 @@ import {
 export type Page =
   | "home"
   | "runs"
+  | "live"
   | "history"
   | "memory"
   | "skills"
   | "toolbox"
-  | "keys"
   | "settings";
 
 const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }[] = [
@@ -35,6 +35,7 @@ const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }
     items: [
       { id: "home", title: "Home", icon: "home" },
       { id: "runs", title: "Runs", icon: "runs" },
+      { id: "live", title: "Live", icon: "eye" },
       { id: "history", title: "History", icon: "clock" },
     ],
   },
@@ -49,7 +50,6 @@ const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }
     label: "setup",
     items: [
       { id: "toolbox", title: "Toolbox", icon: "grid" },
-      { id: "keys", title: "Keys", icon: "key" },
       { id: "settings", title: "Settings", icon: "gear" },
     ],
   },
@@ -58,11 +58,11 @@ const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }
 const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "Home", subtitle: "What needs you, and what's moving" },
   runs: { title: "Runs", subtitle: "Live work and action previews" },
+  live: { title: "Live", subtitle: "Watch okidoki drive, step by step" },
   history: { title: "History", subtitle: "Threads and past requests" },
   memory: { title: "Memory", subtitle: "What okidoki knows about you" },
   skills: { title: "Skills", subtitle: "Show it once, replay it forever" },
   toolbox: { title: "Toolbox", subtitle: "Free tools, agents and Apple apps" },
-  keys: { title: "Keys", subtitle: "Your API keys, kept on this Mac" },
   settings: { title: "Settings", subtitle: "Input, voice, permissions, look" },
 };
 
@@ -133,7 +133,8 @@ export function AppShell({
       setPaletteOpen(true);
     };
     bridge.okidokiNavigate = (next: string) => {
-      if (NAV.some((group) => group.items.some((item) => item.id === next))) setPage(next as Page);
+      const page = next === "keys" ? "settings" : next;
+      if (NAV.some((group) => group.items.some((item) => item.id === page))) setPage(page as Page);
     };
     return () => {
       delete bridge.okidokiOpenAsk;
@@ -678,7 +679,7 @@ export function AuthGate() {
         )}
         <div className="auth-note">
           <PixelIcon name="lock" size={13} />
-          Stays on this Mac. Turn on sync anytime in Keys.
+          Stays on this Mac. Accounts and history sync through Convex.
         </div>
       </div>
     </div>

@@ -57,6 +57,7 @@ export interface Settings {
   agentExtraArgs: Record<string, string>;
   lastWorkingDirectory: string;
   mcpServers: McpServer[];
+  drivePace: "calm" | "fast";
 }
 
 export interface McpServer {
@@ -234,9 +235,35 @@ export interface Tool {
   popularity?: number;
 }
 
+export interface LiveStep {
+  index: number;
+  say: string;
+  kind: "script" | "pointer" | "keys" | "app" | "look" | "";
+  detail: string;
+  result: string;
+  frame?: string | null;
+  aimX?: number | null;
+  aimY?: number | null;
+  zoomFrame?: string | null;
+  script?: string | null;
+  status: "acting" | "done";
+  at: string;
+}
+
+export interface LiveState {
+  active: boolean;
+  runID?: string | null;
+  target: string;
+  goal: string;
+  stepIndex: number;
+  steps: LiveStep[];
+}
+
 export interface NativeState {
   /** Missing on Convex snapshots, which don't carry live recorder state. */
   watching?: Watching;
+  /** The current or last driving run. Missing on Convex snapshots and when nothing has been driven. */
+  live?: LiveState | null;
   accounts: Account[];
   currentAccountID: string;
   settings: Settings;

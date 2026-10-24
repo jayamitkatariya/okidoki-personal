@@ -132,9 +132,6 @@ struct OKTheme {
 // MARK: - Fonts
 
 extension Font {
-    static func okDisplay(_ size: CGFloat) -> Font {
-        .custom("PPNeueBit-Bold", size: size)
-    }
     static func okBody(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         let name: String
         switch weight {

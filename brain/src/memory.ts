@@ -3,10 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { MemorySyncRequest, RecalledItem } from "./types";
 
-// Long-term recall over what okidoki already keeps on the Mac — memories, conversations, runs (with a
-// short tail of their output), skills and routines — through a Moss session index. It embeds and
-// searches in-process and is saved to disk on this Mac; nothing is pushed to Moss's cloud.
-// Images aren't indexed: screenshots are never stored.
+// Short-term memory. Moss holds the recent conversation and "right now" notes, embeds them
+// in-process, and saves the index on this Mac. Nothing is pushed to Moss's cloud.
+// Durable account data (profile, runs, skills) lives in Convex. Images aren't indexed.
 
 const INDEX_NAME = "okidoki-memory";
 
@@ -75,16 +74,6 @@ let lastError = "";
 const known = new Map<string, string>(); // doc id → fingerprint of what the index holds
 let queue: Promise<unknown> = Promise.resolve(); // index changes run one at a time
 
-let makeEngine: (projectId: string, projectKey: string, cacheDir: string) => Promise<MemoryEngine> = mossEngine;
-
-/** Tests swap in a fake engine; the app always uses Moss. */
-export function useEngineFactory(factory: typeof makeEngine) {
-  makeEngine = factory;
-  engine = null;
-  engineKey = "";
-  starting = null;
-  known.clear();
-}
 
 async function ensureEngine(request: MemorySyncRequest): Promise<MemoryEngine> {
   const cacheDir = request.cacheDir || defaultCacheDir();
@@ -97,7 +86,7 @@ async function ensureEngine(request: MemorySyncRequest): Promise<MemoryEngine> {
   known.clear();
   starting = (async () => {
     await previous?.close().catch(() => {});
-    const next = await makeEngine(request.projectId, request.projectKey, cacheDir);
+    const next = await mossEngine(request.projectId, request.projectKey, cacheDir);
     for (const doc of await next.all()) known.set(doc.id, fingerprint(doc));
     engine = next;
     return next;
@@ -120,46 +109,33 @@ const clip = (text: unknown, max: number) => {
 };
 const day = (value: unknown) => String(value ?? "").slice(0, 10);
 
-/** Turns the Mac's items into index documents. Ids are prefixed by type so kinds never collide. */
+const SHORT_TERM_MESSAGES = 48;
+
+/** Recent turns plus "right now" notes. Profile, runs, skills and routines stay in Convex. */
 export function toDocs(request: MemorySyncRequest): MemoryDoc[] {
   const docs: MemoryDoc[] = [];
   for (const memory of request.memories ?? []) {
-    if (!memory.text?.trim()) continue;
-    // Memories are shared by every account on the Mac, so they carry no account.
-    docs.push({ id: `memory:${memory.id}`, text: clip(memory.text, 2000), metadata: { type: "memory", account: "", section: String(memory.section ?? ""), date: day(memory.updatedAt) } });
+    if (memory.section !== "rightNow" || !memory.text?.trim()) continue;
+    // Right-now notes are shared by every account on the Mac, so they carry no account.
+    docs.push({ id: `memory:${memory.id}`, text: clip(memory.text, 2000), metadata: { type: "memory", account: "", section: "rightNow", date: day(memory.updatedAt) } });
   }
+  const messages: { at: string; doc: MemoryDoc }[] = [];
   for (const thread of request.threads ?? []) {
     for (const message of thread.messages ?? []) {
       const text = clip(message.text, 2000);
       if (text.length < 3 || message.role === "system") continue;
-      docs.push({
-        id: `message:${message.id}`,
-        text,
-        metadata: { type: "message", account: String(thread.accountID ?? ""), role: String(message.role ?? ""), thread: clip(thread.title, 120), threadId: String(thread.id), date: day(message.createdAt) },
+      messages.push({
+        at: String(message.createdAt ?? ""),
+        doc: {
+          id: `message:${message.id}`,
+          text,
+          metadata: { type: "message", account: String(thread.accountID ?? ""), role: String(message.role ?? ""), thread: clip(thread.title, 120), threadId: String(thread.id), date: day(message.createdAt) },
+        },
       });
     }
   }
-  for (const run of request.runs ?? []) {
-    // The run's "log": what was asked, what happened, and the end of its output.
-    const text = [run.title, run.prompt, run.summary, clip(String(run.output ?? "").slice(-1500), 1500)].filter((part) => String(part ?? "").trim()).join("\n");
-    if (!text.trim()) continue;
-    docs.push({
-      id: `run:${run.id}`,
-      text: clip(text, 4000),
-      metadata: { type: "run", account: String(run.accountID ?? ""), kind: String(run.kind ?? ""), status: String(run.status ?? ""), title: clip(run.title, 120), date: day(run.createdAt) },
-    });
-  }
-  for (const skill of request.skills ?? []) {
-    const steps = (skill.steps ?? []).map((step) => step.text).filter(Boolean).join("; ");
-    docs.push({ id: `skill:${skill.id}`, text: clip(`${skill.name}. ${skill.summary}. ${steps}`, 2000), metadata: { type: "skill", account: String(skill.accountID ?? ""), title: clip(skill.name, 120), date: day(skill.createdAt) } });
-  }
-  for (const routine of request.routines ?? []) {
-    docs.push({
-      id: `routine:${routine.id}`,
-      text: clip(`${routine.name}: ${routine.prompt} (${routine.cadence})`, 1000),
-      metadata: { type: "routine", account: String(routine.accountID ?? ""), title: clip(routine.name, 120), date: day(routine.createdAt) },
-    });
-  }
+  messages.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  for (const item of messages.slice(0, SHORT_TERM_MESSAGES)) docs.push(item.doc);
   return docs;
 }
 
@@ -220,11 +196,21 @@ export function recallPrompt(items: RecalledItem[]): string {
     const label = [item.type, item.title, item.date].filter(Boolean).join(" · ");
     return `· [${label}] ${clip(item.text, 400)}`;
   });
-  return `Related from their history (searched for this request; use it if it helps, ignore it if not):\n${lines.join("\n")}`;
+  return `Recent context (short-term memory; use it if it helps, ignore it if not):\n${lines.join("\n")}`;
 }
 
 export function memoryStatus() {
   return { ready: Boolean(engine), documents: known.size, error: lastError || undefined };
+}
+
+/** Loads the on-disk short-term index so the first question can recall it. Does not drop documents. */
+export async function warmMemory(projectId: string, projectKey: string): Promise<void> {
+  const run = async () => {
+    await ensureEngine({ projectId, projectKey });
+  };
+  const result = queue.then(run, run);
+  queue = result.catch(() => {});
+  await result;
 }
 
 export async function closeMemory() {

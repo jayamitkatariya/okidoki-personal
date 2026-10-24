@@ -71,7 +71,7 @@ export function SkillsPage() {
   const startRecording = () => {
     invoke("startWatching", { name: teachName.trim() });
     setTeachOpen(false);
-    notify("Recording", "Do the task once. Stop from the pill at the top of your screen, or come back here.", "info");
+    notify("Recording", "Do the task once. Stop from the notch at the top of your screen, or come back here.", "info");
   };
 
   const stopRecording = () => {
@@ -227,7 +227,7 @@ export function SkillsPage() {
           ) : (
             <p className="recording-hint">Go do the task at a normal pace. Every click, keystroke, drag and scroll shows up here as it happens.</p>
           )}
-          <p className="recording-foot">Stop from the pill at the top of your screen, shake your mouse, or click Stop & save.</p>
+          <p className="recording-foot">Press Save in the notch at the top of your screen, shake your mouse, or click Stop & save here.</p>
         </section>
       ) : null}
 
@@ -466,7 +466,7 @@ export function SkillsPage() {
             </li>
             <li>
               <PixelIcon name="stop" size={13} />
-              <span>Stop from the pill at the top of your screen, shake your mouse, or come back to this page.</span>
+              <span>Press Save in the notch at the top of your screen, shake your mouse, or come back to this page.</span>
             </li>
           </ul>
         </div>

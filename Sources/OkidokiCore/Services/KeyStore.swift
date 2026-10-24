@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// API keys and MCP secrets, saved in a private file in okidoki's folder:
 /// `~/Library/Application Support/Okidoki/keys.json`, readable only by you.
@@ -23,9 +22,20 @@ public enum KeyStore {
 
     public static func get(_ key: String) -> String? {
         if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" { return nil }
+        let stored = stored(key)
+        // Tests point at a private file and must not see the app's compiled keys.
+        if ProcessInfo.processInfo.environment["OKIDOKI_KEYS_FILE"] != nil {
+            return stored
+        }
+        if let builtin = ServiceSecrets.builtin(key), !builtin.isEmpty { return builtin }
+        return stored
+    }
+
+    private static func stored(_ key: String) -> String? {
         lock.lock()
         defer { lock.unlock() }
-        return load()[key]
+        let value = load()[key]
+        return (value?.isEmpty == false) ? value : nil
     }
 
     public static func delete(_ key: String) {
@@ -51,10 +61,6 @@ public enum KeyStore {
         var keys: [String: String] = [:]
         if let data = try? Data(contentsOf: fileURL) {
             keys = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
-        } else {
-            // No file yet: bring over keys an earlier version kept in the Keychain, once.
-            keys = LegacyKeychain.takeAll()
-            if !keys.isEmpty { save(keys) }
         }
         cache = keys
         return keys
@@ -72,42 +78,6 @@ public enum KeyStore {
         if rename(temp.path, url.path) != 0 {
             try? FileManager.default.removeItem(at: temp)
         }
-    }
-}
-
-/// The macOS Keychain items earlier versions saved keys in. Only read once, to move them to `KeyStore`.
-enum LegacyKeychain {
-    private static let service = "com.jaykatariya.okidoki.keys"
-
-    /// Every saved key, removed from the Keychain as it's read.
-    static func takeAll() -> [String: String] {
-        let list: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        var found: AnyObject?
-        guard SecItemCopyMatching(list as CFDictionary, &found) == errSecSuccess,
-              let items = found as? [[String: Any]] else { return [:] }
-        var keys: [String: String] = [:]
-        for account in items.compactMap({ $0[kSecAttrAccount as String] as? String }) {
-            let item: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-            ]
-            var query = item
-            query[kSecReturnData as String] = true
-            query[kSecMatchLimit as String] = kSecMatchLimitOne
-            var result: AnyObject?
-            if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-               let data = result as? Data, let value = String(data: data, encoding: .utf8) {
-                keys[account] = value
-                SecItemDelete(item as CFDictionary)
-            }
-        }
-        return keys
     }
 }
 

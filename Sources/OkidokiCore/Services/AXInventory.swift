@@ -67,6 +67,29 @@ public enum AXInventory {
         return found
     }
 
+    /// Press the control under a point through accessibility. Nothing moves on screen, so the
+    /// learner keeps their pointer. False when the element has no press action.
+    @discardableResult
+    public static func press(at point: CGPoint) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let system = AXUIElementCreateSystemWide()
+        var ref: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &ref) == .success,
+              var element = ref else { return false }
+        for _ in 0..<4 {
+            var namesRef: CFArray?
+            if AXUIElementCopyActionNames(element, &namesRef) == .success,
+               let names = namesRef as? [String], names.contains(kAXPressAction) {
+                return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+            }
+            var parentRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parentRef) == .success,
+                  let parentRef, let parent = AXSearch.axElement(parentRef) else { break }
+            element = parent
+        }
+        return false
+    }
+
     /// The element under a point, lifted to the control that owns it: an icon inside a button
     /// reports the button, a glyph inside a menu item reports the item.
     public static func control(at point: CGPoint) -> AXSeenControl? {

@@ -9,8 +9,6 @@ struct OnboardingView: View {
     @State private var step: OnboardStep = .welcome
     @State private var forward = true
     @State private var name = ""
-    @State private var anthropicKey = ""
-    @State private var keySaved = false
     @State private var inputMode: InputMode = .typing
     @State private var about = ""
     @State private var permissions: [PermissionKind: PermissionState] = [:]
@@ -34,7 +32,6 @@ struct OnboardingView: View {
         .onAppear {
             name = store.activeAccount.name == "you" ? "" : store.activeAccount.name
             inputMode = store.settings.defaultInput
-            keySaved = env.hasKey("anthropic")
             refreshPermissions()
         }
         .onDisappear { env.suspendSummonForTour = false }
@@ -115,8 +112,6 @@ struct OnboardingView: View {
             Button(primaryTitle) { primaryAction() }
                 .buttonStyle(OKButtonStyle(kind: .primary))
                 .keyboardShortcut(.defaultAction)
-                .disabled(step == .brain && !keyReady)
-                .opacity(step == .brain && !keyReady ? 0.45 : 1)
         }
     }
 
@@ -185,30 +180,14 @@ struct OnboardingView: View {
 
     private var brainStep: some View {
         VStack(alignment: .leading, spacing: 0) {
-            title("Bring your own key")
-            subtitle("An Anthropic key is required. Answers, lessons, and actions all go through it.")
-            HStack(spacing: 8) {
-                Image(systemName: keySaved ? "checkmark.seal.fill" : "key")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(keySaved ? OKBrand.greenInk : OKBrand.faint)
-                    .frame(width: 20)
-                SecureField(keySaved ? "Key saved on this Mac. Paste to replace." : "sk-ant-…", text: $anthropicKey)
-                    .textFieldStyle(.plain)
-                    .font(.okBody(14))
-                    .onSubmit { saveKeyIfNeeded() }
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 46)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
-            .padding(.top, 24)
-
+            title("How do you want to ask?")
+            subtitle("Voice answers use Cartesia. Typing stays quiet until the next time you speak.")
             HStack {
-                fieldLabel("How do you want to ask?")
+                fieldLabel("Default")
                 Spacer()
                 OKSegmented(options: InputMode.allCases, label: { $0 == .voice ? "Voice" : "Typing" }, selection: $inputMode)
             }
-            .padding(.top, 22)
+            .padding(.top, 24)
         }
     }
 
@@ -318,8 +297,6 @@ struct OnboardingView: View {
             store.updateAccount(account)
             store.saveNow()
         case .brain:
-            saveKeyIfNeeded()
-            guard env.hasKey("anthropic") else { return }
             store.settings.defaultInput = inputMode
             store.saveNow()
         case .about:
@@ -337,18 +314,6 @@ struct OnboardingView: View {
     private func go(to next: OnboardStep) {
         forward = next.rawValue > step.rawValue
         withAnimation(OKMotion.spring) { step = next }
-    }
-
-    private var keyReady: Bool {
-        keySaved || !anthropicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func saveKeyIfNeeded() {
-        let trimmed = anthropicKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        env.saveKey(provider: "anthropic", value: trimmed)
-        anthropicKey = ""
-        withAnimation(OKMotion.snappy) { keySaved = env.hasKey("anthropic") }
     }
 
     private func finish() {

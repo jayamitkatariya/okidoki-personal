@@ -57,6 +57,11 @@ const responseTool = {
           required: ["say"],
         },
       },
+      lesson_kind: {
+        type: "string",
+        enum: ["app", "concept"],
+        description: "for teach: 'app' walks them through the app on screen step by step; 'concept' explains an idea or a real thing (a molecule, an engine, compound interest, how a neural net works, what a video is about) with an animated 2D/3D model beside their screen.",
+      },
       overlay_html: {
         type: "string",
         description:
@@ -118,6 +123,7 @@ const KEY_MAP: Record<string, string> = {
   quick_action: "quickAction",
   pick_file: "pickFile",
   overlay_html: "overlayHTML",
+  lesson_kind: "lessonKind",
   overlay_title: "overlayTitle",
   overlay_width: "overlayWidth",
   overlay_height: "overlayHeight",
@@ -153,8 +159,9 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     `- a terminal job using free open-source tools → terminal, always with an action preview`,
     `- writing or fixing code → coding (the app runs their chosen coding agent)`,
     `- a long batch job → background`,
-    `- learning a Mac app, "teach me", "how do I", "walk me through", or a concept that lives in the app on screen → teach, with a teach_plan outline. a live tutor starts immediately on their screen. never ask them to approve a lesson, never clarify "show or do", and never send a lesson through computer_use.`,
-    `- seeing a concept in motion — "explain with a simulation", "show me how this works", physics/dynamics/visualize → overlay, with overlay_html rendered as a floating canvas right on their screen`,
+    `- learning a Mac app, "teach me", "how do I", "walk me through", "show me how", or a concept that lives in the app on screen → teach with lesson_kind "app" and a teach_plan outline. a live tutor starts immediately on their screen. never ask them to approve a lesson, never clarify "show or do", and never send a lesson through computer_use.`,
+    `- understanding an idea or a real thing — "explain this", "teach me compound interest", "how does an engine work", "what is this video about", a molecule, a planet, an algorithm — → teach with lesson_kind "concept". an animated 2D/3D model with narration appears beside what they're looking at. the title is the topic.`,
+    `- a one-off physics or dynamics simulation they want to poke at ("simulate a pendulum") → overlay, with overlay_html rendered as a floating canvas right on their screen. for explanations prefer teach with lesson_kind "concept".`,
     `- a single click in the current app → borrow, with a clear preview`,
     `- "watch me" → watch`,
     `- live web data, or a job one of their connected services (below) can do → connector, with connector_call and a preview`,
@@ -216,10 +223,10 @@ function userContent(request: ThinkRequest): string {
 
 const needsKey: Decision = {
   kind: "answer",
-  title: "add a key",
-  answer: "okidoki needs an anthropic key before it can answer, teach, or do anything. add one in keys.",
+  title: "model unavailable",
+  answer: "okidoki needs an anthropic key before it can answer, teach, or do anything.",
   speak: "",
-  actions: ["add key"],
+  actions: [],
 };
 
 function stopped(detail: string, rejected = false): { decision: Decision; usedModel: false; error: string } {
@@ -228,7 +235,7 @@ function stopped(detail: string, rejected = false): { decision: Decision; usedMo
       kind: "answer",
       title: rejected ? "key rejected" : "model unavailable",
       answer: rejected
-        ? "that anthropic key was rejected. add a new one in keys."
+        ? "that anthropic key was rejected."
         : `the model didn't answer, so i stopped instead of guessing. ${detail}`,
       speak: "",
     },

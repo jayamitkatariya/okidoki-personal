@@ -337,6 +337,7 @@ export const demoState: NativeState = {
     tourComplete: true,
     showedWelcome: true,
     claudeModel: "claude-haiku-5-5",
+    drivePace: "calm",
     agentExtraArgs: {},
     lastWorkingDirectory: "/Users/jay/Desktop",
     mcpServers: [

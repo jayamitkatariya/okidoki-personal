@@ -354,6 +354,17 @@ export function SettingsPage() {
               <PrefRow title="Cursor glow">
                 <Swatches value={settings.cursorGlowHex} onPick={(color) => updateSettings({ cursorGlowHex: color })} />
               </PrefRow>
+              <PrefRow title="Driving pace" detail="How the pointer moves when okidoki drives an app for you">
+                <Segmented
+                  options={[
+                    { value: "calm", label: "Calm" },
+                    { value: "fast", label: "Fast" },
+                  ]}
+                  value={settings.drivePace ?? "calm"}
+                  onChange={(value) => updateSettings({ drivePace: value as typeof settings.drivePace })}
+                  compact
+                />
+              </PrefRow>
               <PrefRow title="Shake sensitivity" detail="Lower is easier to trigger">
                 <Slider
                   min={0.2}
@@ -467,7 +478,7 @@ export function SettingsPage() {
           {native ? (
             <SettingsSection id="sync-login" title="Sync login" description="Link this Mac's accounts to a login on your own Convex deployment. Only that login can read what syncs.">
               <div className="pref-group">
-                <SyncLogin onOpenKeys={() => (window.location.hash = "#/keys")} />
+                <SyncLogin />
               </div>
             </SettingsSection>
           ) : null}
@@ -547,7 +558,7 @@ export function SettingsPage() {
 
           <footer className="settings-foot">
             <PixelIcon name="lock" size={13} />
-            Open source. Keys stay on this Mac. Screenshots never stored. No background tracking.
+            Open source. Screenshots never stored. No background tracking.
           </footer>
         </div>
       </div>

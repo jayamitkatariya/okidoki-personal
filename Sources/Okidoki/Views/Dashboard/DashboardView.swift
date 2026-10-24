@@ -88,6 +88,8 @@ struct DashboardPayload: Encodable {
     var mcpStatus: [String: MCPServerStatus]
     /// Names (never values) of each MCP server's stored secrets, so the page can show what's set.
     var mcpSecretNames: [String: [String]]
+    /// The current or last driving run, step by step, for the Live page.
+    var live: DashboardLivePayload?
 }
 
 // MARK: - Controller
@@ -121,6 +123,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .store(in: &cancellables)
         // Live step list while a skill is being recorded.
         environment.watch.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.schedulePush() }
+            .store(in: &cancellables)
+        // Driving steps for the Live page.
+        environment.driver.model.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
@@ -190,6 +197,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         let script = WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         config.userContentController.addUserScript(script)
         config.userContentController.add(self, name: "okidoki")
+        config.setURLSchemeHandler(LiveFrameSchemeHandler(), forURLScheme: LiveFrames.scheme)
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -284,8 +292,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     }
 
     private func schedulePush() {
-        pushWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.sendState() }
+        // Throttle: continuous terminal output must still reach the dashboard every 180 ms.
+        guard pushWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pushWork = nil
+            self?.sendState()
+        }
         pushWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
     }
@@ -335,7 +347,14 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             mcpSecretNames: Dictionary(uniqueKeysWithValues: env.store.settings.mcpServers.map { server in
                 let secrets = env.mcpSecrets(server)
                 return (server.id, (secrets.env.keys.map { $0 } + secrets.headers.keys.map { $0 }).sorted())
-            })
+            }),
+            live: env.driver.model.runID == nil ? nil : DashboardLivePayload(
+                active: env.driver.isActive,
+                runID: env.driver.model.runID,
+                target: env.driver.model.targetName,
+                goal: env.driver.model.goal,
+                stepIndex: env.driver.model.stepIndex,
+                steps: env.driver.model.steps)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -513,7 +532,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String, let enabled = payload["enabled"] as? Bool {
                 env.store.setConnector(id, enabled: enabled)
                 env.store.saveNow()
-                if id == "mcp" && enabled { env.refreshMCP() }
             }
         case "saveMcpServer":
             if let raw = payload["server"] as? [String: Any],
@@ -529,7 +547,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         case "deleteMcpServer":
             if let id = payload["id"] as? String { env.deleteMCPServer(id) }
         case "refreshMcp":
-            env.refreshMCP()
+            env.refreshMCP(reconnect: true)
         case "requestPermission":
             if let raw = payload["kind"] as? String, let kind = PermissionKind(rawValue: raw) {
                 Task {

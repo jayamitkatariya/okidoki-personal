@@ -44,7 +44,7 @@ export function SharePage({ token }: { token: string }) {
         alive = false;
       };
     }
-    const url = (import.meta.env.VITE_CONVEX_URL as string | undefined)?.trim();
+    const url = (import.meta.env.VITE_CONVEX_URL as string | undefined)?.trim() || "https://wonderful-rook-611.convex.cloud";
     if (!url) {
       setError("This link needs sync. Ask the sender to turn it on in okidoki.");
       return;

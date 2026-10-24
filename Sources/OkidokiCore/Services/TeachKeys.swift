@@ -1,0 +1,86 @@
+import AppKit
+import Foundation
+
+// MARK: - Keys
+
+/// Key names the tutor and the learner agree on: "cmd+shift+a", "f", "return", "esc".
+public enum TeachKeys {
+    private static let names: [UInt16: String] = [
+        36: "return", 76: "return", 48: "tab", 49: "space", 51: "delete", 117: "delete", 53: "esc",
+        123: "left", 124: "right", 125: "up", 126: "down", 115: "home", 119: "end", 116: "pageup", 121: "pagedown",
+        122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6", 98: "f7", 100: "f8", 101: "f9",
+        109: "f10", 103: "f11", 111: "f12",
+    ]
+
+    public static func combo(for event: NSEvent) -> String {
+        combo(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers ?? "", flags: event.modifierFlags)
+    }
+
+    public static func combo(keyCode: UInt16, characters: String, flags: NSEvent.ModifierFlags) -> String {
+        var parts: [String] = []
+        if flags.contains(.control) { parts.append("ctrl") }
+        if flags.contains(.option) { parts.append("alt") }
+        if flags.contains(.shift) { parts.append("shift") }
+        if flags.contains(.command) { parts.append("cmd") }
+        let key = names[keyCode] ?? characters.lowercased()
+        parts.append(key.isEmpty ? "key\(keyCode)" : key)
+        return parts.joined(separator: "+")
+    }
+
+    public static func normalize(_ expected: String) -> [String] {
+        let aliases: [String: String] = [
+            "command": "cmd", "⌘": "cmd", "cmd": "cmd", "meta": "cmd",
+            "option": "alt", "opt": "alt", "⌥": "alt", "alt": "alt",
+            "control": "ctrl", "ctrl": "ctrl", "⌃": "ctrl",
+            "shift": "shift", "⇧": "shift",
+            "enter": "return", "↩": "return", "return": "return",
+            "escape": "esc", "esc": "esc", "backspace": "delete", "del": "delete",
+            "arrowup": "up", "arrowdown": "down", "arrowleft": "left", "arrowright": "right",
+            "spacebar": "space",
+        ]
+        let pieces = expected.lowercased()
+            .replacingOccurrences(of: " ", with: "+")
+            .split { $0 == "+" || $0 == "-" }
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        return pieces.map { aliases[$0] ?? $0 }
+    }
+
+    public static func matches(_ combo: String, expected: String?) -> Bool {
+        guard let expected, !expected.isEmpty else { return false }
+        let modifiers: Set<String> = ["cmd", "alt", "ctrl", "shift"]
+        let want = normalize(expected)
+        let got = combo.split(separator: "+").map(String.init)
+        guard let wantKey = want.last(where: { !modifiers.contains($0) }),
+              let gotKey = got.last(where: { !modifiers.contains($0) }) else { return false }
+        let wantMods = Set(want.filter { modifiers.contains($0) })
+        let gotMods = Set(got.filter { modifiers.contains($0) })
+        // A bare letter still counts when shift is the only extra, e.g. "A" typed as shift+a.
+        return wantKey == gotKey && (wantMods == gotMods || (wantMods.isEmpty && gotMods == ["shift"]))
+    }
+
+    public static func caps(_ expected: String?) -> [String] {
+        guard let expected, !expected.isEmpty else { return [] }
+        let glyphs: [String: String] = [
+            "cmd": "⌘", "alt": "⌥", "ctrl": "⌃", "shift": "⇧", "return": "↩", "tab": "⇥",
+            "delete": "⌫", "esc": "esc", "space": "space", "up": "↑", "down": "↓", "left": "←", "right": "→",
+        ]
+        return normalize(expected).map { glyphs[$0] ?? $0.uppercased() }
+    }
+}
+
+// MARK: - Mode
+
+/// Which way a lesson starts: wording first, then the saved choice.
+public enum TeachModePicker {
+    public static func infer(text: String, saved: String) -> String {
+        let lower = text.lowercased()
+        if lower.contains("let me try") || lower.contains("teach me") || lower.contains("guide me") || lower.contains("walk me through") {
+            return "guide"
+        }
+        if lower.hasPrefix("show me") || lower.contains("just show me") || lower.contains("do it while") || lower.contains("show me how") || lower.contains("demo ") || lower.hasSuffix("demo") {
+            return "show"
+        }
+        return ["guide", "show"].contains(saved) ? saved : "guide"
+    }
+}
