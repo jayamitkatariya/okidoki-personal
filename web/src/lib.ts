@@ -105,7 +105,7 @@ export function scheduleLabel(routine: {
 }
 
 // Rough yearly price of the paid app each free tool stands in for. Mirrors ToolCatalog.paidAlternatives.
-const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59 };
+const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59, "yt-dlp": 45, gifski: 15, sox: 35, whisper: 100, pngquant: 39, oxipng: 15, exiftool: 20, webp: 15, qpdf: 80, ghostscript: 6, czkawka: 20, sevenzip: 25, duckdb: 100, restic: 60, gh: 69 };
 
 export function toolPrice(id: string): number {
   return TOOL_PRICES[id] ?? 0;
@@ -132,20 +132,49 @@ export function jobWords(query: string): string[] {
     .map(singular);
 }
 
+// Letters and digits only, so "7zip", "7-zip" and "7 Zip" all read as one name.
+function compact(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+// The names a tool goes by: what's on its card, its id and the command it runs ("7-Zip", "sevenzip", "7zz").
+function toolNames(tool: Tool): string[] {
+  return [tool.name, tool.id, tool.command].map(compact).filter(Boolean);
+}
+
+// The catalog search box: plain text anywhere on the card, or any of the tool's names however it's spelled.
+export function toolMatches(tool: Tool, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")} ${tool.command} ${tool.id}`.toLowerCase();
+  const name = compact(q);
+  return hay.includes(q) || (name.length > 1 && toolNames(tool).some((each) => each.includes(name)));
+}
+
+// The catalog search box: tools matching by name or card text first, then tools that fit the described job.
+export function searchTools(tools: Tool[], query: string): Tool[] {
+  if (!query.trim()) return tools;
+  const direct = tools.filter((tool) => toolMatches(tool, query));
+  const byJob = findTools(tools, query, tools.length).filter((tool) => !direct.includes(tool));
+  return [...direct, ...byJob];
+}
+
 // Ranks the catalog for a job description: word hits first, popularity breaks ties.
+// Tools matching less than half as many words as the best one are left out, so one shared word ("open") doesn't count.
 export function findTools(tools: Tool[], query: string, limit = 3): Tool[] {
   const wanted = jobWords(query);
   if (!wanted.length) return [];
   const phrase = query.trim().toLowerCase();
-  return tools
-    .map((tool) => {
-      const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")} ${tool.category}`.toLowerCase();
-      const vocab = new Set(words(hay).map(singular));
-      const hits = wanted.filter((word) => vocab.has(word)).length;
-      const score = hits * 3 + (hay.includes(phrase) ? 8 : 0) + Math.floor((tool.popularity ?? 0) / 20);
-      return { tool, hits, score };
-    })
-    .filter((entry) => entry.hits > 0)
+  const ranked = tools.map((tool) => {
+    const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")} ${tool.category}`.toLowerCase();
+    const vocab = new Set([...words(hay).map(singular), ...toolNames(tool)]);
+    const hits = wanted.filter((word) => vocab.has(word)).length;
+    const score = hits * 3 + (hay.includes(phrase) ? 8 : 0) + Math.floor((tool.popularity ?? 0) / 20);
+    return { tool, hits, score };
+  });
+  const best = Math.max(0, ...ranked.map((entry) => entry.hits));
+  return ranked
+    .filter((entry) => entry.hits > 0 && entry.hits * 2 >= best)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((entry) => entry.tool);

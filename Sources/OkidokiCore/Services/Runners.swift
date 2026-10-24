@@ -67,6 +67,20 @@ public enum OutputInsights {
         return Int64(total * 1_073_741_824)
     }
 
+    /// What a dry run says it could free, read from its last "would free" / "potential" / "total" line.
+    /// Unlike `freedBytes` it doesn't add up every size it sees, since previews also list free space and item sizes.
+    public static func reclaimableBytes(in output: String) -> Int64? {
+        let pattern = #"\b(?:would|could|can|potential|reclaimable|to free|total)\b[^\n]*?([0-9]+(?:[.,][0-9]+)?)\s*(GB|GiB|MB|MiB)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(output.startIndex..., in: output)
+        guard let match = regex.matches(in: output, range: range).last,
+              let numberRange = Range(match.range(at: 1), in: output),
+              let unitRange = Range(match.range(at: 2), in: output),
+              let number = Double(output[numberRange].replacingOccurrences(of: ",", with: ".")), number > 0 else { return nil }
+        let gigabytes = output[unitRange].lowercased().hasPrefix("g") ? number : number / 1024
+        return Int64(gigabytes * 1_073_741_824)
+    }
+
     public static func plainSummary(from output: String, maxLines: Int = 4) -> String {
         let lines = output
             .split(separator: "\n")
@@ -90,6 +104,56 @@ public enum SafetyPolicy {
             }
         }
         return nil
+    }
+
+    /// The first "always ask" entry named in the run's commands, apps or target, if any.
+    public static func mustAsk(_ items: [String], settings: AppSettings) -> String? {
+        settings.alwaysAsk.first { entry in items.contains { mentions($0, entry) } }
+    }
+
+    /// True when every command starts with an "always allow" prefix, so the run can start without a card.
+    /// High-risk plans, chained or redirected commands, installs, deletes and anything on the always-ask list still ask.
+    public static func preApproved(commands: [String], risk: RiskLevel, settings: AppSettings) -> Bool {
+        guard !commands.isEmpty, risk != .high, mustAsk(commands, settings: settings) == nil else { return false }
+        let chaining = #"[;&|`<>\n]|\$\("#
+        return commands.allSatisfy { command in
+            let command = command.trimmingCharacters(in: .whitespaces)
+            guard command.range(of: chaining, options: .regularExpression) == nil,
+                  CommandRisk.classify(command) != .high, !alwaysNeedsApproval(command) else { return false }
+            return settings.alwaysAllow.contains { entry in
+                let entry = entry.trimmingCharacters(in: .whitespaces)
+                return !entry.isEmpty && (command == entry || command.hasPrefix(entry + " "))
+            }
+        }
+    }
+
+    /// Installs and deletes ask every time, whatever "always allow" says, and are never remembered.
+    public static func alwaysNeedsApproval(_ command: String) -> Bool {
+        let installs = [
+            #"\bbrew\s+(install|reinstall|upgrade|tap)\b"#, #"Homebrew/install"#,
+            #"\bnpm\s+(install|i)\b"#, #"\b(pip|pip3|pipx)\s+install\b"#, #"\buv\s+(tool\s+|pip\s+)?install\b"#,
+            #"\b(gem|cargo|go)\s+install\b"#, #"\bmas\s+(install|purchase|upgrade)\b"#,
+            #"\b(bash|sh|zsh)\s+\S+\.sh\b"#, #"\binstaller\s+-pkg\b"#,
+        ]
+        let deletes = [
+            #"\brm\b"#, #"\brmdir\b"#, #"\bshred\b"#, #"\s-delete\b"#, #"\s--delete"#, #"\s-overwrite_original"#,
+            #"\bbrew\s+(uninstall|remove|rm|cleanup|autoremove)\b"#, #"\bmas\s+uninstall\b"#,
+            #"\brestic\s+(forget|prune)\b"#, #"\brclone\s+(sync|delete|deletefile|purge|rmdir|rmdirs|move)\b"#,
+            #"\bgit\s+(clean|reset\s+--hard)\b"#,
+        ]
+        let matches = { (pattern: String) in command.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        if (installs + deletes).contains(where: matches) { return true }
+        // Mole's dry run only looks; the real clean, purge or uninstall removes files.
+        let previewOnly = matches(#"\s(--dry-run|-n)(\s|$)"#)
+        return !previewOnly && matches(#"\b(mo|mole)\s+(clean|purge|uninstall|remove|optimize)\b"#)
+    }
+
+    /// What "always allow" remembers for a command: its program and first argument, e.g. "mo clean".
+    /// A dry-run flag right after them is kept, so allowing "mo clean --dry-run" never allows the real clean.
+    public static func allowPrefix(_ command: String) -> String {
+        let words = command.split(separator: " ")
+        let keep = words.count > 2 && ["--dry-run", "-n"].contains(words[2]) ? 3 : 2
+        return words.prefix(keep).joined(separator: " ")
     }
 
     /// True when `term` appears in `command` as a whole word, so blocking "mo" (Mole) doesn't block "remove".

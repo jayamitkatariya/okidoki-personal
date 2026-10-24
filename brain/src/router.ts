@@ -447,12 +447,12 @@ export function localRouter(request: ThinkRequest): Decision {
     return {
       kind: "terminal",
       title: "free up space",
-      answer: mole ? "mole is installed. i can dry-run first, then clean caches, logs and trash. approval before anything moves." : "mole is the free cleaner i'd use. installing it is one homebrew command; i'll ask first.",
+      answer: mole ? "mole is installed. i'll preview what it can clean first; nothing moves until you approve the clean." : "mole is the free cleaner i'd use. installing it is one homebrew command; i'll ask first, then preview what it can clean.",
       speak: "I can clean this up with Mole, with your approval.",
-      risk: "medium",
-      previewSummary: mole ? "scan with mole, then clean caches and trash" : "install mole, scan, then clean caches and trash",
-      previewSteps: mole ? ["dry-run scan with mole", "clean caches, logs and trash", "show freed space"] : ["install mole with homebrew", "dry-run scan", "clean caches, logs and trash"],
-      commands: mole ? ["mo clean --dry-run", "mo clean"] : ["brew install mole", "mo clean --dry-run", "mo clean"],
+      risk: mole ? "low" : "medium",
+      previewSummary: mole ? "preview what mole can clean" : "install mole, then preview what it can clean",
+      previewSteps: mole ? ["preview what would be removed"] : ["install mole with homebrew", "preview what would be removed"],
+      commands: mole ? ["mo clean --dry-run"] : ["brew install mole", "mo clean --dry-run"],
       apps: ["Terminal"],
       actions: ["review"],
     };
