@@ -1731,7 +1731,7 @@ final class AppEnvironment: ObservableObject {
 
     /// One live tutoring step. The sidecar when it's up, otherwise straight to the model.
     func teachStep(_ request: TeachStepRequest) async -> TeachLiveStep? {
-        guard let key = Keychain.get("anthropic"), !key.isEmpty else { return nil }
+        guard let key = KeyStore.get("anthropic"), !key.isEmpty else { return nil }
         if sidecar.status.isReady, let step = await BrainClient.shared.teachStep(request) {
             return step
         }
@@ -1739,7 +1739,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     func teachRefine(_ request: TeachRefineRequest) async -> TeachRefineResult {
-        guard let key = Keychain.get("anthropic"), !key.isEmpty else { return TeachRefineResult(found: false) }
+        guard let key = KeyStore.get("anthropic"), !key.isEmpty else { return TeachRefineResult(found: false) }
         if sidecar.status.isReady, let result = await BrainClient.shared.teachRefine(request) {
             return result
         }
@@ -1825,7 +1825,7 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Keys, tools, sync
 
-    func hasKey(_ provider: String) -> Bool { Keychain.has(provider) }
+    func hasKey(_ provider: String) -> Bool { KeyStore.has(provider) }
 
     /// Nothing answers, teaches, or drives the screen until an Anthropic key is saved.
     private func presentNeedsKey(prompt: String, threadID: String?, source: String) {
@@ -1847,11 +1847,11 @@ final class AppEnvironment: ObservableObject {
     func saveKey(provider: String, value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            Keychain.delete(provider)
+            KeyStore.delete(provider)
             toast(title: "key removed", detail: provider, kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
         } else {
-            Keychain.set(trimmed, for: provider)
-            toast(title: "key saved", detail: "\(provider) · stored in the keychain", kind: .success,
+            KeyStore.set(trimmed, for: provider)
+            toast(title: "key saved", detail: "\(provider) · stored on this mac", kind: .success,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
             if provider == "cartesia" {
                 // Check the key and the built-in voices now, not on the first spoken reply.
@@ -1885,7 +1885,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     func deleteKey(provider: String) {
-        Keychain.delete(provider)
+        KeyStore.delete(provider)
         keysVersion += 1
         toast(title: "key removed", detail: provider, kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
     }
@@ -1908,12 +1908,12 @@ final class AppEnvironment: ObservableObject {
     }
 
     func mcpSecrets(_ server: MCPServer) -> (env: [String: String], headers: [String: String]) {
-        guard let raw = Keychain.get(server.keychainKey), let data = raw.data(using: .utf8),
+        guard let raw = KeyStore.get(server.secretsKey), let data = raw.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return ([:], [:]) }
         return (json["env"] as? [String: String] ?? [:], json["headers"] as? [String: String] ?? [:])
     }
 
-    /// Adds or updates a server. `secrets` nil keeps what's in the Keychain; empty dictionaries remove it.
+    /// Adds or updates a server. `secrets` nil keeps what's in the key file; empty dictionaries remove it.
     func saveMCPServer(_ server: MCPServer, secrets: (env: [String: String], headers: [String: String])?) {
         var servers = store.settings.mcpServers
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
@@ -1924,10 +1924,10 @@ final class AppEnvironment: ObservableObject {
         store.settings.mcpServers = servers
         if let secrets {
             if secrets.env.isEmpty && secrets.headers.isEmpty {
-                Keychain.delete(server.keychainKey)
+                KeyStore.delete(server.secretsKey)
             } else if let data = try? JSONSerialization.data(withJSONObject: ["env": secrets.env, "headers": secrets.headers]),
                       let text = String(data: data, encoding: .utf8) {
-                Keychain.set(text, for: server.keychainKey)
+                KeyStore.set(text, for: server.secretsKey)
             }
         }
         store.saveNow()
@@ -1938,7 +1938,7 @@ final class AppEnvironment: ObservableObject {
 
     func deleteMCPServer(_ id: String) {
         store.settings.mcpServers.removeAll { $0.id == id }
-        Keychain.delete("mcp.\(id)")
+        KeyStore.delete("mcp.\(id)")
         mcpStatus[id] = nil
         BrainClient.shared.forgetMCP(id: id)
         store.saveNow()
@@ -2030,7 +2030,7 @@ final class AppEnvironment: ObservableObject {
             }
         }
         let result = await BrainClient.shared.runConnector(runID: run.id, prompt: run.prompt, callJSON: callJSON,
-                                                           apifyToken: Keychain.get("apify"),
+                                                           apifyToken: KeyStore.get("apify"),
                                                            servers: mcpServerPayloads(),
                                                            spendingLimit: store.settings.spendingLimit,
                                                            model: store.settings.claudeModel)
@@ -2129,7 +2129,7 @@ final class AppEnvironment: ObservableObject {
 
     /// Moss credentials from Keys, saved as "projectId:projectKey".
     private func mossCredentials() -> (projectId: String, projectKey: String)? {
-        guard let raw = Keychain.get("moss")?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard let raw = KeyStore.get("moss")?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
         let parts = raw.split(maxSplits: 1, whereSeparator: { $0 == ":" || $0.isWhitespace }).map(String.init)
         guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
         return (parts[0], parts[1].trimmingCharacters(in: .whitespacesAndNewlines))

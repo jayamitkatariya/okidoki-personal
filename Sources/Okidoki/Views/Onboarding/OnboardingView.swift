@@ -192,7 +192,7 @@ struct OnboardingView: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(keySaved ? OKBrand.greenInk : OKBrand.faint)
                     .frame(width: 20)
-                SecureField(keySaved ? "Key saved in Keychain. Paste to replace." : "sk-ant-…", text: $anthropicKey)
+                SecureField(keySaved ? "Key saved on this Mac. Paste to replace." : "sk-ant-…", text: $anthropicKey)
                     .textFieldStyle(.plain)
                     .font(.okBody(14))
                     .onSubmit { saveKeyIfNeeded() }

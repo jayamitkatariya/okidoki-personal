@@ -226,6 +226,6 @@ public enum ToolCatalog {
         Connector(id: "mcp", name: "MCP servers", kind: "mcp",
                   blurb: "Bring your existing model-context tools into Okidoki runs.",
                   installCommand: "",
-                  docs: "Add servers in Toolbox › MCP servers; their secrets stay in the Keychain. Always show which server a tool belongs to."),
+                  docs: "Add servers in Toolbox › MCP servers; their secrets stay on the Mac. Always show which server a tool belongs to."),
     ]
 }

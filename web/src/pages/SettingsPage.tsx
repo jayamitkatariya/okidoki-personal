@@ -547,7 +547,7 @@ export function SettingsPage() {
 
           <footer className="settings-foot">
             <PixelIcon name="lock" size={13} />
-            Open source. Keys in your Keychain. Screenshots never stored. No background tracking.
+            Open source. Keys stay on this Mac. Screenshots never stored. No background tracking.
           </footer>
         </div>
       </div>

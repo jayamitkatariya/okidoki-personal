@@ -62,7 +62,7 @@ const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   memory: { title: "Memory", subtitle: "What okidoki knows about you" },
   skills: { title: "Skills", subtitle: "Show it once, replay it forever" },
   toolbox: { title: "Toolbox", subtitle: "Free tools, agents and Apple apps" },
-  keys: { title: "Keys", subtitle: "Your API keys, kept in the Keychain" },
+  keys: { title: "Keys", subtitle: "Your API keys, kept on this Mac" },
   settings: { title: "Settings", subtitle: "Input, voice, permissions, look" },
 };
 

@@ -39,7 +39,7 @@ public final class BrainService {
     }
 
     public func think(_ request: BrainRequest) async -> BrainResult {
-        let key = Keychain.get("anthropic") ?? ""
+        let key = KeyStore.get("anthropic") ?? ""
         guard !key.isEmpty else {
             return BrainResult(decision: Self.needsKeyDecision(), usedModel: false, error: "anthropic key required")
         }

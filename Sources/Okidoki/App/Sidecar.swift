@@ -236,7 +236,7 @@ struct BrainAccountPayload: Encodable {
     var kind: String
 }
 
-/// An MCP server as the brain needs it, secrets included (read from the Keychain per request).
+/// An MCP server as the brain needs it, secrets included (read from the Mac's key file per request).
 struct BrainMCPServerPayload: Encodable {
     var id: String
     var name: String
@@ -370,7 +370,7 @@ final class BrainClient {
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 90
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = Keychain.get("anthropic"), !key.isEmpty {
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
             urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
         }
         do {
@@ -508,7 +508,7 @@ final class BrainClient {
         request.httpMethod = "POST"
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = Keychain.get("anthropic"), !key.isEmpty {
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
             request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
         }
         do {
@@ -535,7 +535,7 @@ final class BrainClient {
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 70
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = Keychain.get("anthropic"), !key.isEmpty {
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
             urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
         }
         do {
@@ -555,7 +555,7 @@ final class BrainClient {
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 30
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = Keychain.get("anthropic"), !key.isEmpty {
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
             urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
         }
         do {
@@ -662,7 +662,7 @@ final class BrainClient {
         request.httpMethod = "POST"
         request.timeoutInterval = 60 * 6
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = Keychain.get("anthropic"), !key.isEmpty {
+        if let key = KeyStore.get("anthropic"), !key.isEmpty {
             request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
         }
         do {

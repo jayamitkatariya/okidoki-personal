@@ -154,7 +154,7 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   url?: string;
-  // Secrets come from the Mac's Keychain on every request; the sidecar never stores them.
+  // Secrets come from the Mac's key file on every request; the sidecar never stores them.
   env?: Record<string, string>;
   headers?: Record<string, string>;
 }

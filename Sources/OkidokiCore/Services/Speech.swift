@@ -190,7 +190,7 @@ public final class VoiceSpeaker: NSObject, ObservableObject, AVSpeechSynthesizer
         stop()
         lastError = nil
 
-        let cartesiaKey = Keychain.get("cartesia") ?? ""
+        let cartesiaKey = KeyStore.get("cartesia") ?? ""
         let voice = Voices.voice(voiceID)
         if !cartesiaKey.isEmpty && !voice.cartesiaID.isEmpty {
             let spoken = String(cleaned.prefix(900))

@@ -123,7 +123,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var agentExtraArgs: [String: String] = [:]
     public var lastWorkingDirectory: String = ""
 
-    /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Keychain, not here.
+    /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Mac's key file, not here.
     public var mcpServers: [MCPServer] = []
 
     public init() {}
@@ -222,8 +222,8 @@ public struct MCPServer: Identifiable, Codable, Equatable, Sendable {
         enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? true
     }
 
-    /// Keychain account holding this server's secrets as JSON: {"env": {...}, "headers": {...}}.
-    public var keychainKey: String { "mcp.\(id)" }
+    /// KeyStore entry holding this server's secrets as JSON: {"env": {...}, "headers": {...}}.
+    public var secretsKey: String { "mcp.\(id)" }
 }
 
 // MARK: - Coding agents

@@ -37,7 +37,7 @@ npx convex env set OKIDOKI_SHARE_BASE_URL "https://your-hosted-panel.example.com
 ```
 
 The native app pushes its state to `http://127.0.0.1:3211/api/sync` with the
-bearer secret from the macOS Keychain. Each sync runs as small batched mutations
+bearer secret saved on the Mac. Each sync runs as small batched mutations
 (unchanged items are skipped), and the snapshot the panel loads is trimmed to fit
 in one document; the full history stays on the Mac.
 

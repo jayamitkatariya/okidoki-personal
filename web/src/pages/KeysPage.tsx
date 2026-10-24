@@ -71,11 +71,11 @@ export function KeysPage() {
     <div className="keys-page">
       <PageTitle
         title="Keys"
-        subtitle="An Anthropic key is required. Everything else is optional, and every key stays in the Keychain."
+        subtitle="An Anthropic key is required. Everything else is optional, and every key stays on this Mac."
         trailing={
           <span className="keys-badge">
             <PixelIcon name="lock" size={14} />
-            Stored in Keychain
+            Stored on this Mac
           </span>
         }
       />
@@ -118,7 +118,7 @@ export function KeysPage() {
                         onClick={() =>
                           setConfirm({
                             title: `Remove the ${provider.name} key?`,
-                            detail: "It's deleted from your Keychain. You'll need to paste it again to use it.",
+                            detail: "It's deleted from this Mac. You'll need to paste it again to use it.",
                             action: "Remove key",
                             onConfirm: () => {
                               invoke("deleteKey", { provider: provider.id });
@@ -231,7 +231,7 @@ export function KeysPage() {
         open={Boolean(editing)}
         onClose={() => setEditing(null)}
         title={editing ? `${state.keys[editing.id] ? "Replace" : "Add"} ${editing.name} key` : "Key"}
-        subtitle="Saved to your Keychain. It's never shown again, here or anywhere."
+        subtitle="Saved privately on this Mac. It's never shown again, here or anywhere."
         width={480}
       >
         {editing ? (
@@ -247,7 +247,7 @@ export function KeysPage() {
                 onEnter={() => {
                   if (!value.trim()) return;
                   invoke("saveKey", { provider: editing.id, value: value.trim() });
-                  notify("Key saved", `${editing.name} · Keychain`);
+                  notify("Key saved", `${editing.name} · on this Mac`);
                   setEditing(null);
                 }}
               />
@@ -269,7 +269,7 @@ export function KeysPage() {
                 disabled={!value.trim()}
                 onClick={() => {
                   invoke("saveKey", { provider: editing.id, value: value.trim() });
-                  notify("Key saved", `${editing.name} · Keychain`);
+                  notify("Key saved", `${editing.name} · on this Mac`);
                   setEditing(null);
                 }}
               >

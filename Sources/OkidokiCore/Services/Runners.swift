@@ -123,7 +123,7 @@ public final class ConvexSyncService: ObservableObject {
             status = "check the convex url"
             return
         }
-        guard let secret = Keychain.get("convex"), !secret.isEmpty else {
+        guard let secret = KeyStore.get("convex"), !secret.isEmpty else {
             status = "add a sync secret in keys"
             return
         }
@@ -169,7 +169,7 @@ public final class ConvexSyncService: ObservableObject {
 
     public func share(run: AgentRun, account: Account, store: OkidokiStore) async -> String? {
         guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return nil }
-        guard let secret = Keychain.get("convex"), !secret.isEmpty else { return nil }
+        guard let secret = KeyStore.get("convex"), !secret.isEmpty else { return nil }
         guard let url = endpoint(store.settings.convexSiteURL, path: "/api/share") else { return nil }
         do {
             let encoder = JSONEncoder()
@@ -198,7 +198,7 @@ public final class ConvexSyncService: ObservableObject {
 
     public func pull(store: OkidokiStore) async -> AppState? {
         guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return nil }
-        guard let secret = Keychain.get("convex"), !secret.isEmpty,
+        guard let secret = KeyStore.get("convex"), !secret.isEmpty,
               let url = endpoint(store.settings.convexSiteURL, path: "/api/bootstrap?accountId=\(store.currentAccountID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") else { return nil }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")

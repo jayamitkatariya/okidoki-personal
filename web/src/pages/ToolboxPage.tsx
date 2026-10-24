@@ -513,7 +513,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
       enabled: existing?.enabled ?? true,
     };
     const typed = secretText.trim();
-    // Secrets go only when changed, straight to the Keychain; leaving the box empty keeps what's saved.
+    // Secrets go only when changed, straight to the Mac's key file; leaving the box empty keeps what's saved.
     const secrets = typed
       ? transport === "http"
         ? { env: {}, headers: parsePairs(typed, ":") }
@@ -569,7 +569,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
             placeholder={transport === "http" ? "Authorization: Bearer …" : "GITHUB_PERSONAL_ACCESS_TOKEN=…"}
           />
           <span className="tb-mcp-hint">
-            <PixelIcon name="lock" size={12} /> Saved to your Keychain, never synced.{" "}
+            <PixelIcon name="lock" size={12} /> Saved privately on this Mac, never synced.{" "}
             {stored.length && !clearSecrets ? (
               <>
                 Saved now: {stored.join(", ")}. Leave empty to keep them, or{" "}

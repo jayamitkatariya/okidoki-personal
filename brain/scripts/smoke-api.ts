@@ -1,14 +1,20 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { computerAct } from "../src/computer";
 import { think } from "../src/llm";
 
 // Exercise the actual API without capturing the screen or executing any returned action.
 let key = process.env.ANTHROPIC_API_KEY?.trim();
-if (!key && process.platform === "darwin") {
-  const saved = Bun.spawnSync(["security", "find-generic-password", "-s", "com.jaykatariya.okidoki.keys", "-a", "anthropic", "-w"]);
-  if (saved.exitCode === 0) key = saved.stdout.toString().trim();
+if (!key) {
+  // The key okidoki saved in Keys (see KeyStore.swift).
+  const file = process.env.OKIDOKI_KEYS_FILE || join(homedir(), "Library", "Application Support", "Okidoki", "keys.json");
+  try {
+    key = (JSON.parse(readFileSync(file, "utf8")) as Record<string, string>).anthropic?.trim();
+  } catch {}
 }
 if (!key) {
-  console.error("No API key available. Run from a terminal with access to Okidoki's Keychain entry, or set ANTHROPIC_API_KEY.");
+  console.error("No API key available. Add one in okidoki's Keys page, or set ANTHROPIC_API_KEY.");
   process.exit(1);
 }
 

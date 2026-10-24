@@ -21,7 +21,7 @@ make test     # Swift tests
 ```
 
 Copy `backend/.env.local.example` to `backend/.env.local` only if you run the sync backend.
-Keys are kept in the macOS Keychain, not in the repository.
+Keys are kept in a private file on your Mac (`~/Library/Application Support/Okidoki/keys.json`), not in the repository or the Keychain.
 
 ## License
 
@@ -105,6 +105,6 @@ and Opus 5.5 reject forced tool calls. Routing can use Haiku while computer use
 switches to Sonnet, so both paths must support the same request format.
 
 For a live API smoke check, run `cd brain && bun run smoke:api`. It tests answers
-and computer-use planning with Haiku, Sonnet, and Opus 5.5 using the saved Keychain
-entry or `ANTHROPIC_API_KEY`. It makes six billed API requests without capturing
+and computer-use planning with Haiku, Sonnet, and Opus 5.5 using the key saved
+in Keys or `ANTHROPIC_API_KEY`. It makes six billed API requests without capturing
 the screen or executing the returned actions.

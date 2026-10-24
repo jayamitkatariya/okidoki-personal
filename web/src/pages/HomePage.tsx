@@ -519,7 +519,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
         </div>
         <p className="home-footer-note">
           <PixelIcon name="lock" size={13} />
-          A little peace of mind. Your keys stay in your Mac's Keychain.
+          A little peace of mind. Your keys stay on your Mac.
         </p>
       </footer>
     </div>

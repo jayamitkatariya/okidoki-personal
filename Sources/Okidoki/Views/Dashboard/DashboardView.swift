@@ -519,7 +519,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let raw = payload["server"] as? [String: Any],
                let data = try? JSONSerialization.data(withJSONObject: raw),
                let server = try? JSONDecoder().decode(MCPServer.self, from: data) {
-                // Secrets arrive only when the page changed them; otherwise the Keychain copy stays.
+                // Secrets arrive only when the page changed them; otherwise the saved copy stays.
                 var secrets: (env: [String: String], headers: [String: String])?
                 if let given = payload["secrets"] as? [String: Any] {
                     secrets = (given["env"] as? [String: String] ?? [:], given["headers"] as? [String: String] ?? [:])

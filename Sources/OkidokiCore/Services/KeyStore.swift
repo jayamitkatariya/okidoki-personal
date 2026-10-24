@@ -1,50 +1,113 @@
 import Foundation
 import Security
 
-public enum Keychain {
-    private static let service = "com.jaykatariya.okidoki.keys"
+/// API keys and MCP secrets, saved in a private file in okidoki's folder:
+/// `~/Library/Application Support/Okidoki/keys.json`, readable only by you.
+/// The file never leaves this Mac — it isn't part of the synced state.
+public enum KeyStore {
+    private static let lock = NSLock()
+    private static var cache: [String: String]? // guarded by lock
+
+    static var fileURL: URL {
+        if let override = ProcessInfo.processInfo.environment["OKIDOKI_KEYS_FILE"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Okidoki", isDirectory: true)
+            .appendingPathComponent("keys.json")
+    }
 
     public static func set(_ value: String, for key: String) {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(query as CFDictionary)
-        var attributes = query
-        attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attributes as CFDictionary, nil)
+        update { $0[key] = value }
     }
 
     public static func get(_ key: String) -> String? {
         if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" { return nil }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              let string = String(data: data, encoding: .utf8) else { return nil }
-        return string
+        lock.lock()
+        defer { lock.unlock() }
+        return load()[key]
     }
 
     public static func delete(_ key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(query as CFDictionary)
+        update { $0[key] = nil }
     }
 
     public static func has(_ key: String) -> Bool {
         (get(key)?.isEmpty == false)
+    }
+
+    private static func update(_ change: (inout [String: String]) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        var keys = load()
+        change(&keys)
+        cache = keys
+        save(keys)
+    }
+
+    /// Reads the file once and keeps it in memory. Callers hold the lock.
+    private static func load() -> [String: String] {
+        if let cache { return cache }
+        var keys: [String: String] = [:]
+        if let data = try? Data(contentsOf: fileURL) {
+            keys = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        } else {
+            // No file yet: bring over keys an earlier version kept in the Keychain, once.
+            keys = LegacyKeychain.takeAll()
+            if !keys.isEmpty { save(keys) }
+        }
+        cache = keys
+        return keys
+    }
+
+    /// Writes owner-only (0600) to a temporary file, then swaps it in, so a crash never leaves half a file.
+    private static func save(_ keys: [String: String]) {
+        let url = fileURL
+        let folder = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(keys) else { return }
+        let temp = folder.appendingPathComponent(".keys-\(UUID().uuidString).json")
+        guard FileManager.default.createFile(atPath: temp.path, contents: data,
+                                             attributes: [.posixPermissions: 0o600]) else { return }
+        if rename(temp.path, url.path) != 0 {
+            try? FileManager.default.removeItem(at: temp)
+        }
+    }
+}
+
+/// The macOS Keychain items earlier versions saved keys in. Only read once, to move them to `KeyStore`.
+enum LegacyKeychain {
+    private static let service = "com.jaykatariya.okidoki.keys"
+
+    /// Every saved key, removed from the Keychain as it's read.
+    static func takeAll() -> [String: String] {
+        let list: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var found: AnyObject?
+        guard SecItemCopyMatching(list as CFDictionary, &found) == errSecSuccess,
+              let items = found as? [[String: Any]] else { return [:] }
+        var keys: [String: String] = [:]
+        for account in items.compactMap({ $0[kSecAttrAccount as String] as? String }) {
+            let item: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ]
+            var query = item
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: AnyObject?
+            if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+               let data = result as? Data, let value = String(data: data, encoding: .utf8) {
+                keys[account] = value
+                SecItemDelete(item as CFDictionary)
+            }
+        }
+        return keys
     }
 }
 
