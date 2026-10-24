@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { MemorySyncRequest, RecalledItem } from "./types";
+import { tools } from "./catalog";
+import type { MemorySyncRequest, RecalledItem, ToolSpec } from "./types";
 
 // Short-term memory. Moss holds the recent conversation and "right now" notes, embeds them
 // in-process, and saves the index on this Mac. Nothing is pushed to Moss's cloud.
 // Durable account data (profile, runs, skills) lives in Convex. Images aren't indexed.
+// The Toolbox's free tools share the index (type "tool"), so a request can find a tool by meaning.
 
 const INDEX_NAME = "okidoki-memory";
 
@@ -139,28 +141,47 @@ export function toDocs(request: MemorySyncRequest): MemoryDoc[] {
   return docs;
 }
 
+/** Every Toolbox tool, described by what it's for (not how to run it), so it matches a request's meaning. */
+export function toolIndexDocs(catalog: ToolSpec[] = tools): MemoryDoc[] {
+  return catalog.map((tool) => ({
+    id: `tool:${tool.id}`,
+    text: `${tool.name}, instead of ${tool.replaces}. ${tool.blurb} Good for requests like: ${tool.examples.join("; ")}.`,
+    metadata: { type: "tool", account: "", title: tool.name, toolId: tool.id, category: tool.category },
+  }));
+}
+
 // --- sync + recall -------------------------------------------------------------
+
+/** Embeds the docs that are new or changed since the index last saw them. Returns how many that was. */
+async function upsert(index: MemoryEngine, docs: MemoryDoc[]): Promise<number> {
+  const changed = docs.filter((doc) => known.get(doc.id) !== fingerprint(doc));
+  for (let start = 0; start < changed.length; start += 256) {
+    const batch = changed.slice(start, start + 256);
+    await index.add(batch);
+    for (const doc of batch) known.set(doc.id, fingerprint(doc));
+  }
+  return changed.length;
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} timed out`)), ms))]);
+}
 
 /** Brings the index in line with the Mac: embeds only new or changed items, drops removed ones. */
 export async function syncMemory(request: MemorySyncRequest): Promise<{ ok: boolean; total: number; added: number; removed: number; error?: string }> {
   const run = async () => {
     const index = await ensureEngine(request);
-    const docs = toDocs(request);
+    const docs = [...toDocs(request), ...toolIndexDocs()];
     const wanted = new Map(docs.map((doc) => [doc.id, doc]));
-    const changed = docs.filter((doc) => known.get(doc.id) !== fingerprint(doc));
     const removed = [...known.keys()].filter((id) => !wanted.has(id));
-    for (let start = 0; start < changed.length; start += 256) {
-      const batch = changed.slice(start, start + 256);
-      await index.add(batch);
-      for (const doc of batch) known.set(doc.id, fingerprint(doc));
-    }
+    const added = await upsert(index, docs);
     if (removed.length) {
       await index.remove(removed);
       for (const id of removed) known.delete(id);
     }
-    if (changed.length || removed.length) await index.save();
+    if (added || removed.length) await index.save();
     lastError = "";
-    return { ok: true, total: known.size, added: changed.length, removed: removed.length };
+    return { ok: true, total: known.size, added, removed: removed.length };
   };
   const result = queue.then(run, run);
   queue = result.catch(() => {});
@@ -177,14 +198,29 @@ export async function recall(text: string, accountId: string | undefined, limit 
   const index = engine;
   if (!index || !text.trim()) return [];
   try {
-    const hits = await Promise.race([
-      index.query(text, limit * 4),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("recall timed out")), 2000)),
-    ]);
+    const hits = await withTimeout(index.query(text, limit * 4 + tools.length), 2000, "recall");
     return hits
+      .filter((hit) => hit.metadata.type !== "tool")
       .filter((hit) => !hit.metadata.account || !accountId || hit.metadata.account === accountId)
       .slice(0, limit)
       .map((hit) => ({ type: hit.metadata.type ?? "memory", text: hit.text, title: hit.metadata.title ?? hit.metadata.thread ?? "", date: hit.metadata.date ?? "", score: hit.score }));
+  } catch {
+    return [];
+  }
+}
+
+/** The Toolbox tools closest in meaning to a request, best first. Never throws; [] when the index is off. */
+export async function recallTools(text: string, limit = 3): Promise<ToolSpec[]> {
+  const index = engine;
+  if (!index || !text.trim()) return [];
+  try {
+    // Messages and notes share the index, so ask for enough hits that the tools are among them.
+    const hits = await withTimeout(index.query(text, Math.max(known.size, limit)), 2000, "tool search");
+    return hits
+      .filter((hit) => hit.metadata.type === "tool")
+      .map((hit) => tools.find((tool) => tool.id === hit.metadata.toolId))
+      .filter((tool): tool is ToolSpec => Boolean(tool))
+      .slice(0, limit);
   } catch {
     return [];
   }
@@ -203,10 +239,12 @@ export function memoryStatus() {
   return { ready: Boolean(engine), documents: known.size, error: lastError || undefined };
 }
 
-/** Loads the on-disk short-term index so the first question can recall it. Does not drop documents. */
+/** Loads the on-disk short-term index so the first question can recall it, and makes sure the tools are in it.
+ * Does not drop documents. */
 export async function warmMemory(projectId: string, projectKey: string): Promise<void> {
   const run = async () => {
-    await ensureEngine({ projectId, projectKey });
+    const index = await ensureEngine({ projectId, projectKey });
+    if (await upsert(index, toolIndexDocs())) await index.save();
   };
   const result = queue.then(run, run);
   queue = result.catch(() => {});

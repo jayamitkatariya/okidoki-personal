@@ -1,7 +1,7 @@
-import type { Decision, TeachMark, ThinkRequest } from "./types";
+import type { Decision, TeachMark, ThinkRequest, ToolSpec } from "./types";
 import { toolDocs } from "./catalog";
 import { checkConnectorDecision, connectorPrompt, mcpCatalog, type McpCatalogEntry } from "./connectors";
-import { recall, recallPrompt } from "./memory";
+import { recall, recallPrompt, recallTools } from "./memory";
 
 const responseTool = {
   name: "okidoki_respond",
@@ -142,9 +142,18 @@ function normalize(input: Record<string, unknown>): Decision {
   return mapped as unknown as Decision;
 }
 
-function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalled: string): string {
+// Toolbox tools Moss found for this request that aren't installed yet. Installed ones already have their docs in the prompt.
+export function toolSuggestions(suggested: ToolSpec[], installed: string[]): string {
+  const missing = suggested.filter((tool) => !installed.includes(tool.id));
+  if (!missing.length) return "";
+  const entries = missing.map((tool) => `${tool.name} (not installed; install with: ${tool.installCommand}):\n${tool.docs}`);
+  return `Free tools from the Toolbox that may fit this request, found by meaning. Use one only if it truly fits; installing it is part of the plan and needs approval:\n${entries.join("\n\n")}`;
+}
+
+function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalled: string, suggested: ToolSpec[] = []): string {
   const memory = request.memory?.length ? request.memory.map((m) => `· ${m}`).join("\n") : "nothing yet.";
   const docs = toolDocs(request.installedTools ?? []);
+  const fitting = toolSuggestions(suggested, request.installedTools ?? []);
   const native = request.nativeContext;
   const connectors = connectorPrompt(request.connectors, catalog);
   const lines = [
@@ -208,6 +217,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     native?.frontWindow ? `Front window: ${native.frontWindow}` : "",
     request.documentName ? `Attached document: ${request.documentName}` : "",
     docs ? `\nOpen-source tool docs you can rely on:\n${docs}` : "",
+    fitting ? `\n${fitting}` : "",
     connectors ? `\nConnected services:\n${connectors}` : "",
   ];
   return lines.filter(Boolean).join("\n");
@@ -265,9 +275,10 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
   }
   // Cached after the first listing, so this is usually instant; a slow server is left out rather than stalling.
   // Both are quick (cached servers, in-process index) and run side by side; either can come back empty.
-  const [catalog, recalled] = await Promise.all([
+  const [catalog, recalled, suggested] = await Promise.all([
     request.connectors?.mcpServers?.length ? mcpCatalog(request.connectors.mcpServers, 4_000) : Promise.resolve([]),
     recall(request.text, request.accountId),
+    recallTools(request.text),
   ]);
   const content: unknown[] = [];
   if (request.screenshotBase64) {
@@ -286,7 +297,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
   const body = {
     model,
     max_tokens: 1600,
-    system: systemPrompt(request, catalog, recallPrompt(recalled)),
+    system: systemPrompt(request, catalog, recallPrompt(recalled), suggested),
     messages,
     tools: [responseTool],
     // Sonnet/Opus 5.5 reject forced tool calls. The prompt selects our single tool.
