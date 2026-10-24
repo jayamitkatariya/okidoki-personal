@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Account, NativeState, Settings, Toast } from "./types";
-import { useConvexSnapshot, useNativeState, invoke as nativeInvoke } from "./bridge";
+import { useNativeState, invoke as nativeInvoke } from "./bridge";
 import { demoState } from "./demo";
+import { Cloud, CLOUD_OFF, hostedConvexUrl, nativeConvexUrl, type CloudState } from "./cloud";
 
 interface DashboardContextValue {
   state: NativeState;
@@ -10,6 +11,9 @@ interface DashboardContextValue {
   native: boolean;
   connected: boolean;
   convexConnected: boolean;
+  /** A browser build pointed at a deployment, with no Mac app around it: read-only, behind sign-in. */
+  hosted: boolean;
+  cloud: CloudState;
   toasts: Toast[];
   updateSettings: (patch: Partial<Settings>) => void;
   updateManySettings: (settings: Settings) => void;
@@ -26,15 +30,75 @@ function resolveTheme(appearance: Settings["appearance"]): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+const HOSTED_ACCOUNT_KEY = "okidoki.hostedAccount";
+
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {}
+}
+
+// The hosted panel sees only what the Mac synced, so everything that lives on the Mac
+// (keys, permissions, installed tools) starts empty rather than borrowing demo values.
+function fromCloud(cloud: CloudState, accountId: string): NativeState {
+  const snapshot = cloud.snapshot ?? {};
+  return {
+    ...demoState,
+    runs: [],
+    threads: [],
+    memories: [],
+    skills: [],
+    routines: [],
+    connectors: [],
+    tools: [],
+    installedAgents: [],
+    keys: {},
+    permissions: {},
+    mcpStatus: {},
+    mcpSecretNames: {},
+    savings: 0,
+    ...snapshot,
+    settings: { ...demoState.settings, ...(snapshot.settings ?? {}) },
+    accounts: cloud.accounts,
+    currentAccountID: accountId,
+    signedOut: false,
+    inCall: false,
+    onboardingOpen: false,
+    dashboardOpen: true,
+    sidecar: "on your Mac",
+    convexConfigured: true,
+  };
+}
+
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const { state: nativeState, connected } = useNativeState();
-  const base = nativeState ?? demoState;
-  const convex = useConvexSnapshot(
-    nativeState?.currentAccountID ?? demoState.currentAccountID,
-    nativeState?.settings.convexSiteURL ?? demoState.settings.convexSiteURL,
-    Boolean(nativeState?.settings.syncEnabled),
-  );
-  const state = nativeState ?? convex.state ?? demoState;
+  // `connected` means a real Mac app is on the other end; nativeState alone may be the demo fallback.
+  const native = connected && Boolean(nativeState);
+  const hostedUrl = native ? "" : hostedConvexUrl();
+  const hosted = Boolean(hostedUrl);
+  const cloudUrl = native ? nativeConvexUrl(nativeState) : hostedUrl;
+
+  const [cloud, setCloud] = useState<CloudState>(CLOUD_OFF);
+  useEffect(() => {
+    if (!cloudUrl) setCloud(CLOUD_OFF);
+  }, [cloudUrl]);
+
+  const [hostedAccountId, setHostedAccountId] = useState<string | null>(() => readStored(HOSTED_ACCOUNT_KEY));
+  const hostedAccount = hosted ? (cloud.accounts.find((item) => item.id === hostedAccountId) ?? cloud.accounts[0] ?? null) : null;
+
+  // Built once per cloud change: a fresh object every render would re-trigger the settings effect below.
+  const hostedState = useMemo(() => (hosted ? fromCloud(cloud, hostedAccount?.id ?? "") : null), [hosted, cloud, hostedAccount?.id]);
+  const state: NativeState = native ? nativeState! : (hostedState ?? nativeState ?? demoState);
+  const base = native || hosted ? state : demoState;
+
   const [settings, setSettings] = useState<Settings>(state.settings);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const pendingUntil = useRef(0);
@@ -55,8 +119,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   }, [settings.appearance]);
 
   const account = useMemo(
-    () => state.accounts.find((item) => item.id === state.currentAccountID) ?? state.accounts[0] ?? base.accounts[0],
-    [state.accounts, state.currentAccountID, base.accounts],
+    () =>
+      state.accounts.find((item) => item.id === state.currentAccountID) ??
+      state.accounts[0] ??
+      base.accounts[0] ?? { id: "", name: cloud.email ?? "you", email: cloud.email ?? "", kind: "personal" as const, colorHex: "44E45E", createdAt: "" },
+    [state.accounts, state.currentAccountID, base.accounts, cloud.email],
   );
 
   const pushToast = useCallback((title: string, detail?: string, kind: Toast["kind"] = "success") => {
@@ -65,30 +132,54 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 5200);
   }, []);
 
-  const invoke = useCallback((type: string, payload: Record<string, unknown> = {}) => {
-    nativeInvoke(type, payload);
-  }, []);
+  // The hosted panel can't reach the Mac yet: it switches accounts and signs out locally, and says
+  // so for anything that would need the Mac to act.
+  const latestCloud = useRef(cloud);
+  latestCloud.current = cloud;
+  const invoke = useCallback(
+    (type: string, payload: Record<string, unknown> = {}) => {
+      if (!hosted) {
+        nativeInvoke(type, payload);
+        return;
+      }
+      if (type === "switchAccount" && typeof payload.id === "string") {
+        setHostedAccountId(payload.id);
+        writeStored(HOSTED_ACCOUNT_KEY, payload.id);
+      } else if (type === "signOut") {
+        void latestCloud.current.signOut();
+      } else if (type !== "ready" && type !== "getState") {
+        pushToast("Do this on your Mac", "This panel shows what your Mac synced. It can't act from here yet.", "info");
+      }
+    },
+    [hosted, pushToast],
+  );
 
   // the latest settings, so a quick second change builds on the first instead of a stale render
   const latestSettings = useRef(settings);
   latestSettings.current = settings;
 
-  const updateSettings = useCallback((patch: Partial<Settings>) => {
-    // side effects stay out of the state updater, which React may run more than once
-    const next = { ...latestSettings.current, ...patch };
-    latestSettings.current = next;
-    pendingUntil.current = Date.now() + 900;
-    setSettings(next);
-    // only the changed keys: native merges them, so settings it changed meanwhile aren't overwritten
-    nativeInvoke("updateSettings", { patch });
-  }, []);
+  const updateSettings = useCallback(
+    (patch: Partial<Settings>) => {
+      // side effects stay out of the state updater, which React may run more than once
+      const next = { ...latestSettings.current, ...patch };
+      latestSettings.current = next;
+      pendingUntil.current = Date.now() + 900;
+      setSettings(next);
+      // only the changed keys: native merges them, so settings it changed meanwhile aren't overwritten
+      if (!hosted) nativeInvoke("updateSettings", { patch });
+    },
+    [hosted],
+  );
 
-  const updateManySettings = useCallback((next: Settings) => {
-    latestSettings.current = next;
-    pendingUntil.current = Date.now() + 900;
-    setSettings(next);
-    nativeInvoke("updateSettings", { settings: next });
-  }, []);
+  const updateManySettings = useCallback(
+    (next: Settings) => {
+      latestSettings.current = next;
+      pendingUntil.current = Date.now() + 900;
+      setSettings(next);
+      if (!hosted) nativeInvoke("updateSettings", { settings: next });
+    },
+    [hosted],
+  );
 
   const dismissToast = useCallback((id: string) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
@@ -98,9 +189,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     state: { ...state, settings },
     settings,
     account,
-    native: Boolean(nativeState),
+    native,
     connected,
-    convexConnected: convex.connected,
+    convexConnected: cloud.status === "signedIn" && Boolean(cloud.snapshot),
+    hosted,
+    cloud,
     toasts,
     updateSettings,
     updateManySettings,
@@ -109,7 +202,19 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     invoke,
   };
 
-  return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
+  return (
+    <DashboardContext.Provider value={value}>
+      {cloudUrl ? (
+        <Cloud
+          url={cloudUrl}
+          accountId={native ? (nativeState?.currentAccountID ?? null) : (hostedAccount?.id ?? null)}
+          claimAccounts={native ? (nativeState?.accounts ?? null) : null}
+          onChange={setCloud}
+        />
+      ) : null}
+      {children}
+    </DashboardContext.Provider>
+  );
 }
 
 export function useDashboard(): DashboardContextValue {

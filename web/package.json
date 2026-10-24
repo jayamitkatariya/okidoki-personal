@@ -9,6 +9,7 @@
     "preview": "vite preview --port=5174"
   },
   "dependencies": {
+    "@convex-dev/auth": "0.0.96",
     "convex": "^1.48.0",
     "motion": "^12.23.24",
     "react": "^19.0.0",

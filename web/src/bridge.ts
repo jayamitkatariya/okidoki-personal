@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { ConvexClient } from "convex/browser";
-import { anyApi } from "convex/server";
 import type { Account, AccountKind, McpServer, NativeState, Settings } from "./types";
 import { demoState } from "./demo";
 
@@ -127,57 +125,6 @@ export function useNativeState(): { state: NativeState | null; connected: boolea
       window.clearTimeout(timer);
     };
   }, []);
-
-  return { state, connected };
-}
-
-let client: ConvexClient | null = null;
-let clientURL = "";
-
-function convexUrl(siteURL: string | undefined, enabled: boolean): string {
-  const baked = (import.meta.env.VITE_CONVEX_URL as string | undefined)?.trim();
-  if (baked) return baked;
-  if (!enabled || !siteURL) return "";
-  return siteURL.replace(":3211", ":3210").replace(/\/$/, "");
-}
-
-export function useConvexSnapshot(accountId: string | undefined, siteURL: string | undefined, enabled: boolean): {
-  state: NativeState | null;
-  connected: boolean;
-} {
-  const [state, setState] = useState<NativeState | null>(null);
-  const [connected, setConnected] = useState(false);
-  const url = convexUrl(siteURL, enabled);
-
-  useEffect(() => {
-    if (!url || !accountId) return;
-    try {
-      if (!client || clientURL !== url) {
-        // drop the old socket rather than leaving one open per URL tried
-        void client?.close();
-        client = new ConvexClient(url);
-        clientURL = url;
-      }
-      const unsubscribe = client.onUpdate(
-        anyApi.dashboard.bootstrap,
-        { accountId },
-        (data: unknown) => {
-          const value = data as { state?: NativeState | string; updatedAt?: number } | null;
-          if (!value?.state) return;
-          const parsed = typeof value.state === "string" ? (JSON.parse(value.state) as NativeState) : value.state;
-          if (parsed && Array.isArray(parsed.accounts)) {
-            setState(parsed);
-            setConnected(true);
-          }
-        },
-        () => setConnected(false),
-      );
-      return () => unsubscribe();
-    } catch (error) {
-      console.warn("convex unavailable", error);
-      setConnected(false);
-    }
-  }, [url, accountId]);
 
   return { state, connected };
 }

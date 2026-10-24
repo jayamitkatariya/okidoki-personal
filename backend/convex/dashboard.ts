@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { internalQuery, query, type QueryCtx } from "./_generated/server";
+import { ownedAccount } from "./accounts";
 
 // Older snapshots may hold the state as a JSON string.
 function parseState(state: unknown) {
@@ -11,13 +12,20 @@ function parseState(state: unknown) {
   }
 }
 
+async function snapshotFor(ctx: QueryCtx, accountId: string) {
+  return await ctx.db
+    .query("snapshots")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .first();
+}
+
+// Everything below answers only the signed-in owner of the account; anyone else gets nothing.
+
 export const bootstrap = query({
   args: { accountId: v.string() },
   handler: async (ctx, { accountId }) => {
-    const snapshot = await ctx.db
-      .query("snapshots")
-      .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .first();
+    if (!(await ownedAccount(ctx, accountId))) return null;
+    const snapshot = await snapshotFor(ctx, accountId);
     if (!snapshot) return null;
     return { state: parseState(snapshot.state), updatedAt: snapshot.updatedAt, device: snapshot.device };
   },
@@ -26,10 +34,8 @@ export const bootstrap = query({
 export const state = query({
   args: { accountId: v.string() },
   handler: async (ctx, { accountId }) => {
-    const snapshot = await ctx.db
-      .query("snapshots")
-      .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .first();
+    if (!(await ownedAccount(ctx, accountId))) return null;
+    const snapshot = await snapshotFor(ctx, accountId);
     return snapshot ? parseState(snapshot.state) : null;
   },
 });
@@ -37,6 +43,7 @@ export const state = query({
 export const runs = query({
   args: { accountId: v.string() },
   handler: async (ctx, { accountId }) => {
+    if (!(await ownedAccount(ctx, accountId))) return [];
     return await ctx.db
       .query("runs")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
@@ -47,9 +54,19 @@ export const runs = query({
 export const memories = query({
   args: { accountId: v.string() },
   handler: async (ctx, { accountId }) => {
+    if (!(await ownedAccount(ctx, accountId))) return [];
     return await ctx.db
       .query("memories")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .collect();
+  },
+});
+
+// For the Mac's own pull over /api/bootstrap, which is guarded by the sync secret instead of a login.
+export const forDevice = internalQuery({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    const snapshot = await snapshotFor(ctx, accountId);
+    return snapshot ? { state: parseState(snapshot.state), updatedAt: snapshot.updatedAt } : null;
   },
 });

@@ -1,7 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
+import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  // Convex Auth: users, sessions, sign-in accounts, refresh tokens.
+  ...authTables,
+
+  // okidoki accounts (Personal, Work…), owned by the signed-in user who claimed them.
   accounts: defineTable({
     clientId: v.string(),
     name: v.string(),
@@ -10,7 +15,10 @@ export default defineSchema({
     colorHex: v.string(),
     createdAt: v.string(),
     updatedAt: v.number(),
-  }).index("by_client", ["clientId"]),
+    ownerId: v.optional(v.id("users")),
+  })
+    .index("by_client", ["clientId"])
+    .index("by_owner", ["ownerId"]),
 
   settings: defineTable({
     accountId: v.string(),

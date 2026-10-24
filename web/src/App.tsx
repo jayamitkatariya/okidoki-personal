@@ -11,6 +11,7 @@ import { KeysPage } from "./pages/KeysPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SharePage } from "./pages/SharePage";
 import { ToastStack } from "./components/ui";
+import { CloudSignIn } from "./components/CloudAuth";
 
 export default function App() {
   const shareToken = window.location.hash.match(/^#\/share\/(.+)$/)?.[1];
@@ -23,7 +24,7 @@ export default function App() {
 }
 
 function Root() {
-  const { state, toasts, dismissToast } = useDashboard();
+  const { state, toasts, dismissToast, hosted, cloud } = useDashboard();
   const initial = (window.location.hash.replace("#/", "") as Page) || "home";
   const [page, setPage] = useState<Page>(isPage(initial) ? initial : "home");
   const [askOpen, setAskOpen] = useState(false);
@@ -40,6 +41,16 @@ function Root() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  // In a browser, the panel opens only for a signed-in login that has a Mac linked.
+  if (hosted && (cloud.status !== "signedIn" || !cloud.accounts.length)) {
+    return (
+      <>
+        <CloudSignIn />
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      </>
+    );
+  }
 
   if (state.signedOut) {
     return (

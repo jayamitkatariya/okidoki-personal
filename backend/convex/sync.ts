@@ -1,48 +1,122 @@
-import { internalMutation, type MutationCtx } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+
+// A sync is split into many small mutations (see http.ts) so no single transaction or document
+// hits Convex's limits: 1 MiB per document, and capped reads/writes per transaction.
+// Each step is idempotent, so a sync interrupted halfway is completed by the next one.
 
 function asArray(value: unknown): any[] {
   return Array.isArray(value) ? value : [];
 }
 
-// Deletes this account's rows whose ids the Mac no longer sends, so deletions reach Convex.
-// Skipped when the field is missing, so a partial payload never wipes a table.
-async function removeMissing(
-  ctx: MutationCtx,
-  table: "threads" | "memories" | "runs" | "skills" | "routines",
-  accountId: string,
-  items: unknown,
-) {
-  if (!Array.isArray(items)) return;
-  const keep = new Set(items.map((item) => String(item.id)));
-  const rows = await ctx.db
-    .query(table)
-    .withIndex("by_account", (q) => q.eq("accountId", accountId))
-    .collect();
-  for (const row of rows) {
-    if (keep.has(row.clientId)) continue;
-    if (table === "runs") {
-      const previews = await ctx.db
-        .query("actionPreviews")
-        .withIndex("by_run", (q) => q.eq("runId", row.clientId))
-        .collect();
-      for (const preview of previews) await ctx.db.delete(preview._id);
-    }
-    await ctx.db.delete(row._id);
-  }
+const MAX_DOC_BYTES = 800_000; // headroom under Convex's 1 MiB document limit
+
+export function byteSize(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value) ?? "").length;
 }
 
-export const pushSnapshot = internalMutation({
+// Keeps the newest messages that fit in one document; the Mac still has the full thread.
+function fitMessages(messages: unknown): unknown[] {
+  const list = asArray(messages);
+  let start = 0;
+  while (start < list.length && byteSize(list.slice(start)) > MAX_DOC_BYTES - 20_000) {
+    start += Math.max(1, Math.ceil((list.length - start) / 10));
+  }
+  return list.slice(start);
+}
+
+const iso = (value: unknown) => String(value ?? new Date().toISOString());
+
+// One builder per synced table: Mac item → Convex document (minus updatedAt, which writes add).
+const builders = {
+  threads: (item: any, accountId: string) => ({
+    clientId: String(item.id),
+    accountId,
+    title: String(item.title ?? "thread"),
+    app: String(item.app ?? "mac"),
+    topic: String(item.topic ?? ""),
+    messages: fitMessages(item.messages),
+    archived: Boolean(item.archived),
+    createdAt: iso(item.createdAt),
+    updatedAt: iso(item.updatedAt),
+  }),
+  memories: (item: any, accountId: string) => ({
+    clientId: String(item.id),
+    accountId,
+    section: String(item.section ?? "aboutYou"),
+    text: String(item.text ?? ""),
+    source: String(item.source ?? "you"),
+    createdAt: iso(item.createdAt),
+    updatedAt: iso(item.updatedAt),
+  }),
+  runs: (item: any, accountId: string) => ({
+    clientId: String(item.id),
+    accountId,
+    kind: String(item.kind ?? "answer"),
+    title: String(item.title ?? "run"),
+    prompt: String(item.prompt ?? ""),
+    status: String(item.status ?? "done"),
+    threadId: item.threadID ?? null,
+    steps: item.steps ?? [],
+    output: String(item.output ?? "").slice(-20_000), // matches what the Mac sends
+    summary: String(item.summary ?? ""),
+    agent: item.agent ?? null,
+    workingDirectory: item.workingDirectory ?? null,
+    createdAt: iso(item.createdAt),
+    startedAt: item.startedAt ?? null,
+    endedAt: item.endedAt ?? null,
+    freedBytes: typeof item.freedBytes === "number" ? item.freedBytes : null,
+    builtin: item.builtin ?? null,
+    pickedPath: item.pickedPath ?? null,
+  }),
+  skills: (item: any, accountId: string) => ({
+    clientId: String(item.id),
+    accountId,
+    name: String(item.name ?? "skill"),
+    summary: String(item.summary ?? ""),
+    steps: item.steps ?? [],
+    source: String(item.source ?? "watch me"),
+    runCount: Number(item.runCount ?? 0),
+    createdAt: iso(item.createdAt),
+  }),
+  routines: (item: any, accountId: string) => ({
+    clientId: String(item.id),
+    accountId,
+    name: String(item.name ?? "routine"),
+    prompt: String(item.prompt ?? ""),
+    cadence: String(item.cadence ?? "weekly"),
+    weekday: Number(item.weekday ?? 6),
+    hour: Number(item.hour ?? 17),
+    minute: Number(item.minute ?? 0),
+    enabled: Boolean(item.enabled),
+    createdAt: iso(item.createdAt),
+    lastRunAt: item.lastRunAt ?? null,
+    nextRunAt: item.nextRunAt ?? null,
+  }),
+};
+
+export type SyncedTable = keyof typeof builders;
+export const SYNCED_TABLES = Object.keys(builders) as SyncedTable[];
+const tableArg = v.union(v.literal("threads"), v.literal("memories"), v.literal("runs"), v.literal("skills"), v.literal("routines"));
+
+// Threads and memories carry the Mac's own updatedAt; the rest are stamped here, only when they change.
+const stampsOwnTime = (table: SyncedTable) => table !== "threads" && table !== "memories";
+
+// True when every field we'd write already matches, so unchanged items cost a read, not a write.
+function unchanged(existing: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  return Object.entries(next).every(([key, value]) => JSON.stringify(existing[key]) === JSON.stringify(value));
+}
+
+export const pushMeta = internalMutation({
   args: {
     accountId: v.string(),
-    device: v.string(),
-    state: v.any(),
+    accounts: v.array(v.any()),
+    settings: v.any(),
+    connectors: v.array(v.any()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const state = args.state as Record<string, any>;
-
-    for (const account of asArray(state.accounts)) {
+    for (const account of args.accounts) {
       const existing = await ctx.db
         .query("accounts")
         .withIndex("by_client", (q) => q.eq("clientId", String(account.id)))
@@ -53,143 +127,21 @@ export const pushSnapshot = internalMutation({
         email: String(account.email ?? ""),
         kind: String(account.kind ?? "personal"),
         colorHex: String(account.colorHex ?? "1FB57A"),
-        createdAt: String(account.createdAt ?? new Date().toISOString()),
-        updatedAt: now,
+        createdAt: iso(account.createdAt),
       };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("accounts", document);
+      if (!existing) await ctx.db.insert("accounts", { ...document, updatedAt: now });
+      else if (!unchanged(existing, document)) await ctx.db.patch(existing._id, { ...document, updatedAt: now });
     }
 
+    const settings = args.settings ?? {};
     const existingSettings = await ctx.db
       .query("settings")
       .withIndex("by_account", (q) => q.eq("accountId", args.accountId))
       .first();
-    const settings = state.settings ?? {};
-    if (existingSettings) await ctx.db.patch(existingSettings._id, { data: settings, updatedAt: now });
-    else await ctx.db.insert("settings", { accountId: args.accountId, data: settings, updatedAt: now });
+    if (!existingSettings) await ctx.db.insert("settings", { accountId: args.accountId, data: settings, updatedAt: now });
+    else if (!unchanged(existingSettings, { data: settings })) await ctx.db.patch(existingSettings._id, { data: settings, updatedAt: now });
 
-    for (const thread of asArray(state.threads)) {
-      const existing = await ctx.db
-        .query("threads")
-        .withIndex("by_client", (q) => q.eq("clientId", String(thread.id)))
-        .first();
-      const document = {
-        clientId: String(thread.id),
-        accountId: args.accountId,
-        title: String(thread.title ?? "thread"),
-        app: String(thread.app ?? "mac"),
-        topic: String(thread.topic ?? ""),
-        messages: thread.messages ?? [],
-        archived: Boolean(thread.archived),
-        createdAt: String(thread.createdAt ?? new Date().toISOString()),
-        updatedAt: String(thread.updatedAt ?? new Date().toISOString()),
-      };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("threads", document);
-    }
-
-    for (const memory of asArray(state.memories)) {
-      const existing = await ctx.db
-        .query("memories")
-        .withIndex("by_client", (q) => q.eq("clientId", String(memory.id)))
-        .first();
-      const document = {
-        clientId: String(memory.id),
-        accountId: args.accountId,
-        section: String(memory.section ?? "aboutYou"),
-        text: String(memory.text ?? ""),
-        source: String(memory.source ?? "you"),
-        createdAt: String(memory.createdAt ?? new Date().toISOString()),
-        updatedAt: String(memory.updatedAt ?? new Date().toISOString()),
-      };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("memories", document);
-    }
-
-    for (const run of asArray(state.runs)) {
-      const existing = await ctx.db
-        .query("runs")
-        .withIndex("by_client", (q) => q.eq("clientId", String(run.id)))
-        .first();
-      const document = {
-        clientId: String(run.id),
-        accountId: args.accountId,
-        kind: String(run.kind ?? "answer"),
-        title: String(run.title ?? "run"),
-        prompt: String(run.prompt ?? ""),
-        status: String(run.status ?? "done"),
-        threadId: run.threadID ?? null,
-        steps: run.steps ?? [],
-        output: String(run.output ?? "").slice(-60_000),
-        summary: String(run.summary ?? ""),
-        agent: run.agent ?? null,
-        workingDirectory: run.workingDirectory ?? null,
-        createdAt: String(run.createdAt ?? new Date().toISOString()),
-        startedAt: run.startedAt ?? null,
-        endedAt: run.endedAt ?? null,
-        freedBytes: typeof run.freedBytes === "number" ? run.freedBytes : null,
-        builtin: run.builtin ?? null,
-        pickedPath: run.pickedPath ?? null,
-        updatedAt: now,
-      };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("runs", document);
-
-      if (run.preview) {
-        const existingPreview = await ctx.db
-          .query("actionPreviews")
-          .withIndex("by_run", (q) => q.eq("runId", String(run.id)))
-          .first();
-        if (existingPreview) await ctx.db.patch(existingPreview._id, { data: run.preview, updatedAt: now });
-        else await ctx.db.insert("actionPreviews", { runId: String(run.id), accountId: args.accountId, data: run.preview, updatedAt: now });
-      }
-    }
-
-    for (const skill of asArray(state.skills)) {
-      const existing = await ctx.db
-        .query("skills")
-        .withIndex("by_client", (q) => q.eq("clientId", String(skill.id)))
-        .first();
-      const document = {
-        clientId: String(skill.id),
-        accountId: args.accountId,
-        name: String(skill.name ?? "skill"),
-        summary: String(skill.summary ?? ""),
-        steps: skill.steps ?? [],
-        source: String(skill.source ?? "watch me"),
-        runCount: Number(skill.runCount ?? 0),
-        createdAt: String(skill.createdAt ?? new Date().toISOString()),
-        updatedAt: now,
-      };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("skills", document);
-    }
-
-    for (const routine of asArray(state.routines)) {
-      const existing = await ctx.db
-        .query("routines")
-        .withIndex("by_client", (q) => q.eq("clientId", String(routine.id)))
-        .first();
-      const document = {
-        clientId: String(routine.id),
-        accountId: args.accountId,
-        name: String(routine.name ?? "routine"),
-        prompt: String(routine.prompt ?? ""),
-        cadence: String(routine.cadence ?? "weekly"),
-        weekday: Number(routine.weekday ?? 6),
-        hour: Number(routine.hour ?? 17),
-        minute: Number(routine.minute ?? 0),
-        enabled: Boolean(routine.enabled),
-        createdAt: String(routine.createdAt ?? new Date().toISOString()),
-        lastRunAt: routine.lastRunAt ?? null,
-        nextRunAt: routine.nextRunAt ?? null,
-        updatedAt: now,
-      };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("routines", document);
-    }
-
-    for (const connector of asArray(state.connectors)) {
+    for (const connector of args.connectors) {
       const existing = await ctx.db
         .query("connectors")
         .withIndex("by_client", (q) => q.eq("clientId", String(connector.id)))
@@ -201,38 +153,110 @@ export const pushSnapshot = internalMutation({
         blurb: String(connector.blurb ?? ""),
         enabled: Boolean(connector.enabled),
         installed: Boolean(connector.installed),
-        updatedAt: now,
       };
-      if (existing) await ctx.db.patch(existing._id, document);
-      else await ctx.db.insert("connectors", document);
+      if (!existing) await ctx.db.insert("connectors", { ...document, updatedAt: now });
+      else if (!unchanged(existing, document)) await ctx.db.patch(existing._id, { ...document, updatedAt: now });
     }
+  },
+});
 
-    await removeMissing(ctx, "threads", args.accountId, state.threads);
-    await removeMissing(ctx, "memories", args.accountId, state.memories);
-    await removeMissing(ctx, "runs", args.accountId, state.runs);
-    await removeMissing(ctx, "skills", args.accountId, state.skills);
-    await removeMissing(ctx, "routines", args.accountId, state.routines);
+export const upsertBatch = internalMutation({
+  args: { accountId: v.string(), table: tableArg, items: v.array(v.any()) },
+  handler: async (ctx, { accountId, table, items }) => {
+    const now = Date.now();
+    let written = 0;
+    for (const item of items) {
+      const document: Record<string, any> = builders[table](item, accountId);
+      const existing = await ctx.db
+        .query(table)
+        .withIndex("by_client", (q) => q.eq("clientId", document.clientId))
+        .first();
+      if (existing && unchanged(existing, document)) continue;
+      const row = stampsOwnTime(table) ? { ...document, updatedAt: now } : document;
+      if (existing) await ctx.db.patch(existing._id, row);
+      else await ctx.db.insert(table, row as any);
+      written++;
 
-    const existingSnapshot = await ctx.db
-      .query("snapshots")
-      .withIndex("by_account", (q) => q.eq("accountId", args.accountId))
-      .first();
-    const snapshotState = {
+      if (table === "runs" && item.preview) {
+        const runId = String(item.id);
+        const preview = await ctx.db
+          .query("actionPreviews")
+          .withIndex("by_run", (q) => q.eq("runId", runId))
+          .first();
+        if (!preview) await ctx.db.insert("actionPreviews", { runId, accountId, data: item.preview, updatedAt: now });
+        else if (!unchanged(preview, { data: item.preview })) await ctx.db.patch(preview._id, { data: item.preview, updatedAt: now });
+      }
+    }
+    return { written };
+  },
+});
+
+// Deletes this account's rows the Mac no longer has, one page at a time; the caller loops on the cursor.
+export const removeMissingPage = internalMutation({
+  args: { accountId: v.string(), table: tableArg, keep: v.array(v.string()), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { accountId, table, keep, cursor }) => {
+    const keepSet = new Set(keep);
+    const page = await ctx.db
+      .query(table)
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .paginate({ cursor, numItems: 100 });
+    let removed = 0;
+    for (const row of page.page) {
+      if (keepSet.has(row.clientId)) continue;
+      if (table === "runs") {
+        const previews = await ctx.db
+          .query("actionPreviews")
+          .withIndex("by_run", (q) => q.eq("runId", row.clientId))
+          .collect();
+        for (const preview of previews) await ctx.db.delete(preview._id);
+      }
+      await ctx.db.delete(row._id);
+      removed++;
+    }
+    return { cursor: page.continueCursor, isDone: page.isDone, removed };
+  },
+});
+
+// The snapshot is what the panel and share links load in one read, so it must fit in one document.
+// Newest first: recent runs keep a short output tail, threads keep their latest messages, and the
+// rest is dropped until it fits. Full data stays in the per-item tables (and on the Mac).
+export function trimSnapshot(state: Record<string, any>): Record<string, any> {
+  const newest = (key: string) => (a: any, b: any) => String(b?.[key] ?? "").localeCompare(String(a?.[key] ?? ""));
+  const runs = asArray(state.runs).slice().sort(newest("createdAt"));
+  const threads = asArray(state.threads).slice().sort(newest("updatedAt"));
+  let runLimit = 100;
+  let threadLimit = 60;
+  let messageLimit = 40;
+  let outputTail = 4_000;
+  for (;;) {
+    const snapshot = {
       ...state,
-      runs: asArray(state.runs).map((run) => ({ ...run, output: String(run.output ?? "").slice(-40_000) })),
+      runs: runs.slice(0, runLimit).map((run) => ({ ...run, output: String(run.output ?? "").slice(-outputTail) })),
+      threads: threads.slice(0, threadLimit).map((thread) => ({ ...thread, messages: asArray(thread.messages).slice(-messageLimit) })),
     };
-    if (existingSnapshot) {
-      await ctx.db.patch(existingSnapshot._id, { state: snapshotState, device: args.device, updatedAt: now });
-    } else {
-      await ctx.db.insert("snapshots", {
-        accountId: args.accountId,
-        device: args.device,
-        state: snapshotState,
-        updatedAt: now,
-      });
+    if (byteSize(snapshot) <= MAX_DOC_BYTES) return snapshot;
+    if (runLimit === 0 && threadLimit === 0) {
+      // Even the bare state is too big (huge settings or memory): keep only what the panel can't do without.
+      return { ...snapshot, memories: asArray(state.memories).slice(0, 200), skills: [], routines: [] };
     }
+    runLimit = Math.floor(runLimit / 2);
+    threadLimit = Math.floor(threadLimit / 2);
+    messageLimit = Math.max(10, Math.floor(messageLimit / 2));
+    outputTail = Math.floor(outputTail / 2);
+  }
+}
 
-    return { ok: true, syncedAt: now };
+export const writeSnapshot = internalMutation({
+  args: { accountId: v.string(), device: v.string(), state: v.any() },
+  handler: async (ctx, { accountId, device, state }) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("snapshots")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .first();
+    if (existing) await ctx.db.patch(existing._id, { state, device, updatedAt: now });
+    else await ctx.db.insert("snapshots", { accountId, device, state, updatedAt: now });
+    return now;
   },
 });
 

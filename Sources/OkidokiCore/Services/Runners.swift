@@ -145,7 +145,15 @@ public final class ConvexSyncService: ObservableObject {
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            let stateData = try encoder.encode(store.stateForSync())
+            // Only the tail of each run's terminal output syncs; the full log stays on this Mac.
+            // Keeps the request well under Convex's HTTP body limit as history grows.
+            var syncState = store.stateForSync()
+            syncState.runs = syncState.runs.map { run in
+                var run = run
+                run.output = String(run.output.suffix(20_000))
+                return run
+            }
+            let stateData = try encoder.encode(syncState)
             let stateObject = try JSONSerialization.jsonObject(with: stateData)
             let body: [String: Any] = [
                 "accountId": store.currentAccountID,

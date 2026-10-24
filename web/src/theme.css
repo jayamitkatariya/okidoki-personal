@@ -2411,3 +2411,27 @@ button.row:hover .kind-icon {
 .sentence::first-letter {
   text-transform: uppercase;
 }
+
+/* ---------- sync login ---------- */
+
+.cloud-form .btn {
+  margin-top: 4px;
+}
+.cloud-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--red);
+}
+.cloud-steps {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  text-align: center;
+}
+.cloud-card .cloud-form {
+  width: min(360px, 100%);
+}
+.cloud-card > .btn {
+  align-self: flex-start;
+}

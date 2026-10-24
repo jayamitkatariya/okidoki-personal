@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
 import type { AccountKind } from "../types";
+import { SyncLogin } from "../components/CloudAuth";
 import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
@@ -29,11 +30,12 @@ const SECTIONS = [
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
   { id: "account", label: "Account", icon: "user" },
+  { id: "sync-login", label: "Sync login", icon: "link" },
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
 
 export function SettingsPage() {
-  const { state, settings, account, updateSettings, invoke, notify, convexConnected } = useDashboard();
+  const { state, settings, account, updateSettings, invoke, notify, convexConnected, native } = useDashboard();
   const [instructions, setInstructions] = useState(settings.customInstructions);
   const [name, setName] = useState(account.name);
   const [email, setEmail] = useState(account.email);
@@ -104,7 +106,7 @@ export function SettingsPage() {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.map((section) => (
+          {SECTIONS.filter((section) => native || section.id !== "sync-login").map((section) => (
             <button key={section.id} className={cx("settings-nav-item", active === section.id && "is-active")} onClick={() => jump(section.id)}>
               <PixelIcon name={section.icon} size={15} />
               {section.label}
@@ -452,6 +454,15 @@ export function SettingsPage() {
               </button>
             </div>
           </SettingsSection>
+
+          {/* Sync login: only inside the Mac app; the hosted panel signs in at its front door. */}
+          {native ? (
+            <SettingsSection id="sync-login" title="Sync login" description="Link this Mac's accounts to a login on your own Convex deployment. Only that login can read what syncs.">
+              <div className="pref-group">
+                <SyncLogin onOpenKeys={() => (window.location.hash = "#/keys")} />
+              </div>
+            </SettingsSection>
+          ) : null}
 
           <SettingsSection id="advanced" title="Advanced" description="The boring but necessary bits.">
             <div className="pref-group">

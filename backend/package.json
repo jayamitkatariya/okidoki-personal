@@ -7,9 +7,12 @@
     "dev": "convex dev",
     "deploy": "convex deploy",
     "codegen": "convex codegen",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "setup-auth": "node scripts/setup-auth.mjs"
   },
   "dependencies": {
+    "@auth/core": "0.41.1",
+    "@convex-dev/auth": "0.0.96",
     "convex": "^1.48.0"
   },
   "devDependencies": {

@@ -1,8 +1,32 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { byteSize, SYNCED_TABLES, trimSnapshot } from "./sync";
+import { auth } from "./auth";
+
+// Groups items into mutation-sized batches: at most 50 items or ~4 MB of arguments each.
+function batches(items: any[]): any[][] {
+  const groups: any[][] = [];
+  let current: any[] = [];
+  let bytes = 0;
+  for (const item of items) {
+    const size = byteSize(item);
+    if (current.length && (current.length >= 50 || bytes + size > 4_000_000)) {
+      groups.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(item);
+    bytes += size;
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
 
 const http = httpRouter();
+
+// Convex Auth's sign-in endpoints (token refresh, JWKS for verifying its own tokens).
+auth.addHttpRoutes(http);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,12 +72,46 @@ http.route({
       return json({ error: "bad json" }, 400);
     }
     if (!body.accountId || !body.state) return json({ error: "accountId and state required" }, 400);
-    const result = await ctx.runMutation(internal.sync.pushSnapshot, {
-      accountId: body.accountId,
-      device: body.device ?? "mac",
-      state: body.state,
+    const accountId = body.accountId;
+    const state = body.state as Record<string, any>;
+    const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
+
+    await ctx.runMutation(internal.sync.pushMeta, {
+      accountId,
+      accounts: list(state.accounts),
+      settings: state.settings ?? {},
+      connectors: list(state.connectors),
     });
-    return json(result);
+
+    let written = 0;
+    let removed = 0;
+    for (const table of SYNCED_TABLES) {
+      // A field the Mac didn't send is left alone, so a partial payload never wipes a table.
+      if (!Array.isArray(state[table])) continue;
+      for (const items of batches(state[table])) {
+        written += (await ctx.runMutation(internal.sync.upsertBatch, { accountId, table, items })).written;
+      }
+      const keep = state[table].map((item: any) => String(item.id));
+      let cursor: string | null = null;
+      for (;;) {
+        const page: { cursor: string; isDone: boolean; removed: number } = await ctx.runMutation(internal.sync.removeMissingPage, {
+          accountId,
+          table,
+          keep,
+          cursor,
+        });
+        removed += page.removed;
+        if (page.isDone) break;
+        cursor = page.cursor;
+      }
+    }
+
+    const syncedAt = await ctx.runMutation(internal.sync.writeSnapshot, {
+      accountId,
+      device: body.device ?? "mac",
+      state: trimSnapshot(state),
+    });
+    return json({ ok: true, syncedAt, written, removed });
   }),
 });
 
@@ -70,7 +128,7 @@ http.route({
     if (!authorized(request)) return json({ error: "unauthorized" }, 401);
     const accountId = new URL(request.url).searchParams.get("accountId");
     if (!accountId) return json({ error: "accountId required" }, 400);
-    const result = await ctx.runQuery(api.dashboard.bootstrap, { accountId });
+    const result = await ctx.runQuery(internal.dashboard.forDevice, { accountId });
     return json({ state: result?.state ?? null, updatedAt: result?.updatedAt ?? 0 });
   }),
 });
