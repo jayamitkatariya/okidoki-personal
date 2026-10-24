@@ -195,7 +195,8 @@ export async function computerAct(
     max_tokens: 1400,
     messages: [{ role: "user", content: messageContent(request) }],
     tools: [actTool],
-    tool_choice: { type: "tool", name: "okidoki_act" },
+    // Driving switches Haiku to Sonnet 5.5, which only supports auto/none.
+    tool_choice: { type: "auto" },
   };
 
   let lastError = "model unavailable";

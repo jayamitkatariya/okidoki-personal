@@ -117,7 +117,8 @@ public final class BrainService {
             "system": systemPrompt(request),
             "messages": normalized,
             "tools": [responseTool],
-            "tool_choice": ["type": "tool", "name": "okidoki_respond"],
+            // Sonnet/Opus 5.5 reject forced tool calls; the prompt selects the tool.
+            "tool_choice": ["type": "auto"],
         ]
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: urlRequest)

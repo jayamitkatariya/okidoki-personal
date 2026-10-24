@@ -217,7 +217,7 @@ function stopped(detail: string, rejected = false): { decision: Decision; usedMo
   };
 }
 
-export async function think(request: ThinkRequest, apiKey: string | undefined): Promise<{ decision: Decision; usedModel: boolean; error?: string }> {
+export async function think(request: ThinkRequest, apiKey: string | undefined, fetchImpl: typeof fetch = fetch): Promise<{ decision: Decision; usedModel: boolean; error?: string }> {
   if (!apiKey) {
     return { decision: needsKey, usedModel: false, error: "anthropic key required" };
   }
@@ -256,11 +256,12 @@ export async function think(request: ThinkRequest, apiKey: string | undefined): 
     system: systemPrompt(request),
     messages,
     tools: [responseTool],
-    tool_choice: { type: "tool", name: "okidoki_respond" },
+    // Sonnet/Opus 5.5 reject forced tool calls. The prompt selects our single tool.
+    tool_choice: { type: "auto" },
   };
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
@@ -333,6 +334,7 @@ export async function groundTeach(
   input: { screenshotBase64?: string; appName?: string; topic: string; say: string; stepIndex: number; stepCount: number; space: "window" | "screen" },
   apiKey: string | undefined,
   model = "claude-haiku-5-5",
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ marks: TeachMark[] }> {
   if (!apiKey || !input.screenshotBase64) return { marks: [] };
   const where = input.space === "window"
@@ -340,6 +342,7 @@ export async function groundTeach(
     : "The image is the whole display. The app is a window inside it.";
   const system = [
     "You point at one control while someone learns a Mac app.",
+    "Always respond through the okidoki_mark tool.",
     where,
     "Return 1 mark. Coordinates are fractions of THIS image, origin top-left, from 0 to 1.",
     "circle hugs a button or tool. box hugs a small region such as a settings group. arrow shows a drag: point is where it starts, to is where it ends.",
@@ -349,7 +352,7 @@ export async function groundTeach(
   ].join(" ");
   const user = `App: ${input.appName || "unknown"}. Topic: ${input.topic}. Step ${input.stepIndex + 1} of ${input.stepCount}: ${input.say}`;
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({
@@ -364,7 +367,7 @@ export async function groundTeach(
           ],
         }],
         tools: [groundTool],
-        tool_choice: { type: "tool", name: "okidoki_mark" },
+        tool_choice: { type: "auto" },
       }),
       signal: AbortSignal.timeout(25_000),
     });

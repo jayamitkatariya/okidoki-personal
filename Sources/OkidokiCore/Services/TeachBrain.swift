@@ -27,7 +27,7 @@ public enum TeachBrain {
             "system": systemPrompt(request),
             "messages": [["role": "user", "content": content]],
             "tools": [tool],
-            "tool_choice": ["type": "tool", "name": "okidoki_teach"],
+            "tool_choice": ["type": "auto"],
         ]
         do {
             urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -115,7 +115,7 @@ public enum TeachBrain {
                 ["type": "text", "text": "Find: \(request.describe)"],
             ]]],
             "tools": [pointTool],
-            "tool_choice": ["type": "tool", "name": "okidoki_point"],
+            "tool_choice": ["type": "auto"],
         ]
         do {
             urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)

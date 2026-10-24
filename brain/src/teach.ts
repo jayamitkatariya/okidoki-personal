@@ -143,8 +143,8 @@ export function normalizeTeachStep(raw: Record<string, unknown>): TeachStep {
   };
 }
 
-async function callAnthropic(body: unknown, apiKey: string, timeout: number): Promise<Record<string, unknown> | null> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+async function callAnthropic(body: unknown, apiKey: string, timeout: number, fetchImpl: typeof fetch): Promise<Record<string, unknown> | null> {
+  const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -162,6 +162,7 @@ async function callAnthropic(body: unknown, apiKey: string, timeout: number): Pr
 export async function teachStep(
   request: TeachStepRequest,
   apiKey: string | undefined,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ step: TeachStep | null; usedModel: boolean; error?: string }> {
   if (!apiKey) return { step: null, usedModel: false, error: "anthropic key required" };
   const model = request.model || "claude-sonnet-4-5";
@@ -185,8 +186,8 @@ export async function teachStep(
       system: teachSystemPrompt(request),
       messages: [{ role: "user", content }],
       tools: [teachTool],
-      tool_choice: { type: "tool", name: "okidoki_teach" },
-    }, apiKey, 60_000);
+      tool_choice: { type: "auto" },
+    }, apiKey, 60_000, fetchImpl);
     if (!input) return { step: null, usedModel: false, error: "empty model response" };
     return { step: normalizeTeachStep(input), usedModel: true };
   } catch (error) {
@@ -214,6 +215,7 @@ const pointTool = {
 export async function refineTeach(
   request: TeachRefineRequest,
   apiKey: string | undefined,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ found: boolean; x?: number; y?: number; w?: number; h?: number }> {
   if (!apiKey || !request.cropBase64) return { found: false };
   const model = request.model || "claude-sonnet-4-5";
@@ -230,8 +232,8 @@ export async function refineTeach(
         ],
       }],
       tools: [pointTool],
-      tool_choice: { type: "tool", name: "okidoki_point" },
-    }, apiKey, 25_000);
+      tool_choice: { type: "auto" },
+    }, apiKey, 25_000, fetchImpl);
     if (!input || input.found === false) return { found: false };
     const x = unitNumber(input.x);
     const y = unitNumber(input.y);

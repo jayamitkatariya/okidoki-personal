@@ -99,3 +99,12 @@ you picked another non-Haiku model in Keys.
 
 Needs Accessibility and Screen Recording. Checks: `swift test --filter ComputerUseTests`
 and `bun test brain/tests`.
+
+Model requests use `tool_choice: auto` with an explicit tool instruction: Sonnet
+and Opus 5.5 reject forced tool calls. Routing can use Haiku while computer use
+switches to Sonnet, so both paths must support the same request format.
+
+For a live API smoke check, run `cd brain && bun run smoke:api`. It tests answers
+and computer-use planning with Haiku, Sonnet, and Opus 5.5 using the saved Keychain
+entry or `ANTHROPIC_API_KEY`. It makes six billed API requests without capturing
+the screen or executing the returned actions.
