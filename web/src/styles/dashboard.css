@@ -27,13 +27,50 @@
   flex-basis: 232px;
   min-height: 0;
   padding: 40px 14px 14px;
+  transition: width 0.3s var(--ease), flex-basis 0.3s var(--ease), padding 0.3s var(--ease);
 }
-.brand { gap: 10px; padding: 0 12px 20px; align-items: flex-start; }
-.brand-name { font-family: "PP Mondwest", var(--sans); font-size: 27px; line-height: 1.05; letter-spacing: -0.01em; }
-.brand-text { flex: 1; min-width: 0; gap: 3px; }
+.sidebar > * { min-width: 0; }
+.brand { gap: 10px; padding: 0 6px 18px; align-items: center; }
+.brand-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--tile);
+  border: 1px solid var(--tile-line);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.3s var(--spring), border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.brand-mark:hover { transform: translateY(-1px) rotate(-4deg); border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+.brand-mark .logo { width: 24px; height: 24px; border-radius: 0; }
+.brand-mark .logo img { width: 24px; height: 24px; }
+/* the status dot rides the icon's corner, so the collapsed rail still says how okidoki feels */
+.brand-mark > i {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 2px var(--canvas);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.2s var(--ease), transform 0.3s var(--spring);
+}
+.brand-mark.is-quiet > i { background: var(--sky); }
+.brand-mark.is-off > i { background: var(--faint); }
+.brand-mark.is-waiting > i { background: var(--amber); animation: pixel-blink 1.06s steps(1) infinite; }
+.sidebar.is-collapsed .brand-mark > i { opacity: 1; transform: scale(1); }
+.brand-name { font-family: "PP Mondwest", var(--sans); font-size: 19px; line-height: 1.05; letter-spacing: -0.01em; }
+.brand-text { flex: 1; min-width: 0; gap: 2px; }
 .brand-status {
   min-width: 0;
   max-width: 100%;
+  margin-top: 1px;
   font-family: var(--sans);
   font-size: 10.5px;
   letter-spacing: 0;
@@ -41,8 +78,73 @@
 }
 .brand-status > span { overflow: hidden; text-overflow: ellipsis; }
 .brand-status i { flex: 0 0 5px; width: 5px; height: 5px; }
-.brand .theme-toggle { flex: 0 0 28px; margin-top: 1px; }
+.brand .theme-toggle { flex: 0 0 28px; }
 .brand-status.is-waiting i { animation: none; }
+
+/* ---------- the collapsed rail ----------
+   64px of icons. Labels become hover tips, badges ride the icon corner, menus fly out to the right. */
+.sidebar.is-collapsed { width: 64px; flex-basis: 64px; padding-left: 10px; padding-right: 10px; }
+.sidebar.is-collapsed .brand { flex-direction: column; gap: 8px; padding: 0 0 14px; }
+.sidebar.is-collapsed .brand-mark { flex-basis: 40px; width: 40px; height: 40px; }
+.sidebar.is-collapsed .brand-text,
+.sidebar.is-collapsed .nav-label,
+.sidebar.is-collapsed .nav-item > span,
+.sidebar.is-collapsed .side-ask > span,
+.sidebar.is-collapsed .side-ask .kbd,
+.sidebar.is-collapsed .account-text,
+.sidebar.is-collapsed .account-chevron,
+.sidebar.is-collapsed .sidebar-foot > span { display: none; }
+.sidebar.is-collapsed .brand .theme-toggle { margin: 0; }
+.sidebar.is-collapsed .side-ask { justify-content: center; padding: 0; margin-bottom: 16px; }
+.sidebar.is-collapsed .workspace-switcher { margin-bottom: 12px; }
+.sidebar.is-collapsed .workspace-switcher .account { justify-content: center; padding: 6px; }
+.sidebar.is-collapsed .workspace-switcher .account-pop { left: calc(100% + 10px); top: 0; transform-origin: top left; }
+.sidebar.is-collapsed .nav { gap: 10px; overflow: visible; }
+.sidebar.is-collapsed .nav-group { gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sidebar.is-collapsed .nav-group:first-child { padding-top: 0; border-top: 0; }
+.sidebar.is-collapsed .nav-item { justify-content: center; height: 40px; padding: 0; }
+.sidebar.is-collapsed .nav-item:hover .icon { transform: none; }
+.sidebar.is-collapsed .nav-badge { position: absolute; top: 4px; right: 4px; min-width: 15px; height: 15px; padding: 0 4px; margin: 0; font-size: 9.5px; box-shadow: 0 0 0 2px var(--canvas); }
+.sidebar.is-collapsed .nav-active .nav-badge { box-shadow: 0 0 0 2px var(--accent-soft); }
+.sidebar.is-collapsed .sidebar-bottom { padding-top: 12px; margin-top: 12px; }
+.sidebar.is-collapsed .sidebar-foot { position: relative; justify-content: center; height: 28px; padding: 0; }
+.sidebar.is-collapsed .sidebar-foot i { width: 7px; height: 7px; flex-basis: 7px; }
+
+/* hover tips: only while collapsed, only for pointers, and only after a beat */
+@media (hover: hover) {
+  .sidebar.is-collapsed [data-tip] { position: relative; }
+  .sidebar.is-collapsed [data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    z-index: 40;
+    padding: 6px 9px;
+    border-radius: var(--r-sm);
+    background: #14100f;
+    color: #fff;
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0;
+    text-transform: none;
+    white-space: nowrap;
+    box-shadow: var(--shadow-md);
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-4px, -50%);
+    transition: opacity 0.14s var(--ease) 0s, transform 0.2s var(--ease) 0s;
+  }
+  :root[data-theme="dark"] .sidebar.is-collapsed [data-tip]::after { background: var(--tile-hover); color: var(--ink); box-shadow: var(--shadow-md), inset 0 0 0 1px var(--line-strong); }
+  .sidebar.is-collapsed [data-tip]:hover::after,
+  .sidebar.is-collapsed [data-tip]:focus-visible::after {
+    opacity: 1;
+    transform: translate(0, -50%);
+    transition-delay: 0.35s;
+  }
+  .sidebar.is-collapsed .account.is-open::after { display: none; }
+}
 
 /* the workspace switcher sits above the nav, the way a studio picker sits above a menu */
 .workspace-switcher { margin-bottom: 14px; }
@@ -102,6 +204,21 @@
   color: var(--faint);
   font-size: 11.5px;
 }
+.workspace-lead { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: -8px; }
+.bar-toggle {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: var(--r-md);
+  color: var(--faint);
+  transition: background 0.18s var(--ease), color 0.18s var(--ease);
+}
+.bar-toggle:hover { background: var(--well-strong); color: var(--ink); }
+.bar-toggle:disabled { opacity: 0.4; pointer-events: none; }
+.bar-toggle .icon { transition: transform 0.3s var(--spring); }
+.bar-toggle:hover .icon { transform: scale(1.08); }
 .workspace-breadcrumb, .workspace-local { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 .workspace-breadcrumb strong { font-weight: 500; color: var(--ink-2); }
 .workspace-local { gap: 5px; font-size: 10.5px; white-space: nowrap; }
@@ -222,8 +339,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
   gap: 26px;
 }
 .home-hero-copy { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-.hero-date { font-family: var(--sans); font-size: 10px; font-weight: 550; letter-spacing: 0.09em; color: var(--faint); text-transform: uppercase; }
-.home-hero h1 { margin-top: 12px; font-size: clamp(30px, 3.3vw, 44px); line-height: 1.14; letter-spacing: -0.05em; font-weight: 500; overflow-wrap: anywhere; }
+.home-hero h1 { font-size: clamp(30px, 3.3vw, 44px); line-height: 1.14; letter-spacing: -0.05em; font-weight: 500; overflow-wrap: anywhere; }
 .greeting-dot { color: var(--accent); }
 .hero-lede { margin-top: 12px; font-size: 14.5px; line-height: 1.65; color: var(--muted); max-width: 44ch; }
 .home .hero-ask {
@@ -459,29 +575,69 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .home .row-meta { font-family: var(--sans); font-size: 11px; }
 .home .row .status { font-size: 10px; }
 
-/* the sign at the end of the page */
-.home-footer { margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; }
-.wordmark-band {
+/* the sign above the door: a dot-matrix marquee that greets you before anything else */
+.home-sign {
   position: relative;
-  width: 100%;
-  display: grid;
-  place-items: center;
-  padding: 28px 24px;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 30px 22px 16px;
   border-radius: var(--r-2xl);
   border: 1px solid var(--tile-line);
   background: var(--tile);
-  overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
-.wordmark-band::before {
+.home-sign::before {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: 0;
   pointer-events: none;
   background-image: radial-gradient(var(--line) 1px, rgba(0, 0, 0, 0) 1.4px);
   background-size: 17px 17px;
   opacity: 0.75;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.55) 70%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.55) 70%, transparent 100%);
 }
-.pixel-wordmark { position: relative; display: block; }
+.home-sign::after {
+  content: "";
+  position: absolute;
+  inset: -40% 10% auto;
+  height: 120%;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(50% 50% at 50% 50%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%);
+}
+.sign-face { position: relative; z-index: 1; width: 100%; display: grid; place-items: center; }
+.pixel-wordmark { position: relative; display: block; max-width: 100%; }
+.sign-ticker {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.sign-pulse { display: inline-flex; align-items: center; gap: 8px; }
+.sign-pulse i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.sign-pulse.is-live i { background: var(--accent-bright); animation: pixel-blink 1.06s steps(1) infinite; }
+.sign-pulse.is-waiting { color: var(--amber); }
+.sign-pulse.is-waiting i { background: var(--amber); animation: pixel-blink 1.06s steps(1) infinite; }
+.sign-date { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.home-footer { margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .home-footer-note { display: inline-flex; align-items: center; gap: 7px; font-family: var(--sans); font-size: 11px; line-height: 1.7; letter-spacing: 0; color: var(--faint); text-align: center; }
 .home-footer-note .icon { color: var(--faint); }
 
@@ -525,27 +681,14 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
   .page-trailing { width: 100%; }
   .home-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .wordmark-band { padding: 22px 16px; }
+  .home-sign { padding: 22px 16px 14px; }
+  .sign-ticker { font-size: 9.5px; }
 }
 @media (max-width: 760px) {
-  .sidebar { width: 192px; flex-basis: 192px; padding-left: 10px; padding-right: 10px; }
-  .brand { flex-wrap: wrap; }
-  .brand .theme-toggle { margin-left: 0; }
-  .brand-name { font-size: 23px; }
-  .brand-status { font-size: 9px; }
   .workspace-bar { padding-left: 22px; padding-right: 22px; }
-  .nav-item { font-size: 12px; }
 }
 @media (max-width: 560px) {
-  .sidebar { width: 64px; flex-basis: 64px; padding: 38px 10px 12px; }
-  .brand { padding: 0 0 18px; justify-content: center; gap: 14px; }
-  .brand-text, .nav-label, .nav-item > span, .side-ask > span, .side-ask .kbd, .account-text, .account > .icon, .sidebar-foot > span { display: none; }
-  .brand .theme-toggle { margin: 0; }
-  .side-ask { justify-content: center; padding: 0; margin-bottom: 20px; }
-  .workspace-switcher .account { justify-content: center; padding: 6px; }
-  .nav-item { justify-content: center; padding: 10px; }
-  .nav-badge { position: absolute; top: 0; right: -1px; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; }
-  .sidebar-foot { justify-content: center; }
+  .sidebar.is-collapsed { padding: 38px 10px 12px; }
   .main { margin: 6px 6px 6px 0; border-radius: 12px; }
   .workspace-bar { min-height: 44px; padding: 10px 16px; font-size: 10px; }
   .workspace-local { display: none; }
@@ -572,5 +715,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-new(root) { clip-path: none; }
   .reveal { animation: none; }
+  .sidebar { transition: none; }
+  .brand-mark:hover { transform: none; }
   .stat-card:hover, .home .bento > .tile:hover, .halo-card:hover { transform: none; }
 }

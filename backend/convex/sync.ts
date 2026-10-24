@@ -107,6 +107,46 @@ function unchanged(existing: Record<string, unknown>, next: Record<string, unkno
   return Object.entries(next).every(([key, value]) => JSON.stringify(existing[key]) === JSON.stringify(value));
 }
 
+// Claims the sync for this account. A payload older than the one already accepted is refused, so two
+// overlapping pushes (a slow one finishing after a fast one) can't delete each other's rows.
+export const begin = internalMutation({
+  args: { accountId: v.string(), sentAt: v.number(), device: v.string() },
+  handler: async (ctx, { accountId, sentAt, device }) => {
+    const existing = await ctx.db
+      .query("syncs")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .first();
+    if (existing && sentAt < existing.sentAt) return { ok: false as const, latest: existing.sentAt };
+    const now = Date.now();
+    if (existing) await ctx.db.patch(existing._id, { sentAt, device, startedAt: now, finishedAt: null });
+    else await ctx.db.insert("syncs", { accountId, sentAt, device, startedAt: now, finishedAt: null });
+    return { ok: true as const, latest: sentAt };
+  },
+});
+
+// Still the newest sync? Checked before each destructive step so a superseded sync stops instead of deleting.
+export const stillCurrent = internalMutation({
+  args: { accountId: v.string(), sentAt: v.number() },
+  handler: async (ctx, { accountId, sentAt }) => {
+    const existing = await ctx.db
+      .query("syncs")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .first();
+    return !existing || existing.sentAt <= sentAt;
+  },
+});
+
+export const finish = internalMutation({
+  args: { accountId: v.string(), sentAt: v.number() },
+  handler: async (ctx, { accountId, sentAt }) => {
+    const existing = await ctx.db
+      .query("syncs")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .first();
+    if (existing && existing.sentAt === sentAt) await ctx.db.patch(existing._id, { finishedAt: Date.now() });
+  },
+});
+
 export const pushMeta = internalMutation({
   args: {
     accountId: v.string(),
@@ -177,14 +217,19 @@ export const upsertBatch = internalMutation({
       else await ctx.db.insert(table, row as any);
       written++;
 
-      if (table === "runs" && item.preview) {
+      if (table === "runs") {
         const runId = String(item.id);
         const preview = await ctx.db
           .query("actionPreviews")
           .withIndex("by_run", (q) => q.eq("runId", runId))
           .first();
-        if (!preview) await ctx.db.insert("actionPreviews", { runId, accountId, data: item.preview, updatedAt: now });
-        else if (!unchanged(preview, { data: item.preview })) await ctx.db.patch(preview._id, { data: item.preview, updatedAt: now });
+        if (item.preview) {
+          if (!preview) await ctx.db.insert("actionPreviews", { runId, accountId, data: item.preview, updatedAt: now });
+          else if (!unchanged(preview, { data: item.preview })) await ctx.db.patch(preview._id, { data: item.preview, updatedAt: now });
+        } else if (preview) {
+          // The Mac dropped the preview (the run was re-planned); don't keep showing the old one.
+          await ctx.db.delete(preview._id);
+        }
       }
     }
     return { written };
@@ -214,6 +259,34 @@ export const removeMissingPage = internalMutation({
       removed++;
     }
     return { cursor: page.continueCursor, isDone: page.isDone, removed };
+  },
+});
+
+// Removes everything synced for an account, a page at a time; the caller loops until done is true.
+// Used when the account is deleted on the Mac, so Convex doesn't keep data the person removed.
+export const purgeAccountPage = internalMutation({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    let removed = 0;
+    const budget = 200;
+    for (const table of [...SYNCED_TABLES, "actionPreviews", "settings", "snapshots", "shareLinks", "syncs"] as const) {
+      const rows = await ctx.db
+        .query(table)
+        .withIndex("by_account", (q) => q.eq("accountId", accountId))
+        .take(budget - removed);
+      for (const row of rows) await ctx.db.delete(row._id);
+      removed += rows.length;
+      if (removed >= budget) return { removed, done: false };
+    }
+    const account = await ctx.db
+      .query("accounts")
+      .withIndex("by_client", (q) => q.eq("clientId", accountId))
+      .first();
+    if (account) {
+      await ctx.db.delete(account._id);
+      removed++;
+    }
+    return { removed, done: true };
   },
 });
 
@@ -247,19 +320,22 @@ export function trimSnapshot(state: Record<string, any>): Record<string, any> {
 }
 
 export const writeSnapshot = internalMutation({
-  args: { accountId: v.string(), device: v.string(), state: v.any() },
-  handler: async (ctx, { accountId, device, state }) => {
+  args: { accountId: v.string(), device: v.string(), state: v.any(), sentAt: v.number() },
+  handler: async (ctx, { accountId, device, state, sentAt }) => {
     const now = Date.now();
     const existing = await ctx.db
       .query("snapshots")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .first();
-    if (existing) await ctx.db.patch(existing._id, { state, device, updatedAt: now });
-    else await ctx.db.insert("snapshots", { accountId, device, state, updatedAt: now });
+    // A newer snapshot already landed (another device, or a faster sync): keep it.
+    if (existing?.sentAt && existing.sentAt > sentAt) return existing.updatedAt;
+    if (existing) await ctx.db.patch(existing._id, { state, device, updatedAt: now, sentAt });
+    else await ctx.db.insert("snapshots", { accountId, device, state, updatedAt: now, sentAt });
     return now;
   },
 });
 
+// Sharing the same run twice returns the same link; the run's content is refreshed each time.
 export const createShare = internalMutation({
   args: {
     token: v.string(),
@@ -271,13 +347,14 @@ export const createShare = internalMutation({
   handler: async (ctx, args) => {
     const existing = await ctx.db
       .query("shareLinks")
-      .withIndex("by_token", (q) => q.eq("token", args.token))
+      .withIndex("by_run", (q) => q.eq("runId", args.runId))
+      .order("desc")
       .first();
-    if (existing) {
-      await ctx.db.patch(existing._id, { run: args.run, createdAt: Date.now() });
-      return existing._id;
+    if (existing && existing.accountId === args.accountId) {
+      await ctx.db.patch(existing._id, { run: args.run, accountName: args.accountName });
+      return { token: existing.token, created: false };
     }
-    return await ctx.db.insert("shareLinks", {
+    await ctx.db.insert("shareLinks", {
       token: args.token,
       accountId: args.accountId,
       accountName: args.accountName,
@@ -286,5 +363,6 @@ export const createShare = internalMutation({
       views: 0,
       createdAt: Date.now(),
     });
+    return { token: args.token, created: true };
   },
 });

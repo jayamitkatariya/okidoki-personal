@@ -32,12 +32,13 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, authorization",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
 };
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json", ...corsHeaders },
+    headers: { "content-type": "application/json", "cache-control": "no-store", ...corsHeaders },
   });
 }
 
@@ -45,14 +46,42 @@ function options() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
+// Same length and content, compared without short-circuiting on the first differing byte.
+function sameSecret(given: string, expected: string): boolean {
+  const a = new TextEncoder().encode(given);
+  const b = new TextEncoder().encode(expected);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return diff === 0;
+}
+
 function authorized(request: Request): boolean {
-  const secret = process.env.OKIDOKI_SYNC_SECRET;
+  const secret = process.env.OKIDOKI_SYNC_SECRET?.trim();
   if (!secret) {
     console.error("OKIDOKI_SYNC_SECRET is not set; rejecting request. Run `npx convex env set OKIDOKI_SYNC_SECRET ...`.");
     return false;
   }
-  return request.headers.get("authorization") === `Bearer ${secret}`;
+  const header = request.headers.get("authorization") ?? "";
+  const match = /^Bearer\s+(.+)$/i.exec(header);
+  return match ? sameSecret(match[1].trim(), secret) : false;
 }
+
+// Convex caps HTTP action bodies at 20 MiB; refuse early with a clear message instead of a platform error.
+const MAX_BODY_BYTES = 20 * 1024 * 1024;
+
+async function readJson<T>(request: Request): Promise<{ ok: true; body: T } | { ok: false; response: Response }> {
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (length > MAX_BODY_BYTES) return { ok: false, response: json({ error: "payload too large" }, 413) };
+  try {
+    const body = (await request.json()) as T;
+    if (!body || typeof body !== "object") return { ok: false, response: json({ error: "bad json" }, 400) };
+    return { ok: true, body };
+  } catch {
+    return { ok: false, response: json({ error: "bad json" }, 400) };
+  }
+}
+
+const isId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128;
 
 http.route({
   path: "/api/sync",
@@ -65,21 +94,25 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     if (!authorized(request)) return json({ error: "unauthorized" }, 401);
-    let body: { accountId?: string; device?: string; state?: unknown };
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "bad json" }, 400);
+    const parsed = await readJson<{ accountId?: unknown; device?: unknown; state?: unknown; sentAt?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    if (!isId(body.accountId) || !body.state || typeof body.state !== "object") {
+      return json({ error: "accountId and state required" }, 400);
     }
-    if (!body.accountId || !body.state) return json({ error: "accountId and state required" }, 400);
     const accountId = body.accountId;
+    const device = typeof body.device === "string" && body.device.trim() ? body.device.trim().slice(0, 120) : "mac";
+    const sentAt = typeof body.sentAt === "number" && Number.isFinite(body.sentAt) ? body.sentAt : Date.now();
     const state = body.state as Record<string, any>;
     const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
+
+    const claim = await ctx.runMutation(internal.sync.begin, { accountId, sentAt, device });
+    if (!claim.ok) return json({ error: "stale", detail: "a newer sync for this account already landed", latest: claim.latest }, 409);
 
     await ctx.runMutation(internal.sync.pushMeta, {
       accountId,
       accounts: list(state.accounts),
-      settings: state.settings ?? {},
+      settings: state.settings && typeof state.settings === "object" ? state.settings : {},
       connectors: list(state.connectors),
     });
 
@@ -88,10 +121,15 @@ http.route({
     for (const table of SYNCED_TABLES) {
       // A field the Mac didn't send is left alone, so a partial payload never wipes a table.
       if (!Array.isArray(state[table])) continue;
-      for (const items of batches(state[table])) {
-        written += (await ctx.runMutation(internal.sync.upsertBatch, { accountId, table, items })).written;
+      const items = state[table].filter((item: any) => item && typeof item === "object" && isId(item.id));
+      for (const batch of batches(items)) {
+        written += (await ctx.runMutation(internal.sync.upsertBatch, { accountId, table, items: batch })).written;
       }
-      const keep = state[table].map((item: any) => String(item.id));
+      // Deleting is the one step that can't be undone by the next sync, so make sure we're still the newest one.
+      if (!(await ctx.runMutation(internal.sync.stillCurrent, { accountId, sentAt }))) {
+        return json({ error: "stale", detail: "superseded by a newer sync", written, removed }, 409);
+      }
+      const keep = items.map((item: any) => String(item.id));
       let cursor: string | null = null;
       for (;;) {
         const page: { cursor: string; isDone: boolean; removed: number } = await ctx.runMutation(internal.sync.removeMissingPage, {
@@ -108,9 +146,11 @@ http.route({
 
     const syncedAt = await ctx.runMutation(internal.sync.writeSnapshot, {
       accountId,
-      device: body.device ?? "mac",
+      device,
       state: trimSnapshot(state),
+      sentAt,
     });
+    await ctx.runMutation(internal.sync.finish, { accountId, sentAt });
     return json({ ok: true, syncedAt, written, removed });
   }),
 });
@@ -127,9 +167,34 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     if (!authorized(request)) return json({ error: "unauthorized" }, 401);
     const accountId = new URL(request.url).searchParams.get("accountId");
-    if (!accountId) return json({ error: "accountId required" }, 400);
+    if (!isId(accountId)) return json({ error: "accountId required" }, 400);
     const result = await ctx.runQuery(internal.dashboard.forDevice, { accountId });
     return json({ state: result?.state ?? null, updatedAt: result?.updatedAt ?? 0 });
+  }),
+});
+
+http.route({
+  path: "/api/purge",
+  method: "OPTIONS",
+  handler: httpAction(async () => options()),
+});
+
+// The Mac deleted an account: drop everything synced for it. Guarded by the same secret as sync.
+http.route({
+  path: "/api/purge",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<{ accountId?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    if (!isId(parsed.body.accountId)) return json({ error: "accountId required" }, 400);
+    let removed = 0;
+    for (let i = 0; i < 500; i++) {
+      const page = await ctx.runMutation(internal.sync.purgeAccountPage, { accountId: parsed.body.accountId });
+      removed += page.removed;
+      if (page.done) return json({ ok: true, removed });
+    }
+    return json({ error: "purge incomplete; run again", removed }, 500);
   }),
 });
 
@@ -144,23 +209,23 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     if (!authorized(request)) return json({ error: "unauthorized" }, 401);
-    let body: { accountId?: string; accountName?: string; run?: any; runId?: string };
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "bad json" }, 400);
+    const parsed = await readJson<{ accountId?: unknown; accountName?: unknown; run?: unknown; runId?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    if (!isId(body.accountId) || !isId(body.runId) || !body.run || typeof body.run !== "object") {
+      return json({ error: "accountId, runId and run required" }, 400);
     }
-    if (!body.accountId || !body.run || !body.runId) return json({ error: "accountId, runId and run required" }, 400);
+    if (byteSize(body.run) > 800_000) return json({ error: "run too large to share; trim its output" }, 413);
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
-    await ctx.runMutation(internal.sync.createShare, {
+    const result = await ctx.runMutation(internal.sync.createShare, {
       token,
       accountId: body.accountId,
-      accountName: body.accountName ?? "someone",
+      accountName: typeof body.accountName === "string" && body.accountName.trim() ? body.accountName.trim().slice(0, 80) : "someone",
       runId: body.runId,
       run: body.run,
     });
-    const base = process.env.OKIDOKI_SHARE_BASE_URL ?? "https://okidoki.app";
-    return json({ token, url: `${base.replace(/\/$/, "")}/#/share/${token}` });
+    const base = (process.env.OKIDOKI_SHARE_BASE_URL ?? "https://okidoki.app").replace(/\/$/, "");
+    return json({ token: result.token, url: `${base}/#/share/${result.token}` });
   }),
 });
 
@@ -169,8 +234,10 @@ http.route({
   method: "GET",
   handler: httpAction(async (ctx, request) => {
     const token = new URL(request.url).searchParams.get("token");
-    if (!token) return json({ error: "token required" }, 400);
+    if (!isId(token)) return json({ error: "token required" }, 400);
     const result = await ctx.runQuery(api.share.get, { token });
+    if (!result) return json({ error: "not found" }, 404);
+    await ctx.runMutation(api.share.viewed, { token });
     return json(result);
   }),
 });
@@ -178,7 +245,7 @@ http.route({
 http.route({
   path: "/health",
   method: "GET",
-  handler: httpAction(async () => json({ ok: true, service: "okidoki-convex" })),
+  handler: httpAction(async () => json({ ok: true, service: "okidoki-convex", syncConfigured: Boolean(process.env.OKIDOKI_SYNC_SECRET) })),
 });
 
 export default http;

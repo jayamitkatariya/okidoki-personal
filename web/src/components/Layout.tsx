@@ -55,6 +55,9 @@ const NAV: { label: string; items: { id: Page; title: string; icon: string }[] }
   },
 ];
 
+const SIDEBAR_KEY = "okidoki.sidebar";
+const NARROW_QUERY = "(max-width: 760px)";
+
 const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "Home", subtitle: "What needs you, and what's moving" },
   runs: { title: "Runs", subtitle: "Live work and action previews" },
@@ -87,6 +90,21 @@ export function AppShell({
   const [addAccount, setAddAccount] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // the rail starts closed; opening it is remembered, and narrow windows force it closed
+  const [expanded, setExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) === "open");
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
+  const collapsed = !expanded || narrow;
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_KEY, expanded ? "open" : "closed");
+  }, [expanded]);
+
+  useEffect(() => {
+    const media = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setNarrow(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
 
   // each page starts at the top, not wherever the last one was scrolled to
   useLayoutEffect(() => {
@@ -100,6 +118,10 @@ export function AppShell({
         setPaletteAsk(false);
         setPalettePrompt("");
         setPaletteOpen(true);
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        setExpanded((value) => !value);
       }
       if (event.key === "Escape") setAccountOpen(false);
     };
@@ -169,9 +191,18 @@ export function AppShell({
   };
 
   return (
-    <div className="app">
-      <aside className="sidebar" aria-label="Workspace navigation">
+    <div className={cx("app", collapsed && "is-collapsed")}>
+      <aside id="sidebar" className={cx("sidebar", collapsed && "is-collapsed")} aria-label="Workspace navigation">
         <div className="brand">
+          <button
+            className={cx("brand-mark", tone)}
+            onClick={() => setPage("home")}
+            aria-label={`okidoki — ${status}`}
+            data-tip={status}
+          >
+            <Logo size={30} />
+            <i aria-hidden="true" />
+          </button>
           <div className="brand-text">
             <span className="brand-name">okidoki</span>
             <span className={cx("brand-status", tone)} title={status}>
@@ -183,7 +214,14 @@ export function AppShell({
         </div>
 
         <div className="account-wrap workspace-switcher" ref={accountRef}>
-          <button className={cx("account", accountOpen && "is-open")} aria-expanded={accountOpen} aria-haspopup="menu" aria-label="Switch workspace" onClick={() => setAccountOpen((value) => !value)}>
+          <button
+            className={cx("account", accountOpen && "is-open")}
+            aria-expanded={accountOpen}
+            aria-haspopup="menu"
+            aria-label="Switch workspace"
+            data-tip={account.name}
+            onClick={() => setAccountOpen((value) => !value)}
+          >
             <Avatar account={account} size={28} />
             <span className="account-text">
               <strong>{account.name}</strong>
@@ -260,7 +298,7 @@ export function AppShell({
           </AnimatePresence>
         </div>
 
-        <button className="side-ask" aria-label="Search or ask okidoki" onClick={openAsk}>
+        <button className="side-ask" aria-label="Search or ask okidoki" data-tip="Search or ask · ⌘K" onClick={openAsk}>
           <PixelIcon name="search" size={15} />
           <span>Search or ask</span>
           <KeyHint>⌘K</KeyHint>
@@ -278,7 +316,8 @@ export function AppShell({
                     className={cx("nav-item", page === item.id && "nav-active")}
                     onClick={() => setPage(item.id)}
                     aria-current={page === item.id ? "page" : undefined}
-                    aria-label={item.title}
+                    aria-label={badge ? `${item.title}, ${badge}` : item.title}
+                    data-tip={badge ? `${item.title} · ${badge}` : item.title}
                   >
                     <PixelIcon name={item.icon} size={17} />
                     <span>{item.title}</span>
@@ -291,7 +330,10 @@ export function AppShell({
         </nav>
 
         <div className="sidebar-bottom">
-          <div className={cx("sidebar-foot", convexConnected ? "is-live" : native ? "is-local" : "")}>
+          <div
+            className={cx("sidebar-foot", convexConnected ? "is-live" : native ? "is-local" : "")}
+            data-tip={`${convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"} · v${state.version}`}
+          >
             <i />
             <span>{convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}</span>
             <span className="spacer" />
@@ -302,9 +344,22 @@ export function AppShell({
 
       <main className="main">
         <header className="workspace-bar">
-          <span className="workspace-breadcrumb">
-            Workspace <PixelIcon name="chevron" size={12} /> <strong>{SECTION_META[page].title}</strong>
-          </span>
+          <div className="workspace-lead">
+            <button
+              className="bar-toggle"
+              onClick={() => setExpanded((value) => !value)}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!collapsed}
+              aria-controls="sidebar"
+              title={`${collapsed ? "Expand" : "Collapse"} sidebar (⌘B)`}
+              disabled={narrow}
+            >
+              <PixelIcon name="panel" size={15} />
+            </button>
+            <span className="workspace-breadcrumb">
+              Workspace <PixelIcon name="chevron" size={12} /> <strong>{SECTION_META[page].title}</strong>
+            </span>
+          </div>
           <div className="workspace-actions">
             <span className="workspace-local">
               <PixelIcon name="lock" size={12} />

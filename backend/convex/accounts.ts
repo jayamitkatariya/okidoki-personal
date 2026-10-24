@@ -55,13 +55,17 @@ export const claim = mutation({
     if (!userId) throw new Error("sign in first");
     const claimed: string[] = [];
     const taken: string[] = [];
+    const seen = new Set<string>();
     for (const account of accounts.slice(0, 20)) {
+      const id = account.id.trim();
+      if (!id || id.length > 128 || seen.has(id)) continue;
+      seen.add(id);
       const existing = await ctx.db
         .query("accounts")
-        .withIndex("by_client", (q) => q.eq("clientId", account.id))
+        .withIndex("by_client", (q) => q.eq("clientId", id))
         .first();
       if (existing?.ownerId && existing.ownerId !== userId) {
-        taken.push(account.id);
+        taken.push(id);
         continue;
       }
       if (existing) {
@@ -69,9 +73,9 @@ export const claim = mutation({
       } else {
         // Not synced yet: hold the place so the first sync lands under this owner.
         await ctx.db.insert("accounts", {
-          clientId: account.id,
-          name: account.name,
-          email: account.email,
+          clientId: id,
+          name: account.name.slice(0, 120),
+          email: account.email.slice(0, 254),
           kind: account.kind,
           colorHex: account.colorHex,
           createdAt: account.createdAt,
@@ -79,8 +83,24 @@ export const claim = mutation({
           ownerId: userId,
         });
       }
-      claimed.push(account.id);
+      claimed.push(id);
     }
     return { claimed, taken };
+  },
+});
+
+// Unlinks an account from this login. Its synced rows stay, but nobody can read them until it's claimed again.
+export const release = mutation({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("sign in first");
+    const existing = await ctx.db
+      .query("accounts")
+      .withIndex("by_client", (q) => q.eq("clientId", accountId))
+      .first();
+    if (!existing || existing.ownerId !== userId) return { released: false };
+    await ctx.db.patch(existing._id, { ownerId: undefined });
+    return { released: true };
   },
 });

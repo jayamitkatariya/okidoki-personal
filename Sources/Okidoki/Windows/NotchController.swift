@@ -243,6 +243,15 @@ final class HoverHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// Keeps the fixed-size SwiftUI canvas pinned top-centre however the window is resized.
+/// Autoresizing masks can't do this: once the canvas is wider than the window (negative
+/// margins) AppKit pins it to the left edge instead, which shoved the island off-centre
+/// until the next time the window grew.
+final class NotchCanvasContainer: NSView {
+    var onResize: (() -> Void)?
+    override func resizeSubviews(withOldSize oldSize: NSSize) { onResize?() }
+}
+
 final class HoverView: NSView {
     var onEnter: (() -> Void)?
     var onExit: (() -> Void)?
@@ -273,7 +282,7 @@ final class NotchController {
     let model: NotchModel
     private var panel: NotchPanel?
     private var host: HoverHostingView<NotchRootView>?
-    private var container: NSView?
+    private var container: NotchCanvasContainer?
     private var hotZone: NSWindow?
 
     private var hideWork: DispatchWorkItem?
@@ -343,9 +352,10 @@ final class NotchController {
         // The SwiftUI canvas keeps a fixed size, pinned top-centre inside a plain container.
         // Resizing the window then only changes how much of the canvas is shown — SwiftUI never
         // re-lays out mid-spring, so the island can't slide or jump when the window grows/shrinks.
-        let container = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
+        let container = NotchCanvasContainer(frame: NSRect(origin: .zero, size: panel.frame.size))
         container.wantsLayer = true
-        host.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]
+        container.onResize = { [weak self] in self?.layoutCanvas() }
+        host.autoresizingMask = []
         container.addSubview(host)
         panel.contentView = container
         self.panel = panel

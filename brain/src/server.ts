@@ -142,7 +142,7 @@ export async function handleRequest(request: Request): Promise<Response> {
         if (!payload.topic) {
           return json({ error: "topic required" }, 400);
         }
-        const key = request.headers.get("x-anthropic-key") ?? undefined;
+        const key = anthropicKey(request.headers.get("x-anthropic-key"));
         const result = await conceptLesson(
           {
             topic: payload.topic,
@@ -169,7 +169,7 @@ export async function handleRequest(request: Request): Promise<Response> {
         if (!payload.topic || !payload.question) {
           return json({ error: "topic and question required" }, 400);
         }
-        const key = request.headers.get("x-anthropic-key") ?? undefined;
+        const key = anthropicKey(request.headers.get("x-anthropic-key"));
         const result = await conceptFollowUp(
           {
             topic: payload.topic,

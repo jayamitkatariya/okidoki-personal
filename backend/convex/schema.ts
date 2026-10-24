@@ -82,7 +82,9 @@ export default defineSchema({
     accountId: v.string(),
     data: v.any(),
     updatedAt: v.number(),
-  }).index("by_run", ["runId"]),
+  })
+    .index("by_run", ["runId"])
+    .index("by_account", ["accountId"]),
 
   skills: defineTable({
     clientId: v.string(),
@@ -131,6 +133,17 @@ export default defineSchema({
     device: v.string(),
     state: v.any(),
     updatedAt: v.number(),
+    // When the Mac assembled this state. Used so an older sync that finishes late can't overwrite a newer one.
+    sentAt: v.optional(v.number()),
+  }).index("by_account", ["accountId"]),
+
+  // One row per account: the newest sync the backend has accepted. Older syncs are rejected at the door.
+  syncs: defineTable({
+    accountId: v.string(),
+    sentAt: v.number(),
+    device: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.union(v.number(), v.null()),
   }).index("by_account", ["accountId"]),
 
   shareLinks: defineTable({

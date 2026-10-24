@@ -36,7 +36,7 @@ function readVar(canvas: HTMLCanvasElement, name: string, fallback: string): str
 
 /** The okidoki wordmark, drawn as a dot-matrix sign: a ribbon of light sweeps through
  *  the pixels and the letters warm up as it passes. */
-export function PixelWordmark({ text = "okidoki", className = "" }: { text?: string; className?: string }) {
+export function PixelWordmark({ text = "okidoki", className = "", maxCell = 12 }: { text?: string; className?: string; maxCell?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -130,7 +130,7 @@ export function PixelWordmark({ text = "okidoki", className = "" }: { text?: str
     const build = () => {
       const width = canvas.getBoundingClientRect().width;
       if (!width) return;
-      cell = Math.max(4, Math.min(12, Math.floor(width / cols)));
+      cell = Math.max(4, Math.min(maxCell, Math.floor(width / cols)));
       size = cell * cols;
       const height = cell * rows;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -169,7 +169,7 @@ export function PixelWordmark({ text = "okidoki", className = "" }: { text?: str
       media.removeEventListener("change", start);
       document.removeEventListener("visibilitychange", start);
     };
-  }, [text]);
+  }, [text, maxCell]);
 
   return <canvas ref={ref} className={`pixel-wordmark ${className}`} aria-label={text} role="img" />;
 }

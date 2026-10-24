@@ -165,15 +165,35 @@ public final class OkidokiStore: ObservableObject {
         return thread
     }
 
-    public func threadForContext(app: String, topic: String = "") -> ChatThread {
+    /// The thread a new request belongs to. A request continues the app's latest thread only when it
+    /// is plausibly a follow-up: within a few minutes, or worded like one. Otherwise it starts fresh,
+    /// so an unrelated question hours later doesn't drag an old conversation back into the model's context.
+    public func threadForContext(app: String, topic: String = "", text: String = "", now: Date = Date()) -> ChatThread {
         let candidates = threads.filter { $0.accountID == currentAccountID && !$0.archived }
-        if let match = candidates.first(where: { $0.topic.lowercased() == topic.lowercased() && !topic.isEmpty }) {
+        if !topic.isEmpty,
+           let match = candidates.first(where: { $0.topic.lowercased() == topic.lowercased() && now.timeIntervalSince($0.updatedAt) < 60 * 60 * 24 }) {
             return match
         }
-        if let recent = candidates.first(where: { $0.app == app && Date().timeIntervalSince($0.updatedAt) < 60 * 60 * 6 }) {
-            return recent
+        if let recent = candidates.first(where: { $0.app == app }) {
+            let age = now.timeIntervalSince(recent.updatedAt)
+            if age < 60 * 5 || (age < 60 * 60 * 2 && Self.looksLikeFollowUp(text)) {
+                return recent
+            }
         }
         return createThread(title: threadTitle(for: app, topic: topic), app: app, topic: topic)
+    }
+
+    /// Short replies and anaphora ("and then?", "do that", "yes", "what about the other one").
+    public static func looksLikeFollowUp(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lower.isEmpty else { return false }
+        let words = lower.split(whereSeparator: { $0.isWhitespace || $0 == "," })
+        if words.count <= 3 { return true }
+        let openers = ["and ", "also ", "then ", "now ", "what about", "how about", "ok ", "okay ", "yes", "no ", "nope", "yeah",
+                       "again", "retry", "try again", "undo", "that ", "those ", "it ", "them ", "the same", "same ", "more ",
+                       "why", "instead", "actually", "wait"]
+        if openers.contains(where: { lower.hasPrefix($0) }) { return true }
+        return lower.contains(" that one") || lower.contains(" the other") || lower.contains(" it again")
     }
 
     public func appendMessage(threadID: String, role: MessageRole, text: String, runID: String? = nil) {

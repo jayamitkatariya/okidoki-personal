@@ -1,4 +1,4 @@
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { ownedAccount } from "./accounts";
 
@@ -16,7 +16,20 @@ export const get = query({
       run: link.run,
       accountName: link.accountName,
       createdAt: link.createdAt,
+      views: link.views,
     };
+  },
+});
+
+// Counts an open of the share page. Unauthenticated on purpose: the page itself is public.
+export const viewed = mutation({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    const link = await ctx.db
+      .query("shareLinks")
+      .withIndex("by_token", (q) => q.eq("token", token))
+      .first();
+    if (link) await ctx.db.patch(link._id, { views: link.views + 1 });
   },
 });
 
@@ -29,6 +42,24 @@ export const byRun = query({
       .order("desc")
       .first();
     if (!link || !(await ownedAccount(ctx, link.accountId))) return null;
-    return link;
+    return { token: link.token, runId: link.runId, views: link.views, createdAt: link.createdAt };
+  },
+});
+
+// Owners can take a link down; the token stops resolving at once.
+export const revoke = mutation({
+  args: { runId: v.string() },
+  handler: async (ctx, { runId }) => {
+    const links = await ctx.db
+      .query("shareLinks")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    let removed = 0;
+    for (const link of links) {
+      if (!(await ownedAccount(ctx, link.accountId))) continue;
+      await ctx.db.delete(link._id);
+      removed++;
+    }
+    return { removed };
   },
 });

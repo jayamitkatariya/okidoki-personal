@@ -443,7 +443,7 @@ final class AppEnvironment: ObservableObject {
         } else if lower.contains("start fresh") {
             thread = store.createThread(title: "fresh thread", app: appName, topic: "")
         } else {
-            thread = store.threadForContext(app: appName, topic: inferTopic(text))
+            thread = store.threadForContext(app: appName, topic: inferTopic(text), text: text)
         }
 
         store.appendMessage(threadID: thread.id, role: .user, text: text.isEmpty ? "look at this" : text)
@@ -452,7 +452,12 @@ final class AppEnvironment: ObservableObject {
             await handleDecision(builtin, request: request, threadID: thread.id, source: source)
             return
         }
-        let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+        // Whatever is on the clipboard is sent only when the request is about it. Otherwise a copied
+        // answer or an unrelated command would ride along with every question and confuse the model.
+        let priorTurns = (store.thread(thread.id)?.messages ?? []).map(\.text)
+        let clipboard = BrainService.relevantClipboard(NSPasteboard.general.string(forType: .string) ?? "",
+                                                       request: text, history: priorTurns,
+                                                       hasScreenshot: screenshot != nil, hasDocument: !document.isEmpty)
         let request = BrainRequest(text: text, appName: appName, bundleID: bundleID,
                                    threadID: thread.id, screenshotPNG: screenshot,
                                    selection: selection, source: source,
@@ -490,7 +495,7 @@ final class AppEnvironment: ObservableObject {
 
     private func handleDecision(_ decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
         let decision = withoutShowOrDoChoice(decision, request: request)
-        for fact in decision.memory where !fact.isEmpty {
+        for fact in decision.memory where BrainService.isDurableFact(fact) {
             store.addMemory(fact, section: fact.lowercased().hasPrefix("right now") ? .rightNow : .aboutYou,
                             source: source == "summon" ? "said" : source)
         }
@@ -999,9 +1004,9 @@ final class AppEnvironment: ObservableObject {
                                   steps: preview.steps.map { RunStep(title: $0.text) },
                                   status: .waiting, builtin: "computer-use")
         let detail = decision.answer.isEmpty ? "i'll do it now." : decision.answer
-        store.appendMessage(threadID: threadID, role: .assistant,
-                            text: "\(detail) esc stops me.",
-                            runID: run.id)
+        // The brain strips its own "esc stops me"; guard here too so history never carries it twice.
+        let note = detail.lowercased().contains("esc stops me") ? detail : "\(detail) esc stops me."
+        store.appendMessage(threadID: threadID, role: .assistant, text: note, runID: run.id)
         summon.hideInput()
         approveRun(run.id)
     }

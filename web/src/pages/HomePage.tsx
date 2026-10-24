@@ -99,9 +99,21 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
 
   return (
     <div className="home">
+      <section className="home-sign" aria-label="okidoki">
+        <div className="sign-face">
+          <PixelWordmark maxCell={14} />
+        </div>
+        <div className="sign-ticker">
+          <span className={cx("sign-pulse", live.length > 0 && "is-live", waiting.length > 0 && "is-waiting")}>
+            <i />
+            {waiting.length ? `${waiting.length} waiting` : live.length ? `${live.length} working` : "standing by"}
+          </span>
+          <span className="sign-date">{todayLabel()}</span>
+        </div>
+      </section>
+
       <section className="home-hero">
         <div className="home-hero-copy">
-          <span className="hero-date">{todayLabel()}</span>
           <h1>
             Good {timeOfDay()}, {firstName}
             <span className="greeting-dot">.</span>
@@ -514,9 +526,6 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
       </div>
 
       <footer className="home-footer">
-        <div className="wordmark-band">
-          <PixelWordmark />
-        </div>
         <p className="home-footer-note">
           <PixelIcon name="lock" size={13} />
           Voice uses Cartesia. Recent context uses Moss. Your account lives in Convex.

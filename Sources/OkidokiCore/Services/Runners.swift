@@ -125,6 +125,11 @@ public final class ConvexSyncService: ObservableObject {
     @Published public private(set) var status: String = "local only"
     @Published public private(set) var isSyncing = false
 
+    /// A push asked for while one is in flight runs once the current one finishes, with the newer state.
+    private var pushAgain = false
+    /// Hash of the last state that reached Convex, so an unchanged store isn't re-sent.
+    private var lastPushedHash: Int?
+
     public init() {}
 
     private func endpoint(_ base: String, path: String) -> URL? {
@@ -146,12 +151,24 @@ public final class ConvexSyncService: ObservableObject {
             status = "sync secret missing"
             return
         }
+        // One push at a time: two overlapping syncs would race to delete each other's rows on the backend.
+        if isSyncing {
+            pushAgain = true
+            return
+        }
         isSyncing = true
         status = "syncing…"
-        defer { isSyncing = false }
+        defer {
+            isSyncing = false
+            if pushAgain {
+                pushAgain = false
+                Task { await self.push(store: store) }
+            }
+        }
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
             // Only the tail of each run's terminal output syncs; the full log stays on this Mac.
             // Keeps the request well under Convex's HTTP body limit as history grows.
             var syncState = store.stateForSync()
@@ -160,24 +177,44 @@ public final class ConvexSyncService: ObservableObject {
                 run.output = String(run.output.suffix(20_000))
                 return run
             }
+            // lastSyncAt is written by this very method; counting it would make every push schedule the next.
+            var forHash = syncState
+            forHash.settings.lastSyncAt = nil
+            let hash = try encoder.encode(forHash).hashValue
+            if hash == lastPushedHash {
+                status = "synced"
+                return
+            }
             let stateData = try encoder.encode(syncState)
             let stateObject = try JSONSerialization.jsonObject(with: stateData)
             let body: [String: Any] = [
                 "accountId": store.currentAccountID,
                 "device": Host.current().localizedName ?? "mac",
+                "sentAt": Int(Date().timeIntervalSince1970 * 1000),
                 "state": stateObject,
             ]
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
+            request.timeoutInterval = 120
             request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "content-type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                let text = String(data: data, encoding: .utf8) ?? ""
-                status = "sync failed \(text.prefix(60))"
+            guard let http = response as? HTTPURLResponse else {
+                status = "sync failed: no response"
                 return
             }
+            if http.statusCode == 409 {
+                // A newer sync for this account already landed (another Mac, or a faster push). Nothing lost.
+                status = "synced elsewhere"
+                return
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let text = String(data: data, encoding: .utf8) ?? ""
+                status = http.statusCode == 401 ? "sync secret rejected" : "sync failed \(text.prefix(60))"
+                return
+            }
+            lastPushedHash = hash
             store.settings.lastSyncAt = Date()
             store.saveNow()
             status = "synced just now"
@@ -213,6 +250,23 @@ public final class ConvexSyncService: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    /// Deletes everything Convex holds for an account the Mac no longer has.
+    @discardableResult
+    public func purge(accountID: String, store: OkidokiStore) async -> Bool {
+        guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return false }
+        guard let secret = KeyStore.get("convex"), !secret.isEmpty else { return false }
+        guard let url = endpoint(store.settings.convexSiteURL, path: "/api/purge") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["accountId": accountID])
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
     }
 
     public func pull(store: OkidokiStore) async -> AppState? {

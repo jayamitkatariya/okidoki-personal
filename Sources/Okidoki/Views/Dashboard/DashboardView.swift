@@ -397,9 +397,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 env.store.saveNow()
             }
         case "deleteAccount":
-            if let id = payload["id"] as? String {
+            if let id = payload["id"] as? String, env.store.accounts.count > 1 {
                 env.store.deleteAccount(id)
                 env.store.saveNow()
+                // The Mac forgot it; Convex should too.
+                Task { await env.convex.purge(accountID: id, store: env.store) }
             }
         case "previewVoice":
             if let voice = payload["voice"] as? String {

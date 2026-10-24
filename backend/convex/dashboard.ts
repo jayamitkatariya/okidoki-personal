@@ -27,7 +27,17 @@ export const bootstrap = query({
     if (!(await ownedAccount(ctx, accountId))) return null;
     const snapshot = await snapshotFor(ctx, accountId);
     if (!snapshot) return null;
-    return { state: parseState(snapshot.state), updatedAt: snapshot.updatedAt, device: snapshot.device };
+    const sync = await ctx.db
+      .query("syncs")
+      .withIndex("by_account", (q) => q.eq("accountId", accountId))
+      .first();
+    return {
+      state: parseState(snapshot.state),
+      updatedAt: snapshot.updatedAt,
+      device: snapshot.device,
+      // A sync that began but never finished means the Mac is mid-push (or was interrupted).
+      syncing: Boolean(sync && sync.finishedAt === null && Date.now() - sync.startedAt < 10 * 60_000),
+    };
   },
 });
 
