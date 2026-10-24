@@ -89,9 +89,21 @@ if [ ! -f build/AppIcon.icns ]; then
 fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-# Local builds use ad-hoc signing without looking up identities in the Keychain.
-# A certificate is used only when the builder explicitly selects one.
-IDENTITY="${OKIDOKI_CODESIGN_IDENTITY:--}"
+# macOS ties Accessibility and Screen Recording grants to the signing identity. An ad-hoc
+# signature changes with every build, which makes the Mac ask for every permission again,
+# so sign with a stable certificate whenever one is installed. OKIDOKI_CODESIGN_IDENTITY
+# overrides the choice ("-" forces ad-hoc).
+IDENTITY="${OKIDOKI_CODESIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+fi
+if [ -z "$IDENTITY" ]; then
+  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+fi
+if [ -z "$IDENTITY" ]; then
+  echo "▸ No signing certificate found; using an ad-hoc signature (permissions will be asked again after each build)."
+  IDENTITY="-"
+fi
 
 echo "▸ Signing with: $IDENTITY"
 codesign --force --deep --options runtime --entitlements Resources/Okidoki.entitlements --sign "$IDENTITY" "$APP"
