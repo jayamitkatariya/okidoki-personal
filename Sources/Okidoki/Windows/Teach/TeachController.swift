@@ -375,7 +375,7 @@ final class TeachController {
                 return TeachControlHint(id: element.id, label: element.label, role: element.role,
                                         x: r.midX.rounded(), y: r.midY.rounded(), w: r.width.rounded(), h: r.height.rounded())
             }
-            let known = env.store.memories.map(\.text).filter { $0.lowercased().contains("knows ") && $0.lowercased().contains(app.lowercased()) }
+            let known = env.store.activeMemories.map(\.text).filter { $0.lowercased().contains("knows ") && $0.lowercased().contains(app.lowercased()) }
             let pageInfo = await page
             let menuBarLines = await menuBar
             guard gen == self.generation, self.model.isActive else { return }

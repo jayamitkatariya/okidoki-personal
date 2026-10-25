@@ -372,11 +372,10 @@ struct BrainMemorySyncPayload: Encodable {
     var projectId: String
     var projectKey: String
     var cacheDir: String
-    var memories: [MemoryItem]
-    var threads: [ChatThread]
-    var runs: [AgentRun]
-    var skills: [Skill]
-    var routines: [Routine]
+    var memories: [MemoryIndexPayload.Note]
+    var threads: [MemoryIndexPayload.Thread]
+    var runs: [MemoryIndexPayload.RunEntry]
+    var skills: [MemoryIndexPayload.SkillEntry]
 }
 
 enum BrainExecEvent {

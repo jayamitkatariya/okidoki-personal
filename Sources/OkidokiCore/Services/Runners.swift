@@ -184,17 +184,58 @@ public enum SafetyPolicy {
     }
 }
 
+/// Two-way sync with the Convex backend, one account at a time: pull what other Macs changed since this
+/// Mac last merged, merge it into the store, then push this Mac's copy on top of that exact version.
+/// If another Mac synced in between, the push is refused and the round starts over, so a push never
+/// deletes what this Mac hasn't seen. Against a backend without versions it falls back to a plain push.
 @MainActor
 public final class ConvexSyncService: ObservableObject {
     @Published public private(set) var status: String = "local only"
     @Published public private(set) var isSyncing = false
+    /// What the last finished sync did.
+    @Published public private(set) var lastReport: SyncReport?
 
-    /// A push asked for while one is in flight runs once the current one finishes, with the newer state.
-    private var pushAgain = false
-    /// Hash of the last state that reached Convex, so an unchanged store isn't re-sent.
-    private var lastPushedHash: Int?
+    public struct SyncReport: Equatable, Sendable {
+        /// Changes brought in from other Macs, all accounts together.
+        public var merged = MergeSummary()
+        /// Accounts pushed, and accounts with nothing new to push.
+        public var pushed: [String] = []
+        public var skipped: [String] = []
+        /// Pushes refused because another Mac synced first (each was retried after a fresh pull).
+        public var conflicts = 0
+        /// Pulled items this build couldn't read (from a newer build, say); left on Convex untouched.
+        public var unreadable = 0
+        /// The backend has no versions yet, so this was a one-way push.
+        public var legacy = false
+    }
 
-    public init() {}
+    enum SyncFailure: Error {
+        case unauthorized
+        case tooLarge
+        case http(Int, String)
+        case keptLosing
+    }
+
+    /// The newest runs and threads that go up with each push; older ones stay on Convex as they are.
+    public static let maxRuns = 1_000
+    public static let maxThreads = 300
+    static let maxAttempts = 4
+
+    /// A sync asked for while one is in flight runs once the current one finishes, with the newer state.
+    private var syncAgain = false
+    /// Per account, a hash of the last state that reached Convex, so an unchanged account isn't re-sent.
+    private var lastPushedHash: [String: Int] = [:]
+    private let session: URLSession
+    private let secret: () -> String?
+    private let device: String
+
+    public init(session: URLSession = .shared,
+                secret: @escaping () -> String? = { KeyStore.get("convex") },
+                device: String = Host.current().localizedName ?? "mac") {
+        self.session = session
+        self.secret = secret
+        self.device = device
+    }
 
     private func endpoint(_ base: String, path: String) -> URL? {
         let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -202,122 +243,260 @@ public final class ConvexSyncService: ObservableObject {
         return URL(string: trimmed + path)
     }
 
-    /// `sentAt` is normally now; a 409 hands back the newest accepted stamp so a Mac whose clock went
-    /// backwards can retry once just ahead of it instead of being refused until wall time catches up.
-    public func push(store: OkidokiStore, sentAt: Int? = nil) async {
+    private func request(_ url: URL, secret: String, method: String = "GET", json: Any? = nil, timeout: TimeInterval = 60) throws -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = timeout
+        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        if let json {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: json)
+        }
+        return request
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Int, Data) {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SyncFailure.http(0, "no response") }
+        if http.statusCode == 401 { throw SyncFailure.unauthorized }
+        if http.statusCode == 413 { throw SyncFailure.tooLarge }
+        return (http.statusCode, data)
+    }
+
+    /// Kept for callers from before sync went both ways.
+    public func push(store: OkidokiStore) async { await sync(store: store) }
+
+    /// Pulls, merges and pushes every account on this Mac, the one in front first.
+    public func sync(store: OkidokiStore) async {
         guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else {
             status = "local only"
             return
         }
-        guard let url = endpoint(store.settings.convexSiteURL, path: "/api/sync") else {
+        let base = store.settings.convexSiteURL
+        guard endpoint(base, path: "/api/sync") != nil else {
             status = "check the convex url"
             return
         }
-        guard let secret = KeyStore.get("convex"), !secret.isEmpty else {
+        guard let secret = secret(), !secret.isEmpty else {
             status = "sync secret missing"
             return
         }
-        // One push at a time: two overlapping syncs would race to delete each other's rows on the backend.
+        // One sync at a time: two overlapping rounds would each push on top of a version the other replaces.
         if isSyncing {
-            pushAgain = true
+            syncAgain = true
             return
         }
         isSyncing = true
         status = "syncing…"
         defer {
             isSyncing = false
-            if pushAgain {
-                pushAgain = false
-                Task { await self.push(store: store) }
+            if syncAgain {
+                syncAgain = false
+                Task { await self.sync(store: store) }
             }
         }
+        var report = SyncReport()
         do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.sortedKeys]
-            // Only the tail of each run's terminal output syncs; the full log stays on this Mac.
-            // Keeps the request well under Convex's HTTP body limit as history grows.
-            var syncState = store.stateForSync()
-            syncState.runs = syncState.runs.sorted { $0.createdAt > $1.createdAt }.prefix(1_000).map { run in
-                var run = run
-                run.output = String(run.output.suffix(20_000))
-                return run
+            let ids = [store.currentAccountID] + store.accounts.map(\.id).filter { $0 != store.currentAccountID }
+            for id in ids where store.accounts.contains(where: { $0.id == id }) {
+                try await syncAccount(id, store: store, base: base, secret: secret, report: &report)
             }
-            syncState.threads = Array(syncState.threads.sorted { $0.updatedAt > $1.updatedAt }.prefix(300))
-            // lastSyncAt is written by this very method; counting it would make every push schedule the next.
-            var forHash = syncState
-            forHash.settings.lastSyncAt = nil
-            let hash = try encoder.encode(forHash).hashValue
-            if hash == lastPushedHash {
-                status = "synced"
-                return
-            }
-            let stateData = try encoder.encode(syncState)
-            let stateObject = try JSONSerialization.jsonObject(with: stateData)
-            let body: [String: Any] = [
-                "accountId": store.currentAccountID,
-                "device": Host.current().localizedName ?? "mac",
-                "sentAt": sentAt ?? Int(Date().timeIntervalSince1970 * 1000),
-                "state": stateObject,
-            ]
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.timeoutInterval = 120
-            request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "content-type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                status = "sync failed: no response"
-                return
-            }
-            if http.statusCode == 409 {
-                // A newer sync for this account already landed (another Mac, or a faster push). Nothing lost.
-                if sentAt == nil,
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let latest = json["latest"] as? Int {
-                    isSyncing = false
-                    await push(store: store, sentAt: latest + 1)
-                    return
-                }
-                status = "synced elsewhere"
-                return
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                let text = String(data: data, encoding: .utf8) ?? ""
-                status = http.statusCode == 401 ? "sync secret rejected" : "sync failed \(text.prefix(60))"
-                return
-            }
-            lastPushedHash = hash
             store.settings.lastSyncAt = Date()
             store.saveNow()
-            status = "synced just now"
+            lastReport = report
+            let brought = report.merged.changes
+            status = report.legacy ? "synced (one way: update the backend for two-way sync)"
+                : brought > 0 ? "synced · brought in \(brought) change\(brought == 1 ? "" : "s") from your other Macs"
+                : "synced just now"
+        } catch SyncFailure.unauthorized {
+            status = "sync secret rejected"
+        } catch SyncFailure.tooLarge {
+            status = "sync failed: too much to send at once"
+        } catch SyncFailure.keptLosing {
+            status = "another Mac keeps syncing; will try again"
+        } catch SyncFailure.http(let code, let text) {
+            status = "sync failed \(code) \(text.prefix(60))"
         } catch {
             status = "sync failed: \(error.localizedDescription)"
         }
+        // Whatever finished (cursors, merged items) is worth keeping even when a later account failed.
+        store.saveNow()
+    }
+
+    private func syncAccount(_ id: String, store: OkidokiStore, base: String, secret: String, report: inout SyncReport) async throws {
+        for _ in 0..<Self.maxAttempts {
+            guard let remote = try await remoteVersion(id, base: base, secret: secret) else {
+                report.legacy = true
+                try await legacyPush(id, store: store, base: base, secret: secret, report: &report)
+                return
+            }
+            // A deployment that was reset (or a purged account) is behind this Mac: start over from nothing.
+            var cursor = store.syncCursors[id] ?? 0
+            if remote < cursor { cursor = 0 }
+            let before = try payload(for: id, store: store)
+            let hadLocalChanges = before.hash != lastPushedHash[id]
+            if remote != cursor {
+                let (changes, unreadable) = try await pull(id, since: cursor, base: base, secret: secret)
+                report.unreadable += unreadable.count
+                report.merged += store.mergePulled(changes)
+                store.keepUnreadable(unreadable)
+                store.syncCursors[id] = remote
+            }
+            let state = try payload(for: id, store: store)
+            // Nothing new here: after merging, this Mac matches Convex, so there's nothing to push.
+            if !hadLocalChanges, store.syncCursors[id] == remote {
+                lastPushedHash[id] = state.hash
+                report.skipped.append(id)
+                return
+            }
+            var body = state.body
+            body["baseVersion"] = remote
+            let url = endpoint(base, path: "/api/sync")!
+            let (code, data) = try await send(try request(url, secret: secret, method: "POST", json: body, timeout: 120))
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+            if code == 409 {
+                // Another Mac got in first: pull what it wrote and go again.
+                report.conflicts += 1
+                continue
+            }
+            guard (200..<300).contains(code) else { throw SyncFailure.http(code, String(data: data, encoding: .utf8) ?? "") }
+            if let version = json["version"] as? Int { store.syncCursors[id] = version }
+            lastPushedHash[id] = state.hash
+            report.pushed.append(id)
+            return
+        }
+        throw SyncFailure.keptLosing
+    }
+
+    /// The account's version on Convex, or nil when the backend predates versions.
+    private func remoteVersion(_ id: String, base: String, secret: String) async throws -> Int? {
+        guard let url = endpoint(base, path: "/api/version?accountId=\(id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? id)") else {
+            throw SyncFailure.http(0, "bad url")
+        }
+        let (code, data) = try await send(try request(url, secret: secret))
+        if code == 404 { return nil }
+        guard (200..<300).contains(code),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = json["version"] as? Int else { throw SyncFailure.http(code, String(data: data, encoding: .utf8) ?? "") }
+        return version
+    }
+
+    /// Everything that changed for an account since a version, table by table, page by page.
+    private func pull(_ id: String, since: Int, base: String, secret: String) async throws -> (PulledChanges, [UnreadableItem]) {
+        var changes = PulledChanges()
+        var unreadable: [UnreadableItem] = []
+        let decoder = SyncDates.decoder
+        func page<T: Decodable>(_ table: String, as type: T.Type) async throws -> [T] {
+            var items: [T] = []
+            var cursor: String?
+            for _ in 0..<10_000 {
+                var body: [String: Any] = ["accountId": id, "table": table, "since": since]
+                if let cursor { body["cursor"] = cursor }
+                let url = endpoint(base, path: "/api/pull")!
+                let (code, data) = try await send(try request(url, secret: secret, method: "POST", json: body))
+                guard (200..<300).contains(code), let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw SyncFailure.http(code, String(data: data, encoding: .utf8) ?? "")
+                }
+                for raw in json["items"] as? [Any] ?? [] {
+                    guard let itemData = try? JSONSerialization.data(withJSONObject: raw) else { continue }
+                    if let item = try? decoder.decode(T.self, from: itemData) {
+                        items.append(item)
+                    } else if table != "deletions", let object = raw as? [String: Any], let itemID = object["id"] as? String {
+                        // One item this build can't read must not stop the rest, and must not be lost either.
+                        unreadable.append(UnreadableItem(table: table, id: itemID, accountID: object["accountID"] as? String ?? id,
+                                                         json: String(data: itemData, encoding: .utf8) ?? "{}"))
+                    }
+                }
+                if json["isDone"] as? Bool != false { break }
+                cursor = json["cursor"] as? String
+            }
+            return items
+        }
+        changes.threads = try await page("threads", as: ChatThread.self)
+        changes.memories = try await page("memories", as: MemoryItem.self)
+        changes.runs = try await page("runs", as: AgentRun.self)
+        changes.skills = try await page("skills", as: Skill.self)
+        changes.routines = try await page("routines", as: Routine.self)
+        changes.deletions = try await page("deletions", as: PulledChanges.Deletion.self)
+        return (changes, unreadable)
+    }
+
+    /// The push body for one account, and a hash of it without the bits that change on every push.
+    private func payload(for id: String, store: OkidokiStore) throws -> (body: [String: Any], hash: Int) {
+        var state = store.stateForSync(accountID: id)
+        // Only the tail of each run's terminal output syncs; the full log stays on this Mac.
+        let runs = state.runs.sorted { $0.createdAt > $1.createdAt }
+        state.runs = runs.prefix(Self.maxRuns).map { run in
+            var run = run
+            run.output = String(run.output.suffix(20_000))
+            return run
+        }
+        let threads = state.threads.sorted { $0.updatedAt > $1.updatedAt }
+        state.threads = Array(threads.prefix(Self.maxThreads))
+        // lastSyncAt is written by every sync; counting it would make every push schedule the next.
+        state.settings.lastSyncAt = nil
+        let encoder = SyncDates.encoder
+        var object = try jsonObject(encoder.encode(state))
+        // Items this build couldn't read go back exactly as they came, so the push doesn't delete them.
+        for item in store.unreadable where item.accountID == id {
+            guard let raw = try? JSONSerialization.jsonObject(with: Data(item.json.utf8)) else { continue }
+            var list = object[item.table] as? [Any] ?? []
+            if !list.contains(where: { ($0 as? [String: Any])?["id"] as? String == item.id }) { list.append(raw) }
+            object[item.table] = list
+        }
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        var floors: [String: String] = [:]
+        if runs.count > Self.maxRuns, let oldest = state.runs.last { floors["runs"] = SyncDates.string(from: oldest.createdAt) }
+        if threads.count > Self.maxThreads, let oldest = state.threads.last { floors["threads"] = SyncDates.string(from: oldest.updatedAt) }
+        let body: [String: Any] = [
+            "accountId": id,
+            "device": device,
+            "sentAt": Int(Date().timeIntervalSince1970 * 1000),
+            "state": object,
+            "floors": floors,
+        ]
+        return (body, data.hashValue)
+    }
+
+    private func jsonObject(_ data: Data) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw SyncFailure.http(0, "state didn't encode") }
+        return object
+    }
+
+    /// A backend without versions: push as before. A refusal means a newer push from another Mac landed;
+    /// it isn't forced through.
+    private func legacyPush(_ id: String, store: OkidokiStore, base: String, secret: String, report: inout SyncReport) async throws {
+        let state = try payload(for: id, store: store)
+        if state.hash == lastPushedHash[id] {
+            report.skipped.append(id)
+            return
+        }
+        var body = state.body
+        body["floors"] = nil
+        let (code, data) = try await send(try request(endpoint(base, path: "/api/sync")!, secret: secret, method: "POST", json: body, timeout: 120))
+        if code == 409 {
+            report.conflicts += 1
+            return
+        }
+        guard (200..<300).contains(code) else { throw SyncFailure.http(code, String(data: data, encoding: .utf8) ?? "") }
+        lastPushedHash[id] = state.hash
+        report.pushed.append(id)
     }
 
     public func share(run: AgentRun, account: Account, store: OkidokiStore) async -> String? {
         guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return nil }
-        guard let secret = KeyStore.get("convex"), !secret.isEmpty else { return nil }
+        guard let secret = secret(), !secret.isEmpty else { return nil }
         guard let url = endpoint(store.settings.convexSiteURL, path: "/api/share") else { return nil }
         do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            let runObject = try JSONSerialization.jsonObject(with: encoder.encode(run))
+            let runObject = try JSONSerialization.jsonObject(with: SyncDates.encoder.encode(run))
             let body: [String: Any] = [
                 "accountId": account.id,
                 "accountName": account.name,
                 "runId": run.id,
                 "run": runObject,
             ]
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "content-type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let (code, data) = try await send(try request(url, secret: secret, method: "POST", json: body))
+            guard (200..<300).contains(code),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let link = json["url"] as? String else { return nil }
             return link
@@ -330,44 +509,12 @@ public final class ConvexSyncService: ObservableObject {
     @discardableResult
     public func purge(accountID: String, store: OkidokiStore) async -> Bool {
         guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return false }
-        guard let secret = KeyStore.get("convex"), !secret.isEmpty else { return false }
+        guard let secret = secret(), !secret.isEmpty else { return false }
         guard let url = endpoint(store.settings.convexSiteURL, path: "/api/purge") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 120
-        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["accountId": accountID])
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return false }
-        return (200..<300).contains(http.statusCode)
-    }
-
-    public func pull(store: OkidokiStore) async -> AppState? {
-        guard store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return nil }
-        guard let secret = KeyStore.get("convex"), !secret.isEmpty,
-              let url = endpoint(store.settings.convexSiteURL, path: "/api/bootstrap?accountId=\(store.currentAccountID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") else { return nil }
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            // /api/bootstrap replies {"state": <AppState as JSON string or object>, "updatedAt": ...}
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let state = json["state"] {
-                if let string = state as? String, let inner = string.data(using: .utf8) {
-                    return try? decoder.decode(AppState.self, from: inner)
-                }
-                if let object = state as? [String: Any],
-                   let inner = try? JSONSerialization.data(withJSONObject: object) {
-                    return try? decoder.decode(AppState.self, from: inner)
-                }
-            }
-            return try? decoder.decode(AppState.self, from: data)
-        } catch {
-            return nil
-        }
+        lastPushedHash[accountID] = nil
+        guard let request = try? request(url, secret: secret, method: "POST", json: ["accountId": accountID], timeout: 120),
+              let (code, _) = try? await send(request) else { return false }
+        return (200..<300).contains(code)
     }
 }
 
@@ -395,7 +542,8 @@ public final class RoutineScheduler {
     private func tick() {
         guard let store else { return }
         let now = Date()
-        for routine in store.activeRoutines where routine.enabled {
+        // A routine synced from another Mac runs there, not here as well.
+        for routine in store.activeRoutines where routine.enabled && store.isFromThisMac(routine) {
             guard let next = routine.nextRunAt else { continue }
             let key = routine.id + "-" + String(Int(next.timeIntervalSince1970 / 60))
             if next <= now, !fired.contains(key) {

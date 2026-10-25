@@ -1,4 +1,4 @@
-.PHONY: build test verify-terminal app run demo install clean backend
+.PHONY: build test verify-terminal verify-sync app run demo install clean backend
 
 build:
 	swift build
@@ -10,6 +10,15 @@ verify-terminal:
 	cd brain && bun run typecheck && bun test tests/terminal.test.ts tests/http.test.ts tests/connectors.test.ts
 	cd web && bun test && bun run build
 	swift test --filter 'TerminalActionsTests|ToolboxTests'
+
+# Memory and sync end to end: the Convex routes (in-memory Convex), the brain's index and recall, the
+# Mac's merge and two-Mac sync against a fake backend. OKIDOKI_LIVE_MOSS=1 adds the real Moss engine.
+verify-sync:
+	cd backend && npm run typecheck && npm test
+	cd brain && bun run typecheck && bun test tests/memory.test.ts tests/memory-sync.test.ts
+	cd web && bunx tsc --noEmit -p .
+	swift test --filter 'SyncMergeTests|OkidokiStoreSyncTests|ConvexSyncServiceTests|ContextTests'
+	@if [ "$$OKIDOKI_LIVE_MOSS" = "1" ]; then cd brain && OKIDOKI_LIVE_MOSS=1 bun --env-file=../.env test tests/memory-live.test.ts; fi
 
 app:
 	./scripts/build-app.sh

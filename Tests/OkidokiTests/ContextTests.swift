@@ -69,21 +69,28 @@ final class ContextTests: XCTestCase {
         XCTAssertFalse(BrainService.mentionsClipboard("how do i fix this"))
     }
 
-    func testModelSavedClipboardNotesArePrunedAtLoad() {
+    func testModelSavedClipboardNotesAreNeverKept() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("okidoki-tests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("state.json")
         let store = OkidokiStore(stateURL: url)
-        store.addMemory("Do not run the git fetch on the clipboard unless Jay explicitly asks", source: "said")
+        XCTAssertNil(store.addMemory("Do not run the git fetch on the clipboard unless Jay explicitly asks", source: "said"))
         store.addMemory("Okidoki cannot open, focus, or change its own windows", source: "said")
         store.addMemory("Jay wants purchases stopped before checkout", source: "said")
         store.addMemory("remind me what's on the clipboard every morning", source: "you")
+        // Notes like these that older builds saved are dropped once, when that save is first loaded.
+        store.memories.append(MemoryItem(accountID: store.currentAccountID, section: .aboutYou,
+                                         text: "Okidoki cannot see the clipboard right now", source: "said"))
         store.saveNow()
+        var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        saved["version"] = 1
+        try JSONSerialization.data(withJSONObject: saved).write(to: url)
 
         let reloaded = OkidokiStore(stateURL: url)
         let texts = reloaded.memories.map(\.text)
         XCTAssertFalse(texts.contains { $0.contains("git fetch on the clipboard") }, "a model note about the clipboard is dropped")
         XCTAssertFalse(texts.contains { $0.hasPrefix("Okidoki cannot") }, "a model note about its own limits is dropped")
+        XCTAssertEqual(texts.count, 2)
         XCTAssertTrue(texts.contains("Jay wants purchases stopped before checkout"), "a real fact the model saved stays")
         XCTAssertTrue(texts.contains("remind me what's on the clipboard every morning"), "the person's own notes are never pruned")
     }

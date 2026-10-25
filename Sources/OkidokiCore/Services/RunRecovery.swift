@@ -8,6 +8,7 @@ extension AgentRun {
         var run = self
         run.status = .failed
         run.endedAt = date
+        run.updatedAt = date
         run.summary = lostConnector
             ? "This connector plan expired when Okidoki restarted. Ask again to prepare a new one."
             : "Okidoki restarted before this job reported a result. Check what changed before retrying."

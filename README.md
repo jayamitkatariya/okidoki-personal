@@ -130,6 +130,38 @@ mocked logins), `cd web && bun test`, and
   `scripts/demo-meridian/rehearse.sh "<line>"` runs one demo line against an app started with
   `OKIDOKI_DEV_HOOKS=1` and prints each step's timing.
 
+## Memory and sync
+
+Everything lives on the Mac first (`~/Library/Application Support/Okidoki/state.json`). Two things build on it:
+
+- **Recall (Moss).** A few seconds after the Mac's data changes, it sends the brain what the index uses:
+  every note (each with its account), the last two weeks of conversation, the last 60 days of tasks
+  (title, request and result, never output) and skills (name, summary, step lines). The brain embeds only
+  what changed, in-process, and saves the index under `Application Support/Okidoki/moss`. Documents are
+  never uploaded; the Moss key only signs the session in, so the first start needs the internet. Each
+  request recalls the closest items from its own account (plus notes older Macs saved without one),
+  never tools, never the thread it continues, never a note the prompt already lists. The model always
+  gets the account's current notes; "right now" notes stop being handed to it two weeks after their last
+  edit (they stay on the Memory page). A failed index sync is retried, backing off to two minutes.
+- **Sync (Convex).** Two-way, per account, every account on the Mac. A round pulls what other Macs changed
+  since this one last merged (`/api/version`, then `/api/pull` by version, tombstones included), merges
+  it item by item (the later edit wins, a tie keeps the local copy, threads keep every message from both
+  sides, the same note saved twice is kept once, an item deleted here isn't pulled back), then pushes on top
+  of exactly that version. If another Mac synced in between, Convex refuses the push (409) and the round
+  starts over, so a push never deletes what this Mac hasn't seen. Pushes send the newest 1,000 runs and
+  300 threads with a floor, so older history on Convex isn't taken for deletions. Sync runs on launch,
+  10 s after changes, on account switch, when the dashboard opens, and every five minutes. Against a
+  backend without versions the Mac falls back to a one-way push and says so.
+
+Memory is per account. Runs and routines remember which Mac they came from: only that Mac fires a
+routine or drives a run; on other Macs they're synced history. Signing in to the same sync login on
+another Mac brings its accounts over (same ids) and pulls their data in, which is also how a reinstalled
+Mac gets everything back.
+
+Checks: `make verify-sync` (Convex routes against an in-memory Convex, the brain's index and recall with an
+in-memory engine, the Mac's merge and two Macs syncing against a fake backend). `OKIDOKI_LIVE_MOSS=1 make
+verify-sync` adds the real Moss engine in a throwaway folder.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

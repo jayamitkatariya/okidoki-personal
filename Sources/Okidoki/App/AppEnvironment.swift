@@ -90,7 +90,10 @@ final class AppEnvironment: ObservableObject {
     /// Approved-later connector calls by run id: the brain's call JSON, handed back untouched when the run starts.
     private var pendingConnectorCalls: [String: String] = [:]
     private var syncWork: DispatchWorkItem?
+    private var syncTimer: Timer?
     private var memoryWork: DispatchWorkItem?
+    /// Seconds before the next try after the memory index failed to sync; doubles up to two minutes.
+    private var memoryRetryDelay: Double = 5
     /// Hash of the last memory payload the brain accepted, so an unchanged store isn't re-sent.
     private var lastMemoryHash: Int?
     private var callTimer: Timer?
@@ -277,25 +280,11 @@ final class AppEnvironment: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.openOnboarding() }
         }
 
-        if store.settings.syncEnabled {
-            Task {
-                if let remote = await convex.pull(store: store), remote.accounts.count > 0,
-                   let account = remote.accounts.first(where: { $0.id == store.currentAccountID }) {
-                    // Only restore when there is nothing local worth keeping.
-                    if store.threads.isEmpty && store.memories.isEmpty && store.runs.isEmpty
-                        && store.skills.isEmpty && store.routines.isEmpty {
-                        store.threads = remote.threads
-                        store.memories = remote.memories
-                        store.runs = remote.runs.map { $0.recoveredAfterRestart() }
-                        store.skills = remote.skills
-                        store.routines = remote.routines
-                        store.accounts = remote.accounts
-                        store.saveNow()
-                        toast(title: "restored from convex", detail: "\(account.name)'s threads and memory are here",
-                              kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-                    }
-                }
-            }
+        // Sync is two-way: on launch, and every few minutes after, this Mac pulls what the account's other
+        // Macs changed (cheap when nothing did: one version check per account) and merges it in.
+        refreshSync()
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshSync() }
         }
 
         if ProcessInfo.processInfo.environment["OKIDOKI_DEV_HOOKS"] == "1" { installDevHooks() }
@@ -667,7 +656,8 @@ final class AppEnvironment: ObservableObject {
             }
         }
         let history = (store.thread(thread.id)?.messages ?? []).map { BrainMessage(role: $0.role.rawValue, text: $0.text) }
-        var memory = store.memories.map { "\($0.section.label): \($0.text)" }
+        // The account's current notes; anything else it remembers is found by meaning in the memory index.
+        var memory = store.memoryLines()
         if teach.isActive { memory.insert("Right now: \(teach.questionContext)", at: 0) }
         else if concept.isActive { memory.insert("Right now: \(concept.questionContext)", at: 0) }
         let installed = ToolCatalog.tools.filter { store.toolInstalled[$0.id] == true }.map(\.id)
@@ -1984,7 +1974,7 @@ final class AppEnvironment: ObservableObject {
         if stepsDone >= 2 {
             // Remember it, so next time the basics get skipped, and keep the steps as a replayable skill.
             let fact = "knows \(topic) in \(app)"
-            if !store.memories.contains(where: { $0.text.lowercased() == fact.lowercased() }) {
+            if !store.activeMemories.contains(where: { $0.text.lowercased() == fact.lowercased() }) {
                 _ = store.addMemory(fact, section: .aboutYou, source: "lesson")
             }
             if !store.skills.contains(where: { $0.name.lowercased() == topic.lowercased() && $0.source == "lesson" }) {
@@ -2013,7 +2003,7 @@ final class AppEnvironment: ObservableObject {
             store.appendMessage(threadID: threadID, role: .assistant, text: recap, runID: runID)
         }
         let fact = "knows about \(topic)"
-        if !store.memories.contains(where: { $0.text.lowercased() == fact.lowercased() }) {
+        if !store.activeMemories.contains(where: { $0.text.lowercased() == fact.lowercased() }) {
             _ = store.addMemory(fact, section: .aboutYou, source: "lesson")
         }
         store.saveNow()
@@ -2299,7 +2289,7 @@ final class AppEnvironment: ObservableObject {
             toast(title: "deleted “\(skill.name)”", detail: "undo to bring it back", kind: .info,
                   undoLabel: "undo", onUndo: { [weak self] in
                       guard let self else { return }
-                      self.store.skills.insert(skill, at: 0)
+                      self.store.restoreSkill(skill)
                       self.store.saveNow()
                   }, editLabel: nil, onEdit: nil, runID: nil)
             store.appendMessage(threadID: thread.id, role: .assistant, text: "deleted “\(skill.name)”.")
@@ -3009,8 +2999,10 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// Pulls, merges and pushes now. Does nothing while sync is off.
     func refreshSync() {
-        Task { await convex.push(store: store) }
+        guard store.settings.syncEnabled else { return }
+        Task { await convex.sync(store: store) }
     }
 
     func shareRun(_ id: String) {
@@ -3055,25 +3047,27 @@ final class AppEnvironment: ObservableObject {
     private func pushMemoryIndex() async {
         guard sidecar.status.isReady, let credentials = mossCredentials() else { return }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        // Only the tail of each run's output is indexed; the full log stays in the store.
-        let runs = store.runs.map { run -> AgentRun in
-            var run = run
-            run.output = String(run.output.suffix(1_500))
-            return run
-        }
+        // Only what the index uses: notes, recent turns, recent tasks and skills, never run output.
+        let index = MemoryIndexPayload(store: store)
         let payload = BrainMemorySyncPayload(
             projectId: credentials.projectId, projectKey: credentials.projectKey,
             cacheDir: support.appendingPathComponent("Okidoki/moss", isDirectory: true).path,
-            memories: store.memories, threads: store.threads, runs: runs,
-            skills: store.skills, routines: store.routines)
+            memories: index.memories, threads: index.threads, runs: index.runs, skills: index.skills)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(payload) else { return }
         let hash = data.hashValue
         guard hash != lastMemoryHash else { return }
-        guard let result = await BrainClient.shared.memorySync(payload) else { return }
-        memoryIndex = result.status
-        if result.ok { lastMemoryHash = hash }
+        let result = await BrainClient.shared.memorySync(payload)
+        if let result { memoryIndex = result.status }
+        if result?.ok == true {
+            lastMemoryHash = hash
+            memoryRetryDelay = 5
+        } else {
+            // The brain was busy, restarting or offline (Moss signs in on first use): try again, backing off.
+            scheduleMemoryIndex(after: memoryRetryDelay)
+            memoryRetryDelay = min(memoryRetryDelay * 2, 120)
+        }
     }
 
     private func scheduleSync() {
@@ -3081,7 +3075,7 @@ final class AppEnvironment: ObservableObject {
         syncWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            Task { await self.convex.push(store: self.store) }
+            Task { await self.convex.sync(store: self.store) }
         }
         syncWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
@@ -3118,6 +3112,7 @@ final class AppEnvironment: ObservableObject {
     func openDashboard(_ section: DashboardSection, runID: String? = nil) {
         dashboardRoute = section
         if let runID { dashboardRunID = runID }
+        refreshSync()
         if signedOut {
             dashboard.show(section: .home, runID: runID)
             return
@@ -3270,6 +3265,8 @@ final class AppEnvironment: ObservableObject {
         store.switchAccount(accountID)
         signedOut = false
         store.saveNow()
+        // The account in front should be current with its other Macs.
+        refreshSync()
     }
 
     func createAccountAndSignIn(name: String, email: String, kind: AccountKind) {

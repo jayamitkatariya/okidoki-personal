@@ -4,6 +4,7 @@ import { ConvexAuthProvider, useAuthActions } from "@convex-dev/auth/react";
 import { anyApi } from "convex/server";
 import type { Account, NativeState } from "./types";
 import { EnterpriseBridge, type EnterpriseState } from "./enterprise";
+import { invoke } from "./bridge";
 
 // Sign-in for sync and the hosted panel, through Convex Auth on the person's own deployment.
 // Without a Convex URL none of this mounts, and okidoki stays fully local.
@@ -105,6 +106,20 @@ function CloudBridge({ accountId, claimAccounts, onChange }: { accountId: string
     const accounts = claimAccounts.map(({ id, name, email, kind, colorHex, createdAt }) => ({ id, name, email, kind, colorHex, createdAt }));
     void claim({ accounts }).then((result: { taken: string[] }) => setTaken(result.taken));
   }, [me, claimAccounts, claim]);
+
+  // Inside the Mac app: accounts this login owns that another Mac created come here too, so their threads
+  // and memory sync in. A reinstalled Mac gets its accounts back the same way.
+  const adoptedFor = useRef("");
+  useEffect(() => {
+    if (!me || !mine || !claimAccounts) return;
+    const here = new Set(claimAccounts.map((account) => account.id));
+    const missing = mine.filter((account) => !here.has(account.id));
+    if (!missing.length) return;
+    const key = `${me.id}:${missing.map((account) => account.id).sort().join(",")}`;
+    if (adoptedFor.current === key) return;
+    adoptedFor.current = key;
+    invoke("adoptAccounts", { accounts: missing.map(({ id, name, email, kind, colorHex, createdAt }) => ({ id, name, email, kind, colorHex, createdAt })) });
+  }, [me, mine, claimAccounts]);
 
   // Stable callbacks over the latest actions, so reporting state up doesn't loop on a new identity each render.
   const latestActions = useRef(actions);

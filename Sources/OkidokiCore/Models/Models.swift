@@ -436,16 +436,31 @@ public enum MemorySection: String, Codable, CaseIterable, Identifiable, Sendable
 
 public struct MemoryItem: Identifiable, Codable, Equatable, Sendable {
     public var id: String
+    /// The account this belongs to. Empty only for memories saved before memory was per account;
+    /// the store gives those to the account in front when it loads them.
+    public var accountID: String
     public var section: MemorySection
     public var text: String
     public var source: String
     public var createdAt: Date
     public var updatedAt: Date
 
-    public init(id: String = UUID().uuidString, section: MemorySection, text: String,
+    public init(id: String = UUID().uuidString, accountID: String = "", section: MemorySection, text: String,
                 source: String = "you", createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id; self.section = section; self.text = text; self.source = source
+        self.id = id; self.accountID = accountID; self.section = section; self.text = text; self.source = source
         self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        // Older saves have no account; a missing key must not drop the memory.
+        accountID = (try? c.decodeIfPresent(String.self, forKey: .accountID)).flatMap { $0 } ?? ""
+        section = try c.decode(MemorySection.self, forKey: .section)
+        text = try c.decode(String.self, forKey: .text)
+        source = (try? c.decodeIfPresent(String.self, forKey: .source)).flatMap { $0 } ?? "you"
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)).flatMap { $0 } ?? createdAt
     }
 }
 
@@ -589,6 +604,11 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     public var freedBytes: Int64?
     public var builtin: String?
     public var pickedPath: String?
+    /// Last change on any Mac, so sync keeps the newest copy. Nil on runs saved before sync merged.
+    public var updatedAt: Date?
+    /// The Mac that ran it (`DeviceIdentity`). Only that Mac executes, stops or recovers it;
+    /// elsewhere it's history synced from that Mac.
+    public var origin: String?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,
@@ -596,7 +616,8 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
                 steps: [RunStep] = [], output: String = "", summary: String = "",
                 agent: CodingAgentID? = nil, workingDirectory: String? = nil,
                 createdAt: Date = Date(), startedAt: Date? = nil, endedAt: Date? = nil,
-                freedBytes: Int64? = nil, builtin: String? = nil, pickedPath: String? = nil) {
+                freedBytes: Int64? = nil, builtin: String? = nil, pickedPath: String? = nil,
+                updatedAt: Date? = nil, origin: String? = nil) {
         self.id = id; self.accountID = accountID; self.kind = kind; self.title = title
         self.prompt = prompt; self.threadID = threadID; self.status = status
         self.preview = preview; self.steps = steps; self.output = output; self.summary = summary
@@ -604,9 +625,12 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt; self.startedAt = startedAt; self.endedAt = endedAt
         self.freedBytes = freedBytes
         self.builtin = builtin; self.pickedPath = pickedPath
+        self.updatedAt = updatedAt; self.origin = origin
     }
 
     public var isActive: Bool { status.isActive }
+    /// When it last changed, for merging copies from two Macs.
+    public var editedAt: Date { updatedAt ?? createdAt }
 }
 
 /// One recorded movement. `text` is the human line shown in the dashboard; the rest is what
@@ -688,13 +712,18 @@ public struct Skill: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var source: String
     public var runCount: Int
+    /// Last change on any Mac, so sync keeps the newest copy.
+    public var updatedAt: Date?
 
     public init(id: String = UUID().uuidString, accountID: String, name: String,
                 summary: String, steps: [SkillStep] = [], createdAt: Date = Date(),
-                source: String = "watch me", runCount: Int = 0) {
+                source: String = "watch me", runCount: Int = 0, updatedAt: Date? = nil) {
         self.id = id; self.accountID = accountID; self.name = name; self.summary = summary
         self.steps = steps; self.createdAt = createdAt; self.source = source; self.runCount = runCount
+        self.updatedAt = updatedAt
     }
+
+    public var editedAt: Date { updatedAt ?? createdAt }
 }
 
 public enum RoutineCadence: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -724,16 +753,23 @@ public struct Routine: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var lastRunAt: Date?
     public var nextRunAt: Date?
+    /// Last change on any Mac, so sync keeps the newest copy.
+    public var updatedAt: Date?
+    /// The Mac that runs it on schedule (`DeviceIdentity`). Synced copies on other Macs never fire,
+    /// so one routine doesn't run once per Mac.
+    public var origin: String?
 
     public init(id: String = UUID().uuidString, accountID: String, name: String, prompt: String,
                 cadence: RoutineCadence = .weekly, weekday: Int = 6, hour: Int = 17, minute: Int = 0,
                 enabled: Bool = true, createdAt: Date = Date(),
-                lastRunAt: Date? = nil, nextRunAt: Date? = nil) {
+                lastRunAt: Date? = nil, nextRunAt: Date? = nil, updatedAt: Date? = nil, origin: String? = nil) {
         self.id = id; self.accountID = accountID; self.name = name; self.prompt = prompt
         self.cadence = cadence; self.weekday = weekday; self.hour = hour; self.minute = minute
         self.enabled = enabled; self.createdAt = createdAt; self.lastRunAt = lastRunAt
-        self.nextRunAt = nextRunAt
+        self.nextRunAt = nextRunAt; self.updatedAt = updatedAt; self.origin = origin
     }
+
+    public var editedAt: Date { updatedAt ?? createdAt }
 
     public func nextDate(after date: Date = Date(), calendar: Calendar = .current) -> Date? {
         guard enabled, cadence != .manual else { return nil }
@@ -1415,7 +1451,25 @@ public enum ToastKind: String, Sendable {
 
 // MARK: - State container
 
+/// An item this build can't read (a newer build wrote it, say). Kept exactly as it came and sent back with
+/// every push, so a Mac on an older version never deletes what a newer one made.
+public struct UnreadableItem: Codable, Equatable, Sendable {
+    /// threads · memories · runs · skills · routines
+    public var table: String
+    public var id: String
+    public var accountID: String
+    /// The item's JSON, untouched.
+    public var json: String
+
+    public init(table: String, id: String, accountID: String, json: String) {
+        self.table = table; self.id = id; self.accountID = accountID; self.json = json
+    }
+}
+
 public struct AppState: Codable, Sendable {
+    /// 2: memories belong to an account, and runs and routines know which Mac they came from.
+    public static let currentVersion = 2
+
     public var version: Int
     public var accounts: [Account]
     public var currentAccountID: String
@@ -1426,18 +1480,30 @@ public struct AppState: Codable, Sendable {
     public var skills: [Skill]
     public var routines: [Routine]
     public var connectors: [Connector]
+    /// Items deleted on this Mac (id → when), so a pull can't bring one back before the delete
+    /// reaches Convex. Kept for a while after, then dropped.
+    public var deletions: [String: Date]
+    /// Per account, the Convex sync version this Mac last merged.
+    public var syncCursors: [String: Int]
+    /// Synced items this build couldn't read, kept as they came.
+    public var unreadable: [UnreadableItem]
+    /// Items in the saved file that couldn't be read (a newer build's data, say). Not saved.
+    public private(set) var droppedItems = 0
 
-    public init(version: Int = 1, accounts: [Account] = [], currentAccountID: String = "",
+    public init(version: Int = AppState.currentVersion, accounts: [Account] = [], currentAccountID: String = "",
                 settings: AppSettings = AppSettings(), threads: [ChatThread] = [],
                 memories: [MemoryItem] = [], runs: [AgentRun] = [], skills: [Skill] = [],
-                routines: [Routine] = [], connectors: [Connector] = []) {
+                routines: [Routine] = [], connectors: [Connector] = [],
+                deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = []) {
         self.version = version; self.accounts = accounts; self.currentAccountID = currentAccountID
         self.settings = settings; self.threads = threads; self.memories = memories; self.runs = runs
         self.skills = skills; self.routines = routines; self.connectors = connectors
+        self.deletions = deletions; self.syncCursors = syncCursors; self.unreadable = unreadable
     }
 
     enum CodingKeys: String, CodingKey {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
+        case deletions, syncCursors, unreadable
     }
 
     /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
@@ -1447,21 +1513,30 @@ public struct AppState: Codable, Sendable {
         init(from decoder: Decoder) { value = try? T(from: decoder) }
     }
 
-    private static func items<T: Decodable>(_ type: T.Type, _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> [T]? {
-        (try? c.decodeIfPresent([Lossy<T>].self, forKey: key))?.compactMap(\.value)
+    private static func items<T: Decodable>(_ type: T.Type, _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys,
+                                            dropped: inout Int) -> [T]? {
+        guard let lossy = try? c.decodeIfPresent([Lossy<T>].self, forKey: key) else { return nil }
+        let kept = lossy.compactMap(\.value)
+        dropped += lossy.count - kept.count
+        return kept
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        var dropped = 0
         version = (try? c.decodeIfPresent(Int.self, forKey: .version)).flatMap { $0 } ?? 1
-        accounts = Self.items(Account.self, c, .accounts) ?? []
+        accounts = Self.items(Account.self, c, .accounts, dropped: &dropped) ?? []
         currentAccountID = (try? c.decodeIfPresent(String.self, forKey: .currentAccountID)).flatMap { $0 } ?? ""
         settings = (try? c.decodeIfPresent(AppSettings.self, forKey: .settings)).flatMap { $0 } ?? AppSettings()
-        threads = Self.items(ChatThread.self, c, .threads) ?? []
-        memories = Self.items(MemoryItem.self, c, .memories) ?? []
-        runs = Self.items(AgentRun.self, c, .runs) ?? []
-        skills = Self.items(Skill.self, c, .skills) ?? []
-        routines = Self.items(Routine.self, c, .routines) ?? []
-        connectors = Self.items(Connector.self, c, .connectors) ?? ToolCatalog.defaultConnectors
+        threads = Self.items(ChatThread.self, c, .threads, dropped: &dropped) ?? []
+        memories = Self.items(MemoryItem.self, c, .memories, dropped: &dropped) ?? []
+        runs = Self.items(AgentRun.self, c, .runs, dropped: &dropped) ?? []
+        skills = Self.items(Skill.self, c, .skills, dropped: &dropped) ?? []
+        routines = Self.items(Routine.self, c, .routines, dropped: &dropped) ?? []
+        connectors = Self.items(Connector.self, c, .connectors, dropped: &dropped) ?? ToolCatalog.defaultConnectors
+        deletions = (try? c.decodeIfPresent([String: Date].self, forKey: .deletions)).flatMap { $0 } ?? [:]
+        syncCursors = (try? c.decodeIfPresent([String: Int].self, forKey: .syncCursors)).flatMap { $0 } ?? [:]
+        unreadable = Self.items(UnreadableItem.self, c, .unreadable, dropped: &dropped) ?? []
+        droppedItems = dropped
     }
 }

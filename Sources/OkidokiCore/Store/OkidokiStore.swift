@@ -16,13 +16,27 @@ public final class OkidokiStore: ObservableObject {
     @Published public var toolInstalled: [String: Bool] = [:]
     @Published public private(set) var lastSavedAt: Date?
     @Published public private(set) var loadError: String?
+    /// The saved file had items this build couldn't read. They're kept in a copy beside it.
+    @Published public private(set) var loadWarning: String?
+
+    /// This Mac (`DeviceIdentity`). Runs and routines started here carry it.
+    public let deviceID: String
+    /// Items deleted here, id → when, until well after the delete has reached Convex.
+    public private(set) var deletions: [String: Date]
+    /// Per account, the Convex sync version this Mac last merged. Saved with the state.
+    public var syncCursors: [String: Int]
+    /// Items this build can't read, from the saved file or a pull. Pushed back as they are, never deleted.
+    public private(set) var unreadable: [UnreadableItem]
 
     private var saveWork: DispatchWorkItem?
     private var isWriting = false
     private var cancellables = Set<AnyCancellable>()
     private let stateURL: URL
 
-    public init(seedDemo: Bool = false, stateURL: URL? = nil) {
+    /// How long a delete is remembered: long past any pull that could still bring the item back.
+    static let deletionMemory: TimeInterval = 60 * 60 * 24 * 30
+
+    public init(seedDemo: Bool = false, stateURL: URL? = nil, deviceID: String? = nil) {
         let support = stateURL?.deletingLastPathComponent() ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Okidoki", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
@@ -30,6 +44,7 @@ public final class OkidokiStore: ObservableObject {
         self.stateURL = stateURL ?? support.appendingPathComponent(seedDemo ? "state-demo.json" : "state.json")
 
         var loaded: AppState?
+        var unreadableAtLoad: [UnreadableItem] = []
         if !seedDemo, let data = try? Data(contentsOf: self.stateURL) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .custom { decoder in
@@ -42,8 +57,17 @@ public final class OkidokiStore: ObservableObject {
                 if let date = formatter.date(from: text) { return date }
                 throw DecodingError.dataCorruptedError(in: value, debugDescription: "Invalid saved date")
             }
-            do { loaded = try decoder.decode(AppState.self, from: data) }
-            catch {
+            do {
+                loaded = try decoder.decode(AppState.self, from: data)
+                if let dropped = loaded?.droppedItems, dropped > 0 {
+                    // The next save would write the state without them; keep the file as it was.
+                    let copy = self.stateURL.deletingPathExtension()
+                        .appendingPathExtension("partial-\(Int(Date().timeIntervalSince1970)).json")
+                    try? FileManager.default.copyItem(at: self.stateURL, to: copy)
+                    if let loaded { unreadableAtLoad = Self.unreadableItems(in: data, besides: loaded) }
+                    loadWarning = "\(dropped) saved item\(dropped == 1 ? "" : "s") couldn't be read by this version; the original file is kept as \(copy.lastPathComponent)"
+                }
+            } catch {
                 loadError = "couldn't read saved state: \(error.localizedDescription)"
                 // Keep the unreadable file: the first save would otherwise replace it with an empty state.
                 let aside = self.stateURL.deletingPathExtension()
@@ -65,15 +89,41 @@ public final class OkidokiStore: ObservableObject {
             current = accounts[0].id
         }
 
+        let device = deviceID ?? DeviceIdentity.current
+        var memories = state.memories
+        var runs = state.runs
+        var routines = state.routines
+        if loaded != nil, state.version < 2 {
+            // Once, on the first launch of a build with per-account memory and multi-Mac sync.
+            memories = Self.pruneModelNoise(memories)
+            runs = runs.map { run in var run = run; if run.origin == nil { run.origin = device }; return run }
+            routines = routines.map { routine in var routine = routine; if routine.origin == nil { routine.origin = device }; return routine }
+        }
+        // Memories saved before memory was per account belong to the account in front.
+        memories = memories.map { item in
+            var item = item
+            if item.accountID.isEmpty { item.accountID = current }
+            return item
+        }
+
+        self.deviceID = device
         self.accounts = accounts
         self.currentAccountID = current
         self.settings = state.settings
         self.threads = state.threads
-        self.memories = Self.pruneModelNoise(state.memories)
-        self.runs = state.runs.map { $0.recoveredAfterRestart() }
+        self.memories = memories
+        // Only this Mac's own runs were cut off by its restart; another Mac's are still its business.
+        self.runs = runs.map { $0.origin == device ? $0.recoveredAfterRestart() : $0 }
         self.skills = state.skills
-        self.routines = state.routines
+        self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)
+        self.deletions = state.deletions
+        self.syncCursors = state.syncCursors
+        var unreadable = state.unreadable
+        for item in unreadableAtLoad where !unreadable.contains(where: { $0.table == item.table && $0.id == item.id }) {
+            unreadable.append(item)
+        }
+        self.unreadable = unreadable
 
         if seedDemo { seedDemoData() }
 
@@ -116,9 +166,33 @@ public final class OkidokiStore: ObservableObject {
         skills.filter { $0.accountID == currentAccountID }
     }
 
-    public func memories(_ section: MemorySection) -> [MemoryItem] {
-        memories.filter { $0.section == section }.sorted { $0.updatedAt > $1.updatedAt }
+    /// The memories of the account in front.
+    public var activeMemories: [MemoryItem] {
+        memories.filter { $0.accountID == currentAccountID }
     }
+
+    public func memories(_ section: MemorySection) -> [MemoryItem] {
+        activeMemories.filter { $0.section == section }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// "Right now" notes describe the moment; after two weeks without an edit they're no longer handed
+    /// to the model or the memory index. They stay on the Memory page until the person removes them.
+    public static let rightNowLifetime: TimeInterval = 60 * 60 * 24 * 14
+
+    public func isCurrent(_ item: MemoryItem, now: Date = Date()) -> Bool {
+        item.section != .rightNow || now.timeIntervalSince(item.updatedAt) < Self.rightNowLifetime
+    }
+
+    /// What the model is told it remembers about the account in front: current right-now notes first,
+    /// then the newest about-you notes. The rest is found by meaning through the memory index.
+    public func memoryLines(limit: Int = 24, now: Date = Date()) -> [String] {
+        let current = memories(.rightNow).filter { isCurrent($0, now: now) }
+        let about = memories(.aboutYou)
+        return (current + about).prefix(limit).map { "\($0.section.label): \($0.text)" }
+    }
+
+    public func isFromThisMac(_ run: AgentRun) -> Bool { run.origin == deviceID }
+    public func isFromThisMac(_ routine: Routine) -> Bool { routine.origin == deviceID }
 
     public var savings: Double {
         ToolCatalog.tools.reduce(0) { partial, tool in
@@ -157,10 +231,24 @@ public final class OkidokiStore: ObservableObject {
         guard accounts.count > 1 else { return }
         accounts.removeAll { $0.id == id }
         threads.removeAll { $0.accountID == id }
+        memories.removeAll { $0.accountID == id }
+        unreadable.removeAll { $0.accountID == id }
         runs.removeAll { $0.accountID == id }
         skills.removeAll { $0.accountID == id }
         routines.removeAll { $0.accountID == id }
+        syncCursors[id] = nil
+        // Until Convex has forgotten it too, the sync login still lists it; don't adopt it straight back.
+        rememberDeletion(id)
         if currentAccountID == id { currentAccountID = accounts[0].id }
+    }
+
+    /// An account this login owns that another Mac created, brought onto this Mac with the same id so
+    /// its synced data can be pulled in. An account already here is left as it is.
+    @discardableResult
+    public func adoptAccount(_ account: Account) -> Bool {
+        guard !account.id.isEmpty, !accounts.contains(where: { $0.id == account.id }), deletions[account.id] == nil else { return false }
+        accounts.append(account)
+        return true
     }
 
     // MARK: - Threads
@@ -218,10 +306,12 @@ public final class OkidokiStore: ObservableObject {
     public func archiveThread(_ id: String) {
         guard let index = threads.firstIndex(where: { $0.id == id }) else { return }
         threads[index].archived.toggle()
+        threads[index].updatedAt = Date()
     }
 
     public func deleteThread(_ id: String) {
         threads.removeAll { $0.id == id }
+        rememberDeletion(id)
     }
 
     private func threadTitle(for app: String, topic: String) -> String {
@@ -233,14 +323,19 @@ public final class OkidokiStore: ObservableObject {
 
     // MARK: - Memory
 
+    /// Saves a memory for an account (the one in front unless named). The same text twice in one account is kept once.
     @discardableResult
-    public func addMemory(_ text: String, section: MemorySection = .aboutYou, source: String = "you") -> MemoryItem? {
+    public func addMemory(_ text: String, section: MemorySection = .aboutYou, source: String = "you",
+                          accountID: String? = nil) -> MemoryItem? {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: ".,;: "))
         guard cleaned.count > 2 else { return nil }
+        // What the model saves on its own has to be a lasting fact about the person, checked here, once.
+        if Self.modelSources.contains(source), !BrainService.isDurableFact(cleaned) { return nil }
+        let account = accountID ?? currentAccountID
         let lower = cleaned.lowercased()
-        if memories.contains(where: { $0.text.lowercased() == lower }) { return nil }
-        let item = MemoryItem(section: section, text: cleaned, source: source)
+        if memories.contains(where: { $0.accountID == account && $0.text.lowercased() == lower }) { return nil }
+        let item = MemoryItem(accountID: account, section: section, text: cleaned, source: source)
         memories.insert(item, at: 0)
         return item
     }
@@ -253,6 +348,7 @@ public final class OkidokiStore: ObservableObject {
 
     public func deleteMemory(_ id: String) {
         memories.removeAll { $0.id == id }
+        rememberDeletion(id)
     }
 
     /// Sources that mean the model wrote the memory itself. Anything the person typed, answered
@@ -261,14 +357,15 @@ public final class OkidokiStore: ObservableObject {
 
     /// Memories the model saved before `isDurableFact` existed — notes about the clipboard, a
     /// screenshot or its own limits — were fed back with every request and kept the model stuck on
-    /// them. They are dropped once at load; the person's own notes are never touched.
+    /// them. They are dropped once, when a save from before per-account memory is first loaded; new
+    /// ones are checked before they're saved. The person's own notes are never touched.
     static func pruneModelNoise(_ memories: [MemoryItem]) -> [MemoryItem] {
         memories.filter { !modelSources.contains($0.source) || BrainService.isDurableFact($0.text) }
     }
 
     public var memoryContext: String {
         let about = memories(.aboutYou).prefix(12).map(\.text)
-        let now = memories(.rightNow).prefix(6).map(\.text)
+        let now = memories(.rightNow).filter { isCurrent($0) }.prefix(6).map(\.text)
         var lines: [String] = []
         if !about.isEmpty { lines.append("About them: " + about.joined(separator: "; ")) }
         if !now.isEmpty { lines.append("Right now: " + now.joined(separator: "; ")) }
@@ -283,17 +380,23 @@ public final class OkidokiStore: ObservableObject {
                           agent: CodingAgentID? = nil, workingDirectory: String? = nil,
                           status: RunStatus = .previewing, builtin: String? = nil,
                           pickedPath: String? = nil) -> AgentRun {
+        let now = Date()
         let run = AgentRun(accountID: currentAccountID, kind: kind, title: title, prompt: prompt,
                            threadID: threadID, status: status, preview: preview, steps: steps,
-                           agent: agent, workingDirectory: workingDirectory,
-                           builtin: builtin, pickedPath: pickedPath)
+                           agent: agent, workingDirectory: workingDirectory, createdAt: now,
+                           builtin: builtin, pickedPath: pickedPath, updatedAt: now, origin: deviceID)
         runs.insert(run, at: 0)
         return run
     }
 
     public func updateRun(_ id: String, _ mutate: (inout AgentRun) -> Void) {
         guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
-        mutate(&runs[index])
+        // In place: a run's output can be long, and copying the run would copy it on every chunk.
+        func stamped(_ run: inout AgentRun) {
+            mutate(&run)
+            run.updatedAt = Date()
+        }
+        stamped(&runs[index])
     }
 
     public func startRun(_ id: String) {
@@ -332,9 +435,20 @@ public final class OkidokiStore: ObservableObject {
 
     @discardableResult
     public func createSkill(name: String, summary: String, steps: [SkillStep], source: String = "watch me") -> Skill {
-        let skill = Skill(accountID: currentAccountID, name: name, summary: summary, steps: steps, source: source)
+        let now = Date()
+        let skill = Skill(accountID: currentAccountID, name: name, summary: summary, steps: steps, createdAt: now,
+                          source: source, updatedAt: now)
         skills.insert(skill, at: 0)
         return skill
+    }
+
+    /// Puts back a skill that was just deleted (undo), as a fresh edit so sync keeps it.
+    public func restoreSkill(_ skill: Skill) {
+        guard !skills.contains(where: { $0.id == skill.id }) else { return }
+        var skill = skill
+        skill.updatedAt = Date()
+        skills.insert(skill, at: 0)
+        deletions[skill.id] = nil
     }
 
     /// A skill shared by a colleague, brought onto this Mac for the current account. Steps arrive as
@@ -355,6 +469,7 @@ public final class OkidokiStore: ObservableObject {
             skills[index].name = name
             skills[index].summary = summary
             skills[index].steps = cleaned
+            skills[index].updatedAt = Date()
             return skills[index]
         }
         // The Mac that published it already has the original (with its pictures): use that, not a copy.
@@ -370,24 +485,28 @@ public final class OkidokiStore: ObservableObject {
     public func deleteSkill(_ id: String) {
         if let skill = skills.first(where: { $0.id == id }) { SkillFrames.remove(skill: skill) }
         skills.removeAll { $0.id == id }
+        rememberDeletion(id)
     }
     public func incrementSkillRun(_ id: String, by count: Int = 1) {
         guard let index = skills.firstIndex(where: { $0.id == id }) else { return }
         skills[index].runCount += max(1, count)
+        skills[index].updatedAt = Date()
     }
     public func updateSkill(_ id: String, name: String? = nil, summary: String? = nil) {
         guard let index = skills.firstIndex(where: { $0.id == id }) else { return }
         if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty { skills[index].name = name }
         if let summary { skills[index].summary = summary }
+        skills[index].updatedAt = Date()
     }
 
     @discardableResult
     public func createRoutine(name: String, prompt: String, cadence: RoutineCadence = .weekly,
                               weekday: Int = 6, hour: Int = 17, minute: Int = 0,
                               enabled: Bool = true) -> Routine {
+        let now = Date()
         var routine = Routine(accountID: currentAccountID, name: name, prompt: prompt,
                               cadence: cadence, weekday: weekday, hour: hour, minute: minute,
-                              enabled: enabled)
+                              enabled: enabled, createdAt: now, updatedAt: now, origin: deviceID)
         routine.nextRunAt = routine.nextDate()
         routines.insert(routine, at: 0)
         return routine
@@ -398,6 +517,7 @@ public final class OkidokiStore: ObservableObject {
         var updated = routine
         // From now, like toggleRoutine: a slot missed since lastRunAt would otherwise fire on save.
         updated.nextRunAt = routine.nextDate()
+        updated.updatedAt = Date()
         routines[index] = updated
     }
 
@@ -405,14 +525,88 @@ public final class OkidokiStore: ObservableObject {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].enabled.toggle()
         routines[index].nextRunAt = routines[index].nextDate()
+        routines[index].updatedAt = Date()
     }
 
-    public func deleteRoutine(_ id: String) { routines.removeAll { $0.id == id } }
+    public func deleteRoutine(_ id: String) {
+        routines.removeAll { $0.id == id }
+        rememberDeletion(id)
+    }
 
     public func markRoutineRun(_ id: String, at date: Date = Date()) {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].lastRunAt = date
         routines[index].nextRunAt = routines[index].nextDate(after: date)
+        routines[index].updatedAt = date
+    }
+
+    // MARK: - Sync
+
+    private func rememberDeletion(_ id: String, at date: Date = Date()) {
+        deletions[id] = date
+    }
+
+    /// Keeps items a pull brought that this build can't read, replacing an older copy of the same one.
+    public func keepUnreadable(_ items: [UnreadableItem]) {
+        guard !items.isEmpty else { return }
+        for item in items {
+            unreadable.removeAll { $0.table == item.table && $0.id == item.id }
+            unreadable.append(item)
+        }
+    }
+
+    /// The saved file's items that didn't decode, found by id, so they can be kept rather than lost.
+    static func unreadableItems(in data: Data, besides state: AppState) -> [UnreadableItem] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        let readable: [String: Set<String>] = [
+            "threads": Set(state.threads.map(\.id)), "memories": Set(state.memories.map(\.id)), "runs": Set(state.runs.map(\.id)),
+            "skills": Set(state.skills.map(\.id)), "routines": Set(state.routines.map(\.id)),
+        ]
+        var found: [UnreadableItem] = []
+        for (table, ids) in readable {
+            for raw in root[table] as? [[String: Any]] ?? [] {
+                guard let id = raw["id"] as? String, !ids.contains(id),
+                      let json = try? JSONSerialization.data(withJSONObject: raw),
+                      let text = String(data: json, encoding: .utf8) else { continue }
+                found.append(UnreadableItem(table: table, id: id, accountID: raw["accountID"] as? String ?? state.currentAccountID, json: text))
+            }
+        }
+        return found
+    }
+
+    /// Brings in what another Mac changed in an account (see `SyncMerge`). Collections that end up the
+    /// same are left untouched, so a pull with nothing new doesn't trigger a save or another sync.
+    @discardableResult
+    public func mergePulled(_ changes: PulledChanges) -> MergeSummary {
+        guard !changes.isEmpty else { return MergeSummary() }
+        var summary = MergeSummary()
+        func tombstones(_ table: String) -> [PulledChanges.Deletion] { changes.deletions.filter { $0.table == table } }
+
+        let mergedThreads = SyncMerge.merge(local: threads, remote: changes.threads, deletions: tombstones("threads"),
+                                            deletedHere: deletions, editedAt: \.updatedAt,
+                                            combine: SyncMerge.combineThreads, summary: &summary)
+        let mergedMemories = SyncMerge.merge(local: memories, remote: SyncMerge.withoutDuplicateMemories(changes.memories, local: memories),
+                                             deletions: tombstones("memories"), deletedHere: deletions,
+                                             editedAt: \.updatedAt, summary: &summary)
+        let mergedRuns = SyncMerge.merge(local: runs, remote: changes.runs, deletions: tombstones("runs"),
+                                         deletedHere: deletions, editedAt: \.editedAt, summary: &summary)
+        let mergedSkills = SyncMerge.merge(local: skills, remote: changes.skills, deletions: tombstones("skills"),
+                                           deletedHere: deletions, editedAt: \.editedAt, summary: &summary)
+        let mergedRoutines = SyncMerge.merge(local: routines, remote: changes.routines, deletions: tombstones("routines"),
+                                             deletedHere: deletions, editedAt: \.editedAt, summary: &summary)
+
+        // An item that reads fine now (or was deleted elsewhere) no longer needs keeping as it came.
+        let settled = Set(changes.threads.map(\.id) + changes.memories.map(\.id) + changes.runs.map(\.id)
+                          + changes.skills.map(\.id) + changes.routines.map(\.id) + changes.deletions.map(\.id))
+        if unreadable.contains(where: { settled.contains($0.id) }) { unreadable.removeAll { settled.contains($0.id) } }
+
+        // Newest first, the way the store keeps them.
+        if mergedThreads != threads { threads = mergedThreads.sorted { $0.updatedAt > $1.updatedAt } }
+        if mergedMemories != memories { memories = mergedMemories.sorted { $0.createdAt > $1.createdAt } }
+        if mergedRuns != runs { runs = mergedRuns.sorted { $0.createdAt > $1.createdAt } }
+        if mergedSkills != skills { skills = mergedSkills.sorted { $0.createdAt > $1.createdAt } }
+        if mergedRoutines != routines { routines = mergedRoutines.sorted { $0.createdAt > $1.createdAt } }
+        return summary
     }
 
     // MARK: - Connectors
@@ -446,12 +640,19 @@ public final class OkidokiStore: ObservableObject {
 
     public func saveNow() {
         saveWork?.cancel()
+        let horizon = Date().addingTimeInterval(-Self.deletionMemory)
+        deletions = deletions.filter { $0.value > horizon }
         let state = AppState(accounts: accounts, currentAccountID: currentAccountID,
                              settings: settings, threads: threads, memories: memories, runs: runs,
-                             skills: skills, routines: routines, connectors: connectors)
+                             skills: skills, routines: routines, connectors: connectors,
+                             deletions: deletions, syncCursors: syncCursors, unreadable: unreadable)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        // Fractional seconds: sync tells two edits apart by these times, so they shouldn't round off on save.
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(SyncDates.string(from: date))
+        }
         do {
             let data = try encoder.encode(state)
             try data.write(to: stateURL, options: .atomic)
@@ -466,14 +667,16 @@ public final class OkidokiStore: ObservableObject {
         }
     }
 
-    public func stateForSync() -> AppState {
-        AppState(accounts: accounts, currentAccountID: currentAccountID, settings: settings,
-                 threads: threads.filter { $0.accountID == currentAccountID },
-                 memories: memories,
-                 runs: runs.filter { $0.accountID == currentAccountID },
-                 skills: skills.filter { $0.accountID == currentAccountID },
-                 routines: routines.filter { $0.accountID == currentAccountID },
-                 connectors: connectors)
+    /// One account's share of the state, as it goes to Convex (the one in front unless named).
+    public func stateForSync(accountID: String? = nil) -> AppState {
+        let account = accountID ?? currentAccountID
+        return AppState(accounts: accounts, currentAccountID: account, settings: settings,
+                        threads: threads.filter { $0.accountID == account },
+                        memories: memories.filter { $0.accountID == account },
+                        runs: runs.filter { $0.accountID == account },
+                        skills: skills.filter { $0.accountID == account },
+                        routines: routines.filter { $0.accountID == account },
+                        connectors: connectors)
     }
 
     // MARK: - Demo
@@ -512,11 +715,11 @@ public final class OkidokiStore: ObservableObject {
         threads = [figma, space]
 
         memories = [
-            MemoryItem(section: .aboutYou, text: "I'm a student at Purdue, studying IBE", createdAt: now.addingTimeInterval(-86400 * 30)),
-            MemoryItem(section: .aboutYou, text: "I use Figma and VS Code every day", createdAt: now.addingTimeInterval(-86400 * 20)),
-            MemoryItem(section: .aboutYou, text: "keep answers short and concrete", source: "you", createdAt: now.addingTimeInterval(-86400 * 5)),
-            MemoryItem(section: .rightNow, text: "building Okidoki, a Mac assistant", createdAt: now.addingTimeInterval(-3600 * 4)),
-            MemoryItem(section: .rightNow, text: "redesigning the Workro onboarding", createdAt: now.addingTimeInterval(-86400)),
+            MemoryItem(accountID: jay.id, section: .aboutYou, text: "I'm a student at Purdue, studying IBE", createdAt: now.addingTimeInterval(-86400 * 30)),
+            MemoryItem(accountID: jay.id, section: .aboutYou, text: "I use Figma and VS Code every day", createdAt: now.addingTimeInterval(-86400 * 20)),
+            MemoryItem(accountID: jay.id, section: .aboutYou, text: "keep answers short and concrete", source: "you", createdAt: now.addingTimeInterval(-86400 * 5)),
+            MemoryItem(accountID: jay.id, section: .rightNow, text: "building Okidoki, a Mac assistant", createdAt: now.addingTimeInterval(-3600 * 4)),
+            MemoryItem(accountID: work.id, section: .rightNow, text: "redesigning the Workro onboarding", createdAt: now.addingTimeInterval(-86400)),
         ]
 
         var cleanup = AgentRun(accountID: jay.id, kind: .terminal, title: "free up 23 GB",
@@ -579,7 +782,10 @@ public final class OkidokiStore: ObservableObject {
                               prompt: "every monday at 9, summarise my week and today's calendar",
                               cadence: .weekly, weekday: 2, hour: 9, minute: 0)
         standup.nextRunAt = standup.nextDate()
+        friday.origin = deviceID
+        standup.origin = deviceID
         routines = [friday, standup]
+        runs = runs.map { run in var run = run; run.origin = deviceID; return run }
 
         connectors = Self.mergeConnectors([
             Connector(id: "calendar", name: "Apple Calendar", kind: "apple", blurb: "", enabled: true, installed: true),
