@@ -705,6 +705,10 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String, let text = payload["text"] as? String {
                 env.continueThread(id, text: text)
             }
+        case "answerDriveQuestion":
+            if let id = payload["id"] as? String, let text = payload["text"] as? String {
+                env.answerDriveQuestion(runID: id, text: text)
+            }
         case "archiveThread":
             if let id = payload["id"] as? String { env.store.archiveThread(id); env.store.saveNow() }
         case "deleteThread":

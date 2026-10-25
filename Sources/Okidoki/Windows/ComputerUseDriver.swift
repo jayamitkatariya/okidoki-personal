@@ -243,7 +243,7 @@ final class ComputerUseDriver {
                                         aimX: Self.isPointer(act) || act.type == "zoom" ? aim.map { Double($0.x) } : nil,
                                         aimY: Self.isPointer(act) || act.type == "zoom" ? aim.map { Double($0.y) } : nil,
                                         zoomFrame: nil, script: scriptSource,
-                                        status: act.type == "done" || act.type == "fail" ? "done" : "acting", at: Date()))
+                                        status: ["done", "fail", "ask"].contains(act.type) ? "done" : "acting", at: Date()))
             cursor.update(label: "okidoki · \(act.say ?? act.type)")
             env.store.updateRun(run.id) { run in
                 run.output += "→ \(act.say ?? act.type)\n"
@@ -253,8 +253,13 @@ final class ComputerUseDriver {
                 finish(success: true, summary: act.summary ?? act.say ?? "done")
                 return
             }
+            if act.type == "ask" {
+                ask(act.text ?? act.reason ?? "what should I do next?")
+                return
+            }
             if act.type == "fail" {
-                finish(success: false, summary: act.reason ?? act.summary ?? "i couldn't finish")
+                let reason = act.reason ?? act.summary ?? "i couldn't finish"
+                if DrivePolicy.asksForDetail(reason) { ask(reason) } else { finish(success: false, summary: reason) }
                 return
             }
 
@@ -479,10 +484,18 @@ final class ComputerUseDriver {
                 guard session == self.session, !cancelled, env.store.run(run.id)?.status == .running else { ended = true; return false }
                 handled += 1
                 let id = act.toolUseID ?? ""
-                if act.type == "done" || act.type == "fail" {
+                if act.type == "done" || act.type == "fail" || act.type == "ask" {
                     if halted || batchFailed {
                         results.append(["id": id, "result": "Not finished: an earlier action in this turn failed — check the new screenshot first.", "isError": true])
                         return true
+                    }
+                    // A question only the user can answer pauses the run; their reply continues it.
+                    let question = act.type == "ask" ? (act.text ?? "") : (act.reason ?? act.summary ?? "")
+                    if act.type == "ask" || (act.type == "fail" && DrivePolicy.asksForDetail(question)) {
+                        recordCall()
+                        ask(question.isEmpty ? "what should I do next?" : question)
+                        ended = true
+                        return false
                     }
                     // Asking whether to go on isn't a failure: the user asked for the whole task and approved the plan.
                     if act.type == "fail", questionHolds < 2, DrivePolicy.asksToContinue(act.reason ?? act.summary ?? "") {
@@ -671,7 +684,9 @@ final class ComputerUseDriver {
             .max { ($0.endedAt ?? .distantPast) < ($1.endedAt ?? .distantPast) }
         guard let prior, let ended = prior.endedAt, Date().timeIntervalSince(ended) < 2 * 3600 else { return nil }
         let steps = prior.output.split(separator: "\n").map(String.init).filter { $0.hasPrefix("→") }.suffix(8)
-        return ["goal": prior.prompt, "summary": prior.summary, "steps": Array(steps)]
+        var previous: [String: Any] = ["goal": prior.prompt, "summary": prior.summary, "steps": Array(steps)]
+        if prior.status == .asked { previous["asked"] = true }
+        return previous
     }
 
     nonisolated static func isPermissionProblem(_ text: String) -> Bool {
@@ -879,6 +894,26 @@ final class ComputerUseDriver {
         }
         env.store.saveNow()
         self.runID = nil
+    }
+
+    /// The model needs something only the user knows. The run pauses on the question rather than
+    /// failing; the card takes their reply and a new run in the same thread carries on from it.
+    private func ask(_ question: String) {
+        guard let env, let runID else { return }
+        if let last = model.steps.indices.last {
+            model.steps[last].status = "done"
+            if model.steps[last].result.isEmpty { model.steps[last].result = question }
+        }
+        recorder?.finish(outcome: "asked", summary: question, screen: target.screen())
+        recorder = nil
+        cleanupPanels()
+        env.store.finishRun(runID, status: .asked, summary: question)
+        if let run = env.store.run(runID), let threadID = run.threadID {
+            env.store.appendMessage(threadID: threadID, role: .assistant, text: question, runID: runID)
+        }
+        env.store.saveNow()
+        self.runID = nil
+        env.presentDriveQuestion(runID: runID, question: question)
     }
 
     func cancel(reason: String = "control is yours") {

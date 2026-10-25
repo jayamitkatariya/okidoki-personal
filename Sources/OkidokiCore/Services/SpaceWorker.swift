@@ -366,6 +366,7 @@ public final class SpaceWorkerService: ObservableObject {
         case .done: return "done"
         case .failed: return "failed"
         case .cancelled: return "cancelled"
+        case .asked: return "waiting"
         }
     }
 

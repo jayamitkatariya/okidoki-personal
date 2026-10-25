@@ -89,17 +89,32 @@ function customTools(remote: boolean): unknown[] {
       },
     });
   }
-  tools.push({
-    name: "finish",
-    description:
-      "End the task. success true only when the newest screenshot or result shows the whole task is done; " +
-      "false after several different approaches failed. summary: one short sentence the user reads.",
-    input_schema: {
-      type: "object",
-      properties: { success: { type: "boolean" }, summary: { type: "string" } },
-      required: ["success", "summary"],
+  tools.push(
+    {
+      name: "finish",
+      description:
+        "End the task. success true only when the newest screenshot or result shows the whole task is done; " +
+        "false after several different approaches failed. summary: one short sentence the user reads.",
+      input_schema: {
+        type: "object",
+        properties: { success: { type: "boolean" }, summary: { type: "string" } },
+        required: ["success", "summary"],
+      },
     },
-  });
+    {
+      name: "ask",
+      description:
+        "Pause the task and ask the user one question when it can't go on without something only they know: " +
+        "which of several matching contacts, files or accounts; a detail the task left out. " +
+        "Not for permission to continue or for choices the task already covers. " +
+        "question: one short sentence; their reply resumes the task.",
+      input_schema: {
+        type: "object",
+        properties: { question: { type: "string" } },
+        required: ["question"],
+      },
+    },
+  );
   return tools;
 }
 
@@ -119,6 +134,15 @@ function previousRunText(request: DriveRequest): string {
   const prev = request.previous;
   if (!prev?.goal) return "";
   const steps = (prev.steps ?? []).slice(-8).map((s) => `  ${s.replace(/\s+/g, " ").slice(0, 160)}`).join("\n");
+  if (prev.asked) {
+    return [
+      ``,
+      `This continues an earlier run in the same conversation. Earlier task: ${prev.goal}`,
+      `You paused it to ask: ${prev.summary ?? "a question"}`,
+      `The task above is the user's answer. Carry on with the earlier task using it; don't ask the same thing again.`,
+      steps ? `Its last steps:\n${steps}` : "",
+    ].filter(Boolean).join("\n");
+  }
   return [
     ``,
     `This continues an earlier run in the same conversation. Earlier task: ${prev.goal}`,
@@ -156,7 +180,8 @@ export function systemPromptV2(request: DriveRequest): string {
     `Finishing`,
     `- Leave the result on screen for the user: bring the app forward and open or select what you made or changed so its content is readable (the note itself, not just its title in a list; the document; the page; the sent message), even when a script did the work.`,
     `- Call finish with success true on its own, in a turn after you have seen a screenshot that shows the whole task done. A finish sent in the same turn as other actions is held back until you have looked. summary says what was achieved and where.`,
-    `- Call finish with success false only when something truly blocks you (a sign-in, a payment, a permission prompt, a missing app) or after several different approaches have failed, saying what blocked you. A question back to the user is not a reason to stop.`,
+    `- Call finish with success false only when something truly blocks you (a sign-in, a payment, a permission prompt, a missing app) or after several different approaches have failed, saying what blocked you. Never put a question in a finish.`,
+    `- Call ask, on its own, when the task can't go on without something only the user knows: several contacts, files or accounts match and none is clearly the one; a detail the task left out (a recipient, a date). One short question; their answer comes back as a new task that continues this one. Never ask whether to continue or which way to do something the task already covers.`,
     ``,
     `Rules`,
     `- Never type passwords, secrets, payment details or 2FA codes. If a sign-in or payment screen blocks the task, finish with success false and say so.`,
@@ -190,6 +215,7 @@ function remoteSystemPromptV2(request: DriveRequest): string {
     `Finishing`,
     `- Call finish with success true on its own, in a turn after you have seen a screenshot that shows the whole task done; the summary says where the result is, because the user didn't see the screen.`,
     `- Call finish with success false after several different approaches have failed.`,
+    `- Call ask, on its own, when the task can't go on without something only the user knows (several matches and none clearly the one; a detail the task left out). One short question; their answer comes back as a new task that continues this one.`,
     ``,
     `Rules`,
     `- Never type passwords, secrets, payment details or 2FA codes, and never use the user's own Apple ID.`,
@@ -363,6 +389,10 @@ export function mapToolUse(use: ToolUse): DriveAction {
     case "finish": {
       const summary = String(input.summary ?? "");
       return input.success === false ? { ...base, type: "fail", reason: summary || "couldn't finish" } : { ...base, type: "done", summary: summary || "done" };
+    }
+    case "ask": {
+      const question = String(input.question ?? "").replace(/\s+/g, " ").trim();
+      return { ...base, type: "ask", text: question || "what should I do next?" };
     }
     default:
       return { ...base, type: "unknown" };
@@ -749,7 +779,7 @@ export async function driveStep(
     messages = [
       ...messages,
       { role: "assistant", content },
-      { role: "user", content: [{ type: "text", text: "Reply with tool calls for the next actions, or call finish (success true or false) with a summary." }] },
+      { role: "user", content: [{ type: "text", text: "Reply with tool calls for the next actions, call finish (success true or false) with a summary, or call ask if only the user can say what comes next." }] },
     ];
     const again = await callModel(requestBody(session, messages, model, effort), apiKey, fetchImpl, deadline, onToolUse);
     if (again.reply) {

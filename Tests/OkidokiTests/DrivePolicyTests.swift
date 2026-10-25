@@ -11,8 +11,23 @@ final class DrivePolicyTests: XCTestCase {
             between the battery, resistor, and LED pins?
             """))
         XCTAssertTrue(DrivePolicy.asksToContinue("The slide is laid out. Do you want me to add the speaker notes too"))
-        XCTAssertTrue(DrivePolicy.asksToContinue("Two matching contacts were found — which one did you mean?"))
         XCTAssertTrue(DrivePolicy.asksToContinue("Would you like me to keep going with the remaining rows"))
+    }
+
+    func testAQuestionOnlyTheUserCanAnswerPausesTheRun() {
+        // What the model said when the only "Jay Katariya" chat in WhatsApp was the self-chat.
+        XCTAssertTrue(DrivePolicy.asksForDetail("""
+            I didn't send a new "hi". The only chat named Jay Katariya is the self-chat ("Jay Katariya (You)", Message yourself), \
+            which already has a "hi" sent at 4:52 AM. If you meant a different contact, give me their name or number and I'll send it there.
+            """))
+        XCTAssertTrue(DrivePolicy.asksForDetail("Two matching contacts were found — which one did you mean?"))
+        XCTAssertTrue(DrivePolicy.asksForDetail("There are several files called report.pdf; tell me which folder."))
+        // Permission to go on is nudged, not paused on.
+        XCTAssertFalse(DrivePolicy.asksForDetail("The slide is laid out. Do you want me to add the speaker notes too?"))
+        XCTAssertFalse(DrivePolicy.asksForDetail("Should I continue by dragging wires between the pins?"))
+        // Real blockers still end the run.
+        XCTAssertFalse(DrivePolicy.asksForDetail("Two accounts match, but WhatsApp wants me to sign in first — which one did you mean?"))
+        XCTAssertFalse(DrivePolicy.asksForDetail("I tried the menu, the shortcut and a script; the export button stays disabled."))
     }
 
     func testRealBlockersStillEndTheRun() {

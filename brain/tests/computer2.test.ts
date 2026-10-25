@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import {
-  driveStep, HALT_TEXT, mapToolUse, normalizeKey, resetSessions, sessionFor, supportsToolset, TOOLSET_TYPE,
+  driveStep, HALT_TEXT, mapToolUse, normalizeKey, resetSessions, sessionFor, supportsToolset, systemPromptV2, TOOLSET_TYPE,
 } from "../src/computer2";
 import type { DriveRequest } from "../src/types";
 
@@ -74,7 +74,7 @@ test("the first request: toolset and own tools, cached instructions, text before
   expect(body.system[0].text).toContain("The task: send hi to You on whatsapp");
   expect(body.context_management.edits[0].type).toBe("clear_tool_uses_20250919");
   expect(body.tools[0]).toEqual({ type: TOOLSET_TYPE });
-  expect(body.tools.map((t: any) => t.name).filter(Boolean)).toEqual(["run_script", "open_app", "open_url", "click_element", "finish"]);
+  expect(body.tools.map((t: any) => t.name).filter(Boolean)).toEqual(["run_script", "open_app", "open_url", "click_element", "finish", "ask"]);
   const content = body.messages[0].content;
   expect(content.map((c: any) => c.type)).toEqual(["text", "image"]);
   expect(content[0].text).toContain("Frontmost app: WhatsApp");
@@ -171,6 +171,18 @@ test("toolset calls map onto the Mac's actions", () => {
   expect(m("click_element", { id: 7, clicks: 2 }, null)).toMatchObject({ type: "click_element", element: 7, times: 2, member: false });
   expect(m("run_script", { script: "beep" }, null)).toMatchObject({ type: "script", lang: "applescript", script: "beep" });
   expect(m("finish", { success: false, summary: "login needed" }, null)).toMatchObject({ type: "fail", reason: "login needed" });
+  expect(m("ask", { question: "Two chats are called Jay —  which one?" }, null)).toMatchObject({ type: "ask", text: "Two chats are called Jay — which one?" });
+});
+
+test("a run that paused on a question tells the model the new task is the user's answer", () => {
+  const prompt = systemPromptV2(request({
+    goal: "the other Jay, +1 555 0100",
+    previous: { goal: "send hi to Jay on WhatsApp", summary: "Two chats are called Jay — which one?", asked: true, steps: ["→ opened WhatsApp"] },
+  }));
+  expect(prompt).toContain("The task: the other Jay, +1 555 0100");
+  expect(prompt).toContain("Earlier task: send hi to Jay on WhatsApp");
+  expect(prompt).toContain("You paused it to ask: Two chats are called Jay — which one?");
+  expect(prompt).toContain("don't ask the same thing again");
 });
 
 test("key names from the toolset become the Mac's names", () => {
@@ -346,7 +358,7 @@ test("the approved plan reaches the model, and it is told to keep going rather t
   const system = api.sent[0].body.system[0].text as string;
   expect(system).toContain(`The plan the user approved: ${plan}`);
   expect(system).toContain("Never stop to ask whether to continue");
-  expect(system).toContain("A question back to the user is not a reason to stop");
+  expect(system).toContain("Never ask whether to continue");
 
   resetSessions();
   const same = fakeAPI([reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }])]);
@@ -395,7 +407,7 @@ test("the private Mac gets the toolset without scripts or numbered controls", as
   const api = fakeAPI([reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }])]);
   await driveStep(request({ remote: true }), "sk", api.impl);
   const body = api.sent[0].body;
-  expect(body.tools.map((t: any) => t.name ?? t.type)).toEqual([TOOLSET_TYPE, "open_app", "open_url", "finish"]);
+  expect(body.tools.map((t: any) => t.name ?? t.type)).toEqual([TOOLSET_TYPE, "open_app", "open_url", "finish", "ask"]);
   expect(body.system[0].text).toContain("PRIVATE MAC");
   expect(body.messages[0].content[0].text).not.toContain("Frontmost app");
 });

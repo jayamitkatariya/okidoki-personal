@@ -185,7 +185,7 @@ export interface KeyProvider {
 }
 
 export type RunKind = "answer" | "quick_action" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine" | "connector";
-export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled";
+export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled" | "asked";
 export type Risk = "low" | "medium" | "high";
 
 export interface PreviewStep {

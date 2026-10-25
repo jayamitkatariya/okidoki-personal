@@ -15,6 +15,20 @@ public enum DrivePolicy {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
     }
 
+    /// A "can't finish" that is really a question only the user can answer: which of several
+    /// matches they meant, a name or number the task left out. The run pauses on it instead of
+    /// failing, and their reply picks the task back up.
+    public static func asksForDetail(_ reason: String) -> Bool {
+        let text = reason.lowercased()
+        guard !isRealBlocker(text) else { return false }
+        let asks = ["which one", "which of", "which contact", "which chat", "which file", "which account", "which person",
+                    "who did you mean", "who you mean", "did you mean", "if you meant", "if you mean",
+                    "give me their", "give me the name", "give me a name", "tell me which", "tell me who", "tell me their",
+                    "let me know which", "let me know who", "name or number", "what's their", "what is their",
+                    "whose ", "there are several", "there are two", "more than one match"]
+        return asks.contains { text.contains($0) }
+    }
+
     /// Things the model must stop for: secrets, money, permissions, a missing app or account, a captcha.
     public static func isRealBlocker(_ reason: String) -> Bool {
         let text = reason.lowercased()

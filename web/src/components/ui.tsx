@@ -260,6 +260,7 @@ export function StatusBadge({ status }: { status: RunStatus }) {
     done: "done",
     failed: "failed",
     cancelled: "cancelled",
+    asked: "needs your answer",
   };
   return (
     <span className={cx("status", `status-${status}`)}>

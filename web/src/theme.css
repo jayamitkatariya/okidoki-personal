@@ -1069,7 +1069,8 @@ kbd {
   animation: pixel-blink 1.06s steps(1) infinite;
 }
 .status-waiting,
-.status-previewing {
+.status-previewing,
+.status-asked {
   background: var(--amber-soft);
   color: var(--amber);
 }

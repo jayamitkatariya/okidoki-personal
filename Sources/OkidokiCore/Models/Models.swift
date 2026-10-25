@@ -524,7 +524,8 @@ public enum RunKind: String, Codable, CaseIterable, Sendable {
 }
 
 public enum RunStatus: String, Codable, CaseIterable, Sendable {
-    case previewing, waiting, running, paused, done, failed, cancelled
+    /// `asked`: the run paused on a question for the user; their reply starts a new run in the same thread.
+    case previewing, waiting, running, paused, done, failed, cancelled, asked
     public var label: String {
         switch self {
         case .previewing: return "previewing"
@@ -534,6 +535,7 @@ public enum RunStatus: String, Codable, CaseIterable, Sendable {
         case .done: return "done"
         case .failed: return "failed"
         case .cancelled: return "cancelled"
+        case .asked: return "needs your answer"
         }
     }
     public var isActive: Bool { self == .running || self == .waiting || self == .previewing || self == .paused }

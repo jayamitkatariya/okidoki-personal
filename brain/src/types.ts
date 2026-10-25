@@ -420,8 +420,8 @@ export interface DriveRequest {
   results?: DriveResult[];
   /** Compact history, used only to restart the conversation if the brain lost it. */
   history?: ComputerHistoryEntry[];
-  /** The previous run in the same thread, for "again" and "continue". */
-  previous?: { goal: string; summary?: string; steps?: string[] };
+  /** The previous run in the same thread, for "again" and "continue". `asked`: it paused on a question, and `goal` here is the user's answer. */
+  previous?: { goal: string; summary?: string; steps?: string[]; asked?: boolean };
   /** The plan the user approved before the run started, when it says more than the goal. */
   plan?: string;
   remote?: boolean;

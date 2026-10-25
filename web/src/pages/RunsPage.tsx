@@ -54,7 +54,7 @@ function elapsed(start: string | null | undefined, end: string | null | undefine
 }
 
 function rowState(status: RunStatus): "wait" | "live" | null {
-  if (status === "waiting" || status === "previewing") return "wait";
+  if (status === "waiting" || status === "previewing" || status === "asked") return "wait";
   if (status === "running") return "live";
   return null;
 }
@@ -76,7 +76,7 @@ export function RunsPage() {
           filter === "all"
             ? true
             : filter === "waiting"
-              ? run.status === "waiting" || run.status === "previewing"
+              ? run.status === "waiting" || run.status === "previewing" || run.status === "asked"
               : filter === "running"
                 ? run.status === "running" || run.status === "paused"
                 : filter === "done"
@@ -211,6 +211,44 @@ export function RunsPage() {
         </footer>
       </Modal>
     </div>
+  );
+}
+
+/** The run paused on a question only the user can answer; the reply picks the task back up. */
+function AskedReply({ run }: { run: Run }) {
+  const { invoke, notify } = useDashboard();
+  const [text, setText] = useState("");
+  const send = () => {
+    const reply = text.trim();
+    if (!reply) return;
+    invoke("answerDriveQuestion", { id: run.id, text: reply });
+    notify("Carrying on", run.title);
+    setText("");
+  };
+  return (
+    <section className="run-approve run-asked">
+      <span className="run-approve-icon">
+        <PixelIcon name="chat" size={17} />
+      </span>
+      <div className="run-approve-copy">
+        <strong>Needs your answer</strong>
+        <span>{run.summary}</span>
+      </div>
+      <div className="run-asked-reply">
+        <input
+          value={text}
+          autoFocus
+          placeholder="Your answer…"
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && text.trim()) send();
+          }}
+        />
+        <Button variant="primary" size="sm" icon="arrow" onClick={send} disabled={!text.trim()}>
+          Reply
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -349,6 +387,8 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
           </div>
         </section>
       ) : null}
+
+      {run.status === "asked" ? <AskedReply run={run} /> : null}
 
       {run.preview ? (
         <section className="tile run-tile">

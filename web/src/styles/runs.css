@@ -331,6 +331,32 @@
   gap: 6px;
   margin-left: auto;
 }
+.run-asked-reply {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+}
+.run-asked-reply:focus-within {
+  border-color: color-mix(in srgb, var(--accent-bright) 60%, var(--line));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.run-asked-reply input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.run-asked-reply input::placeholder {
+  color: var(--faint);
+}
 
 /* tiles */
 .run-tile {

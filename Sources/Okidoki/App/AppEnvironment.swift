@@ -540,6 +540,41 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// A drive paused on a question only the user can answer. The card shows it with a reply box;
+    /// the reply starts a new run in the same thread that carries on from where this one stopped.
+    func presentDriveQuestion(runID: String, question: String) {
+        guard let run = store.run(runID) else { return }
+        // A colleague's job reports through its space chat; a card here would interrupt whoever's at this Mac.
+        guard run.threadID == nil || run.threadID != worker.activeThreadID else { return }
+        let card = AnswerCardModel(title: "one thing first", text: question,
+                                   threadTitle: run.threadID.flatMap { store.thread($0)?.title },
+                                   runID: runID, threadID: run.threadID)
+        card.footnote = "paused · \(run.title)"
+        card.onSubmitFollowUp = { [weak self] text in
+            self?.answerDriveQuestion(runID: runID, text: text)
+        }
+        present(card, source: "followup")
+        speak(question)
+    }
+
+    func answerDriveQuestion(runID: String, text: String) {
+        let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reply.isEmpty else { return }
+        noteSpokenInput(false)
+        answerController.close(restoreApp: false)
+        guard let prior = store.run(runID), prior.status == .asked, prior.kind == .computerUse,
+              let threadID = prior.threadID else {
+            if let threadID = store.run(runID)?.threadID { continueThread(threadID, text: reply) }
+            return
+        }
+        store.appendMessage(threadID: threadID, role: .user, text: reply)
+        let run = store.createRun(kind: .computerUse, title: prior.title, prompt: reply, threadID: threadID,
+                                  preview: prior.preview, steps: (prior.preview?.steps ?? []).map { RunStep(title: $0.text) },
+                                  status: .waiting, builtin: "computer-use")
+        store.saveNow()
+        approveRun(run.id)
+    }
+
     // MARK: - Request pipeline
 
     func askFromDashboard(_ text: String) {
