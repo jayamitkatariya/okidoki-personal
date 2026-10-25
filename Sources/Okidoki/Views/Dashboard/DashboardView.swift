@@ -106,6 +106,21 @@ struct DashboardPayload: Encodable {
     var privateMac: DashboardPrivateMacPayload
     /// Enterprise: this Mac as a worker for its spaces.
     var worker: DashboardWorkerPayload
+    /// Enterprise: organizations inviting over this network, and whether this Mac is inviting.
+    var nearby: DashboardNearbyPayload
+}
+
+struct DashboardNearbyPayload: Encodable {
+    struct Invite: Encodable {
+        var orgId: String
+        var orgName: String
+        var code: String
+        var device: String
+    }
+    var invites: [Invite]
+    var advertising: Invite?
+    var browsing: Bool
+    var error: String?
 }
 
 struct DashboardWorkerPayload: Encodable {
@@ -427,7 +442,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 activeSpace: env.worker.activeJob?.spaceName,
                 lastPollAt: env.worker.lastPollAt,
                 jobsDone: env.worker.jobsDone,
-                device: Host.current().localizedName ?? "mac")
+                device: Host.current().localizedName ?? "mac"),
+            nearby: DashboardNearbyPayload(
+                invites: env.nearby.invites.map { DashboardNearbyPayload.Invite(orgId: $0.orgID, orgName: $0.orgName, code: $0.code, device: $0.device) },
+                advertising: env.nearby.advertising.map { DashboardNearbyPayload.Invite(orgId: $0.orgID, orgName: $0.orgName, code: $0.code, device: $0.device) },
+                browsing: env.nearby.browsing,
+                error: env.nearby.error)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -603,6 +623,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "deleteKey":
             if let provider = payload["provider"] as? String { env.deleteKey(provider: provider) }
+        case "nearbyInvite":
+            if let orgID = payload["orgId"] as? String, let orgName = payload["orgName"] as? String, let code = payload["code"] as? String {
+                env.nearby.advertise(orgID: orgID, orgName: orgName, code: code, device: Host.current().localizedName ?? "a Mac")
+            }
+        case "nearbyStop":
+            env.nearby.stopAdvertising()
         case "saveVaultPassphrase":
             // The organization's vault passphrase, kept with the other secrets so jobs here can use shared logins.
             if let orgID = payload["orgId"] as? String, !orgID.isEmpty {

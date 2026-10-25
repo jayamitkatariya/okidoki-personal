@@ -20,6 +20,8 @@ final class AppEnvironment: ObservableObject {
     let convex: ConvexSyncService
     /// Enterprise: runs the agent's jobs from the work account's spaces on this Mac.
     let worker = SpaceWorkerService()
+    /// Enterprise: colleagues on the same network, and this Mac's open invitation to them.
+    let nearby = NearbyService()
 
     private(set) var summon: SummonController!
     private(set) var draw: DrawingController!
@@ -131,6 +133,20 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         worker.start(store: store)
+        nearby.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        // Browsing is a passive multicast listen; it runs whenever a work account is selected.
+        store.$currentAccountID.combineLatest(store.$accounts)
+            .map { id, accounts in accounts.first { $0.id == id }?.kind == .work }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] work in
+                guard let self else { return }
+                if work { self.nearby.startBrowsing() } else { self.nearby.stopBrowsing(); self.nearby.stopAdvertising() }
+            }
+            .store(in: &cancellables)
 
         store.$settings
             .receive(on: RunLoop.main)

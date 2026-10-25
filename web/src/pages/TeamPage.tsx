@@ -4,7 +4,7 @@ import { copyText, cx, futureTime, relativeTime } from "../lib";
 import type { Page } from "../nav";
 import type { Account } from "../types";
 import type { JoinCode, OrgMember, OrgRole, OrgView } from "../enterprise";
-import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, TextField, type ConfirmRequest } from "../components/ui";
+import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const ROLE_LABEL: Record<OrgRole, string> = { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" };
 const ROLE_HINT: Record<OrgRole, string> = {
@@ -90,7 +90,7 @@ export function TeamPage({ go }: { go: (page: Page) => void }) {
 
 // A work account that isn't linked yet: create, join with a code, or pick an organization this login is already in.
 function LinkAccount() {
-  const { account, enterprise, notify } = useDashboard();
+  const { account, enterprise, notify, state } = useDashboard();
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
   const [code, setCode] = useState("");
@@ -110,12 +110,38 @@ function LinkAccount() {
   const joinable = enterprise.memberships.filter((item) => item.status === "active");
   const waiting = enterprise.memberships.filter((item) => item.status === "pending");
   const domainOrg = enterprise.domainOrg && !enterprise.memberships.some((item) => item.id === enterprise.domainOrg?.id) ? enterprise.domainOrg : null;
+  const nearby = state.nearby?.invites ?? [];
 
   return (
     <div className="team-page">
       <PageTitle title="Team" subtitle={`Link ${account.name} to your company. Spaces, shared skills and the vault follow the organization.`} />
 
       <div className="team-options">
+        {nearby.length ? (
+          <section className="team-card team-card-nearby">
+            <header>
+              <PixelIcon name="wave" size={18} />
+              <h2>On this network</h2>
+              <p>A colleague's Mac is letting people in right now.</p>
+            </header>
+            <div className="pref-group">
+              {nearby.map((invite) => (
+                <div className="pref-row" key={`${invite.orgId}-${invite.code}`}>
+                  <span className="pref-copy">
+                    <strong>{invite.orgName}</strong>
+                    <em>via {invite.device}</em>
+                  </span>
+                  <span className="pref-control">
+                    <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => run(`nearby-${invite.code}`, () => enterprise.actions.join(invite.code).then((result) => notify("Joined", result.name)))}>
+                      {busy === `nearby-${invite.code}` ? "Joining…" : "Join"}
+                    </Button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {joinable.length ? (
           <section className="team-card">
             <header>
@@ -213,7 +239,27 @@ function LinkAccount() {
 }
 
 function OrgPage({ view }: { view: OrgView }) {
-  const { account, enterprise, notify } = useDashboard();
+  const { account, enterprise, notify, state, native, invoke } = useDashboard();
+  const advertising = state.nearby?.advertising ?? null;
+  const [inviting, setInviting] = useState(false);
+
+  // One day, twenty people: an open door for a room, not a permanent one.
+  const openDoor = async (on: boolean) => {
+    if (!on) {
+      invoke("nearbyStop");
+      return;
+    }
+    setInviting(true);
+    try {
+      const result = await enterprise.actions.createCode(view.org.id, 1, 20);
+      invoke("nearbyInvite", { orgId: view.org.id, orgName: view.org.name, code: result.code });
+      notify("Open to nearby Macs", `Colleagues on this network can join ${view.org.name} for a day`);
+    } catch (error) {
+      notify("That didn't work", error instanceof Error ? error.message : String(error), "warning");
+    } finally {
+      setInviting(false);
+    }
+  };
   const { org, role, members, pending, codes } = view;
   const admin = role === "owner" || role === "admin";
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -356,6 +402,23 @@ function OrgPage({ view }: { view: OrgView }) {
               New code
             </Button>
           </header>
+          {native ? (
+            <div className="pref-group">
+              <div className="pref-row">
+                <span className="pref-copy">
+                  <strong>Let nearby Macs join</strong>
+                  <em>
+                    {advertising
+                      ? `This Mac is inviting over the network with code ${advertising.code}. Anyone running okidoki on this Wi-Fi sees “Join ${org.name}”.`
+                      : "Announce a one-day code over this network, so colleagues in the room join with one click."}
+                  </em>
+                </span>
+                <span className="pref-control">
+                  <Switch checked={Boolean(advertising)} onChange={(value) => { if (!inviting) void openDoor(value); }} />
+                </span>
+              </div>
+            </div>
+          ) : null}
           {codes.length ? (
             <div className="pref-group">
               {codes.map((code) => (

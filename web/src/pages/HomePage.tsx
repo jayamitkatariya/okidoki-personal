@@ -65,7 +65,13 @@ function spentLabel(seconds: number): string {
 }
 
 export function HomePage({ go }: { go: (page: Page) => void }) {
-  const { state, settings, account, invoke, updateSettings, notify } = useDashboard();
+  const { state, settings, account, enterprise, invoke, updateSettings, notify } = useDashboard();
+  // The enterprise row shows for a work account linked to an organization; personal accounts never see it.
+  const org = account.kind === "work" && enterprise.status === "ready" ? enterprise.view : null;
+  const unreadChats = enterprise.spaces.reduce((sum, space) => sum + space.unread, 0);
+  const approvals = enterprise.jobs.filter((job) => job.status === "waiting" && !job.decision).length;
+  const workersOnline = enterprise.workers.filter((worker) => worker.online).length;
+  const nearby = state.nearby?.invites.length ?? 0;
   const runs = state.runs ?? [];
   const waiting = runs.filter((run) => run.status === "waiting" || run.status === "previewing");
   const live = runs.filter((run) => run.status === "running" || run.status === "paused");
@@ -206,6 +212,15 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           onClick={() => go("toolbox")}
         />
       </section>
+
+      {org ? (
+        <section className="home-stats home-stats-enterprise" aria-label={`${org.org.name} overview`}>
+          <StatCard tone="mint" icon="chat" label="Unread in spaces" value={unreadChats} note={unreadChats ? "Colleagues are talking" : `${enterprise.spaces.filter((space) => space.joined).length || "No"} spaces joined`} onClick={() => go("spaces")} />
+          <StatCard tone="rose" icon="hand" label="Jobs awaiting an okay" value={approvals} note={approvals ? "Someone's run needs a Do it" : "The agent has nothing waiting"} onClick={() => go("spaces")} />
+          <StatCard tone="lilac" icon="bolt" label="Worker Macs online" value={workersOnline} note={settings.workerEnabled ? `This Mac is one of them` : "This Mac isn't taking jobs"} onClick={() => go("settings")} />
+          <StatCard tone="peach" icon="people" label={nearby ? "Nearby invitations" : "People"} value={nearby || org.org.memberCount} note={nearby ? "A colleague's Mac is open on this network" : `${org.pending.length ? `${org.pending.length} waiting to join · ` : ""}${org.org.name}`} onClick={() => go("team")} />
+        </section>
+      ) : null}
 
       <div className="bento">
         <section className="tile span-7 reveal reveal-2">

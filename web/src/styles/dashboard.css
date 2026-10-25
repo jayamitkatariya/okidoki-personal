@@ -723,3 +723,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
   .brand-mark:hover { transform: none; }
   .stat-card:hover, .home .bento > .tile:hover, .halo-card:hover { transform: none; }
 }
+
+/* enterprise row on Home, under the personal stats */
+.home-stats-enterprise { margin-top: -8px; }

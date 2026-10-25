@@ -34,6 +34,12 @@
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Okidoki listens only when you summon it, so you can speak instead of type.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Okidoki looks for colleagues' Macs on this network so they can join your organization without typing a code.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_okidoki._tcp</string>
+	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Okidoki turns your spoken request into text on this Mac. Audio is not stored.</string>
 	<key>NSScreenCaptureUsageDescription</key>

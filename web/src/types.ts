@@ -367,6 +367,22 @@ export interface NativeState {
   /** Missing on Convex snapshots and in the demo, where there is no VM to report on. */
   privateMac?: PrivateMacState | null;
   worker?: WorkerState | null;
+  nearby?: NearbyState | null;
+}
+
+/** Enterprise: an organization inviting over this network. */
+export interface NearbyInvite {
+  orgId: string;
+  orgName: string;
+  code: string;
+  device: string;
+}
+
+export interface NearbyState {
+  invites: NearbyInvite[];
+  advertising?: NearbyInvite | null;
+  browsing: boolean;
+  error?: string | null;
 }
 
 export interface Toast {
