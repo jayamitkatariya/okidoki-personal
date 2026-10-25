@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { MotionConfig } from "motion/react";
 import { DashboardProvider, useDashboard } from "./store";
 import { AppShell, AuthGate } from "./components/Layout";
-import { isPage, type Page } from "./nav";
+import { isPage, jumpToSettingsSection, resolveRoute, type Page } from "./nav";
 import { HomePage } from "./pages/HomePage";
 import { TeamPage } from "./pages/TeamPage";
 import { SpacesPage } from "./pages/SpacesPage";
@@ -33,8 +33,8 @@ export default function App() {
 function Root() {
   const { state, toasts, dismissToast, hosted, cloud } = useDashboard();
   const raw = window.location.hash.replace("#/", "");
-  const initial = raw === "keys" ? "settings" : raw;
-  const [page, setPage] = useState<Page>(isPage(initial) ? initial : "home");
+  const initial = resolveRoute(raw);
+  const [page, setPage] = useState<Page>(isPage(initial.page) ? initial.page : "home");
   const [askOpen, setAskOpen] = useState(false);
 
   useEffect(() => {
@@ -43,12 +43,9 @@ function Root() {
 
   useEffect(() => {
     const onHash = () => {
-      const next = window.location.hash.replace("#/", "");
-      if (next === "keys") {
-        setPage("settings");
-        return;
-      }
-      if (isPage(next)) setPage(next);
+      const route = resolveRoute(window.location.hash.replace("#/", ""));
+      if (isPage(route.page)) setPage(route.page);
+      if (route.section) jumpToSettingsSection(route.section);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);

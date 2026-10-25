@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { copyText, cx, futureTime, relativeTime } from "../lib";
 import type { Page } from "../nav";
 import type { Account } from "../types";
-import type { JoinCode, OrgMember, OrgRole, OrgView } from "../enterprise";
-import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
+import type { JoinCode, OrgMember, OrgRole, OrgView, Rollout } from "../enterprise";
+import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const ROLE_LABEL: Record<OrgRole, string> = { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" };
 const AVATAR_COLORS = ["44E45E", "1FB57A", "3DDC97", "0B8A5E", "B8F26B", "8FB7FF", "F2B84B", "E97A6B"];
@@ -28,7 +28,21 @@ function iso(ms: number): string {
 }
 
 export function TeamPage({ go }: { go: (page: Page) => void }) {
-  const { cloud, enterprise } = useDashboard();
+  const { cloud, enterprise, settings, updateSettings, notify } = useDashboard();
+
+  // A join code that arrived before the login (onboarding, a nearby Mac, an IT profile) is used
+  // the moment the login is there. One attempt per code; a bad one is cleared with a note.
+  const pendingCode = settings.pendingJoinCode ?? "";
+  const tried = useRef<string>("");
+  useEffect(() => {
+    if (enterprise.status !== "ready" || enterprise.view || !pendingCode || tried.current === pendingCode) return;
+    tried.current = pendingCode;
+    enterprise.actions
+      .join(pendingCode)
+      .then((result) => notify("Joined", result.name))
+      .catch((error) => notify("Couldn't join with that code", error instanceof Error ? error.message : String(error), "warning"))
+      .finally(() => updateSettings({ pendingJoinCode: "", pendingJoinOrgName: "" }));
+  }, [enterprise, pendingCode, notify, updateSettings]);
 
   if (cloud.status === "off") {
     return (
@@ -50,19 +64,22 @@ export function TeamPage({ go }: { go: (page: Page) => void }) {
   }
 
   if (enterprise.status === "signedOut") {
+    const pendingOrg = settings.pendingJoinCode ? settings.pendingJoinOrgName || "your organization" : "";
     return (
       <div className="team-page">
         <PageTitle title="Team" subtitle="Your organization, its people and join codes." />
         <Empty
           icon="user"
-          title="Sign in to your sync login"
+          title={pendingOrg ? `Sign in to join ${pendingOrg}` : "Sign in to your sync login"}
           action={
             <Button variant="primary" size="sm" onClick={() => go("settings")}>
               Sign in
             </Button>
           }
         >
-          Your organization follows your sync login, so colleagues can work with the same people and spaces from any Mac.
+          {pendingOrg
+            ? `The invitation is ready — once you're signed in, ${pendingOrg} joins on its own.`
+            : "Your organization follows your sync login, so colleagues can work with the same people and spaces from any Mac."}
         </Empty>
       </div>
     );
@@ -357,6 +374,16 @@ function OrgPage({ view }: { view: OrgView }) {
         </div>
       </section>
 
+      {admin ? <RolloutSection rollout={enterprise.rollout} orgName={org.name} /> : null}
+
+      {admin ? (
+        <WelcomeSection
+          welcome={org.welcome ?? ""}
+          onSave={(text) => attempt(() => enterprise.actions.setWelcome(org.id, text), ["Welcome note saved", text ? "New Macs say it the first time they link" : "New Macs won't say anything extra"])}
+          busy={busy}
+        />
+      ) : null}
+
       {admin && pending.length ? (
         <section className="team-section">
           <header className="team-section-head">
@@ -552,5 +579,103 @@ function OrgPage({ view }: { view: OrgView }) {
 
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
+  );
+}
+
+/** Adoption at a glance: who has okidoki, who's been on today, whose Mac takes jobs, what gets replayed. */
+function RolloutSection({ rollout, orgName }: { rollout: Rollout | null; orgName: string }) {
+  if (!rollout) return null;
+  const total = rollout.members.length;
+  const stat = (value: number, label: string) => (
+    <div className="rollout-stat">
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+  return (
+    <section className="team-section">
+      <header className="team-section-head">
+        <h2>Rollout</h2>
+        <p>How far {orgName} has got. A linked Mac counts as installed; a heartbeat today counts as active.</p>
+      </header>
+      <div className="rollout-stats">
+        {stat(rollout.installed, `of ${total} installed`)}
+        {stat(rollout.activeToday, "active today")}
+        {stat(rollout.workersOn, "Macs taking jobs")}
+        {stat(rollout.skillsShared, "skills shared")}
+        {stat(rollout.totalReplays, "replays of shared skills")}
+      </div>
+      <div className="pref-group">
+        {rollout.members.map((member) => (
+          <div className="pref-row team-member rollout-row" key={member.id}>
+            <span className={cx("rollout-dot", member.online ? "is-online" : member.installed ? "is-installed" : "is-missing")} aria-hidden />
+            <div className="pref-copy">
+              <strong>
+                {member.name}
+                {member.device ? <span className="rollout-device"> · {member.device}</span> : null}
+              </strong>
+              <span>
+                {!member.installed
+                  ? "Not installed yet — send them a join code"
+                  : member.online
+                    ? `On now${member.workerOn ? " · taking jobs" : ""}`
+                    : member.lastSeenAt
+                      ? `Last on ${relativeTime(iso(member.lastSeenAt))}${member.workerOn ? " · worker on" : ""}`
+                      : "Linked, not seen yet"}
+                {member.skillsPublished ? ` · shared ${member.skillsPublished} ${member.skillsPublished === 1 ? "skill" : "skills"}` : ""}
+              </span>
+            </div>
+            <Chip tone={member.online ? "green" : member.installed ? "default" : "amber"}>{member.online ? "online" : member.installed ? "installed" : "missing"}</Chip>
+          </div>
+        ))}
+      </div>
+      {rollout.topSkills.length ? (
+        <div className="rollout-top">
+          <h3>Most replayed</h3>
+          <ul>
+            {rollout.topSkills.map((skill) => (
+              <li key={skill.id}>
+                <strong>{skill.name}</strong>
+                <span>
+                  {skill.runCount}× · by {skill.publishedBy}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="form-hint">Nothing shared yet. Record a skill, then say “share it with my team” — colleagues can replay it by name on their own Mac.</p>
+      )}
+    </section>
+  );
+}
+
+/** The one line a new member's Mac says when it first links: where to start. */
+function WelcomeSection({ welcome, onSave, busy }: { welcome: string; onSave: (text: string) => void; busy: boolean }) {
+  const [text, setText] = useState(welcome);
+  useEffect(() => setText(welcome), [welcome]);
+  const dirty = text.trim() !== welcome.trim();
+  return (
+    <section className="team-section">
+      <header className="team-section-head">
+        <h2>Welcome note</h2>
+        <p>Shown once in the notch when a colleague's Mac links. Point them at the first thing to try.</p>
+      </header>
+      <div className="pref-group">
+        <div className="welcome-editor">
+          <TextArea value={text} onChange={(value) => setText(value.slice(0, 600))} placeholder="Say “replay the expense report” to see what okidoki can do here." rows={3} />
+          <div className="welcome-actions">
+            <Button variant="primary" size="sm" disabled={!dirty || busy} onClick={() => onSave(text.trim())}>
+              Save
+            </Button>
+            {welcome ? (
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => onSave("")}>
+                Clear
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }

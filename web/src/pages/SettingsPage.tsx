@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { AccountKind, AgentStatus, CodingAgentID, PrivateMacPhase, PrivateMacState, Toast, WorkerState } from "../types";
-import type { Page } from "../nav";
+import type { AccountKind, AgentStatus, CodingAgentID, KeyProvider, PrivateMacPhase, PrivateMacState, ServicesState, Toast, WorkerState } from "../types";
+import { SETTINGS_JUMP_EVENT, type Page } from "../nav";
 import { SyncLogin } from "../components/CloudAuth";
 import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
@@ -41,7 +41,8 @@ const SECTIONS = [
   { id: "account", label: "Account", icon: "user" },
   { id: "organization", label: "Organization", icon: "building" },
   { id: "worker", label: "Worker", icon: "bolt" },
-  { id: "sync-login", label: "Sync login", icon: "link" },
+  { id: "keys", label: "Keys", icon: "key" },
+  { id: "sync-login", label: "Sync", icon: "link" },
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
 
@@ -101,6 +102,13 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
     jumping.current = window.setTimeout(() => (jumping.current = null), 700);
     document.getElementById(`settings-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+
+  // "#/keys", the notch's "add a key" button and the Mac's own links land on a section, not just the page.
+  useEffect(() => {
+    const onJump = (event: Event) => jump((event as CustomEvent<string>).detail);
+    window.addEventListener(SETTINGS_JUMP_EVENT, onJump);
+    return () => window.removeEventListener(SETTINGS_JUMP_EVENT, onJump);
+  }, []);
 
   const addToList = (list: "blockedApps" | "alwaysAsk", value: string) => {
     if (!value.trim()) return;
@@ -556,12 +564,61 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </SettingsSection>
           ) : null}
 
-          {/* Sync login: only inside the Mac app; the hosted panel signs in at its front door. */}
+          {/* Keys and sync: only inside the Mac app, which holds the key file and does the pushing. */}
           {native ? (
-            <SettingsSection id="sync-login" title="Sync login" description="Link this Mac's accounts to a login on your own Convex deployment. Only that login can read what syncs.">
+            <SettingsSection id="keys" title="Keys" description="The build ships its own service credentials. Anything it doesn't ship can be added here; it goes in a private file on this Mac, never the Keychain or the cloud.">
               <div className="pref-group">
-                <SyncLogin />
+                {(state.keyProviders ?? []).map((provider) => (
+                  <KeyRow key={provider.id} provider={provider} invoke={invoke} notify={notify} />
+                ))}
+                {!state.keyProviders?.length ? (
+                  <PrefRow title="Keys" detail="Open this in the okidoki app on your Mac to add or remove keys.">
+                    <span className="pref-hint">Mac only</span>
+                  </PrefRow>
+                ) : null}
               </div>
+            </SettingsSection>
+          ) : null}
+
+          {native ? (
+            <SettingsSection id="sync-login" title="Sync" description="Threads, memory, runs, skills and routines go to your own Convex deployment, so a second Mac and the web panel see the same thing. Off means everything stays here.">
+              <div className="pref-group">
+                <PrefRow title="Sync to Convex" detail={syncDetail(state.services, settings.syncEnabled)}>
+                  <Switch checked={settings.syncEnabled} onChange={(value) => updateSettings({ syncEnabled: value })} label="Sync to Convex" />
+                </PrefRow>
+                {settings.syncEnabled ? (
+                  <PrefRow title="Status" detail={state.services?.convex.siteURL || "No deployment URL"}>
+                    <span className={cx("pref-value", syncHealthy(state.services) && "is-on")}>
+                      <i />
+                      {state.services?.convex.status ?? (state.convexConfigured ? "configured" : "local only")}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon="refresh"
+                      disabled={!state.services?.convex.hasSecret}
+                      onClick={() => {
+                        invoke("syncNow");
+                        notify("Syncing", "Pushing this Mac's state to Convex", "info");
+                      }}
+                    >
+                      Sync now
+                    </Button>
+                  </PrefRow>
+                ) : null}
+                {settings.syncEnabled && state.services && !state.services.convex.hasSecret ? (
+                  <PrefRow title="Sync secret missing" detail="Convex rejects pushes without it. Add the deployment's sync secret under Keys › Convex sync.">
+                    <Button variant="secondary" size="sm" icon="key" onClick={() => jump("keys")}>
+                      Keys
+                    </Button>
+                  </PrefRow>
+                ) : null}
+              </div>
+              {settings.syncEnabled ? (
+                <div className="pref-group">
+                  <SyncLogin />
+                </div>
+              ) : null}
             </SettingsSection>
           ) : null}
 
@@ -593,29 +650,41 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </div>
 
             <div className="pref-group">
-              <PrefRow title="Brain">
-                <span className={cx("pref-value", state.sidecar === "ready" && "is-on")}>
+              <PrefRow title="Brain" detail={state.services ? `Bun sidecar on 127.0.0.1:${state.services.brain.port}${state.services.brain.version ? ` · v${state.services.brain.version}` : ""}` : undefined}>
+                <span className={cx("pref-value", (state.services?.brain.ready ?? state.sidecar === "ready") && "is-on")}>
                   <i />
-                  {state.sidecar}
+                  {state.services?.brain.status ?? state.sidecar}
                 </span>
               </PrefRow>
-              <PrefRow title="Convex">
-                <span className={cx("pref-value", state.convexConfigured && "is-on")}>
+              <PrefRow title="Convex" detail={state.services?.convex.lastSyncAt ? `Last push ${relativeTime(state.services.convex.lastSyncAt)}` : settings.lastSyncAt ? `Last push ${relativeTime(settings.lastSyncAt)}` : undefined}>
+                <span className={cx("pref-value", syncHealthy(state.services) && "is-on")}>
                   <i />
-                  {state.convexConfigured ? "Configured" : "Local only"}
+                  {state.services?.convex.status ?? (state.convexConfigured ? "configured" : "local only")}
                 </span>
               </PrefRow>
-              <PrefRow title="Convex live">
+              <PrefRow title="Convex live" detail="This page's own connection, for live updates from your deployment">
                 <span className={cx("pref-value", convexConnected && "is-on")}>
                   <i />
-                  {convexConnected ? "Yes" : "No"}
+                  {convexConnected ? "Connected" : "No"}
                 </span>
               </PrefRow>
-              {settings.lastSyncAt ? (
-                <PrefRow title="Last sync">
-                  <span className="pref-hint">{relativeTime(settings.lastSyncAt)}</span>
-                </PrefRow>
-              ) : null}
+              <PrefRow title="Memory index" detail={memoryDetail(state.services)}>
+                <span className={cx("pref-value", state.services?.memory.ready && !state.services.memory.error && "is-on")}>
+                  <i />
+                  {memoryLabel(state.services)}
+                </span>
+              </PrefRow>
+              <PrefRow title="MCP servers" detail={mcpDetail(state.services)}>
+                <span className={cx("pref-value", (state.services?.mcp.connected ?? 0) > 0 && state.services?.mcp.connected === state.services?.mcp.servers && "is-on")}>
+                  <i />
+                  {mcpLabel(state.services)}
+                </span>
+                {state.services?.mcp.enabled && state.services.mcp.servers ? (
+                  <Button variant="secondary" size="sm" icon="grid" onClick={() => go?.("toolbox")}>
+                    Toolbox
+                  </Button>
+                ) : null}
+              </PrefRow>
             </div>
 
             <div className="pref-group">
@@ -658,6 +727,123 @@ function SettingsSection({ id, title, description, children }: { id: string; tit
       </header>
       {children}
     </section>
+  );
+}
+
+function syncHealthy(services: ServicesState | null | undefined): boolean {
+  const status = services?.convex.status ?? "";
+  return services?.convex.enabled === true && /^synced/.test(status);
+}
+
+function syncDetail(services: ServicesState | null | undefined, enabled: boolean): string {
+  if (!enabled) return "Off. Everything stays on this Mac.";
+  if (!services) return "On.";
+  if (!services.convex.siteURL) return "On, but there's no deployment URL. Set CONVEX_SITE_URL in the build's .env.";
+  if (!services.convex.hasSecret) return "On, but the sync secret is missing, so nothing can be pushed yet.";
+  return "On. Pushed a few seconds after anything changes.";
+}
+
+function memoryLabel(services: ServicesState | null | undefined): string {
+  if (!services) return "unknown";
+  if (!services.memory.configured) return "off";
+  if (services.memory.error) return "error";
+  if (!services.memory.ready) return "starting";
+  return `${services.memory.notes + services.memory.messages} items`;
+}
+
+function memoryDetail(services: ServicesState | null | undefined): string {
+  if (!services) return "Moss, searched by meaning for every request.";
+  const memory = services.memory;
+  if (!memory.configured) return "Add a Moss key to search threads and notes by meaning. Right now only exact text matches.";
+  if (memory.error) return memory.error;
+  if (!memory.ready) return "Moss is loading the index on this Mac.";
+  const parts = [`${memory.notes} note${memory.notes === 1 ? "" : "s"}`, `${memory.messages} recent turn${memory.messages === 1 ? "" : "s"}`, `${memory.tools} tools`];
+  return `${parts.join(" · ")}${memory.lastSyncAt ? ` · synced ${relativeTime(memory.lastSyncAt)}` : ""}`;
+}
+
+function mcpLabel(services: ServicesState | null | undefined): string {
+  if (!services) return "unknown";
+  if (!services.mcp.enabled) return "off";
+  if (!services.mcp.servers) return "none";
+  return `${services.mcp.connected} of ${services.mcp.servers}`;
+}
+
+function mcpDetail(services: ServicesState | null | undefined): string {
+  if (!services?.mcp.enabled) return "Turn on MCP in the Toolbox to bring your own tools in.";
+  if (!services.mcp.servers) return "No servers added yet. Add one in the Toolbox.";
+  const checked = services.mcp.checkedAt ? `Checked ${relativeTime(services.mcp.checkedAt)}; rechecked every minute while this is open.` : "Not checked yet.";
+  return services.mcp.connected < services.mcp.servers ? `Some servers aren't answering. ${checked}` : checked;
+}
+
+/** One saved key: set / shipped / missing, with a field to save or replace it. The value is never shown back. */
+function KeyRow({ provider, invoke, notify }: { provider: KeyProvider; invoke: (type: string, payload?: Record<string, unknown>) => void; notify: (title: string, detail: string, kind: Toast["kind"]) => void }) {
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+  const save = () => {
+    const value = draft.trim();
+    if (!value) return;
+    invoke("saveKey", { provider: provider.id, value });
+    notify("Key saved", `${provider.name} · stored on this Mac`, "success");
+    setDraft("");
+    setEditing(false);
+  };
+  const status = provider.set ? (provider.builtin ? "shipped with this build" : "set") : provider.optional ? "optional" : "missing";
+  if (provider.builtin) {
+    // The build's key wins over a saved one, so offering to replace it would be a lie.
+    return (
+      <div className="pref-row">
+        <span className="pref-copy">
+          <strong>{provider.name}</strong>
+          <em>{provider.blurb}</em>
+        </span>
+        <span className="pref-control">
+          <span className="pref-status is-on">{status}</span>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className={cx("pref-row", editing && "is-stack")}>
+      <span className="pref-copy">
+        <strong>{provider.name}</strong>
+        <em>{provider.blurb}</em>
+      </span>
+      {editing ? (
+        <div className="pref-row-foot">
+          <TextField className="pref-field" type="password" value={draft} onChange={setDraft} placeholder={provider.placeholder} autoFocus onEnter={save} />
+          <span className="pref-control">
+            <Button variant="ghost" size="sm" onClick={() => { setEditing(false); setDraft(""); }}>
+              Cancel
+            </Button>
+            <Button variant="primary" size="sm" disabled={!draft.trim()} onClick={save}>
+              Save
+            </Button>
+          </span>
+        </div>
+      ) : (
+        <span className="pref-control">
+          <span className={cx("pref-status", provider.set && "is-on", !provider.set && !provider.optional && "is-warn")}>{status}</span>
+          {provider.url ? (
+            <IconButton icon="external" label={`Get a ${provider.name} key`} onClick={() => invoke("openExternal", { url: provider.url })} />
+          ) : null}
+          <Button variant="secondary" size="sm" icon="key" onClick={() => setEditing(true)}>
+            {provider.set ? "Replace" : "Add"}
+          </Button>
+          {provider.set ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                invoke("deleteKey", { provider: provider.id });
+                notify("Key removed", provider.name, "info");
+              }}
+            >
+              Remove
+            </Button>
+          ) : null}
+        </span>
+      )}
+    </div>
   );
 }
 

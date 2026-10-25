@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { anyApi } from "convex/server";
+import { internal } from "../convex/_generated/api";
 import schema from "../convex/schema";
 
 // Functions run against an in-memory Convex with a mocked login. A login is a row in `users`
@@ -122,6 +123,7 @@ describe("agent jobs and the worker", () => {
     expect(messages.map((m: any) => [m.author, m.kind])).toEqual([
       ["system", "system"],
       ["system", "system"],
+      ["system", "system"],
       ["user", "text"],
       ["agent", "run"],
     ]);
@@ -202,6 +204,139 @@ describe("agent jobs and the worker", () => {
     await jay.as.mutation(api.jobs.cancel, { jobId: second });
     const polled = await post("/api/worker/poll", { accountId: sam.accountId, device: "m", kind: "thisMac", enabled: true });
     expect(polled.held[0]).toMatchObject({ id: second, status: "accepted", decision: "decline" });
+  });
+
+  test("alone in a space every line is for the agent; once a colleague joins it has to be asked", async () => {
+    const { t, login } = await setup();
+    process.env.OKIDOKI_SYNC_SECRET = secret;
+    const jay = await login("jay", "jay@acme.com");
+    const sam = await login("sam", "sam@acme.com");
+    await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Just me" });
+
+    const solo = await jay.as.mutation(api.chat.send, { spaceId, text: "tidy my downloads folder" });
+    expect(solo.jobId).toBeTruthy();
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].prompt).toBe("tidy my downloads folder");
+
+    // jay's own Mac takes it: a one-person team still works end to end
+    const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
+    const polled = await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "thisMac", enabled: true, state: "ready" });
+    expect(polled.jobs.map((j: any) => j.id)).toEqual([solo.jobId]);
+    await post("/api/worker/accept", { accountId: jay.accountId, jobId: solo.jobId, device: "Jay's Mac" });
+    await post("/api/worker/update", { accountId: jay.accountId, jobId: solo.jobId, status: "done", say: "Moved 14 files into folders." });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("done");
+
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
+    await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
+    await sam.as.mutation(api.spaces.join, { spaceId });
+    const texts = (await jay.as.query(api.chat.messages, { spaceId })).map((m: any) => m.text);
+    expect(texts.at(-1)).toBe("With two of you here, mention @okidoki to give it work.");
+    const chat = await jay.as.mutation(api.chat.send, { spaceId, text: "morning sam" });
+    expect(chat.jobId).toBeNull();
+    const asked = await sam.as.mutation(api.chat.send, { spaceId, text: "@okidoki summarise the thread" });
+    expect(asked.jobId).toBeTruthy();
+  });
+
+  test("a paused Mac keeps its held job but takes nothing new; the chat sees who's ready", async () => {
+    const { jay, sam, spaceId, post } = await team();
+    const { jobId } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki rename the screenshots" });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId, device: "Sam's MacBook" });
+    await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki and empty the trash" });
+
+    const paused = await post("/api/worker/poll", { accountId: sam.accountId, device: "Sam's MacBook", kind: "thisMac", enabled: true, state: "paused" });
+    expect(paused.jobs).toEqual([]);
+    expect(paused.held.map((h: any) => h.id)).toEqual([jobId]);
+    let workers = await jay.as.query(api.jobs.workersFor, { accountId: jay.accountId });
+    expect(workers.map((w: any) => [w.name, w.online, w.state])).toEqual([["sam", true, "paused"]]);
+
+    const ready = await post("/api/worker/poll", { accountId: sam.accountId, device: "Sam's MacBook", kind: "thisMac", enabled: true, state: "ready" });
+    expect(ready.jobs.map((j: any) => j.prompt)).toEqual(["and empty the trash"]);
+    workers = await jay.as.query(api.jobs.workersFor, { accountId: jay.accountId });
+    expect(workers[0].state).toBe("ready");
+  });
+
+  test("a job whose Mac went quiet is failed by the reaper, or ended at once when cancelled", async () => {
+    const { t, jay, sam, spaceId, post } = await team();
+    const { jobId } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki build the release" });
+    await post("/api/worker/poll", { accountId: sam.accountId, device: "Sam's MacBook", kind: "thisMac", enabled: true });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId, device: "Sam's MacBook" });
+    await post("/api/worker/update", { accountId: sam.accountId, jobId, status: "running" });
+
+    // still heard from: nothing happens
+    expect(await t.mutation(internal.jobs.reapLost, {})).toEqual({ reaped: 0 });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("running");
+
+    // three minutes of silence from Sam's Mac
+    await t.run(async (ctx) => {
+      const worker = await ctx.db
+        .query("workers")
+        .withIndex("by_account", (q) => q.eq("accountClientId", sam.accountId))
+        .first();
+      await ctx.db.patch(worker!._id, { lastSeenAt: Date.now() - 3 * 60_000 });
+    });
+    expect(await t.mutation(internal.jobs.reapLost, {})).toEqual({ reaped: 1 });
+    const job = (await jay.as.query(api.jobs.forSpace, { spaceId }))[0];
+    expect(job.status).toBe("failed");
+    const last = (await jay.as.query(api.chat.messages, { spaceId })).at(-1);
+    expect(last.text).toMatch(/Lost contact with sam's Mac/);
+
+    // cancelling one held by a quiet Mac doesn't wait for it
+    const { jobId: second } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki build it again" });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId: second, device: "Sam's MacBook" });
+    await t.run(async (ctx) => {
+      const worker = await ctx.db
+        .query("workers")
+        .withIndex("by_account", (q) => q.eq("accountClientId", sam.accountId))
+        .first();
+      await ctx.db.patch(worker!._id, { lastSeenAt: Date.now() - 3 * 60_000 });
+    });
+    await jay.as.mutation(api.jobs.cancel, { jobId: second });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("cancelled");
+  });
+});
+
+describe("deleting a space", () => {
+  test("takes its chat, jobs, files, logins and skills with it, and the creator may do it after the first batch", async () => {
+    const { t, login } = await setup();
+    const jay = await login("jay", "jay@acme.com");
+    const sam = await login("sam", "sam@acme.com");
+    await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
+    await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
+
+    // sam, a plain member, owns this space and fills it
+    const { spaceId } = await sam.as.mutation(api.spaces.create, { accountId: sam.accountId, name: "Scratch" });
+    await sam.as.mutation(api.chat.send, { spaceId, text: "@okidoki do a thing" });
+    const storageId = await t.run(async (ctx) => ctx.storage.store(new Blob(["bytes"], { type: "text/plain" })));
+    await sam.as.mutation(api.vault.saveFile, { accountId: sam.accountId, spaceId, storageId, name: "notes.txt", size: 5, mime: "text/plain" });
+    await sam.as.mutation(api.vault.saveCredential, { accountId: sam.accountId, spaceId, site: "x.com", username: "u", ciphertext: "c", iv: "i", keyVersion: 1, note: "" });
+    await sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId, skill: { id: "sk1", name: "Thing", summary: "", steps: [{ id: "s1", text: "Open Notes", app: "Notes", action: "click", label: "Notes" }] } });
+    // a long chat, so deletion needs more than one call
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 520; index += 1) {
+        await ctx.db.insert("spaceMessages", { spaceId: spaceId as any, authorId: null, author: "system", kind: "system", text: `line ${index}`, runId: null, fileId: null, createdAt: index });
+      }
+    });
+
+    let result = await sam.as.mutation(api.spaces.remove, { spaceId });
+    expect(result.done).toBe(false);
+    // sam's member row may already be gone, but sam made the space, so the next batch is still allowed
+    for (let round = 0; round < 5 && !result.done; round += 1) result = await sam.as.mutation(api.spaces.remove, { spaceId });
+    expect(result.done).toBe(true);
+
+    const counts = await t.run(async (ctx) => ({
+      space: await ctx.db.get(spaceId as any),
+      messages: (await ctx.db.query("spaceMessages").withIndex("by_space_time", (q) => q.eq("spaceId", spaceId as any)).collect()).length,
+      jobs: (await ctx.db.query("spaceRuns").withIndex("by_space", (q) => q.eq("spaceId", spaceId as any)).collect()).length,
+      files: (await ctx.db.query("spaceFiles").withIndex("by_space", (q) => q.eq("spaceId", spaceId as any)).collect()).length,
+      credentials: (await ctx.db.query("spaceCredentials").withIndex("by_space", (q) => q.eq("spaceId", spaceId as any)).collect()).length,
+      skills: (await ctx.db.query("spaceSkills").withIndex("by_space", (q) => q.eq("spaceId", spaceId as any)).collect()).length,
+      members: (await ctx.db.query("spaceMembers").withIndex("by_space", (q) => q.eq("spaceId", spaceId as any)).collect()).length,
+      blob: await ctx.storage.getUrl(storageId),
+    }));
+    expect(counts).toEqual({ space: null, messages: 0, jobs: 0, files: 0, credentials: 0, skills: 0, members: 0, blob: null });
   });
 });
 
@@ -351,27 +486,31 @@ describe("spaces and chat", () => {
     const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Finance" });
     await jay.as.mutation(api.chat.send, { spaceId, text: "Welcome to Finance" });
 
+    // Everyone lands in "general" on joining; Finance is there to join.
     const samList = await sam.as.query(api.spaces.list, { accountId: sam.accountId });
-    expect(samList.map((s: any) => [s.name, s.joined, s.members.length])).toEqual([["Finance", false, 1]]);
+    expect(samList.map((s: any) => [s.name, s.joined, s.members.length])).toEqual([["general", true, 2], ["Finance", false, 1]]);
     expect(await sam.as.query(api.chat.messages, { spaceId })).toEqual([]);
     await expect(sam.as.mutation(api.chat.send, { spaceId, text: "hi" })).rejects.toThrow(/join the space/);
 
     await tick();
     await sam.as.mutation(api.spaces.join, { spaceId });
     const texts = (await sam.as.query(api.chat.messages, { spaceId })).map((m: any) => [m.author, m.text]);
+    // jay was alone when the welcome went out, so the agent took it as a job
     expect(texts).toEqual([
       ["system", "jay created the space"],
       ["user", "Welcome to Finance"],
+      ["agent", ""],
       ["system", "sam joined"],
+      ["system", "With two of you here, mention @okidoki to give it work."],
     ]);
     await tick();
     await sam.as.mutation(api.chat.send, { spaceId, text: "Thanks!" });
 
     // unread counts follow lastReadAt; sending marks your own chat read
-    const jayList = await jay.as.query(api.spaces.list, { accountId: jay.accountId });
-    expect(jayList[0].unread).toBe(2);
+    const finance = (list: any[]) => list.find((s: any) => s.name === "Finance");
+    expect(finance(await jay.as.query(api.spaces.list, { accountId: jay.accountId })).unread).toBe(3);
     await jay.as.mutation(api.spaces.markRead, { spaceId });
-    expect((await jay.as.query(api.spaces.list, { accountId: jay.accountId }))[0].unread).toBe(0);
+    expect(finance(await jay.as.query(api.spaces.list, { accountId: jay.accountId })).unread).toBe(0);
 
     // outside the organization nothing is visible or writable
     expect(await pat.as.query(api.spaces.list, { accountId: pat.accountId })).toEqual([]);
@@ -394,9 +533,104 @@ describe("spaces and chat", () => {
     await expect(sam.as.mutation(api.spaces.remove, { spaceId: other })).rejects.toThrow(/owner or an organization admin/);
     await sam.as.mutation(api.spaces.update, { spaceId, workerPolicy: "privateMac", name: "Sam's room" });
     await expect(sam.as.mutation(api.spaces.update, { spaceId, workerPolicy: "mainframe" })).rejects.toThrow(/unknown worker/);
+    await expect(sam.as.mutation(api.spaces.update, { spaceId, workerPolicy: "hostedVM" })).rejects.toThrow(/aren't available yet/);
 
     // an org admin deletes a space they never joined
     expect((await jay.as.mutation(api.spaces.remove, { spaceId })).done).toBe(true);
-    expect((await jay.as.query(api.spaces.list, { accountId: jay.accountId })).map((s: any) => s.name)).toEqual(["Launch"]);
+    expect((await jay.as.query(api.spaces.list, { accountId: jay.accountId })).map((s: any) => s.name).sort()).toEqual(["Launch", "general"]);
+  });
+});
+
+describe("the Mac's view of the organization", () => {
+  const secret = "test-sync-secret";
+  const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
+
+  async function team() {
+    const { t, login } = await setup();
+    process.env.OKIDOKI_SYNC_SECRET = secret;
+    const jay = await login("jay", "jay@acme.com");
+    const sam = await login("sam", "sam@acme.com");
+    await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
+    await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
+    const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Ops" });
+    const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, ...(await r.json()) }));
+    const poll = (accountId: string) => post("/api/worker/poll", { accountId, device: "mac", kind: "thisMac", enabled: false });
+    return { t, jay, sam, orgId, spaceId, post, poll };
+  }
+
+  test("the poll carries the organization: spaces with unread counts, approvals in my spaces, shared skills", async () => {
+    const { jay, sam, orgId, spaceId, post, poll } = await team();
+    await jay.as.mutation(api.enterprise.setWelcome, { orgId, welcome: "Start with 'replay the expense report'." });
+
+    // Sam isn't in Ops yet: he sees the space, not its approvals. The worker switch is off and the summary still comes.
+    let summary = (await poll(sam.accountId)).summary;
+    expect(summary.org).toMatchObject({ name: "Acme", role: "member", welcome: "Start with 'replay the expense report'.", pendingJoins: 0 });
+    expect(summary.spaces.map((s: any) => [s.name, s.joined])).toEqual([["general", true], ["Ops", false]]);
+
+    await post("/api/enterprise/join-space", { accountId: sam.accountId, spaceId });
+    await tick();
+    await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki clean up the shared drive" });
+    const { jobId } = (await jay.as.query(api.jobs.forSpace, { spaceId }))[0].id ? { jobId: (await jay.as.query(api.jobs.forSpace, { spaceId }))[0].id } : { jobId: "" };
+    await post("/api/worker/accept", { accountId: jay.accountId, jobId, device: "Jay's Mac" });
+    await post("/api/worker/update", { accountId: jay.accountId, jobId, status: "waiting", preview: { summary: "Delete 14 stale folders", risk: "high", steps: ["list", "delete"], commands: ["rm -rf …"] } });
+
+    summary = (await poll(sam.accountId)).summary;
+    const ops = summary.spaces.find((s: any) => s.name === "Ops");
+    expect(ops.joined).toBe(true);
+    expect(ops.unread).toBeGreaterThan(0);
+    expect(summary.approvals).toHaveLength(1);
+    expect(summary.approvals[0]).toMatchObject({ spaceName: "Ops", requestedBy: "jay", workerName: "jay", workerIsYou: false, preview: { summary: "Delete 14 stale folders", risk: "high", commands: ["rm -rf …"] } });
+
+    // Sam answers from his notch; the chat hears it and the approval leaves the summary.
+    const decided = await post("/api/enterprise/decide", { accountId: sam.accountId, jobId, decision: "approve" });
+    expect(decided.ok).toBe(true);
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].decision).toBe("approve");
+    expect((await poll(sam.accountId)).summary.approvals).toEqual([]);
+    const lines = (await jay.as.query(api.chat.messages, { spaceId })).filter((m: any) => m.author === "agent" && m.kind === "text").map((m: any) => m.text);
+    expect(lines.at(-1)).toMatch(/sam approved it/);
+
+    // Reading marks the chat read; a stranger's Mac can't do any of this.
+    await post("/api/enterprise/read", { accountId: sam.accountId, spaceId });
+    expect((await poll(sam.accountId)).summary.spaces.find((s: any) => s.name === "Ops").unread).toBe(0);
+    expect((await post("/api/enterprise/decide", { accountId: "acct-nobody", jobId, decision: "approve" })).status).toBe(400);
+  });
+
+  test("a request typed at the cursor becomes a job in the space; shared skills are pulled by id", async () => {
+    const { jay, sam, spaceId, post, poll } = await team();
+    await post("/api/enterprise/join-space", { accountId: sam.accountId, spaceId });
+    const sent = await post("/api/enterprise/send", { accountId: sam.accountId, spaceId, text: "@okidoki export the deck as PDF" });
+    expect(sent.jobId).toBeTruthy();
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0]).toMatchObject({ prompt: "export the deck as PDF", requestedBy: "sam", status: "queued" });
+    // not a member of a space you never joined
+    const { spaceId: finance } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Finance" });
+    expect((await post("/api/enterprise/send", { accountId: sam.accountId, spaceId: finance, text: "hi" })).error).toMatch(/join the space/);
+
+    const steps = [{ id: "s1", text: "Open Numbers", app: "Numbers", action: "click", label: "Numbers" }];
+    const published = await post("/api/enterprise/publish", { accountId: jay.accountId, spaceId: null, skill: { id: "skill-1", name: "expense report", summary: "monthly", steps } });
+    expect(published.version).toBe(1);
+    const summary = (await poll(sam.accountId)).summary;
+    expect(summary.sharedSkills.map((s: any) => [s.name, s.publishedBy, s.stepCount, s.isMine])).toEqual([["expense report", "jay", 1, false]]);
+    expect(summary.sharedSkills[0].steps).toBeUndefined();
+    const pulled = await post("/api/enterprise/skill", { accountId: sam.accountId, sharedId: published.id });
+    expect(pulled.skill.steps).toEqual(steps);
+    await post("/api/enterprise/skill-run", { accountId: sam.accountId, sharedId: published.id });
+    expect((await poll(sam.accountId)).summary.sharedSkills[0].runCount).toBe(1);
+  });
+
+  test("admins see the rollout: who's installed, who's online, who shares skills", async () => {
+    const { jay, sam, post, poll } = await team();
+    await poll(sam.accountId);
+    const rollout = await jay.as.query(api.enterprise.rollout, { accountId: jay.accountId });
+    expect(rollout.installed).toBe(2);
+    expect(rollout.members.map((m: any) => [m.name, m.installed, m.online, m.workerOn])).toEqual([["sam", true, true, false], ["jay", true, false, false]]);
+    await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "thisMac", enabled: true });
+    const again = await jay.as.query(api.enterprise.rollout, { accountId: jay.accountId });
+    expect(again.workersOn).toBe(1);
+    // members get nothing
+    expect(await sam.as.query(api.enterprise.rollout, { accountId: sam.accountId })).toBeNull();
+    // only admins set the welcome
+    await expect(sam.as.mutation(api.enterprise.setWelcome, { orgId: rollout ? (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id : "", welcome: "x" })).rejects.toThrow(/owner or admin/);
   });
 });

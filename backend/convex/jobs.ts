@@ -11,7 +11,10 @@ import { peopleIn, requireSpaceMember, spaceAccess } from "./spaces";
 // work account it is running as; that account must be linked to a login in the organization.
 
 const WORKER_STALE_MS = 45_000;
+/// A job whose worker hasn't been heard from this long is given up on.
+const JOB_LOST_MS = 2 * 60_000;
 const OUTPUT_TAIL = 8_000;
+const HELD = ["accepted", "running", "waiting"];
 const MENTION = /(^|[^\w@])@okidoki\b/i;
 
 export function mentionsAgent(text: string): boolean {
@@ -26,8 +29,29 @@ export function workerOnline(worker: Pick<Doc<"workers">, "enabled" | "lastSeenA
   return worker.enabled && now - worker.lastSeenAt < WORKER_STALE_MS;
 }
 
+/** off · paused · ready, from the row's state or, for older builds, its switch. */
+export function workerState(worker: Pick<Doc<"workers">, "enabled" | "state">): "off" | "paused" | "ready" {
+  if (!worker.enabled) return "off";
+  return worker.state === "paused" ? "paused" : "ready";
+}
+
+async function workerFor(ctx: QueryCtx | MutationCtx, accountId: string | null): Promise<Doc<"workers"> | null> {
+  if (!accountId) return null;
+  return await ctx.db
+    .query("workers")
+    .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
+    .first();
+}
+
+/** Whether the Mac holding this job has gone quiet for long enough that nobody should wait on it. */
+export async function workerLost(ctx: QueryCtx | MutationCtx, job: Doc<"spaceRuns">, now = Date.now()): Promise<boolean> {
+  if (!HELD.includes(job.status)) return false;
+  const worker = await workerFor(ctx, job.workerAccountId);
+  return !worker || now - worker.lastSeenAt > JOB_LOST_MS;
+}
+
 /** The work account's organization membership, through the secret-trusted account id. */
-async function linkFor(ctx: QueryCtx | MutationCtx, accountId: string): Promise<Doc<"memberships"> | null> {
+export async function linkFor(ctx: QueryCtx | MutationCtx, accountId: string): Promise<Doc<"memberships"> | null> {
   const link = await ctx.db
     .query("memberships")
     .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
@@ -35,7 +59,7 @@ async function linkFor(ctx: QueryCtx | MutationCtx, accountId: string): Promise<
   return link && link.status === "active" ? link : null;
 }
 
-async function spaceMemberOf(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">, userId: Id<"users">): Promise<Doc<"spaceMembers"> | null> {
+export async function spaceMemberOf(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">, userId: Id<"users">): Promise<Doc<"spaceMembers"> | null> {
   const rows = await ctx.db
     .query("spaceMembers")
     .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
@@ -160,24 +184,30 @@ export const workersFor = query({
       device: worker.device,
       kind: worker.kind,
       online: workerOnline(worker, now),
+      state: workerState(worker),
       isYou: worker.userId === userId,
       lastSeenAt: worker.lastSeenAt,
     }));
   },
 });
 
+/** Records a member's answer to a waiting run and tells the chat. The worker Mac acts on it next poll. */
+export async function decideJob(ctx: MutationCtx, job: Doc<"spaceRuns">, userId: Id<"users">, decision: string) {
+  if (decision !== "approve" && decision !== "decline") throw new Error("unknown decision");
+  if (job.status !== "waiting") throw new Error("that run isn't waiting any more");
+  const people = await peopleIn(ctx, job.orgId);
+  await ctx.db.patch(job._id, { decision, updatedAt: Date.now() });
+  await postAgentLine(ctx, job, decision === "approve" ? `${people.get(userId)?.name ?? "Someone"} approved it. Going ahead.` : `${people.get(userId)?.name ?? "Someone"} said not now. Stopping.`);
+}
+
 // Anyone in the space answers an approval; the worker Mac acts on it next poll.
 export const decide = mutation({
   args: { jobId: v.id("spaceRuns"), decision: v.string() },
   handler: async (ctx, { jobId, decision }) => {
-    if (decision !== "approve" && decision !== "decline") throw new Error("unknown decision");
     const job = await ctx.db.get(jobId);
     if (!job) return;
     const access = await requireSpaceMember(ctx, job.spaceId);
-    if (job.status !== "waiting") throw new Error("that run isn't waiting any more");
-    const people = await peopleIn(ctx, job.orgId);
-    await ctx.db.patch(job._id, { decision, updatedAt: Date.now() });
-    await postAgentLine(ctx, job, decision === "approve" ? `${people.get(access.userId)?.name ?? "Someone"} approved it. Going ahead.` : `${people.get(access.userId)?.name ?? "Someone"} said not now. Stopping.`);
+    await decideJob(ctx, job, access.userId, decision);
   },
 });
 
@@ -189,8 +219,9 @@ export const cancel = mutation({
     const access = await requireSpaceMember(ctx, job.spaceId);
     if (["done", "failed", "cancelled"].includes(job.status)) return;
     const now = Date.now();
-    // A queued job dies here; one a worker already holds is told to stop through its decision.
-    if (job.status === "queued") {
+    // A queued job dies here, as does one whose Mac has gone quiet; one a worker still holds is
+    // told to stop through its decision and closes when the Mac confirms.
+    if (job.status === "queued" || (await workerLost(ctx, job, now))) {
       await ctx.db.patch(job._id, { status: "cancelled", decision: "decline", endedAt: now, updatedAt: now });
     } else {
       await ctx.db.patch(job._id, { decision: "decline", updatedAt: now });
@@ -200,18 +231,49 @@ export const cancel = mutation({
   },
 });
 
+// Jobs whose Mac stopped heart-beating are failed so the chat isn't left waiting. Runs from a cron.
+export const reapLost = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let reaped = 0;
+    for (const status of HELD) {
+      const rows = await ctx.db
+        .query("spaceRuns")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(100);
+      for (const job of rows) {
+        if (!(await workerLost(ctx, job, now))) continue;
+        await ctx.db.patch(job._id, { status: "failed", endedAt: now, updatedAt: now });
+        await postAgentLine(ctx, { ...job, status: "failed" }, `Lost contact with ${job.workerName || "the worker"}'s Mac. Ask again and a Mac that's online will take it.`);
+        reaped += 1;
+      }
+    }
+    return { reaped };
+  },
+});
+
 // ---- Worker side (HTTP routes, secret-trusted) ----
 
 export const heartbeat = internalMutation({
-  args: { accountId: v.string(), device: v.string(), kind: v.string(), enabled: v.boolean() },
-  handler: async (ctx, { accountId, device, kind, enabled }) => {
+  args: { accountId: v.string(), device: v.string(), kind: v.string(), enabled: v.boolean(), state: v.optional(v.string()) },
+  handler: async (ctx, { accountId, device, kind, enabled, state }) => {
     const link = await linkFor(ctx, accountId);
     if (!link) return { ok: false as const, reason: "account isn't linked to an organization" };
     const existing = await ctx.db
       .query("workers")
       .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
       .first();
-    const row = { accountClientId: accountId, userId: link.userId, orgId: link.orgId, device: device.slice(0, 120), kind: kind === "privateMac" ? "privateMac" : "thisMac", enabled, lastSeenAt: Date.now() };
+    const row = {
+      accountClientId: accountId,
+      userId: link.userId,
+      orgId: link.orgId,
+      device: device.slice(0, 120),
+      kind: kind === "privateMac" ? "privateMac" : "thisMac",
+      enabled,
+      state: !enabled ? "off" : state === "paused" ? "paused" : "ready",
+      lastSeenAt: Date.now(),
+    };
     if (existing) await ctx.db.patch(existing._id, row);
     else await ctx.db.insert("workers", row);
     return { ok: true as const };
@@ -220,14 +282,18 @@ export const heartbeat = internalMutation({
 
 // Queued jobs this worker may take, plus decisions on the jobs it already holds.
 export const poll = internalQuery({
-  args: { accountId: v.string(), kind: v.string() },
-  handler: async (ctx, { accountId, kind }) => {
+  args: { accountId: v.string(), kind: v.string(), state: v.optional(v.string()) },
+  handler: async (ctx, { accountId, kind, state }) => {
     const link = await linkFor(ctx, accountId);
     if (!link) return { jobs: [], held: [] };
-    const queued = await ctx.db
-      .query("spaceRuns")
-      .withIndex("by_org_status", (q) => q.eq("orgId", link.orgId).eq("status", "queued"))
-      .take(20);
+    // A paused Mac keeps reporting what it holds but takes nothing new.
+    const queued =
+      state === "paused"
+        ? []
+        : await ctx.db
+            .query("spaceRuns")
+            .withIndex("by_org_status", (q) => q.eq("orgId", link.orgId).eq("status", "queued"))
+            .take(20);
     const jobs = [];
     for (const job of queued) {
       const space = await ctx.db.get(job.spaceId);

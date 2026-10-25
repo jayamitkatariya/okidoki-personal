@@ -16,6 +16,7 @@ struct OnboardingView: View {
     @State private var didShake = false
     @State private var didCircle = false
     @State private var workspace = "mac"
+    @State private var joinedTeam = false
 
     var body: some View {
         ZStack {
@@ -347,6 +348,10 @@ struct OnboardingView: View {
             .padding(.bottom, 22)
             title("You're all set\(name.isEmpty ? "" : ", \(firstName)").")
             subtitle("okidoki lives in your notch. It's there whenever you need it.")
+            if let invitation = env.teamInvitation {
+                teamCard(invitation)
+                    .padding(.top, 20)
+            }
             VStack(spacing: 0) {
                 hintRow(keys: "Shake", detail: "Summon okidoki")
                 divider
@@ -536,6 +541,32 @@ struct OnboardingView: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(done ? 0.95 : 0.7)))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(done ? OKBrand.green.opacity(0.35) : OKBrand.ink.opacity(0.07)))
         .animation(OKMotion.spring, value: done)
+    }
+
+    /// One click into the organization: a code IT pushed, or a colleague's Mac inviting on this network.
+    private func teamCard(_ invitation: (orgName: String, code: String, via: String)) -> some View {
+        HStack(spacing: 12) {
+            iconTile(joinedTeam ? "checkmark" : "person.2.fill", active: joinedTeam)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(joinedTeam ? "Joining \(invitation.orgName)" : "Join \(invitation.orgName)")
+                    .font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+                Text(joinedTeam ? "Finish here; Team opens to complete it with your sign-in." : "An invitation from \(invitation.via). Spaces, shared skills and the vault come with it.")
+                    .font(.okBody(12)).foregroundStyle(joinedTeam ? OKBrand.greenInk : OKBrand.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if !joinedTeam {
+                Button("Join") {
+                    joinedTeam = true
+                    env.acceptTeamInvitation(orgName: invitation.orgName, code: invitation.code, openTeam: false)
+                }
+                .buttonStyle(OKButtonStyle(kind: .primary))
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(joinedTeam ? 0.95 : 0.7)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(joinedTeam ? OKBrand.green.opacity(0.35) : OKBrand.ink.opacity(0.07)))
+        .animation(OKMotion.spring, value: joinedTeam)
     }
 
     private func hintRow(keys: String, detail: String) -> some View {

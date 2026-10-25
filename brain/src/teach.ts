@@ -3,6 +3,15 @@ import type { TeachAnnotation, TeachNextGuess, TeachRefineRequest, TeachStep, Te
 const ACTIONS = ["click", "double_click", "right_click", "drag", "type", "key", "scroll", "look", "open_app", "done"] as const;
 const ANNOTATION_KINDS = ["callout", "badge", "bracket", "underline", "flow", "measure", "spotlight", "lens", "sketch", "ghost", "typing", "scroll"] as const;
 
+const STEP_MODEL = "claude-sonnet-5-5";
+const FAST_MODEL = "claude-haiku-5-5";
+
+/** Writing a step means reading a busy screen and knowing the app: Sonnet, unless they chose bigger. Haiku keeps the zoom checks. */
+export function teachModel(configured: string | undefined): string {
+  const name = (configured ?? "").trim();
+  return !name || name.toLowerCase().includes("haiku") ? STEP_MODEL : name;
+}
+
 const teachTool = {
   name: "okidoki_teach",
   description: "Give the learner exactly one next step on their real screen, or finish the lesson.",
@@ -15,8 +24,8 @@ const teachTool = {
       },
       waiting: { type: "boolean", description: "true when the screen is still loading or mid-animation and you should look again in a moment instead of teaching" },
       action: { type: "string", enum: [...ACTIONS] },
-      say: { type: "string", description: "one or two short sentences, spoken aloud and shown in a bubble by the control: its real name, the action, and the idea" },
-      why: { type: "string", description: "optional. one short sentence with the idea or mental model behind this step" },
+      say: { type: "string", description: "one short sentence, spoken aloud and shown in a bubble by the control: its real name, the action, and the idea. two sentences only when the idea needs it" },
+      why: { type: "string", description: "rare. one short sentence with the mental model behind this step, only when there is one" },
       label: { type: "string", description: "2-4 lowercase words for the tag beside the ring, e.g. 'frame tool', 'drag to playlist'" },
       element: { type: "integer", description: "the number of the marked element to point at. prefer this over x,y whenever the control has a marker" },
       x: { type: "number", description: "fallback: center of the control in screenshot pixels, origin top-left" },
@@ -28,7 +37,7 @@ const teachTool = {
       to_x: { type: "number", description: "drag end" },
       to_y: { type: "number" },
       to_element: { type: "integer", description: "drag end as a marked element" },
-      target: { type: "string", description: "the control's visible text label, exactly as written on screen" },
+      target: { type: "string", description: "the control's visible text label, exactly as written on screen. always fill it for click, double_click, right_click and type; okidoki checks the marker against it" },
       key: { type: "string", description: 'for key: the shortcut, e.g. "cmd+shift+a", "f", "return", "esc"' },
       text: { type: "string", description: "for type: what to type" },
       app: { type: "string", description: "for open_app: the app name" },
@@ -42,7 +51,7 @@ const teachTool = {
       also_label: { type: "string", description: "2-3 lowercase words for the second region" },
       annotations: {
         type: "array",
-        description: "up to 3 extra drawings that help this step land. each has a kind and either element or x,y(,w,h).",
+        description: "at most one extra drawing, only when it makes the step land. most steps have none. it has a kind and either element or x,y(,w,h).",
         items: {
           type: "object",
           properties: {
@@ -122,6 +131,7 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
   const known = request.known?.length ? request.known.map((k) => `· ${k}`).join("\n") : "";
   const milestones = request.milestones?.length ? request.milestones.map((m, i) => `${i}. ${m}`).join("\n") : "";
   const page = [request.pageTitle ?? "", request.pageURL ?? ""].map((s) => s.trim()).filter(Boolean).join(" — ");
+  const menus = request.menus?.length ? request.menus.join("\n") : "";
   return [
     `You are Okidoki's tutor. A person is learning "${request.topic}" in ${request.app || "the app on screen"} on their own Mac.`,
     `You see their screen right now.`,
@@ -134,10 +144,10 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
     ``,
     `How to teach:`,
     `- One action per step: a click, a key, a drag, typing something, or just looking at something while you explain it.`,
-    `- say is one or two short sentences. Name the control by the label visible on screen, give the action, and the idea in the same breath ("a frame is a screen — click the frame tool, or press F").`,
-    `- why is optional: one short sentence with the concept or mental model. Skip it for obvious steps.`,
+    `- say is one short sentence; two only when the idea needs it. Name the control by the label visible on screen, give the action, and the idea in the same breath ("a frame is a screen — click the frame tool, or press F").`,
+    `- why is rare: one short sentence with the mental model, only when there is one. Most steps have none.`,
     `- label is 2-4 lowercase words for the tag beside the ring.`,
-    `- Point exactly. Prefer element (a marker number). Otherwise x,y are pixels in the ${request.imageWidth}x${request.imageHeight} screenshot, origin top-left, at the center of the control. For a region set w,h to hug it. Set target to the visible text label when it has one.`,
+    `- Point exactly. Prefer element (a marker number). Otherwise x,y are pixels in the ${request.imageWidth}x${request.imageHeight} screenshot, origin top-left, at the center of the control. For a region set w,h to hug it. Always set target to the control's visible text label for click, double_click, right_click and type; okidoki checks the marker against it.`,
     `- A drag: action drag with from_x, from_y and to_x, to_y or to_element.`,
     `- A shortcut: action key with key. Still point (element or x,y) at where the result will show up when you can.`,
     `- Typing: action type with text, pointing at the field.`,
@@ -145,9 +155,10 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
     `- When the result of this step appears somewhere else, add also_x/also_y/also_w/also_h with also_label so they know where to watch.`,
     `- If they need another app: action open_app with app.`,
     `- Never box the whole window. If the control isn't visible, teach the step that reveals it first (open the menu, scroll, pick the tab). Only use look with no coordinates when there is truly nothing to point at.`,
+    `- Only real things: name menus, items and controls that are in the marked elements, on the screenshot, or in the menu bar listed below. Never a path you only remember.`,
     `- No lecturing. Short, warm, lowercase labels, no emoji.`,
     ``,
-    `Extra drawings (annotations, up to 3, only when they help):`,
+    `Extra drawings (annotations): most steps need none. At most one, only when it makes the step land. spotlight at most once a lesson.`,
     `- callout: a short note with a leader line to a spot ("this number is the gap between items"). text required.`,
     `- badge: a numbered dot (n) for a sequence of places to click in order.`,
     `- bracket: a brace spanning a group (w,h) with a 1-3 word text ("the toolbar").`,
@@ -163,6 +174,8 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
     ``,
     `Checking their work:`,
     `- Look at the screenshot and the log. Set previous_done true if the last step happened: the screen shows its effect, or the log says they hit the target. Otherwise set previous_done false and give the same step again, pointing again, with a DIFFERENT explanation — a landmark ("top left, under the menu"), the icon's shape, or the shortcut. Never repeat yourself word for word, never scold.`,
+    `- "landed" at the end of the log means okidoki saw their action hit the target. Its effect may not show (a tool selected, a mode toggled): previous_done is true, don't teach it again. Give the next step, or handle whatever appeared.`,
+    `- "while i was checking" in the log lists what they did as you looked: the screenshot is newer than your last step, so judge from it.`,
     `- Start from where they are: if something is already set up or already done, don't redo it. If they already achieved what the next step would do, skip it.`,
     `- They may do it a different way, get ahead of you, or wander. Follow the screen, not the outline.`,
     `- If the screen is mid-load (spinner, blank page, half-drawn window), set waiting true with a short say and no action; you'll be asked again in a moment.`,
@@ -179,6 +192,7 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
     `Finishing:`,
     `- When the goal is reached, action done with summary and a warm one-line say that names what they can now do.`,
     `- Keep it tight: a small skill is 3-8 steps. remaining is your rough count of steps after this one.`,
+    menus ? `\nThe app's menu bar, exactly as it is (never name a menu or item that isn't here):\n${menus}` : ``,
     ``,
     `Loose outline from the planner (adjust freely):`,
     outline,
@@ -188,6 +202,7 @@ export function teachSystemPrompt(request: TeachStepRequest): string {
     ``,
     `What has happened so far:`,
     log,
+    request.landed && request.log.length ? `landed — okidoki saw that last action hit its target.` : ``,
   ].filter((line) => line !== undefined).join("\n");
 }
 
@@ -242,7 +257,7 @@ function normalizeNext(raw: unknown): TeachNextGuess | undefined {
 export function normalizeTeachStep(raw: Record<string, unknown>): TeachStep {
   const action = typeof raw.action === "string" && (ACTIONS as readonly string[]).includes(raw.action) ? raw.action : "look";
   const annotations = Array.isArray(raw.annotations)
-    ? raw.annotations.map(normalizeAnnotation).filter((a): a is TeachAnnotation => a !== null).slice(0, 4)
+    ? raw.annotations.map(normalizeAnnotation).filter((a): a is TeachAnnotation => a !== null).slice(0, 1)
     : [];
   const milestones = Array.isArray(raw.milestones)
     ? raw.milestones.filter((m): m is string => typeof m === "string" && m.trim().length > 0).map((m) => m.trim().slice(0, 40)).slice(0, 6)
@@ -320,7 +335,7 @@ export async function teachStep(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ step: TeachStep | null; usedModel: boolean; error?: string }> {
   if (!apiKey) return { step: null, usedModel: false, error: "anthropic key required" };
-  const model = request.model || "claude-haiku-5-5";
+  const model = teachModel(request.model);
   const content: unknown[] = [];
   if (request.screenshotBase64) {
     content.push({
@@ -373,7 +388,7 @@ export async function refineTeach(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ found: boolean; x?: number; y?: number; w?: number; h?: number }> {
   if (!apiKey || !request.cropBase64) return { found: false };
-  const model = request.model || "claude-haiku-5-5";
+  const model = request.model || FAST_MODEL;
   try {
     const input = await callAnthropic({
       model,

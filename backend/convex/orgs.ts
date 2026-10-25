@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ownedAccount } from "./accounts";
+import { welcomeMember } from "./enterprise";
 
 // Organizations and memberships for the enterprise side. A login can belong to several
 // organizations; each of its Mac work accounts links to at most one of them. Everything an
@@ -72,6 +73,7 @@ async function summary(ctx: QueryCtx | MutationCtx, org: Doc<"organizations">, r
     createdAt: org.createdAt,
     role,
     memberCount: members.filter((row) => row.status === "active").length,
+    welcome: org.welcome ?? "",
   };
 }
 
@@ -195,6 +197,7 @@ export const create = mutation({
     const orgId = await ctx.db.insert("organizations", { name: cleanName, domain: cleanedDomain, plan: "team", createdBy: userId, createdAt: now });
     await unlinkAccount(ctx, accountId);
     await ctx.db.insert("memberships", { orgId, userId, role: "owner", status: "active", accountClientId: accountId, joinedAt: now });
+    await welcomeMember(ctx, orgId, userId);
     return { orgId };
   },
 });
@@ -274,6 +277,7 @@ export const join = mutation({
       await ctx.db.insert("memberships", { orgId: org._id, userId, role: "member", status: "active", accountClientId: accountId, joinedAt: Date.now() });
     }
     await ctx.db.patch(row._id, { uses: row.uses + 1 });
+    await welcomeMember(ctx, org._id, userId);
     return { orgId: org._id, name: org.name };
   },
 });
@@ -322,6 +326,7 @@ export const approve = mutation({
     if (!row) return;
     await requireAdmin(ctx, row.orgId);
     await ctx.db.patch(row._id, { status: "active", joinedAt: Date.now() });
+    await welcomeMember(ctx, row.orgId, row.userId);
   },
 });
 

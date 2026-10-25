@@ -5,6 +5,15 @@ import Foundation
 public enum TeachBrain {
     static let actions = ["click", "double_click", "right_click", "drag", "type", "key", "scroll", "look", "open_app", "done"]
     static let annotationKinds = ["callout", "badge", "bracket", "underline", "flow", "measure", "spotlight", "lens", "sketch", "ghost", "typing", "scroll"]
+    static let stepModel = "claude-sonnet-5-5"
+    static let fastModel = "claude-haiku-5-5"
+
+    /// Writing a step means reading a busy screen and knowing the app: Sonnet, unless they chose bigger.
+    /// Haiku keeps the zoom checks. Mirrors `teachModel` in brain/src/teach.ts.
+    public static func stepModel(for configured: String) -> String {
+        let name = configured.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty || name.lowercased().contains("haiku") ? stepModel : name
+    }
 
     public static func step(_ request: TeachStepRequest, key: String, model: String) async -> TeachLiveStep? {
         guard !key.isEmpty else { return nil }
@@ -18,7 +27,7 @@ public enum TeachBrain {
             : "Step \(request.stepNumber). Frontmost app: \(app). No screenshot this turn — teach with words only (action look, no coordinates)."
         content.append(["type": "text", "text": turn])
         let body: [String: Any] = [
-            "model": model.isEmpty ? "claude-haiku-5-5" : model,
+            "model": stepModel(for: model),
             "max_tokens": 1100,
             "system": splitSystem(systemPrompt(request)),
             "messages": [["role": "user", "content": content]],
@@ -34,7 +43,7 @@ public enum TeachBrain {
     public static func refine(_ request: TeachRefineRequest, key: String, model: String) async -> TeachRefineResult {
         guard !key.isEmpty, !request.cropBase64.isEmpty else { return TeachRefineResult(found: false) }
         let body: [String: Any] = [
-            "model": model.isEmpty ? "claude-haiku-5-5" : model,
+            "model": model.isEmpty ? fastModel : model,
             "max_tokens": 160,
             "system": "You pinpoint one control in a zoomed crop of a Mac screen (\(Int(request.cropWidth))x\(Int(request.cropHeight)) pixels, origin top-left). Return its exact center and size through okidoki_point. If it is not in the crop, found is false.",
             "messages": [["role": "user", "content": [
@@ -92,8 +101,8 @@ public enum TeachBrain {
                 "previous_done": ["type": "boolean", "description": "did the learner complete the previous step? judge from the screenshot and the log. true on the first step."],
                 "waiting": ["type": "boolean", "description": "true when the screen is still loading or mid-animation and you should look again in a moment instead of teaching"],
                 "action": ["type": "string", "enum": actions],
-                "say": ["type": "string", "description": "one or two short sentences, spoken aloud and shown in a bubble by the control: its real name, the action, and the idea"],
-                "why": ["type": "string", "description": "optional. one short sentence with the idea or mental model behind this step"],
+                "say": ["type": "string", "description": "one short sentence, spoken aloud and shown in a bubble by the control: its real name, the action, and the idea. two sentences only when the idea needs it"],
+                "why": ["type": "string", "description": "rare. one short sentence with the mental model behind this step, only when there is one"],
                 "label": ["type": "string", "description": "2-4 lowercase words for the tag beside the ring, e.g. 'frame tool', 'drag to playlist'"],
                 "element": ["type": "integer", "description": "the number of the marked element to point at. prefer this over x,y whenever the control has a marker"],
                 "x": ["type": "number", "description": "fallback: center of the control in screenshot pixels, origin top-left"],
@@ -105,7 +114,7 @@ public enum TeachBrain {
                 "to_x": ["type": "number", "description": "drag end"],
                 "to_y": ["type": "number"],
                 "to_element": ["type": "integer", "description": "drag end as a marked element"],
-                "target": ["type": "string", "description": "the control's visible text label, exactly as written on screen"],
+                "target": ["type": "string", "description": "the control's visible text label, exactly as written on screen. always fill it for click, double_click, right_click and type; okidoki checks the marker against it"],
                 "key": ["type": "string", "description": "for key: the shortcut, e.g. \"cmd+shift+a\", \"f\", \"return\", \"esc\""],
                 "text": ["type": "string", "description": "for type: what to type"],
                 "app": ["type": "string", "description": "for open_app: the app name"],
@@ -119,7 +128,7 @@ public enum TeachBrain {
                 "also_label": ["type": "string", "description": "2-3 lowercase words for the second region"],
                 "annotations": [
                     "type": "array",
-                    "description": "up to 3 extra drawings that help this step land. each has a kind and either element or x,y(,w,h).",
+                    "description": "at most one extra drawing, only when it makes the step land. most steps have none. it has a kind and either element or x,y(,w,h).",
                     "items": [
                         "type": "object",
                         "properties": [
@@ -195,6 +204,8 @@ public enum TeachBrain {
         let language = request.language.map { "Write say, why and labels in \($0)." } ?? ""
         let pageBits = [request.pageTitle ?? "", request.pageURL ?? ""].filter { !$0.isEmpty }
         let page = pageBits.isEmpty ? "" : "\nThe browser tab in front is \(pageBits.joined(separator: " — ")). The lesson is about that site, not the browser: teach with its own panels, menus and controls, never the browser's."
+        let menus = request.menus.isEmpty ? "" : "\n\nThe app's menu bar, exactly as it is (never name a menu or item that isn't here):\n" + request.menus.joined(separator: "\n")
+        let landed = request.landed && !request.log.isEmpty ? "\nlanded — okidoki saw that last action hit its target." : ""
         return """
         You are Okidoki's tutor. A person is learning "\(request.topic)" in \(app) on their own Mac.
         You see their screen right now.\(page)
@@ -204,10 +215,10 @@ public enum TeachBrain {
 
         How to teach:
         - One action per step: a click, a key, a drag, typing something, or just looking at something while you explain it.
-        - say is one or two short sentences. Name the control by the label visible on screen, give the action, and the idea in the same breath ("a frame is a screen — click the frame tool, or press F").
-        - why is optional: one short sentence with the concept or mental model. Skip it for obvious steps.
+        - say is one short sentence; two only when the idea needs it. Name the control by the label visible on screen, give the action, and the idea in the same breath ("a frame is a screen — click the frame tool, or press F").
+        - why is rare: one short sentence with the mental model, only when there is one. Most steps have none.
         - label is 2-4 lowercase words for the tag beside the ring.
-        - Point exactly. Prefer element (a marker number). Otherwise x,y are pixels in the \(Int(request.imageWidth))x\(Int(request.imageHeight)) screenshot, origin top-left, at the center of the control. For a region set w,h to hug it. Set target to the visible text label when it has one.
+        - Point exactly. Prefer element (a marker number). Otherwise x,y are pixels in the \(Int(request.imageWidth))x\(Int(request.imageHeight)) screenshot, origin top-left, at the center of the control. For a region set w,h to hug it. Always set target to the control's visible text label for click, double_click, right_click and type; okidoki checks the marker against it.
         - A drag: action drag with from_x, from_y and to_x, to_y or to_element.
         - A shortcut: action key with key. Still point (element or x,y) at where the result will show up when you can.
         - Typing: action type with text, pointing at the field.
@@ -215,9 +226,10 @@ public enum TeachBrain {
         - When the result of this step appears somewhere else, add also_x/also_y/also_w/also_h with also_label so they know where to watch.
         - If they need another app: action open_app with app.
         - Never box the whole window. If the control isn't visible, teach the step that reveals it first (open the menu, scroll, pick the tab). Only use look with no coordinates when there is truly nothing to point at.
+        - Only real things: name menus, items and controls that are in the marked elements, on the screenshot, or in the menu bar listed below. Never a path you only remember.
         - No lecturing. Short, warm, lowercase labels, no emoji.
 
-        Extra drawings (annotations, up to 3, only when they help):
+        Extra drawings (annotations): most steps need none. At most one, only when it makes the step land. spotlight at most once a lesson.
         - callout: a short note with a leader line to a spot ("this number is the gap between items"). text required.
         - badge: a numbered dot (n) for a sequence of places to click in order.
         - bracket: a brace spanning a group (w,h) with a 1-3 word text ("the toolbar").
@@ -233,6 +245,8 @@ public enum TeachBrain {
 
         Checking their work:
         - Look at the screenshot and the log. Set previous_done true if the last step happened: the screen shows its effect, or the log says they hit the target. Otherwise set previous_done false and give the same step again, pointing again, with a DIFFERENT explanation — a landmark ("top left, under the menu"), the icon's shape, or the shortcut. Never repeat yourself word for word, never scold.
+        - "landed" at the end of the log means okidoki saw their action hit the target. Its effect may not show (a tool selected, a mode toggled): previous_done is true, don't teach it again. Give the next step, or handle whatever appeared.
+        - "while i was checking" in the log lists what they did as you looked: the screenshot is newer than your last step, so judge from it.
         - Start from where they are: if something is already set up or already done, don't redo it. If they already achieved what the next step would do, skip it.
         - They may do it a different way, get ahead of you, or wander. Follow the screen, not the outline.
         - If the screen is mid-load (spinner, blank page, half-drawn window), set waiting true with a short say and no action; you'll be asked again in a moment.
@@ -248,13 +262,13 @@ public enum TeachBrain {
 
         Finishing:
         - When the goal is reached, action done with summary and a warm one-line say that names what they can now do.
-        - Keep it tight: a small skill is 3-8 steps. remaining is your rough count of steps after this one.
+        - Keep it tight: a small skill is 3-8 steps. remaining is your rough count of steps after this one.\(menus)
 
         Loose outline from the planner (adjust freely):
         \(outline)\(milestones)\(known)\(controls)
 
         What has happened so far:
-        \(log)
+        \(log)\(landed)
         """
     }
 }

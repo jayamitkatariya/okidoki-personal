@@ -149,39 +149,7 @@ function Documents() {
       {files.length ? (
         <div className="pref-group">
           {files.map((file) => (
-            <div className="pref-row vault-row" key={file.id}>
-              <span className="kind-icon">
-                <PixelIcon name={fileIcon(file.mime, file.name)} size={15} />
-              </span>
-              <span className="pref-copy">
-                <strong>{file.name}</strong>
-                <em>
-                  {formatBytes(file.size)} · {file.spaceId ? file.spaceName : "whole organization"} · {file.uploadedBy} · {relativeTime(iso(file.createdAt))}
-                </em>
-              </span>
-              <span className="pref-control vault-row-tools">
-                {file.url ? (
-                  <a className="btn btn-secondary btn-sm" href={file.url} target="_blank" rel="noreferrer" download={file.name}>
-                    <PixelIcon name="download" size={13} /> Download
-                  </a>
-                ) : null}
-                <IconButton icon="chat" label="Share to a space" onClick={() => setShareFor(file)} />
-                {file.canDelete ? (
-                  <IconButton
-                    icon="trash"
-                    label="Delete file"
-                    onClick={() =>
-                      setConfirm({
-                        title: `Delete ${file.name}?`,
-                        detail: "It's removed for everyone. Links already shared in chats stop working.",
-                        action: "Delete",
-                        onConfirm: () => void enterprise.actions.deleteFile(file.id).then(() => notify("Deleted", file.name, "info")).catch((error: Error) => notify("That didn't work", error.message, "warning")),
-                      })
-                    }
-                  />
-                ) : null}
-              </span>
-            </div>
+            <VaultFileRow key={file.id} file={file} onShare={() => setShareFor(file)} setConfirm={setConfirm} />
           ))}
         </div>
       ) : (
@@ -218,6 +186,46 @@ function Documents() {
         </div>
       </Modal>
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
+    </div>
+  );
+}
+
+/** One document in the vault: download, share to a chat, delete. Used by Vault and by a space's Files tab. */
+export function VaultFileRow({ file, onShare, setConfirm }: { file: VaultFile; onShare?: () => void; setConfirm: (request: ConfirmRequest) => void }) {
+  const { enterprise, notify } = useDashboard();
+  return (
+    <div className="pref-row vault-row">
+      <span className="kind-icon">
+        <PixelIcon name={fileIcon(file.mime, file.name)} size={15} />
+      </span>
+      <span className="pref-copy">
+        <strong>{file.name}</strong>
+        <em>
+          {formatBytes(file.size)} · {file.spaceId ? file.spaceName : "whole organization"} · {file.uploadedBy} · {relativeTime(iso(file.createdAt))}
+        </em>
+      </span>
+      <span className="pref-control vault-row-tools">
+        {file.url ? (
+          <a className="btn btn-secondary btn-sm" href={file.url} target="_blank" rel="noreferrer" download={file.name}>
+            <PixelIcon name="download" size={13} /> Download
+          </a>
+        ) : null}
+        {onShare ? <IconButton icon="chat" label="Share to a space" onClick={onShare} /> : null}
+        {file.canDelete ? (
+          <IconButton
+            icon="trash"
+            label="Delete file"
+            onClick={() =>
+              setConfirm({
+                title: `Delete ${file.name}?`,
+                detail: "It's removed for everyone. Links already shared in chats stop working.",
+                action: "Delete",
+                onConfirm: () => void enterprise.actions.deleteFile(file.id).then(() => notify("Deleted", file.name, "info")).catch((error: Error) => notify("That didn't work", error.message, "warning")),
+              })
+            }
+          />
+        ) : null}
+      </span>
     </div>
   );
 }

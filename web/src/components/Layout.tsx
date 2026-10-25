@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { createPortal } from "react-dom";
 import { useDashboard } from "../store";
 import { cx } from "../lib";
-import { navFor, pageAvailable, SECTION_META, type NavGroup, type Page } from "../nav";
+import { jumpToSettingsSection, navFor, pageAvailable, resolveRoute, SECTION_META, type NavGroup, type Page } from "../nav";
 import type { AccountKind } from "../types";
 import { useDialog } from "./useDialog";
 import {
@@ -112,8 +112,9 @@ export function AppShell({
       setPaletteOpen(true);
     };
     bridge.okidokiNavigate = (next: string) => {
-      const page = next === "keys" ? "settings" : next;
-      if (nav.some((group) => group.items.some((item) => item.id === page))) setPage(page as Page);
+      const route = resolveRoute(next);
+      if (nav.some((group) => group.items.some((item) => item.id === route.page))) setPage(route.page as Page);
+      if (route.section) jumpToSettingsSection(route.section);
     };
     return () => {
       delete bridge.okidokiOpenAsk;

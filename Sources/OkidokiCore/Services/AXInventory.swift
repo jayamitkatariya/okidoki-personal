@@ -68,6 +68,47 @@ public enum AXInventory {
         return found
     }
 
+    /// The app's menu bar as the tutor should quote it: one line per menu, its items in order,
+    /// submenus one level deep ("File: New, Open…, Export ▸ PNG · PDF"). Read once per lesson.
+    public static func menus(pid: pid_t, limit: Int = 24) -> [String] {
+        guard AXIsProcessTrusted() else { return [] }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        var barRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &barRef) == .success,
+              let barRef, let bar = AXSearch.axElement(barRef) else { return [] }
+        let started = Date()
+        func title(_ element: AXUIElement) -> String {
+            AXSearch.stringAttribute(kAXTitleAttribute, of: element).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func items(of element: AXUIElement) -> [AXUIElement] {
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw) == .success,
+                  let children = raw as? [AXUIElement] else { return [] }
+            // A menu bar item or a menu item holds one AXMenu, which holds the items.
+            if children.count == 1, AXSearch.stringAttribute(kAXRoleAttribute, of: children[0]) == "AXMenu" {
+                return items(of: children[0])
+            }
+            return children
+        }
+        var lines: [String] = []
+        for top in items(of: bar).dropFirst() where lines.count < limit && Date().timeIntervalSince(started) < 1.2 {
+            let name = title(top)
+            guard !name.isEmpty else { continue }
+            var entries: [String] = []
+            for item in items(of: top).prefix(40) {
+                let label = title(item)
+                // Hidden alternates (option-key variants) repeat a title; the Services menu is the system's, not the app's.
+                guard !label.isEmpty, !entries.contains(where: { $0 == label || $0.hasPrefix("\(label) ▸") }) else { continue }
+                let sub = label == "Services" ? [] : items(of: item).prefix(12).map(title).filter { !$0.isEmpty }
+                entries.append(sub.isEmpty ? label : "\(label) ▸ \(sub.joined(separator: " · "))")
+            }
+            guard !entries.isEmpty else { continue }
+            lines.append("\(name): \(entries.joined(separator: ", "))")
+        }
+        return lines
+    }
+
     /// Press the control under a point through accessibility. Nothing moves on screen, so the
     /// learner keeps their pointer. False when the element has no press action.
     @discardableResult
