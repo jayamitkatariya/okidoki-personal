@@ -19,7 +19,7 @@ extension AppEnvironment {
             return stop("that's a work thing", "the vault belongs to your organization. switch to your work account and ask again.")
         }
         let settings = store.settings
-        guard settings.syncEnabled, !settings.convexSiteURL.isEmpty, let secret = KeyStore.get("convex"), !secret.isEmpty else {
+        guard settings.syncEnabled, !settings.convexSiteURL.isEmpty, let secret = KeyStore.deviceToken, !secret.isEmpty else {
             return stop("turn on sync", "the vault lives on your organization's deployment. turn on sync in Settings, then ask again.",
                         [CardAction(title: "open settings", kind: .primary, glyph: "gear") { [weak self] in self?.openDashboard(.settings) }])
         }

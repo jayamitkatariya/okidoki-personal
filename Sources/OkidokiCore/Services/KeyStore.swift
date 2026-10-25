@@ -20,15 +20,47 @@ public enum KeyStore {
         update { $0[key] = value }
     }
 
+    /// A key saved on this Mac wins; the one the build ships is the fallback. That way a shipped
+    /// key that's revoked or rate-limited can be replaced from Settings › Keys without a new build.
     public static func get(_ key: String) -> String? {
         if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" { return nil }
-        let stored = stored(key)
+        if let stored = stored(key) { return stored }
         // Tests point at a private file and must not see the app's compiled keys.
-        if ProcessInfo.processInfo.environment["OKIDOKI_KEYS_FILE"] != nil {
-            return stored
-        }
+        if ProcessInfo.processInfo.environment["OKIDOKI_KEYS_FILE"] != nil { return nil }
         if let builtin = ServiceSecrets.builtin(key), !builtin.isEmpty { return builtin }
-        return stored
+        return nil
+    }
+
+    /// Whether the value in use for a key is the one the build ships (nothing saved over it).
+    public static func isBuiltin(_ key: String) -> Bool {
+        stored(key) == nil && (ServiceSecrets.builtin(key)?.isEmpty == false)
+    }
+
+    // MARK: Pairing with the sync login
+
+    /// The token this Mac was given when it paired with a sync login, and who that login is.
+    public static let deviceTokenKey = "convexDevice"
+    public static let deviceUserKey = "convexDeviceUser"
+    public static let deviceEmailKey = "convexDeviceEmail"
+
+    public static var deviceToken: String? { stored(deviceTokenKey) }
+    public static var deviceEmail: String? { stored(deviceEmailKey) }
+    public static var deviceUserID: String? { stored(deviceUserKey) }
+
+    public static func pairDevice(token: String, userID: String, email: String) {
+        update { keys in
+            keys[deviceTokenKey] = token
+            keys[deviceUserKey] = userID
+            keys[deviceEmailKey] = email
+        }
+    }
+
+    public static func unpairDevice() {
+        update { keys in
+            keys[deviceTokenKey] = nil
+            keys[deviceUserKey] = nil
+            keys[deviceEmailKey] = nil
+        }
     }
 
     private static func stored(_ key: String) -> String? {
@@ -109,9 +141,6 @@ public enum KeyProviders {
         KeyProviderSpec(id: "apify", name: "Apify",
                         blurb: "Live web scraping and ready-made actors.",
                         placeholder: "apify_api_…", url: "https://console.apify.com/account/integrations", optional: true),
-        KeyProviderSpec(id: "convex", name: "Convex sync",
-                        blurb: "Private sync of threads, memory and runs across Macs.",
-                        placeholder: "sync secret", url: "https://convex.dev", optional: true),
     ]
 }
 

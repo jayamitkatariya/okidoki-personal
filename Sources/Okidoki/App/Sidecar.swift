@@ -231,6 +231,8 @@ final class BrainSidecar: ObservableObject {
         if let bundled = Bundle.main.url(forResource: "server", withExtension: "js", subdirectory: "brain") {
             return bundled
         }
+        #if DEBUG
+        // Development only: a release build runs the brain it ships, never one found lying around.
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let candidates = [
             cwd.appendingPathComponent("brain/dist/server.js"),
@@ -238,6 +240,9 @@ final class BrainSidecar: ObservableObject {
             URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/okidoki/brain/dist/server.js"),
         ]
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        #else
+        return nil
+        #endif
     }
 
     private func openLog() {

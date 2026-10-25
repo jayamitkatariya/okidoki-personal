@@ -207,6 +207,8 @@ public final class ConvexSyncService: ObservableObject {
         public var unreadable = 0
         /// The backend has no versions yet, so this was a one-way push.
         public var legacy = false
+        /// Accounts another sync login owns; this Mac's pairing can't touch them.
+        public var foreign: [String] = []
     }
 
     enum SyncFailure: Error {
@@ -214,6 +216,8 @@ public final class ConvexSyncService: ObservableObject {
         case tooLarge
         case http(Int, String)
         case keptLosing
+        /// The account belongs to another sync login than the one this Mac is paired with.
+        case forbidden
     }
 
     /// The newest runs and threads that go up with each push; older ones stay on Convex as they are.
@@ -226,11 +230,12 @@ public final class ConvexSyncService: ObservableObject {
     /// Per account, a hash of the last state that reached Convex, so an unchanged account isn't re-sent.
     private var lastPushedHash: [String: Int] = [:]
     private let session: URLSession
+    /// The token this Mac got when it paired with the sync login. Nothing syncs without one.
     private let secret: () -> String?
     private let device: String
 
     public init(session: URLSession = .shared,
-                secret: @escaping () -> String? = { KeyStore.get("convex") },
+                secret: @escaping () -> String? = { KeyStore.deviceToken },
                 device: String = Host.current().localizedName ?? "mac") {
         self.session = session
         self.secret = secret
@@ -259,12 +264,19 @@ public final class ConvexSyncService: ObservableObject {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw SyncFailure.http(0, "no response") }
         if http.statusCode == 401 { throw SyncFailure.unauthorized }
+        if http.statusCode == 403 { throw SyncFailure.forbidden }
         if http.statusCode == 413 { throw SyncFailure.tooLarge }
         return (http.statusCode, data)
     }
 
     /// Kept for callers from before sync went both ways.
     public func push(store: OkidokiStore) async { await sync(store: store) }
+
+    /// The Mac was unpaired: nothing pushed from here counts any more.
+    public func forgetPairing() {
+        status = "local only"
+        lastPushedHash = [:]
+    }
 
     /// Pulls, merges and pushes every account on this Mac, the one in front first.
     public func sync(store: OkidokiStore) async {
@@ -278,7 +290,7 @@ public final class ConvexSyncService: ObservableObject {
             return
         }
         guard let secret = secret(), !secret.isEmpty else {
-            status = "sync secret missing"
+            status = "sign in to sync in the control panel to pair this Mac"
             return
         }
         // One sync at a time: two overlapping rounds would each push on top of a version the other replaces.
@@ -299,17 +311,22 @@ public final class ConvexSyncService: ObservableObject {
         do {
             let ids = [store.currentAccountID] + store.accounts.map(\.id).filter { $0 != store.currentAccountID }
             for id in ids where store.accounts.contains(where: { $0.id == id }) {
-                try await syncAccount(id, store: store, base: base, secret: secret, report: &report)
+                do {
+                    try await syncAccount(id, store: store, base: base, secret: secret, report: &report)
+                } catch SyncFailure.forbidden {
+                    // Another login's account on this Mac: left alone, the rest still sync.
+                    report.foreign.append(id)
+                }
             }
-            store.settings.lastSyncAt = Date()
-            store.saveNow()
+            store.noteSynced()
             lastReport = report
             let brought = report.merged.changes
-            status = report.legacy ? "synced (one way: update the backend for two-way sync)"
+            let foreign = report.foreign.isEmpty ? "" : " · \(report.foreign.count) account\(report.foreign.count == 1 ? "" : "s") signed in elsewhere"
+            status = (report.legacy ? "synced (one way: update the backend for two-way sync)"
                 : brought > 0 ? "synced · brought in \(brought) change\(brought == 1 ? "" : "s") from your other Macs"
-                : "synced just now"
+                : "synced just now") + foreign
         } catch SyncFailure.unauthorized {
-            status = "sync secret rejected"
+            status = "this Mac's pairing was revoked; sign in to sync again"
         } catch SyncFailure.tooLarge {
             status = "sync failed: too much to send at once"
         } catch SyncFailure.keptLosing {

@@ -164,9 +164,12 @@ struct DashboardServicesPayload: Encodable {
     struct Convex: Encodable {
         /// The sync switch in Settings.
         var enabled: Bool
-        /// A site URL and a sync secret are both present, so a push can be attempted.
+        /// A site URL is set and this Mac is paired with a sync login, so a push can be attempted.
         var configured: Bool
-        var hasSecret: Bool
+        /// This Mac holds a device token from a sync login.
+        var paired: Bool
+        /// The login it's paired as, for Settings to say so.
+        var pairedAs: String
         var siteURL: String
         /// ConvexSyncService's own words: "synced just now", "sync secret rejected", "local only"…
         var status: String
@@ -258,17 +261,28 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     private var pushWork: DispatchWorkItem?
     private var didLoad = false
     private var pendingAsk = false
+    /// State changed while the panel was closed; it goes over the moment the panel opens.
+    private var staleWhileClosed = false
 
     init(environment: AppEnvironment) {
         self.env = environment
         super.init()
         let store = environment.store
-        if true {
-            store.objectWillChange
-                .receive(on: RunLoop.main)
-                .sink { [weak self] _ in self?.schedulePush() }
-                .store(in: &cancellables)
-        }
+        store.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.schedulePush() }
+            .store(in: &cancellables)
+        // The whole state is serialised and injected on every push; while the panel is closed that
+        // work waits, and one push catches it up on opening.
+        environment.$dashboardOpen
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] open in
+                guard let self, open, self.staleWhileClosed else { return }
+                self.staleWhileClosed = false
+                self.sendState()
+            }
+            .store(in: &cancellables)
         environment.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.schedulePush() }
@@ -333,7 +347,9 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         // Seed the first render with real state and the right theme; otherwise the page paints
         // demo data in the light theme until the first native push lands.
@@ -372,7 +388,9 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
+        #if DEBUG
         webView.isInspectable = true
+        #endif
         self.webView = webView
         load(into: webView)
         return webView
@@ -416,6 +434,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // Without this the dashboard stays blank until the app is relaunched.
         didLoad = false
+        didSendOnce = false
         load(into: webView)
     }
 
@@ -484,9 +503,18 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     }
 
     func sendState() {
-        guard let webView, didLoad, let json = payloadJSON() else { return }
+        guard let webView, didLoad else { return }
+        // The panel's pairing and sign-in logic lives in the page and runs with the panel closed, so
+        // the first state after load always goes; after that a closed panel waits for the next open.
+        if env?.dashboardOpen == false, didSendOnce {
+            staleWhileClosed = true
+            return
+        }
+        guard let json = payloadJSON() else { return }
+        didSendOnce = true
         webView.evaluateJavaScript("window.okidokiNative(\(json));", completionHandler: nil)
     }
+    private var didSendOnce = false
 
     private func services(_ env: AppEnvironment) -> DashboardServicesPayload {
         let settings = env.store.settings
@@ -499,8 +527,9 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                          version: health?["version"] as? String,
                          port: env.sidecar.port),
             convex: .init(enabled: settings.syncEnabled,
-                          configured: settings.syncEnabled && !settings.convexSiteURL.isEmpty && env.hasKey("convex"),
-                          hasSecret: env.hasKey("convex"),
+                          configured: settings.syncEnabled && !settings.convexSiteURL.isEmpty && KeyStore.deviceToken != nil,
+                          paired: KeyStore.deviceToken != nil,
+                          pairedAs: KeyStore.deviceEmail ?? "",
                           siteURL: settings.convexSiteURL,
                           status: env.convex.status,
                           lastSyncAt: settings.lastSyncAt),
@@ -831,6 +860,13 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "deleteKey":
             if let provider = payload["provider"] as? String { env.deleteKey(provider: provider) }
+        case "pairDevice":
+            // The panel, signed in to the sync login, minted a token for this Mac.
+            if let token = payload["token"] as? String, let userID = payload["userId"] as? String {
+                env.pairDevice(token: token, userID: userID, email: payload["email"] as? String ?? "")
+            }
+        case "unpairDevice":
+            env.unpairDevice()
         case "nearbyInvite":
             if let orgID = payload["orgId"] as? String, let orgName = payload["orgName"] as? String, let code = payload["code"] as? String {
                 env.nearby.advertise(orgID: orgID, orgName: orgName, code: code, device: Host.current().localizedName ?? "a Mac")

@@ -29,7 +29,14 @@ public final class OkidokiStore: ObservableObject {
     public private(set) var unreadable: [UnreadableItem]
 
     private var saveWork: DispatchWorkItem?
-    private var isWriting = false
+    /// True while the store publishes housekeeping (a save landing, a sync finishing) rather than a
+    /// change of the user's data. Listeners that react to changes skip these, or they'd react to
+    /// their own bookkeeping forever.
+    public private(set) var isHousekeeping = false
+    private var isWriting: Bool {
+        get { isHousekeeping }
+        set { isHousekeeping = newValue }
+    }
     private var cancellables = Set<AnyCancellable>()
     private let stateURL: URL
 
@@ -675,6 +682,14 @@ public final class OkidokiStore: ObservableObject {
             loadError = "couldn't save: \(error.localizedDescription)"
             isWriting = false
         }
+    }
+
+    /// Records when a sync finished and saves, without that counting as a change that needs syncing.
+    public func noteSynced(at date: Date = Date()) {
+        isWriting = true
+        settings.lastSyncAt = date
+        isWriting = false
+        saveNow()
     }
 
     /// One account's share of the state, as it goes to Convex (the one in front unless named).

@@ -2137,7 +2137,7 @@ public final class ComputerUseService {
             let result = await ScriptActuator.run(language: language ?? "applescript", source: source)
             // A denied Apple event with no prompt is usually a grant left over from an older build.
             // Clear it once so macOS asks the user again, and let the model retry the same script.
-            if ScriptActuator.isAutomationDenied(result), PermissionsService.shared.repairStaleGrant(.automation) {
+            if ScriptActuator.isAutomationDenied(result), await PermissionsService.shared.repairStaleGrant(.automation) {
                 return "script failed: okidoki's permission to control apps was stale and has been reset — "
                     + "run the exact same script once more; macOS will now ask the user to allow it"
             }

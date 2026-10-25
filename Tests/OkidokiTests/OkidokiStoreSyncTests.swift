@@ -21,6 +21,24 @@ final class OkidokiStoreSyncTests: XCTestCase {
         OkidokiStore(stateURL: stateURL, deviceID: device)
     }
 
+    func testASyncFinishingIsHousekeepingNotAChangeThatNeedsAnotherSync() {
+        let store = store()
+        var changes = 0
+        var housekeeping = 0
+        let sink = store.objectWillChange.sink { _ in
+            if store.isHousekeeping { housekeeping += 1 } else { changes += 1 }
+        }
+        defer { sink.cancel() }
+        store.addMemory("likes tea", section: .aboutYou, source: "said")
+        XCTAssertEqual(changes, 1)
+        // What a finished sync does: stamp the time and save. Neither may count as a change,
+        // or every sync would schedule the next one forever.
+        store.noteSynced()
+        XCTAssertEqual(changes, 1)
+        XCTAssertGreaterThan(housekeeping, 0)
+        XCTAssertNotNil(store.settings.lastSyncAt)
+    }
+
     /// A state.json the way builds before per-account memory wrote it.
     private func writeVersion1State(extraRun: String = "") throws {
         let json = """

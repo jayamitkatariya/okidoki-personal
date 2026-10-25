@@ -197,11 +197,13 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.refreshInstalled() }
             .store(in: &cancellables)
 
+        // Taken synchronously (the store is on the main actor), so a save landing or a sync finishing,
+        // which the store marks as housekeeping, doesn't schedule the next sync and the next after that.
         store.objectWillChange
-            .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.scheduleSync()
-                self?.scheduleMemoryIndex()
+                guard let self, !self.store.isHousekeeping else { return }
+                self.scheduleSync()
+                self.scheduleMemoryIndex()
             }
             .store(in: &cancellables)
     }
@@ -609,8 +611,10 @@ final class AppEnvironment: ObservableObject {
         var document = documentText
         var docName = attachmentName
         let lower = text.lowercased()
-        // A circled region is the thing to summarise; only ask for a file when there's nothing attached.
-        if builtin == nil, document.isEmpty, screenshot == nil, (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
+        // A circled region is the thing to summarise; only ask for a file when there's nothing attached,
+        // and never for a space job or a routine: a file picker would sit open on an unattended Mac.
+        if builtin == nil, document.isEmpty, screenshot == nil, !Self.isUnattended(source),
+           (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
             if let url = await pickFile(kind: "pdf", prompt: "choose a PDF to read") {
                 document = DocumentReader.read(url: url) ?? ""
                 docName = url.lastPathComponent
@@ -678,8 +682,19 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// Space jobs and routines run with nobody at this Mac: nothing may wait on a person here.
+    static func isUnattended(_ source: String) -> Bool { source == "space" || source == "routine" }
+
     private func handleDecision(_ decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
         var decision = withoutShowOrDoChoice(decision, request: request)
+        if Self.isUnattended(source), let needsPerson = Self.needsSomeoneHere(decision.kind) {
+            // A lesson, a recording, the ghost cursor or a drawing takes over this Mac's screen and
+            // waits for whoever is at it; from a space or a schedule that is nobody.
+            decision.kind = .answer
+            decision.answer = "That would need someone at this Mac (\(needsPerson)). Ask it from the Mac itself, or ask for something it can do on its own, like a command, a script or a web task."
+            decision.speak = ""
+            decision.title = String(request.text.prefix(60))
+        }
         if decision.kind == .teach {
             // Same rule as the brain, applied once more here so the sidecar and the native
             // fallback can't disagree: a how-to in the tool in front of them is an app lesson,
@@ -785,9 +800,20 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    /// What an unattended Mac can't give: the kinds that take the screen and wait for a person.
+    static func needsSomeoneHere(_ kind: BrainDecision.Kind) -> String? {
+        switch kind {
+        case .teach: return "a lesson on screen"
+        case .watch: return "a recording of what you do"
+        case .borrow: return "borrowing the cursor"
+        case .overlay: return "drawing on the screen"
+        default: return nil
+        }
+    }
+
     func present(_ card: AnswerCardModel, source: String) {
         // Routines and space jobs report elsewhere; a card at the cursor would interrupt whoever's at this Mac.
-        guard source != "routine", source != "space" else { return }
+        guard !Self.isUnattended(source) else { return }
         if card.onClose == nil {
             card.onClose = { [weak self] in self?.answerController.close() }
         }
@@ -1273,7 +1299,11 @@ final class AppEnvironment: ObservableObject {
 
     func approveRun(_ id: String) {
         guard let run = store.run(id), run.status == .waiting || run.status == .previewing else { return }
-        guard store.settings.okidokiEnabled else { return }
+        guard store.settings.okidokiEnabled else {
+            toast(title: "okidoki is off", detail: "turn it on in Settings to run this", kind: .warning,
+                  undoLabel: nil, onUndo: nil, editLabel: "settings", onEdit: { [weak self] in self?.openDashboard(.settings) }, runID: id)
+            return
+        }
         if run.kind == .coding, ShellRunner.which((run.agent ?? store.settings.selectedAgent).binary) == nil {
             let agent = run.agent ?? store.settings.selectedAgent
             toast(title: "\(agent.displayName) isn't installed", detail: "i can set it up for you",
@@ -2018,6 +2048,11 @@ final class AppEnvironment: ObservableObject {
         pendingConnectorCalls[id] = nil
         pendingToolInstalls[id] = nil
         ShellRunner.shared.cancel(id: id)
+        // A job executing through the brain, or driving the screen, has to be told too; otherwise
+        // it runs on to the end with the store already saying "cancelled".
+        BrainClient.shared.stop(runID: id)
+        if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "cancelled") }
+        if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "cancelled") }
         store.cancelRun(id)
         finishTerminalCard(id)
     }
@@ -2692,10 +2727,6 @@ final class AppEnvironment: ObservableObject {
                 lastMemoryHash = nil
                 scheduleMemoryIndex(after: 1)
             }
-            if provider == "convex" {
-                // A new sync secret: push now so the status line answers right away.
-                refreshSync()
-            }
             if provider == "apify", sidecar.status.isReady {
                 // Catch a mistyped key now rather than on the first scrape.
                 Task { [weak self] in
@@ -3141,7 +3172,8 @@ final class AppEnvironment: ObservableObject {
     /// Do it / Not now on a colleague's run, from the notch. The chat hears who answered.
     func decideSpaceJob(_ jobID: String, approve: Bool) {
         let approval = enterprise.approvals.first { $0.id == jobID }
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             let outcome = await enterprise.decide(jobID: jobID, decision: approve ? "approve" : "decline")
             if let error = outcome.error {
                 toast(title: "that didn't go through", detail: error, kind: .warning,
@@ -3259,6 +3291,32 @@ final class AppEnvironment: ObservableObject {
         signedOut = true
         store.saveNow()
         openDashboard(.home)
+    }
+
+    /// This Mac is now paired with the sync login: everything that talks to Convex can start.
+    func pairDevice(token: String, userID: String, email: String) {
+        let changed = KeyStore.deviceToken != token
+        KeyStore.pairDevice(token: token, userID: userID, email: email)
+        keysVersion += 1
+        guard changed else { return }
+        refreshSync()
+        toast(title: "this Mac is paired", detail: email.isEmpty ? "synced with your login" : "synced as \(email)",
+              kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+    }
+
+    /// The sync login signed out: retire this Mac's token on the backend, then forget it here.
+    func unpairDevice() {
+        guard let token = KeyStore.deviceToken else { return }
+        let base = store.settings.convexSiteURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        KeyStore.unpairDevice()
+        keysVersion += 1
+        convex.forgetPairing()
+        guard !base.isEmpty, let url = URL(string: base + "/api/unpair") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        Task.detached { _ = try? await URLSession.shared.data(for: request) }
     }
 
     func signIn(accountID: String) {

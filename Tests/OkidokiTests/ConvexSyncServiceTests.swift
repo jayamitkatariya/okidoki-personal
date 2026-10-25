@@ -14,6 +14,8 @@ final class FakeConvex {
     var syncBodies: [[String: Any]] = []
     /// Answer every route with this status (401: a wrong secret, 404 on /api/version: an older backend).
     var forcedStatus: [String: Int] = [:]
+    /// Accounts the backend says belong to another login: every route answers 403 for them.
+    var foreignAccounts: Set<String> = []
     /// Pushes to refuse as if another Mac had synced first.
     var refuseNextSyncs = 0
 
@@ -25,6 +27,8 @@ final class FakeConvex {
         log.append(path)
         if let forced = forcedStatus[path] { return (forced, Data("{}".utf8)) }
         let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        let named = (json["accountId"] as? String) ?? URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "accountId" }?.value
+        if let named, foreignAccounts.contains(named) { return (403, Data(#"{"error":"forbidden"}"#.utf8)) }
         switch path {
         case "/api/version":
             let account = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "accountId" }?.value ?? ""
@@ -252,6 +256,22 @@ final class ConvexSyncServiceTests: XCTestCase {
         XCTAssertEqual(Set(service.lastReport?.pushed ?? []), [personal, work.id])
     }
 
+    func testAnAccountAnotherLoginOwnsIsLeftAloneAndTheRestStillSync() async throws {
+        let (store, service) = mac("mac-a")
+        let personal = store.currentAccountID
+        store.addMemory("personal note")
+        let work = store.createAccount(name: "work", email: "", kind: .work)
+        store.addMemory("work note")
+        convex.foreignAccounts = [work.id]
+        await service.sync(store: store)
+        XCTAssertEqual(convex.rows["\(personal)/memories"]?.values.map { $0.item["text"] as? String }, ["personal note"])
+        XCTAssertNil(convex.rows["\(work.id)/memories"])
+        XCTAssertEqual(service.lastReport?.pushed, [personal])
+        XCTAssertEqual(service.lastReport?.foreign, [work.id])
+        XCTAssertTrue(service.status.hasPrefix("synced"), service.status)
+        XCTAssertTrue(service.status.contains("signed in elsewhere"), service.status)
+    }
+
     func testOlderRunsBeyondThePushCapAreNotTakenForDeletes() async throws {
         let (store, service) = mac("mac-a")
         let start = Date().addingTimeInterval(-86_400)
@@ -270,7 +290,7 @@ final class ConvexSyncServiceTests: XCTestCase {
         let (store, service) = mac("mac-a")
         convex.forcedStatus["/api/version"] = 401
         await service.sync(store: store)
-        XCTAssertEqual(service.status, "sync secret rejected")
+        XCTAssertEqual(service.status, "this Mac's pairing was revoked; sign in to sync again")
 
         convex.forcedStatus["/api/version"] = 404
         await service.sync(store: store)
@@ -318,7 +338,7 @@ final class ConvexSyncServiceTests: XCTestCase {
         store.settings.syncEnabled = true
         let noSecret = ConvexSyncService(session: .shared, secret: { nil }, device: "x")
         await noSecret.sync(store: store)
-        XCTAssertEqual(noSecret.status, "sync secret missing")
+        XCTAssertEqual(noSecret.status, "sign in to sync in the control panel to pair this Mac")
         XCTAssertTrue(convex.log.isEmpty)
     }
 }

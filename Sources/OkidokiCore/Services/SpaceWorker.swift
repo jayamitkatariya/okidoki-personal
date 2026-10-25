@@ -98,7 +98,7 @@ public final class SpaceWorkerService: ObservableObject {
 
     private func post(_ path: String, _ body: [String: Any]) async -> [String: Any]? {
         guard let store, let url = endpoint(store.settings.convexSiteURL, path: path),
-              let secret = KeyStore.get("convex"), !secret.isEmpty else { return nil }
+              let secret = KeyStore.deviceToken, !secret.isEmpty else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
@@ -162,7 +162,8 @@ public final class SpaceWorkerService: ObservableObject {
         }
         let enabled = store.settings.workerEnabled
         let next: State = !enabled ? .off : (store.currentAccountID == accountID ? .ready : .paused)
-        state = next
+        // Published only on change: every assignment re-renders the panel and re-serialises the whole state.
+        if state != next { state = next }
         // The heartbeat goes out either way, so the organization sees this Mac switch off or pause.
         guard let reply = await post("/api/worker/poll", [
             "accountId": accountID,
@@ -216,7 +217,11 @@ public final class SpaceWorkerService: ObservableObject {
         }
         Task { [weak self] in
             await runJob(job.prompt, thread.id)
-            await MainActor.run { self?.tracked?.routedAt = Date() }
+            // Only the job that was routed gets the stamp; a newer one tracked by now keeps its own clock.
+            await MainActor.run {
+                guard self?.tracked?.job.id == job.id else { return }
+                self?.tracked?.routedAt = Date()
+            }
         }
     }
 

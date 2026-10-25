@@ -14,7 +14,6 @@ public enum ServiceSecrets {
     public static var mossProjectID: String { resolved("MOSS_PROJECT_ID") }
     public static var mossProjectKey: String { resolved("MOSS_PROJECT_KEY") }
     public static var apify: String { resolved("APIFY_API_KEY") }
-    public static var convexSyncSecret: String { resolved("OKIDOKI_SYNC_SECRET") }
     public static var convexCloudURL: String { resolved("CONVEX_URL", fallback: convexCloudURLDefault) }
     public static var convexSiteURL: String { resolved("CONVEX_SITE_URL", fallback: convexSiteURLDefault) }
 
@@ -25,7 +24,6 @@ public enum ServiceSecrets {
         case "cartesia": return cartesia
         case "moss": return mossProjectID.isEmpty || mossProjectKey.isEmpty ? nil : "\(mossProjectID):\(mossProjectKey)"
         case "apify": return apify
-        case "convex": return convexSyncSecret
         default: return nil
         }
     }
@@ -38,7 +36,6 @@ public enum ServiceSecrets {
             "MOSS_PROJECT_ID": mossProjectID,
             "MOSS_PROJECT_KEY": mossProjectKey,
             "APIFY_API_KEY": apify,
-            "OKIDOKI_SYNC_SECRET": convexSyncSecret,
             "CONVEX_URL": convexCloudURL,
             "CONVEX_SITE_URL": convexSiteURL,
         ]
@@ -66,9 +63,12 @@ public enum ServiceSecrets {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Okidoki/service.env")
         if let support { urls.append(support) }
+        #if DEBUG
+        // Development only: a release build must not take credentials from a file any process can drop on the Desktop.
         let home = URL(fileURLWithPath: NSHomeDirectory())
         urls.append(home.appendingPathComponent("Desktop/okidoki/.env"))
         urls.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"))
+        #endif
         for url in urls {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             // Earlier files win, so an explicit override beats the repo file.

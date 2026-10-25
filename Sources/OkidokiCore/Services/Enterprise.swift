@@ -320,7 +320,7 @@ public final class EnterpriseService: ObservableObject {
         guard let store else { return Reply(error: "not ready") }
         let base = store.settings.convexSiteURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !base.isEmpty, let url = URL(string: base + path) else { return Reply(error: "sync isn't set up") }
-        guard let secret = KeyStore.get("convex"), !secret.isEmpty else { return Reply(error: "sync isn't signed in") }
+        guard let secret = KeyStore.deviceToken, !secret.isEmpty else { return Reply(error: "sync isn't signed in") }
         let account = store.activeAccount.kind == .work ? store.currentAccountID : store.settings.workerAccountID
         guard !account.isEmpty else { return Reply(error: "pick a work account first") }
         var payload = body
