@@ -2415,7 +2415,8 @@ final class AppEnvironment: ObservableObject {
             let where_ = target.map { "#\($0.name)" } ?? (enterprise.org?.name ?? "your team")
             summon.hideInput()
             answerController.close(restoreApp: false)
-            Task {
+            Task { [weak self] in
+                guard let self else { return }
                 let outcome = await enterprise.publish(skill, spaceID: spaceID)
                 if let error = outcome.error {
                     toast(title: "couldn't share “\(skill.name)”", detail: error, kind: .warning,
