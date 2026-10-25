@@ -97,6 +97,11 @@ struct DashboardPayload: Encodable {
     var version: String
     var savings: Double
     var convexConfigured: Bool
+    /// The brain, Convex sync, the Moss index and MCP, as they are right now. The page shows these
+    /// instead of guessing from settings.
+    var services: DashboardServicesPayload
+    /// Every key the app can hold, with whether one is set and where it came from. Values never leave the Mac.
+    var keyProviders: [DashboardKeyProviderPayload]
     var mcpStatus: [String: MCPServerStatus]
     /// Names (never values) of each MCP server's stored secrets, so the page can show what's set.
     var mcpSecretNames: [String: [String]]
@@ -108,6 +113,99 @@ struct DashboardPayload: Encodable {
     var worker: DashboardWorkerPayload
     /// Enterprise: organizations inviting over this network, and whether this Mac is inviting.
     var nearby: DashboardNearbyPayload
+    /// Enterprise: the organization as the Mac last heard it — every approval in my spaces, unread
+    /// counts, shared skills. Home reads this so "what needs you" is whole even with no space open.
+    var enterprise: DashboardEnterprisePayload
+}
+
+struct DashboardEnterprisePayload: Encodable {
+    struct Approval: Encodable {
+        var id: String
+        var spaceId: String
+        var spaceName: String
+        var prompt: String
+        var title: String
+        var requestedBy: String
+        var workerName: String
+        var workerIsYou: Bool
+        var summary: String
+        var risk: String
+        var createdAt: Date
+    }
+    struct Space: Encodable {
+        var id: String
+        var name: String
+        var colorHex: String
+        var joined: Bool
+        var unread: Int
+        var lastMessage: String
+        var lastMessageAt: Date
+    }
+    var linked: Bool
+    var orgId: String?
+    var orgName: String?
+    var role: String?
+    var pendingJoins: Int
+    var approvals: [Approval]
+    var spaces: [Space]
+    var unread: Int
+    var sharedSkills: Int
+    var updatedAt: Date?
+    var lastError: String?
+}
+
+struct DashboardServicesPayload: Encodable {
+    struct Brain: Encodable {
+        var status: String
+        var ready: Bool
+        var version: String?
+        var port: Int
+    }
+    struct Convex: Encodable {
+        /// The sync switch in Settings.
+        var enabled: Bool
+        /// A site URL and a sync secret are both present, so a push can be attempted.
+        var configured: Bool
+        var hasSecret: Bool
+        var siteURL: String
+        /// ConvexSyncService's own words: "synced just now", "sync secret rejected", "local only"…
+        var status: String
+        var lastSyncAt: Date?
+    }
+    struct Memory: Encodable {
+        /// A Moss key is set, so the Mac sends its data to the index.
+        var configured: Bool
+        var ready: Bool
+        var documents: Int
+        var notes: Int
+        var messages: Int
+        var tools: Int
+        var lastSyncAt: Date?
+        var error: String?
+    }
+    struct MCP: Encodable {
+        var enabled: Bool
+        var servers: Int
+        var connected: Int
+        var checkedAt: Date?
+    }
+    var brain: Brain
+    var convex: Convex
+    var memory: Memory
+    var mcp: MCP
+}
+
+struct DashboardKeyProviderPayload: Encodable {
+    var id: String
+    var name: String
+    var blurb: String
+    var placeholder: String
+    var url: String
+    var optional: Bool
+    /// A key is available, from the key file or the build.
+    var set: Bool
+    /// The build ships this key (service.env); removing a saved one falls back to it.
+    var builtin: Bool
 }
 
 struct DashboardNearbyPayload: Encodable {
@@ -125,6 +223,10 @@ struct DashboardNearbyPayload: Encodable {
 
 struct DashboardWorkerPayload: Encodable {
     var status: String
+    /// off · paused · ready, as told to the organization on the last poll.
+    var state: String
+    /// The work account the worker runs as, which may not be the one in front.
+    var accountID: String?
     var activeJob: String?
     var activeSpace: String?
     var lastPollAt: Date?
@@ -175,6 +277,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
+        // Sync status lines ("synced just now", "sync secret rejected") for Settings.
+        environment.convex.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.schedulePush() }
+            .store(in: &cancellables)
         // Live step list while a skill is being recorded.
         environment.watch.objectWillChange
             .receive(on: RunLoop.main)
@@ -206,6 +313,13 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .compactMap { $0 }
             .sink { [weak self] id in
                 self?.focusRun(id)
+            }
+            .store(in: &cancellables)
+        environment.$dashboardSpaceID
+            .receive(on: RunLoop.main)
+            .compactMap { $0 }
+            .sink { [weak self] id in
+                self?.focusSpace(id)
             }
             .store(in: &cancellables)
         // Permissions are granted in System Settings; refresh their labels when the user comes back.
@@ -331,6 +445,19 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         guard let webView, let env else { return }
         webView.evaluateJavaScript("window.okidokiNavigate && window.okidokiNavigate('\(env.dashboardRoute.rawValue)');", completionHandler: nil)
         if let id = env.dashboardRunID { focusRun(id) }
+        if let id = env.dashboardSpaceID { focusSpace(id) }
+    }
+
+    private func focusSpace(_ id: String) {
+        guard let webView else { return }
+        let escaped = id.replacingOccurrences(of: "'", with: "\\'")
+        webView.evaluateJavaScript("""
+        (function(){
+          window.__okidokiFocusSpace = '\(escaped)';
+          window.okidokiNavigate && window.okidokiNavigate('spaces');
+          window.dispatchEvent(new CustomEvent('okidoki-focus-space', { detail: '\(escaped)' }));
+        })();
+        """, completionHandler: nil)
     }
 
     private func focusRun(_ id: String) {
@@ -359,6 +486,36 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
     func sendState() {
         guard let webView, didLoad, let json = payloadJSON() else { return }
         webView.evaluateJavaScript("window.okidokiNative(\(json));", completionHandler: nil)
+    }
+
+    private func services(_ env: AppEnvironment) -> DashboardServicesPayload {
+        let settings = env.store.settings
+        let health = env.sidecar.lastHealth
+        let mcpEnabled = env.store.connectors.contains { $0.id == "mcp" && $0.enabled }
+        let servers = mcpEnabled ? settings.mcpServers.filter(\.enabled) : []
+        return DashboardServicesPayload(
+            brain: .init(status: env.sidecar.status.label,
+                         ready: env.sidecar.status.isReady,
+                         version: health?["version"] as? String,
+                         port: env.sidecar.port),
+            convex: .init(enabled: settings.syncEnabled,
+                          configured: settings.syncEnabled && !settings.convexSiteURL.isEmpty && env.hasKey("convex"),
+                          hasSecret: env.hasKey("convex"),
+                          siteURL: settings.convexSiteURL,
+                          status: env.convex.status,
+                          lastSyncAt: settings.lastSyncAt),
+            memory: .init(configured: env.hasKey("moss"),
+                          ready: env.memoryIndex.ready,
+                          documents: env.memoryIndex.documents,
+                          notes: env.memoryIndex.notes,
+                          messages: env.memoryIndex.messages,
+                          tools: env.memoryIndex.tools,
+                          lastSyncAt: env.memoryIndex.lastSyncAt,
+                          error: env.memoryIndex.error),
+            mcp: .init(enabled: mcpEnabled,
+                       servers: servers.count,
+                       connected: servers.filter { env.mcpStatus[$0.id]?.ok == true }.count,
+                       checkedAt: env.mcpCheckedAt))
     }
 
     private var memorySourcesCache: (at: Date, sources: [DashboardMemorySourcePayload])?
@@ -412,6 +569,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
             savings: env.store.savings,
             convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty,
+            services: services(env),
+            keyProviders: KeyProviders.all.map { spec in
+                DashboardKeyProviderPayload(id: spec.id, name: spec.name, blurb: spec.blurb, placeholder: spec.placeholder,
+                                            url: spec.url, optional: spec.optional, set: env.hasKey(spec.id),
+                                            builtin: ServiceSecrets.builtin(spec.id)?.isEmpty == false)
+            },
             mcpStatus: env.mcpStatus,
             mcpSecretNames: Dictionary(env.store.settings.mcpServers.map { server in
                 let secrets = env.mcpSecrets(server)
@@ -438,6 +601,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 downloadGB: Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)),
             worker: DashboardWorkerPayload(
                 status: env.worker.status,
+                state: env.worker.state.rawValue,
+                accountID: env.worker.workerAccountID,
                 activeJob: env.worker.activeJob?.prompt,
                 activeSpace: env.worker.activeJob?.spaceName,
                 lastPollAt: env.worker.lastPollAt,
@@ -447,7 +612,27 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 invites: env.nearby.invites.map { DashboardNearbyPayload.Invite(orgId: $0.orgID, orgName: $0.orgName, code: $0.code, device: $0.device) },
                 advertising: env.nearby.advertising.map { DashboardNearbyPayload.Invite(orgId: $0.orgID, orgName: $0.orgName, code: $0.code, device: $0.device) },
                 browsing: env.nearby.browsing,
-                error: env.nearby.error)
+                error: env.nearby.error),
+            enterprise: DashboardEnterprisePayload(
+                linked: env.enterprise.linked,
+                orgId: env.enterprise.org?.id,
+                orgName: env.enterprise.org?.name,
+                role: env.enterprise.org?.role,
+                pendingJoins: env.enterprise.org?.pendingJoins ?? 0,
+                approvals: env.enterprise.approvals.map {
+                    DashboardEnterprisePayload.Approval(id: $0.id, spaceId: $0.spaceId, spaceName: $0.spaceName, prompt: $0.prompt,
+                                                        title: $0.title, requestedBy: $0.requestedBy, workerName: $0.workerName,
+                                                        workerIsYou: $0.workerIsYou, summary: $0.summary, risk: $0.risk.rawValue,
+                                                        createdAt: $0.createdAt)
+                },
+                spaces: env.enterprise.spaces.map {
+                    DashboardEnterprisePayload.Space(id: $0.id, name: $0.name, colorHex: $0.colorHex, joined: $0.joined,
+                                                     unread: $0.unread, lastMessage: $0.lastMessage, lastMessageAt: $0.lastMessageAt)
+                },
+                unread: env.enterprise.unreadCount,
+                sharedSkills: env.enterprise.sharedSkills.count,
+                updatedAt: env.enterprise.updatedAt,
+                lastError: env.enterprise.lastError)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -629,6 +814,18 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "nearbyStop":
             env.nearby.stopAdvertising()
+        case "decideSpaceJob":
+            // Home's merged "what needs you" list answers space approvals through the Mac, like the notch.
+            if let jobID = payload["jobId"] as? String {
+                env.decideSpaceJob(jobID, approve: payload["decision"] as? String == "approve")
+            }
+        case "spaceRead":
+            if let spaceID = payload["spaceId"] as? String { Task { await env.enterprise.markRead(spaceID: spaceID) } }
+        case "askSpace":
+            if let spaceID = payload["spaceId"] as? String, let text = payload["text"] as? String,
+               let space = env.enterprise.space(id: spaceID) {
+                Task { await env.askSpace(space, text: text) }
+            }
         case "saveVaultPassphrase":
             // The organization's vault passphrase, kept with the other secrets so jobs here can use shared logins.
             if let orgID = payload["orgId"] as? String, !orgID.isEmpty {

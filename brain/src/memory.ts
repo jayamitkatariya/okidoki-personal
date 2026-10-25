@@ -74,6 +74,7 @@ let engine: MemoryEngine | null = null;
 let engineKey = "";
 let starting: Promise<MemoryEngine> | null = null;
 let lastError = "";
+let lastSyncAt = ""; // ISO time of the last successful sync from the Mac
 const known = new Map<string, string>(); // doc id → fingerprint of what the index holds
 let queue: Promise<unknown> = Promise.resolve(); // index changes run one at a time
 
@@ -185,7 +186,7 @@ function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> 
 }
 
 /** Brings the index in line with the Mac: embeds only new or changed items, drops removed ones. */
-export async function syncMemory(request: MemorySyncRequest): Promise<{ ok: boolean; total: number; added: number; removed: number; error?: string }> {
+export async function syncMemory(request: MemorySyncRequest): Promise<MemorySyncResult> {
   const run = async () => {
     const index = await ensureEngine(request);
     const docs = [...toDocs(request), ...toolIndexDocs()];
@@ -198,7 +199,8 @@ export async function syncMemory(request: MemorySyncRequest): Promise<{ ok: bool
     }
     if (added || removed.length) await index.save();
     lastError = "";
-    return { ok: true, total: known.size, added, removed: removed.length };
+    lastSyncAt = new Date().toISOString();
+    return { ok: true, added, removed: removed.length, ...memoryStatus() };
   };
   const result = queue.then(run, run);
   queue = result.catch(() => {});
@@ -206,7 +208,7 @@ export async function syncMemory(request: MemorySyncRequest): Promise<{ ok: bool
     return await result;
   } catch (error) {
     lastError = error instanceof Error ? error.message : "memory index failed";
-    return { ok: false, total: known.size, added: 0, removed: 0, error: lastError };
+    return { ok: false, added: 0, removed: 0, ...memoryStatus() };
   }
 }
 
@@ -301,8 +303,45 @@ export function recallPrompt(items: RecalledItem[]): string {
   ].join("\n");
 }
 
-export function memoryStatus() {
-  return { ready: Boolean(engine), documents: known.size, error: lastError || undefined };
+export interface MemoryStatus {
+  ready: boolean;
+  /** Everything in the index, tools included. */
+  documents: number;
+  notes: number;
+  messages: number;
+  tools: number;
+  lastSyncAt?: string;
+  error?: string;
+}
+
+export interface MemorySyncResult extends MemoryStatus {
+  ok: boolean;
+  added: number;
+  removed: number;
+  /** Kept for older callers; the same as `documents`. */
+  total: number;
+}
+
+/** What the index holds right now, by kind, so the dashboard can show it. */
+export function memoryStatus(): MemoryStatus & { total: number } {
+  let notes = 0;
+  let messages = 0;
+  let tools = 0;
+  for (const id of known.keys()) {
+    if (id.startsWith("memory:")) notes += 1;
+    else if (id.startsWith("message:")) messages += 1;
+    else if (id.startsWith("tool:")) tools += 1;
+  }
+  return {
+    ready: Boolean(engine),
+    documents: known.size,
+    total: known.size,
+    notes,
+    messages,
+    tools,
+    lastSyncAt: lastSyncAt || undefined,
+    error: lastError || undefined,
+  };
 }
 
 /** Loads the on-disk short-term index so the first question can recall it, and makes sure the tools are in it.

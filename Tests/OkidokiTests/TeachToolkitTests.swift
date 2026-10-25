@@ -16,6 +16,27 @@ final class TeachToolkitTests: XCTestCase {
         XCTAssertEqual(TeachKeys.combo(keyCode: 36, characters: "\r", flags: []), "return")
     }
 
+    func testStepsAreWrittenBySonnetUnlessABiggerModelWasChosen() {
+        XCTAssertEqual(TeachBrain.stepModel(for: ""), "claude-sonnet-5-5")
+        XCTAssertEqual(TeachBrain.stepModel(for: "claude-haiku-5-5"), "claude-sonnet-5-5")
+        XCTAssertEqual(TeachBrain.stepModel(for: "claude-sonnet-5-5"), "claude-sonnet-5-5")
+        XCTAssertEqual(TeachBrain.stepModel(for: "claude-opus-5-5"), "claude-opus-5-5")
+    }
+
+    func testPromptCarriesTheRealMenuBarAndALandedStep() {
+        let log = [TeachLogEntry(say: "open a tab", action: "key", label: "new tab", outcome: "pressed cmd+t — the shortcut")]
+        let request = TeachStepRequest(topic: "tabs", app: "Ghostty", outline: [], log: log, stepNumber: 2,
+                                       imageWidth: 1568, imageHeight: 980, screenshotBase64: nil, model: nil,
+                                       menus: ["File: New Window, New Tab, Close"], landed: true)
+        let prompt = TeachBrain.systemPrompt(request)
+        XCTAssertTrue(prompt.contains("File: New Window, New Tab, Close"))
+        XCTAssertLessThan(prompt.range(of: "menu bar, exactly as it is")!.lowerBound, prompt.range(of: "Loose outline from the planner")!.lowerBound)
+        XCTAssertTrue(prompt.hasSuffix("landed — okidoki saw that last action hit its target."))
+        var quiet = request
+        quiet.landed = false
+        XCTAssertFalse(TeachBrain.systemPrompt(quiet).contains("landed — okidoki"))
+    }
+
     private func image(width: Int, height: Int, draw: (CGContext) -> Void) -> CGImage {
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!

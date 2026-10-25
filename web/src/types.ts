@@ -85,11 +85,20 @@ export interface Settings {
   computerTarget: "mac" | "vm";
   /** Enterprise: this Mac takes jobs the agent is given in the work account's spaces. Missing on older builds. */
   workerEnabled?: boolean;
+  /** A join code waiting for the sync login (onboarding, a nearby Mac, managed configuration). Missing on older builds. */
+  pendingJoinCode?: string;
+  pendingJoinOrgName?: string;
+  /** Where a request typed at the cursor goes by default: "" for this Mac, else a space id. */
+  askScope?: string;
 }
 
 /** Enterprise: this Mac as a worker for its spaces. Missing on Convex snapshots and in the demo. */
 export interface WorkerState {
   status: string;
+  /** off · paused · ready, as told to the organization on the last poll. Missing on older builds. */
+  state?: "off" | "paused" | "ready";
+  /** The work account the worker runs as, which may not be the one in front. */
+  accountID?: string | null;
   activeJob?: string | null;
   activeSpace?: string | null;
   lastPollAt?: string | null;
@@ -131,6 +140,43 @@ export interface McpStatus {
   ok: boolean;
   error?: string | null;
   tools: { name: string; description: string }[];
+}
+
+/** The brain, Convex sync, the Moss index and MCP as the Mac sees them right now. */
+export interface ServicesState {
+  brain: { status: string; ready: boolean; version?: string | null; port: number };
+  convex: {
+    enabled: boolean;
+    configured: boolean;
+    hasSecret: boolean;
+    siteURL: string;
+    /** Native's own words: "synced just now", "sync secret rejected", "local only"… */
+    status: string;
+    lastSyncAt?: string | null;
+  };
+  memory: {
+    configured: boolean;
+    ready: boolean;
+    documents: number;
+    notes: number;
+    messages: number;
+    tools: number;
+    lastSyncAt?: string | null;
+    error?: string | null;
+  };
+  mcp: { enabled: boolean; servers: number; connected: number; checkedAt?: string | null };
+}
+
+export interface KeyProvider {
+  id: string;
+  name: string;
+  blurb: string;
+  placeholder: string;
+  url: string;
+  optional: boolean;
+  set: boolean;
+  /** Shipped with the build; removing a saved key falls back to it. */
+  builtin: boolean;
 }
 
 export type RunKind = "answer" | "quick_action" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine" | "connector";
@@ -362,12 +408,62 @@ export interface NativeState {
   version: string;
   savings: number;
   convexConfigured: boolean;
+  /** Missing on Convex snapshots and older builds. */
+  services?: ServicesState | null;
+  /** Missing on Convex snapshots: only the Mac knows what's in its key file. */
+  keyProviders?: KeyProvider[];
   mcpStatus?: Record<string, McpStatus>;
   mcpSecretNames?: Record<string, string[]>;
   /** Missing on Convex snapshots and in the demo, where there is no VM to report on. */
   privateMac?: PrivateMacState | null;
   worker?: WorkerState | null;
   nearby?: NearbyState | null;
+  /** Enterprise: the organization as the Mac last heard it. Missing on Convex snapshots and older builds. */
+  enterprise?: NativeEnterpriseState | null;
+}
+
+/** A colleague's run waiting on an okay in one of my spaces, as the Mac reports it. */
+export interface NativeApproval {
+  id: string;
+  spaceId: string;
+  spaceName: string;
+  prompt: string;
+  title: string;
+  requestedBy: string;
+  workerName: string;
+  workerIsYou: boolean;
+  summary: string;
+  risk: "low" | "medium" | "high";
+  createdAt: string;
+}
+
+export interface NativeSpace {
+  id: string;
+  name: string;
+  colorHex: string;
+  joined: boolean;
+  unread: number;
+  lastMessage: string;
+  lastMessageAt: string;
+}
+
+/**
+ * Enterprise, from the Mac rather than from Convex directly: every approval across my spaces
+ * (the Convex query only covers the open one), unread counts, and whether the account is linked.
+ * It keeps flowing while the panel is closed, so Home is whole the moment it opens.
+ */
+export interface NativeEnterpriseState {
+  linked: boolean;
+  orgId?: string | null;
+  orgName?: string | null;
+  role?: string | null;
+  pendingJoins: number;
+  approvals: NativeApproval[];
+  spaces: NativeSpace[];
+  unread: number;
+  sharedSkills: number;
+  updatedAt?: string | null;
+  lastError?: string | null;
 }
 
 /** Enterprise: an organization inviting over this network. */

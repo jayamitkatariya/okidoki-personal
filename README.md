@@ -21,9 +21,14 @@ make test     # Swift tests
 ```
 
 Copy `backend/.env.local.example` to `backend/.env.local` only if you run the sync backend.
-There is no bring-your-own-key: the app ships with its service credentials. Anything it stores
+There is no bring-your-own-key: the app ships with its service credentials. A credential the build
+leaves out (say Moss, or the Convex sync secret) can be added under Settings › Keys; the panel shows
+which ones the build ships and which are missing. Anything it stores
 locally lives in a private file on your Mac (`~/Library/Application Support/Okidoki/keys.json`,
-readable only by its owner), never in the repository or the Keychain.
+readable only by its owner), never in the repository or the Keychain. Settings › Sync holds the
+switch for Convex, with the last push's result; Settings › Advanced shows the brain, the Moss
+index (what it holds and when it last synced) and MCP servers as they are right now, rechecked
+while the panel is open.
 
 Service credentials (Anthropic, Cartesia, Moss, Apify, the Convex sync secret) are never
 compiled in. Put them in a gitignored `.env` at the repo root (`ANTHROPIC_API_KEY=…`, `APIFY_API_KEY=…`
@@ -65,9 +70,40 @@ the same thing; a work account that isn't signed in just sees how to sign in.
   (PBKDF2 + AES-GCM) before they leave the Mac; the deployment stores ciphertext only. The
   passphrase is remembered in the panel's storage and in `keys.json`, next to the other secrets.
 
+### Where colleagues meet it: the notch and the cursor card
+
+Nobody has to open the panel to be part of the team. The organization's view rides along with
+the worker's poll every few seconds (`summary` on `/api/worker/poll`, worker on or off), so the
+Mac always knows what's waiting even with the panel closed:
+
+- **Notch.** A colleague's run waiting in one of your spaces shows up as a card — who asked, which
+  Mac it's on, the risk, the commands — with **Do it / Not now** right there; the chat says who
+  answered. When this Mac is running a job for a space, the live row says *For #sales · step*,
+  and the closed band reads *For #sales*. Open the island and spaces with unread chat are listed;
+  tapping one opens the chat and clears the count. **Team** sits in the footer on a work account.
+- **Cursor card.** A scope chip (`Me` / `#sales`) picks where a typed request goes; a space sends
+  it to the agent there as if you'd written `@okidoki …` in its chat, and the choice is remembered.
+  Chat commands, instant and without a model key: `ask #sales to …`, `#sales: …`, `… for #sales`,
+  `what's waiting on me`, `my spaces`, `open #sales`, `share <skill> with my team` (or `with #sales`).
+  A replay that names a colleague's published skill (`replay the expense report`) pulls it onto this
+  Mac first; your own recording of the same name wins.
+- **Home.** "Needs your attention" merges this Mac's waiting runs with every approval across your
+  spaces (not just the open one) and pending join requests; approvals are answered through the Mac.
+  The notch, the card and Home all deep-link into a specific space (`okidoki-focus-space`).
+- **Joining.** Everyone lands in a `general` space on joining. Admins write a **welcome note** on
+  Team; a colleague's Mac says it once in the notch the first time it links. Onboarding's last step
+  offers *Join Acme* when a nearby Mac is inviting or IT pushed a join code; the join finishes on
+  Team the moment the sync login exists. Managed configuration (an MDM profile for the bundle id,
+  keys `OkidokiConvexSiteURL`, `OkidokiJoinCode`, `OkidokiOrgName`, `OkidokiWorkAccountName`; or
+  `OKIDOKI_MANAGED_*` in the environment) seeds the deployment URL, a work account and the code
+  without overriding anything the person set.
+- **Rollout.** Admins see on Team who has okidoki installed (a linked Mac), who was on today, whose
+  Mac takes jobs, how many skills are shared and which get replayed most.
+
 Checks: `cd backend && npm test` (organizations, spaces, chat, jobs and the worker routes, shared
-skills, vault — against an in-memory Convex with mocked logins), `cd web && bun test`, and
-`swift test --filter 'SpaceWorkerTests|NearbyTests'`.
+skills, vault, the Mac's summary and action routes, rollout — against an in-memory Convex with
+mocked logins), `cd web && bun test`, and
+`swift test --filter 'SpaceWorkerTests|NearbyTests|EnterpriseTests|ChatCommandsTests'`.
 
 ### Skills against records, the vault from the Mac
 
@@ -180,7 +216,7 @@ live provider credentials still need a smoke check in the running app.
 
 Say “watch me” (optionally “watch me do the expense report”) and do the task once. The
 recording is ended only by its own controls — **Save** / **Discard** in the notch, the HUD
-pill, the Skills page, or typing “stop”, “done”, “save as …” or “discard” in the chat.
+pill, the Replay page, or typing “stop”, “done”, “save as …” or “discard” in the chat.
 Shaking the pointer is ignored while a recording runs, so hovering and nudging never cut
 it short.
 

@@ -8,7 +8,8 @@ import { activeMembership } from "./orgs";
 // its chat, files and jobs answer only members of the space.
 
 const SPACE_COLORS = ["44E45E", "1FB57A", "3DDC97", "0B8A5E", "B8F26B", "8FB7FF", "F2B84B", "E97A6B", "C79BFF"];
-const WORKER_POLICIES = ["thisMac", "privateMac", "hostedVM"];
+const WORKER_POLICIES = ["thisMac", "privateMac"];
+const DELETE_BATCH = 500;
 
 /** The organization this work account is linked to, through the signed-in login. */
 export async function orgForAccount(ctx: QueryCtx | MutationCtx, accountId: string): Promise<Doc<"memberships"> | null> {
@@ -71,6 +72,14 @@ export async function peopleIn(ctx: QueryCtx | MutationCtx, orgId: Id<"organizat
     });
   }
   return people;
+}
+
+export async function memberCount(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">): Promise<number> {
+  const rows = await ctx.db
+    .query("spaceMembers")
+    .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
+    .collect();
+  return rows.length;
 }
 
 async function unreadIn(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">, since: number): Promise<number> {
@@ -159,25 +168,48 @@ export const create = mutation({
   },
 });
 
+/** Puts a user in a space with the lines the chat expects. No-op when they're already in it. */
+export async function addMember(ctx: MutationCtx, space: Doc<"spaces">, userId: Id<"users">, role: "owner" | "member" = "member", lastReadAt?: number) {
+  const before = await ctx.db
+    .query("spaceMembers")
+    .withIndex("by_space", (q) => q.eq("spaceId", space._id))
+    .collect();
+  if (before.some((row) => row.userId === userId)) return;
+  const now = Date.now();
+  await ctx.db.insert("spaceMembers", { spaceId: space._id, userId, role, lastReadAt: lastReadAt ?? now, joinedAt: now });
+  const people = await peopleIn(ctx, space.orgId);
+  await ctx.db.insert("spaceMessages", {
+    spaceId: space._id,
+    authorId: null,
+    author: "system",
+    kind: "system",
+    text: `${people.get(userId)?.name ?? "Someone"} joined`,
+    runId: null,
+    fileId: null,
+    createdAt: now,
+  });
+  // Alone, every message went to the agent; with company, it has to be asked for.
+  if (before.length === 1) {
+    await ctx.db.insert("spaceMessages", {
+      spaceId: space._id,
+      authorId: null,
+      author: "system",
+      kind: "system",
+      text: "With two of you here, mention @okidoki to give it work.",
+      runId: null,
+      fileId: null,
+      createdAt: now + 1,
+    });
+  }
+}
+
 export const join = mutation({
   args: { spaceId: v.id("spaces") },
   handler: async (ctx, { spaceId }) => {
     const access = await spaceAccess(ctx, spaceId);
     if (!access) throw new Error("you're not in that organization");
     if (access.member) return;
-    const now = Date.now();
-    await ctx.db.insert("spaceMembers", { spaceId, userId: access.userId, role: "member", lastReadAt: now, joinedAt: now });
-    const people = await peopleIn(ctx, access.space.orgId);
-    await ctx.db.insert("spaceMessages", {
-      spaceId,
-      authorId: null,
-      author: "system",
-      kind: "system",
-      text: `${people.get(access.userId)?.name ?? "Someone"} joined`,
-      runId: null,
-      fileId: null,
-      createdAt: now,
-    });
+    await addMember(ctx, access.space, access.userId);
   },
 });
 
@@ -212,6 +244,7 @@ export const update = mutation({
       patch.name = cleanName;
     }
     if (workerPolicy !== undefined) {
+      if (workerPolicy === "hostedVM") throw new Error("hosted VMs aren't available yet");
       if (!WORKER_POLICIES.includes(workerPolicy)) throw new Error("unknown worker");
       patch.workerPolicy = workerPolicy;
     }
@@ -226,21 +259,61 @@ export const remove = mutation({
     const access = await spaceAccess(ctx, spaceId);
     if (!access) throw new Error("you're not in that organization");
     const orgRole = await activeMembership(ctx, access.space.orgId);
-    const mayDelete = access.member?.role === "owner" || orgRole?.role === "owner" || orgRole?.role === "admin";
+    // Judged by who made the space, not by the member row: that row is gone by the second batch.
+    const mayDelete = access.space.createdBy === access.userId || access.member?.role === "owner" || orgRole?.role === "owner" || orgRole?.role === "admin";
     if (!mayDelete) throw new Error("only the space's owner or an organization admin can delete it");
+    // Everything the space holds goes with it, in batches; the panel calls again until `done`.
+    let deleted = 0;
+    const budget = () => DELETE_BATCH - deleted;
+    const messages = await ctx.db
+      .query("spaceMessages")
+      .withIndex("by_space_time", (q) => q.eq("spaceId", spaceId))
+      .take(budget());
+    for (const row of messages) await ctx.db.delete(row._id);
+    deleted += messages.length;
+    if (budget() > 0) {
+      const jobs = await ctx.db
+        .query("spaceRuns")
+        .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
+        .take(budget());
+      for (const row of jobs) await ctx.db.delete(row._id);
+      deleted += jobs.length;
+    }
+    if (budget() > 0) {
+      const files = await ctx.db
+        .query("spaceFiles")
+        .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
+        .take(budget());
+      for (const row of files) {
+        await ctx.storage.delete(row.storageId).catch(() => {});
+        await ctx.db.delete(row._id);
+      }
+      deleted += files.length;
+    }
+    if (budget() > 0) {
+      const credentials = await ctx.db
+        .query("spaceCredentials")
+        .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
+        .take(budget());
+      for (const row of credentials) await ctx.db.delete(row._id);
+      deleted += credentials.length;
+    }
+    if (budget() > 0) {
+      const skills = await ctx.db
+        .query("spaceSkills")
+        .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
+        .take(budget());
+      for (const row of skills) await ctx.db.delete(row._id);
+      deleted += skills.length;
+    }
+    if (deleted >= DELETE_BATCH) return { done: false };
     const members = await ctx.db
       .query("spaceMembers")
       .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
       .collect();
     for (const row of members) await ctx.db.delete(row._id);
-    // Messages go in batches; a long chat is deleted across a few calls from the panel.
-    const messages = await ctx.db
-      .query("spaceMessages")
-      .withIndex("by_space_time", (q) => q.eq("spaceId", spaceId))
-      .take(500);
-    for (const row of messages) await ctx.db.delete(row._id);
-    if (messages.length < 500) await ctx.db.delete(spaceId);
-    return { done: messages.length < 500 };
+    await ctx.db.delete(spaceId);
+    return { done: true };
   },
 });
 

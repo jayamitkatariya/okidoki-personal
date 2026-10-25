@@ -8,6 +8,11 @@ import Foundation
 /// that produces — a plan waiting for approval, steps, output, an answer — is mirrored back
 /// so the space's chat shows it. Approvals come back the same way: someone in the chat says
 /// "Do it" and the run here is approved; "Not now" cancels it.
+///
+/// The worker keeps its place in the organization while the person looks at Personal: it
+/// still heart-beats (as "paused"), still mirrors the job it holds and still honours decisions,
+/// but takes nothing new until the work account is back in front. A relaunch picks the held
+/// job back up from Settings instead of leaving the chat hanging.
 @MainActor
 public final class SpaceWorkerService: ObservableObject {
     public struct Job: Equatable, Sendable {
@@ -17,8 +22,12 @@ public final class SpaceWorkerService: ObservableObject {
         public var prompt: String
     }
 
-    /// One line for Settings: off · idle · running · the last error.
+    /// What this Mac tells the organization each poll.
+    public enum State: String, Sendable { case off, paused, ready }
+
+    /// One line for Settings: off · idle · paused · running · the last error.
     @Published public private(set) var status: String = "off"
+    @Published public private(set) var state: State = .off
     @Published public private(set) var activeJob: Job?
     @Published public private(set) var lastPollAt: Date?
     @Published public private(set) var jobsDone: Int = 0
@@ -27,11 +36,17 @@ public final class SpaceWorkerService: ObservableObject {
     public var runJob: ((_ prompt: String, _ threadID: String) async -> Void)?
     public var approveRun: ((String) -> Void)?
     public var cancelRun: ((String) -> Void)?
+    /// The organization's view that rides along with each poll (`EnterpriseSummary` JSON, or nil
+    /// when the account isn't linked). Set by the app; the enterprise service reads it.
+    public var onSummary: ((Any?) -> Void)?
 
     public static let pollInterval: TimeInterval = 4
+    /// How long a routed prompt may go without becoming a run before the job is closed from the thread.
+    static let routeGrace: TimeInterval = 45
 
     private struct Tracked {
         var job: Job
+        var accountID: String
         var threadID: String
         var runID: String?
         var routedAt: Date?
@@ -43,7 +58,12 @@ public final class SpaceWorkerService: ObservableObject {
     private weak var store: OkidokiStore?
     private var timer: Timer?
     private var polling = false
-    private var tracked: Tracked?
+    private var tracked: Tracked? {
+        didSet { remember() }
+    }
+    /// The thread (and run, once there is one) of the job this Mac holds, so the notch can say who it's for.
+    public var activeThreadID: String? { tracked?.threadID }
+    public var activeRunID: String? { tracked?.runID }
     private let session: URLSession
 
     public init(session: URLSession = .shared) {
@@ -100,35 +120,59 @@ public final class SpaceWorkerService: ObservableObject {
         }
     }
 
-    /// Whether this Mac should be polling at all: sync on, a work account selected.
-    private var eligible: Bool {
-        guard let store else { return false }
-        return store.settings.syncEnabled && !store.settings.convexSiteURL.isEmpty && store.activeAccount.kind == .work
+    /// The work account this Mac works as: the active one when it's a work account, otherwise the
+    /// one it last worked as (so a job keeps reporting while Personal is in front). Nil without sync
+    /// or without any work account.
+    public var workerAccountID: String? {
+        guard let store, store.settings.syncEnabled, !store.settings.convexSiteURL.isEmpty else { return nil }
+        if store.activeAccount.kind == .work { return store.currentAccountID }
+        if let held = tracked { return held.accountID }
+        let remembered = store.settings.workerAccountID
+        guard !remembered.isEmpty, store.accounts.contains(where: { $0.id == remembered && $0.kind == .work }) else { return nil }
+        return remembered
     }
 
     private var workerKind: String {
         store?.settings.computerTarget == "vm" ? "privateMac" : "thisMac"
     }
 
+    private func remember() {
+        guard let store else { return }
+        let held = tracked.map { WorkerHeldJob(jobID: $0.job.id, spaceID: $0.job.spaceId, spaceName: $0.job.spaceName,
+                                               prompt: $0.job.prompt, threadID: $0.threadID, runID: $0.runID) }
+        guard held != store.settings.workerHeldJob else { return }
+        store.settings.workerHeldJob = held
+        store.saveNow()
+    }
+
     // MARK: - The loop
 
     public func tick() async {
         guard let store, !polling else { return }
-        guard eligible else {
+        guard let accountID = workerAccountID else {
             if status != "off" { status = "off" }
+            state = .off
             return
         }
         polling = true
         defer { polling = false }
+        if store.activeAccount.kind == .work, store.settings.workerAccountID != accountID {
+            store.settings.workerAccountID = accountID
+            store.saveNow()
+        }
         let enabled = store.settings.workerEnabled
-        // The heartbeat goes out either way, so the organization sees this Mac switch off.
+        let next: State = !enabled ? .off : (store.currentAccountID == accountID ? .ready : .paused)
+        state = next
+        // The heartbeat goes out either way, so the organization sees this Mac switch off or pause.
         guard let reply = await post("/api/worker/poll", [
-            "accountId": store.currentAccountID,
+            "accountId": accountID,
             "device": device,
             "kind": workerKind,
             "enabled": enabled,
+            "state": next.rawValue,
         ]) else { return }
         lastPollAt = Date()
+        onSummary?(reply["summary"])
         guard reply["ok"] as? Bool == true else {
             status = (reply["reason"] as? String).map { "worker: \($0)" } ?? "worker: not linked"
             return
@@ -138,20 +182,24 @@ public final class SpaceWorkerService: ObservableObject {
             return
         }
 
+        let held = reply["held"] as? [[String: Any]] ?? []
+        await recover(held, accountID: accountID)
         await reportProgress()
-        await applyDecisions(reply["held"] as? [[String: Any]] ?? [])
+        await applyDecisions(held)
 
-        if tracked == nil, let next = (reply["jobs"] as? [[String: Any]])?.first,
-           let id = next["id"] as? String, let spaceId = next["spaceId"] as? String, let prompt = next["prompt"] as? String {
-            let job = Job(id: id, spaceId: spaceId, spaceName: next["spaceName"] as? String ?? "space", prompt: prompt)
-            await accept(job)
+        if next == .ready, tracked == nil, let first = (reply["jobs"] as? [[String: Any]])?.first,
+           let id = first["id"] as? String, let spaceId = first["spaceId"] as? String, let prompt = first["prompt"] as? String {
+            let job = Job(id: id, spaceId: spaceId, spaceName: first["spaceName"] as? String ?? "space", prompt: prompt)
+            await accept(job, accountID: accountID)
         }
-        if tracked == nil { status = "idle" }
+        if tracked == nil {
+            status = next == .paused ? "paused: switch to \(store.accounts.first { $0.id == accountID }?.name ?? "your work account") to take jobs" : "idle"
+        }
     }
 
-    private func accept(_ job: Job) async {
+    private func accept(_ job: Job, accountID: String) async {
         guard let store else { return }
-        guard let reply = await post("/api/worker/accept", ["accountId": store.currentAccountID, "jobId": job.id, "device": device]),
+        guard let reply = await post("/api/worker/accept", ["accountId": accountID, "jobId": job.id, "device": device]),
               let accepted = reply["job"] as? [String: Any] else { return }
         // The space's shared skills come with the job, so "replay …" finds them even on a Mac that never recorded them.
         for shared in accepted["sharedSkills"] as? [[String: Any]] ?? [] {
@@ -159,7 +207,7 @@ public final class SpaceWorkerService: ObservableObject {
             store.importSkill(sharedID: id, name: name, summary: shared["summary"] as? String ?? "", stepsJSON: steps, version: shared["version"] as? Int ?? 1)
         }
         let thread = store.createThread(title: "\(job.spaceName) · \(job.prompt.prefix(48))", app: "space", topic: job.spaceId)
-        tracked = Tracked(job: job, threadID: thread.id)
+        tracked = Tracked(job: job, accountID: accountID, threadID: thread.id)
         activeJob = job
         status = "running: \(job.prompt.prefix(60))"
         guard let runJob else {
@@ -169,6 +217,43 @@ public final class SpaceWorkerService: ObservableObject {
         Task { [weak self] in
             await runJob(job.prompt, thread.id)
             await MainActor.run { self?.tracked?.routedAt = Date() }
+        }
+    }
+
+    /// Jobs the organization says this Mac holds but nothing here is tracking: the app relaunched,
+    /// or an earlier close didn't reach the deployment. Pick the job back up when its run is still
+    /// here; otherwise close it honestly so the chat isn't left waiting.
+    private func recover(_ held: [[String: Any]], accountID: String) async {
+        guard let store else { return }
+        let remembered = store.settings.workerHeldJob
+        // The job Settings remembers comes first, so a leftover never takes its place.
+        let ordered = held.sorted { ($0["id"] as? String) == remembered?.jobID && ($1["id"] as? String) != remembered?.jobID }
+        for item in ordered {
+            guard let id = item["id"] as? String, id != tracked?.job.id else { continue }
+            if tracked != nil {
+                // One job at a time: a second one can only be a leftover whose close never landed.
+                _ = await post("/api/worker/update", ["accountId": accountID, "jobId": id, "status": "failed",
+                                                      "say": "This Mac lost track of that one. Ask again and it starts fresh."])
+                continue
+            }
+            let memory = remembered?.jobID == id ? remembered : nil
+            let runID = memory?.runID ?? item["runClientId"] as? String
+            let run = runID.flatMap { store.run($0) }
+                ?? memory.flatMap { held in store.runs.filter { $0.threadID == held.threadID }.sorted { $0.createdAt > $1.createdAt }.first }
+            if let threadID = memory?.threadID ?? run?.threadID {
+                let job = Job(id: id, spaceId: memory?.spaceID ?? "", spaceName: memory?.spaceName ?? "space", prompt: memory?.prompt ?? run?.prompt ?? "")
+                var current = Tracked(job: job, accountID: accountID, threadID: threadID, runID: run?.id)
+                // Nothing routed in this process: whatever the thread already holds is the answer.
+                current.routedAt = run == nil ? .distantPast : nil
+                current.lastStatus = item["status"] as? String ?? "accepted"
+                current.appliedDecision = run?.status == .waiting ? "" : (item["decision"] as? String ?? "")
+                tracked = current
+                activeJob = job
+                status = "running: \(job.prompt.prefix(60))"
+                continue
+            }
+            _ = await post("/api/worker/update", ["accountId": accountID, "jobId": id, "status": "failed",
+                                                  "say": "This Mac restarted before finishing. Ask again and it starts fresh."])
         }
     }
 
@@ -204,7 +289,7 @@ public final class SpaceWorkerService: ObservableObject {
         }
         guard let run else {
             // Routed a while ago and nothing became a run: the pipeline answered without one or gave up.
-            if let routedAt = current.routedAt, Date().timeIntervalSince(routedAt) > 45 {
+            if let routedAt = current.routedAt, Date().timeIntervalSince(routedAt) > Self.routeGrace {
                 let answer = lastAssistantLine(threadID: current.threadID)
                 await finish(status: answer.isEmpty ? "failed" : "done", say: answer.isEmpty ? "Nothing came of that on this Mac." : answer)
             }
@@ -212,7 +297,7 @@ public final class SpaceWorkerService: ObservableObject {
         }
         let status = Self.jobStatus(for: run.status)
         var body: [String: Any] = [
-            "accountId": store.currentAccountID,
+            "accountId": current.accountID,
             "jobId": current.job.id,
             "status": status,
             "runClientId": run.id,
@@ -240,7 +325,12 @@ public final class SpaceWorkerService: ObservableObject {
         current.lastReport = signature
         current.lastStatus = status
         tracked = current
-        _ = await post("/api/worker/update", body)
+        guard await post("/api/worker/update", body) != nil else {
+            // The deployment didn't hear this one; say it again next tick.
+            current.lastReport = ""
+            tracked = current
+            return
+        }
         if terminal {
             jobsDone += 1
             tracked = nil
@@ -249,8 +339,8 @@ public final class SpaceWorkerService: ObservableObject {
     }
 
     private func finish(status: String, say: String?) async {
-        guard let store, let current = tracked else { return }
-        var body: [String: Any] = ["accountId": store.currentAccountID, "jobId": current.job.id, "status": status]
+        guard let current = tracked else { return }
+        var body: [String: Any] = ["accountId": current.accountID, "jobId": current.job.id, "status": status]
         if let say { body["say"] = say }
         _ = await post("/api/worker/update", body)
         tracked = nil

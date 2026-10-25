@@ -71,6 +71,10 @@ export interface TeachStepRequest {
   /** The browser tab in front, when the app is a browser, so the tutor teaches the site, not the browser. */
   pageTitle?: string;
   pageURL?: string;
+  /** The app's real menu bar, one line per menu, so the tutor never names an item that isn't there. */
+  menus?: string[];
+  /** Okidoki saw the learner's action hit the previous step's target. */
+  landed?: boolean;
 }
 
 export type TeachAction = "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "look" | "open_app" | "done";

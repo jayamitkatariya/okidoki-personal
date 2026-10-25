@@ -141,3 +141,25 @@
 .nav-group-enterprise .nav-label {
   color: var(--accent-ink);
 }
+
+/* Rollout: adoption at a glance, for admins. */
+.rollout-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.rollout-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 12px; background: var(--well); }
+.rollout-stat strong { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.rollout-stat span { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.rollout-row { gap: 12px; }
+.rollout-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--faint); }
+.rollout-dot.is-online { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.rollout-dot.is-installed { background: var(--muted); }
+.rollout-dot.is-missing { background: var(--warn, #F2B84B); }
+.rollout-device { font-weight: 400; color: var(--muted); }
+.rollout-top { margin-top: 14px; }
+.rollout-top h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.rollout-top ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.rollout-top li { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 6px 0; border-top: 1px solid var(--hairline); }
+.rollout-top li span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* The welcome note editor. */
+.welcome-editor { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+.welcome-editor .textarea { width: 100%; }
+.welcome-actions { display: flex; gap: 8px; }

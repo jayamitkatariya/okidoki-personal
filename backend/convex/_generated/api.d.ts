@@ -11,7 +11,9 @@
 import type * as accounts from "../accounts.js";
 import type * as auth from "../auth.js";
 import type * as chat from "../chat.js";
+import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
+import type * as enterprise from "../enterprise.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as orgs from "../orgs.js";
@@ -32,7 +34,9 @@ declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   auth: typeof auth;
   chat: typeof chat;
+  crons: typeof crons;
   dashboard: typeof dashboard;
+  enterprise: typeof enterprise;
   http: typeof http;
   jobs: typeof jobs;
   orgs: typeof orgs;

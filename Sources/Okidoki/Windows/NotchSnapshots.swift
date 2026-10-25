@@ -41,6 +41,14 @@ enum NotchSnapshots {
         func toast(_ title: String, _ detail: String) -> NotchToast {
             NotchToast(title: title, detail: detail, kind: .success, editLabel: "details", expiresAt: .distantFuture)
         }
+        let teamApproval = NotchSpaceApproval(EnterpriseSummary.Approval(
+            id: "j1", spaceId: "sp1", spaceName: "sales", prompt: "clean up the shared drive", title: "Clean up the shared drive",
+            requestedBy: "Jay", workerName: "Pat", workerIsYou: false, summary: "Deletes 14 stale folders under Shared/Archive.",
+            risk: .high, steps: ["list", "delete"], commands: ["rm -rf '/Volumes/Shared/Archive/2019 *'"], apps: ["Finder"], createdAt: Date()))
+        let forSpace = NotchRunItem(id: "w", title: "export the deck as PDF", kind: .computerUse, status: .running,
+                                    step: "exporting slide 7 of 12", summary: "", risk: .low, commands: [], forSpace: "design")
+        let unread = [NotchSpaceUnread(id: "sp1", name: "sales", colorHex: "F2B84B", unread: 3, lastMessage: "Jay: can someone replay the expense report?"),
+                      NotchSpaceUnread(id: "sp2", name: "general", colorHex: "44E45E", unread: 1, lastMessage: "okidoki: Done: launch-discord.mp4 is 7.9 MB.")]
         return [
             ("1-home", model { $0.expanded = true }),
             ("2-home-voice-quiet", model { $0.expanded = true; $0.inputMode = .voice; $0.quiet = true }),
@@ -58,6 +66,15 @@ enum NotchSnapshots {
             }),
             ("8-listening", model { $0.listening = true }),
             ("9-caption", model { $0.caption = "Opening WhatsApp and finding Dad's chat." }),
+            ("10-compact-team-approval", model { $0.approvals = [teamApproval]; $0.hasTeam = true }),
+            ("11-expanded-team", model {
+                $0.expanded = true
+                $0.hasTeam = true
+                $0.approvals = [teamApproval]
+                $0.live = [forSpace]
+                $0.unread = unread
+            }),
+            ("12-compact-for-space", model { $0.live = [forSpace]; $0.hasTeam = true }),
         ]
     }
 
@@ -89,7 +106,7 @@ enum NotchSnapshots {
 extension NotchRunItem {
     /// Preview data only.
     init(id: String, title: String, kind: RunKind, status: RunStatus, step: String, summary: String,
-         risk: RiskLevel, commands: [String]) {
+         risk: RiskLevel, commands: [String], forSpace: String? = nil) {
         self.id = id
         self.title = title
         self.kind = kind
@@ -98,5 +115,6 @@ extension NotchRunItem {
         self.summary = summary
         self.risk = risk
         self.commands = commands
+        self.forSpace = forSpace
     }
 }

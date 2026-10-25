@@ -130,6 +130,19 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var computerTarget: String = "mac"
     /// Enterprise: this Mac takes jobs the agent is given in the work account's spaces.
     public var workerEnabled: Bool = false
+    /// The work account the worker last ran as, so it keeps its place in the organization
+    /// (and finishes the job it holds) while the person is looking at Personal.
+    public var workerAccountID: String = ""
+    /// The job this Mac holds, so a relaunch picks it back up instead of leaving it hanging.
+    public var workerHeldJob: WorkerHeldJob? = nil
+    /// Organizations whose welcome note has already been shown here, by id.
+    public var welcomedOrgIDs: [String] = []
+    /// Where a request typed at the cursor goes by default: "" for this Mac, else a space id.
+    public var askScope: String = ""
+    /// A join code picked up before the sync login existed (onboarding, a nearby Mac, managed
+    /// configuration). The Team page uses it the moment the login is there, then clears it.
+    public var pendingJoinCode: String = ""
+    public var pendingJoinOrgName: String = ""
 
     /// Voice during lessons, remembered separately from the app-wide voice switch.
     public var teachVoice: Bool = true
@@ -151,7 +164,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
         case convexSiteURL, syncEnabled, lastSyncAt, onboardingComplete, tourComplete, showedWelcome
         case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace, computerTarget
-        case teachVoice, autoConnectAgents, screenContext, workerEnabled
+        case teachVoice, autoConnectAgents, screenContext, workerEnabled, workerAccountID, workerHeldJob
+        case welcomedOrgIDs, askScope, pendingJoinCode, pendingJoinOrgName
     }
 
     public init(from decoder: Decoder) throws {
@@ -206,8 +220,33 @@ public struct AppSettings: Codable, Equatable, Sendable {
         drivePace = string(.drivePace, "calm")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
         workerEnabled = bool(.workerEnabled, false)
+        workerAccountID = string(.workerAccountID, "")
+        workerHeldJob = (try? c.decodeIfPresent(WorkerHeldJob.self, forKey: .workerHeldJob)).flatMap { $0 }
+        welcomedOrgIDs = (try? c.decodeIfPresent([String].self, forKey: .welcomedOrgIDs)).flatMap { $0 } ?? []
+        askScope = string(.askScope, "")
+        pendingJoinCode = string(.pendingJoinCode, "")
+        pendingJoinOrgName = string(.pendingJoinOrgName, "")
         teachVoice = bool(.teachVoice, true)
         screenContext = bool(.screenContext, true)
+    }
+}
+
+/// What the space worker remembers across a relaunch about the job it was running.
+public struct WorkerHeldJob: Codable, Equatable, Sendable {
+    public var jobID: String
+    public var spaceID: String
+    public var spaceName: String
+    public var prompt: String
+    public var threadID: String
+    public var runID: String?
+
+    public init(jobID: String, spaceID: String, spaceName: String, prompt: String, threadID: String, runID: String?) {
+        self.jobID = jobID
+        self.spaceID = spaceID
+        self.spaceName = spaceName
+        self.prompt = prompt
+        self.threadID = threadID
+        self.runID = runID
     }
 }
 
@@ -1041,17 +1080,21 @@ public struct TeachStepRequest: Codable, Sendable {
     /// The browser tab in front, when the app is a browser, so the tutor teaches the site, not the browser.
     public var pageTitle: String?
     public var pageURL: String?
+    /// The app's real menu bar, one line per menu, so the tutor never names an item that isn't there.
+    public var menus: [String]
+    /// Okidoki saw the learner's action hit the previous step's target.
+    public var landed: Bool
 
     public init(topic: String, app: String, outline: [String], log: [TeachLogEntry], stepNumber: Int,
                 imageWidth: Double, imageHeight: Double, screenshotBase64: String?,
                 controls: [TeachControlHint] = [], mode: String = "guide", known: [String] = [],
                 milestones: [String] = [], language: String? = nil, model: String?,
-                pageTitle: String? = nil, pageURL: String? = nil) {
+                pageTitle: String? = nil, pageURL: String? = nil, menus: [String] = [], landed: Bool = false) {
         self.topic = topic; self.app = app; self.outline = outline; self.log = log; self.stepNumber = stepNumber
         self.imageWidth = imageWidth; self.imageHeight = imageHeight
         self.screenshotBase64 = screenshotBase64; self.controls = controls
         self.mode = mode; self.known = known; self.milestones = milestones; self.language = language; self.model = model
-        self.pageTitle = pageTitle; self.pageURL = pageURL
+        self.pageTitle = pageTitle; self.pageURL = pageURL; self.menus = menus; self.landed = landed
     }
 }
 

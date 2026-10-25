@@ -60,7 +60,14 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
     }
     case "saveKey":
     case "deleteKey": {
-      state.keys = { ...state.keys, [payload.provider as string]: type === "saveKey" && Boolean(payload.value) };
+      const provider = payload.provider as string;
+      const set = type === "saveKey" && Boolean(payload.value);
+      state.keys = { ...state.keys, [provider]: set };
+      state.keyProviders = state.keyProviders?.map((item) => (item.id === provider ? { ...item, set: set || item.builtin } : item));
+      break;
+    }
+    case "syncNow": {
+      if (state.services) state.services = { ...state.services, convex: { ...state.services.convex, status: "synced just now", lastSyncAt: new Date().toISOString() } };
       break;
     }
     case "saveMcpServer": {

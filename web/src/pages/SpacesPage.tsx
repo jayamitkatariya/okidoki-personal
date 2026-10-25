@@ -89,6 +89,19 @@ function SpacesLayout({ go }: { go: (page: Page) => void }) {
     if (current && current.id !== spaceId) selectSpace(current.id);
   }, [current, spaceId, selectSpace]);
 
+  // The notch, the cursor card and Home open a specific space; it may arrive before the page mounted.
+  useEffect(() => {
+    const pending = window as unknown as { __okidokiFocusSpace?: string };
+    if (pending.__okidokiFocusSpace) selectSpace(pending.__okidokiFocusSpace);
+    delete pending.__okidokiFocusSpace;
+    const onFocus = (event: Event) => {
+      selectSpace((event as CustomEvent<string>).detail);
+      delete pending.__okidokiFocusSpace;
+    };
+    window.addEventListener("okidoki-focus-space", onFocus);
+    return () => window.removeEventListener("okidoki-focus-space", onFocus);
+  }, [selectSpace]);
+
   const attempt = async (task: () => Promise<unknown>, done?: [string, string?]) => {
     setBusy(true);
     try {

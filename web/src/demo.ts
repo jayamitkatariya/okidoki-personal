@@ -937,6 +937,19 @@ export const demoState: NativeState = {
     { id: "cursor", name: "Cursor Agent", installed: false, signedIn: false, account: "", providers: [], source: "", installHint: "curl https://cursor.com/install -fsS | bash", loginHint: "cursor-agent login" },
   ],
   keys: { anthropic: false, cartesia: false, moss: false, apify: true, convex: false },
+  keyProviders: [
+    { id: "anthropic", name: "Anthropic", blurb: "Required. Reads the screen, teaches, and plans every action.", placeholder: "sk-ant-…", url: "https://console.anthropic.com/settings/keys", optional: false, set: false, builtin: false },
+    { id: "cartesia", name: "Cartesia", blurb: "Fast, warm voices for spoken answers.", placeholder: "sk_car_…", url: "https://play.cartesia.ai/console", optional: false, set: false, builtin: false },
+    { id: "moss", name: "Moss", blurb: "Semantic search across your threads and memory.", placeholder: "project-id:project-key", url: "https://moss.dev", optional: true, set: false, builtin: false },
+    { id: "apify", name: "Apify", blurb: "Live web scraping and ready-made actors.", placeholder: "apify_api_…", url: "https://console.apify.com/account/integrations", optional: true, set: true, builtin: true },
+    { id: "convex", name: "Convex sync", blurb: "Private sync of threads, memory and runs across Macs.", placeholder: "sync secret", url: "https://convex.dev", optional: true, set: false, builtin: false },
+  ],
+  services: {
+    brain: { status: "ready", ready: true, version: "0.9.1", port: 4319 },
+    convex: { enabled: false, configured: false, hasSecret: false, siteURL: "", status: "local only", lastSyncAt: null },
+    memory: { configured: false, ready: false, documents: 0, notes: 0, messages: 0, tools: 0, lastSyncAt: null, error: null },
+    mcp: { enabled: true, servers: 2, connected: 1, checkedAt: iso(-3) },
+  },
   mcpStatus: {
     "mcp-github": {
       id: "mcp-github",

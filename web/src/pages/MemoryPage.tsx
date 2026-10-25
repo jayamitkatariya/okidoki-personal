@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { Memory, MemorySource } from "../types";
+import type { Memory, MemorySource, ServicesState } from "../types";
 import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, type ConfirmRequest } from "../components/ui";
 
 type Section = "aboutYou" | "rightNow";
@@ -81,7 +81,11 @@ export function MemoryPage() {
 
   return (
     <div className="memory-page">
-      <PageTitle title="Memory" subtitle="About you stays with your account. Right now is short-term memory, searched with Moss." />
+      <PageTitle
+        title="Memory"
+        subtitle="About you stays with your account. Right now is short-term memory, searched with Moss."
+        trailing={state.services ? <MemoryIndexBadge services={state.services} onFix={() => (window.location.hash = "#/keys")} /> : null}
+      />
 
       <div className="memory-top">
         <section className="tile memory-compose reveal">
@@ -295,5 +299,41 @@ function MemoryList({
         </div>
       )}
     </section>
+  );
+}
+
+/** What the Moss index holds, so "searched with Moss" is a fact rather than a promise. */
+function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix: () => void }) {
+  const memory = services.memory;
+  if (!memory.configured) {
+    return (
+      <button className="memory-index is-off" onClick={onFix} title="Add a Moss key in Settings › Keys">
+        <i />
+        Moss off · exact matches only
+      </button>
+    );
+  }
+  if (memory.error) {
+    return (
+      <span className="memory-index is-warn" title={memory.error}>
+        <i />
+        Moss error
+      </span>
+    );
+  }
+  if (!memory.ready) {
+    return (
+      <span className="memory-index">
+        <i />
+        Moss loading…
+      </span>
+    );
+  }
+  const items = memory.notes + memory.messages;
+  return (
+    <span className="memory-index is-on" title={`${memory.notes} notes · ${memory.messages} recent turns · ${memory.tools} tools`}>
+      <i />
+      Moss · {items} item{items === 1 ? "" : "s"} indexed{memory.lastSyncAt ? ` · ${relativeTime(memory.lastSyncAt)}` : ""}
+    </span>
   );
 }

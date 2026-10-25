@@ -258,19 +258,121 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     if (!authorized(request)) return json({ error: "unauthorized" }, 401);
-    const parsed = await readJson<{ accountId?: unknown; device?: unknown; kind?: unknown; enabled?: unknown }>(request);
+    const parsed = await readJson<{ accountId?: unknown; device?: unknown; kind?: unknown; enabled?: unknown; state?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId)) return json({ error: "accountId required" }, 400);
     const device = typeof body.device === "string" ? body.device : "mac";
     const kind = body.kind === "privateMac" ? "privateMac" : "thisMac";
-    const enabled = body.enabled !== false;
-    const beat = await ctx.runMutation(internal.jobs.heartbeat, { accountId: body.accountId, device, kind, enabled });
-    if (!beat.ok) return json({ ok: false, reason: beat.reason, jobs: [], held: [] });
-    if (!enabled) return json({ ok: true, jobs: [], held: [] });
-    const queue = await ctx.runQuery(internal.jobs.poll, { accountId: body.accountId, kind });
-    return json({ ok: true, ...queue });
+    const enabled = body.enabled !== false && body.state !== "off";
+    // Older builds send only `enabled`; newer ones say whether the Mac is paused on a personal account.
+    const state = !enabled ? "off" : body.state === "paused" ? "paused" : "ready";
+    const beat = await ctx.runMutation(internal.jobs.heartbeat, { accountId: body.accountId, device, kind, enabled, state });
+    if (!beat.ok) return json({ ok: false, reason: beat.reason, jobs: [], held: [], summary: null });
+    // The organization's view rides along whether or not this Mac takes jobs: the notch and the
+    // cursor card show approvals, unread chats and shared skills from it.
+    const summary = await ctx.runQuery(internal.enterprise.summary, { accountId: body.accountId });
+    if (!enabled) return json({ ok: true, jobs: [], held: [], summary });
+    const queue = await ctx.runQuery(internal.jobs.poll, { accountId: body.accountId, kind, state });
+    return json({ ok: true, ...queue, summary });
   }),
+});
+
+// ---- The Mac acting on its organization: approvals, chat, shared skills. Same secret as sync. ----
+
+for (const path of ["/api/enterprise/decide", "/api/enterprise/send", "/api/enterprise/read", "/api/enterprise/join-space", "/api/enterprise/skill", "/api/enterprise/skill-run", "/api/enterprise/publish"]) {
+  http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
+}
+
+async function enterpriseCall(request: Request, run: (body: Record<string, unknown>) => Promise<unknown>): Promise<Response> {
+  if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+  const parsed = await readJson<Record<string, unknown>>(request);
+  if (!parsed.ok) return parsed.response;
+  if (!isId(parsed.body.accountId)) return json({ error: "accountId required" }, 400);
+  try {
+    return json(await run(parsed.body));
+  } catch (error) {
+    // Convex wraps thrown messages in a longer report; keep the sentence the mutation wrote.
+    const message = error instanceof Error ? error.message : String(error);
+    const match = /Uncaught Error: ([^\n]+)/.exec(message);
+    return json({ error: (match?.[1] ?? message).trim() }, 400);
+  }
+}
+
+http.route({
+  path: "/api/enterprise/decide",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      if (!isId(body.jobId)) throw new Error("jobId required");
+      return ctx.runMutation(internal.enterprise.decideForAccount, { accountId: body.accountId as string, jobId: body.jobId as any, decision: String(body.decision ?? "") });
+    })),
+});
+
+http.route({
+  path: "/api/enterprise/send",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      if (!isId(body.spaceId)) throw new Error("spaceId required");
+      return ctx.runMutation(internal.enterprise.sendForAccount, { accountId: body.accountId as string, spaceId: body.spaceId as any, text: String(body.text ?? "") });
+    })),
+});
+
+http.route({
+  path: "/api/enterprise/read",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      if (!isId(body.spaceId)) throw new Error("spaceId required");
+      return ctx.runMutation(internal.enterprise.markReadForAccount, { accountId: body.accountId as string, spaceId: body.spaceId as any });
+    })),
+});
+
+http.route({
+  path: "/api/enterprise/join-space",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      if (!isId(body.spaceId)) throw new Error("spaceId required");
+      return ctx.runMutation(internal.enterprise.joinSpaceForAccount, { accountId: body.accountId as string, spaceId: body.spaceId as any });
+    })),
+});
+
+http.route({
+  path: "/api/enterprise/skill",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      if (!isId(body.sharedId)) throw new Error("sharedId required");
+      const skill = await ctx.runQuery(internal.enterprise.pullSkill, { accountId: body.accountId as string, sharedId: body.sharedId as any });
+      return { skill };
+    })),
+});
+
+http.route({
+  path: "/api/enterprise/skill-run",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      if (!isId(body.sharedId)) throw new Error("sharedId required");
+      return ctx.runMutation(internal.enterprise.recordSkillRunForAccount, { accountId: body.accountId as string, sharedId: body.sharedId as any });
+    })),
+});
+
+http.route({
+  path: "/api/enterprise/publish",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    enterpriseCall(request, async (body) => {
+      const skill = body.skill && typeof body.skill === "object" ? (body.skill as Record<string, unknown>) : null;
+      if (!skill || !isId(skill.id) || typeof skill.name !== "string" || !Array.isArray(skill.steps)) throw new Error("skill required");
+      return ctx.runMutation(internal.enterprise.publishForAccount, {
+        accountId: body.accountId as string,
+        spaceId: isId(body.spaceId) ? (body.spaceId as any) : null,
+        skill: { id: skill.id, name: skill.name, summary: typeof skill.summary === "string" ? skill.summary : "", steps: skill.steps },
+      });
+    })),
 });
 
 http.route({

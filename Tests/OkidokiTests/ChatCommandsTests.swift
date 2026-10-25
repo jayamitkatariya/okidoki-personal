@@ -81,4 +81,59 @@ final class ChatCommandsTests: XCTestCase {
         XCTAssertEqual(parse("delete the invoice flow skill"), .deleteSkill(skillID: "s1"))
         XCTAssertNil(parse("delete the old files"))
     }
+
+    // MARK: - Enterprise
+
+    private let spaces = [ChatSpaceRef(id: "sp1", name: "sales", joined: true),
+                          ChatSpaceRef(id: "sp2", name: "design review", joined: false),
+                          ChatSpaceRef(id: "sp3", name: "general", joined: true)]
+    private let shared = [ChatSharedSkillRef(id: "sh1", name: "expense report", publishedBy: "Priya"),
+                          ChatSharedSkillRef(id: "sh2", name: "invoice flow", publishedBy: "Sam")]
+
+    private func parseWork(_ text: String) -> ChatCommand? {
+        ChatCommands.parse(text, context: ChatCommands.Context(skills: skills, spaces: spaces, sharedSkills: shared))
+    }
+
+    func testRequestsRouteToASpaceWhenOneIsNamed() {
+        XCTAssertEqual(parseWork("ask #sales to compress the launch video"), .askSpace(spaceID: "sp1", text: "compress the launch video"))
+        XCTAssertEqual(parseWork("#sales: compress the launch video"), .askSpace(spaceID: "sp1", text: "compress the launch video"))
+        XCTAssertEqual(parseWork("#design review rename the frames"), .askSpace(spaceID: "sp2", text: "rename the frames"))
+        XCTAssertEqual(parseWork("compress the launch video for #sales"), .askSpace(spaceID: "sp1", text: "compress the launch video"))
+        XCTAssertEqual(parseWork("tell sales to export the deck"), .askSpace(spaceID: "sp1", text: "export the deck"))
+        XCTAssertEqual(parseWork("ask #marketing to do it"), .unknownSpace(query: "marketing", text: "do it"))
+    }
+
+    func testEverydayRequestsDoNotBecomeSpaceMessages() {
+        XCTAssertNil(parseWork("tell sam to buy milk"))
+        XCTAssertNil(parseWork("in 5 minutes remind me to stretch"))
+        XCTAssertNil(parseWork("ask me a question"))
+        XCTAssertNil(parseWork("send the invoice to accounting"))
+        // Without spaces the enterprise commands don't exist at all.
+        XCTAssertNil(parse("ask #sales to compress the launch video"))
+    }
+
+    func testWaitingSpacesAndOpen() {
+        XCTAssertEqual(parse("what's waiting on me?"), .whatsWaiting)
+        XCTAssertEqual(parseWork("approvals"), .whatsWaiting)
+        XCTAssertEqual(parseWork("my spaces"), .listSpaces)
+        XCTAssertEqual(parseWork("open #sales"), .openSpace(spaceID: "sp1"))
+        XCTAssertEqual(parseWork("show the design review chat"), .openSpace(spaceID: "sp2"))
+        XCTAssertNil(parseWork("open finder"))
+    }
+
+    func testShareASkill() {
+        XCTAssertEqual(parseWork("share invoice flow with my team"), .shareSkill(skillID: "s1", spaceID: nil))
+        XCTAssertEqual(parseWork("share the figma export skill with #sales"), .shareSkill(skillID: "s2", spaceID: "sp1"))
+        XCTAssertEqual(parseWork("publish figma frames to everyone"), .shareSkill(skillID: "s3", spaceID: nil))
+        XCTAssertNil(parseWork("share my screen with him"))
+    }
+
+    func testAColleaguesSharedSkillReplaysByName() {
+        XCTAssertEqual(parseWork("replay the expense report"), .replayShared(sharedID: "sh1", times: 1))
+        XCTAssertEqual(parseWork("run expense report 3 times"), .replayShared(sharedID: "sh1", times: 3))
+        XCTAssertEqual(parseWork("expense report"), .replayShared(sharedID: "sh1", times: 1))
+        // My own recording wins over a colleague's copy of the same name.
+        XCTAssertEqual(parseWork("replay invoice flow"), .replay(skillID: "s1", times: 1))
+        XCTAssertNil(parseWork("do my expenses"))
+    }
 }

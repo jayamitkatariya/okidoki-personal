@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
 import { joinCommand, splitCommand, parseServerJSON } from "../mcp";
-import { cx, copyText, findTools, money, searchTools, toolBlocked, toolPrice } from "../lib";
+import { cx, copyText, findTools, money, relativeTime, searchTools, toolBlocked, toolPrice } from "../lib";
 import type { Connector, McpServer, Tool } from "../types";
 import { Button, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField } from "../components/ui";
 
@@ -430,6 +430,11 @@ function McpServers() {
         ) : (
           <span className="tb-mcp-hint">Any MCP server works: a command okidoki starts, or a URL.</span>
         )}
+        {servers.length && state.services?.mcp.checkedAt ? (
+          <span className="tb-mcp-hint">
+            {state.services.mcp.connected} of {state.services.mcp.servers} answering · checked {relativeTime(state.services.mcp.checkedAt)}
+          </span>
+        ) : null}
       </div>
       <McpServerModal server={editing} onClose={() => setEditing(null)} />
     </div>

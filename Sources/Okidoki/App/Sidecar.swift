@@ -326,6 +326,17 @@ struct MCPServerStatus: Codable, Equatable {
     var tools: [MCPToolSummary]
 }
 
+/// What the brain's Moss index holds, as reported by `/memory/status` and after each sync.
+struct MemoryIndexStatus: Codable, Equatable {
+    var ready: Bool = false
+    var documents: Int = 0
+    var notes: Int = 0
+    var messages: Int = 0
+    var tools: Int = 0
+    var lastSyncAt: Date?
+    var error: String?
+}
+
 struct BrainConnectorResult: Decodable {
     var ok: Bool
     var answer: String
@@ -738,7 +749,9 @@ final class BrainClient {
     }
 
     /// Sends the Mac's items to the brain's memory index; the brain embeds only what changed.
-    func memorySync(_ payload: BrainMemorySyncPayload) async -> Bool {
+    /// Sends the Mac's data to the index. Returns the index status afterwards (`ok` false when the sync failed),
+    /// or nil when the brain couldn't be reached.
+    func memorySync(_ payload: BrainMemorySyncPayload) async -> (ok: Bool, status: MemoryIndexStatus)? {
         var request = URLRequest(url: baseURL.appendingPathComponent("memory/sync"))
         request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
         request.httpMethod = "POST"
@@ -746,13 +759,40 @@ final class BrainClient {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let body = try? encoder.encode(payload) else { return false }
+        guard let body = try? encoder.encode(payload) else { return nil }
         request.httpBody = body
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return json["ok"] as? Bool == true
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let status = try? Self.statusDecoder.decode(MemoryIndexStatus.self, from: data) else { return nil }
+        return (json["ok"] as? Bool == true, status)
     }
+
+    /// The index as the brain sees it, without sending anything. Nil when the brain is unreachable.
+    func memoryStatus() async -> MemoryIndexStatus? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("memory/status"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 5
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+        return try? Self.statusDecoder.decode(MemoryIndexStatus.self, from: data)
+    }
+
+    private static let statusDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        // JavaScript writes fractional seconds; accept both forms.
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let value = try decoder.singleValueContainer()
+            let text = try value.decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: text) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: text) { return date }
+            throw DecodingError.dataCorruptedError(in: value, debugDescription: "not an ISO 8601 date")
+        }
+        return decoder
+    }()
 
     func checkApify(token: String) async -> (ok: Bool, detail: String) {
         var request = URLRequest(url: baseURL.appendingPathComponent("apify/check"))

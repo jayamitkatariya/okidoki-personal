@@ -213,3 +213,16 @@ test("connector Stop works through the same dashboard control endpoint", async (
     expect((await (await running).json() as any).error).toBe("stopped by you");
   } finally { (await import("../src/mcp")).closeAll(); }
 });
+
+test("/memory/status reports the index by kind, so the dashboard can show what Moss holds", async () => {
+  const response = await fetch(base + "/memory/status", { headers });
+  expect(response.ok).toBe(true);
+  const status = await response.json() as { ready: boolean; documents: number; notes: number; messages: number; tools: number; lastSyncAt?: string; error?: string };
+  // No Moss credentials in tests: the index is off, and says so without an error.
+  expect(status.ready).toBe(false);
+  expect(status.documents).toBe(0);
+  expect(status.notes + status.messages + status.tools).toBe(status.documents);
+  expect(status.lastSyncAt).toBeUndefined();
+  const sync = await fetch(base + "/memory/sync", { method: "POST", headers, body: JSON.stringify({ memories: [] }) });
+  expect(sync.status).toBe(400);
+});

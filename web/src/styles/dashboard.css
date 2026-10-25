@@ -534,6 +534,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px
 .home .needs-copy p { margin-top: 5px; font-size: 12px; line-height: 1.65; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .home .needs-actions { grid-column: 2; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
 .home .needs-actions .btn-primary { order: -1; }
+.home .needs-row.is-team .kind-icon { color: var(--accent-ink); background: var(--accent-soft, var(--well-strong)); }
+.home .needs-row.is-team .needs-copy p b { font-weight: 600; color: var(--ink); }
 .home .caught-up { min-height: 112px; align-items: center; }
 .home .caught-up span { line-height: 1.65; }
 .home .caught-up .caught-up-icon { display: grid; color: var(--accent-ink); margin: 0; }

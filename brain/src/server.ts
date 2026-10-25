@@ -146,6 +146,8 @@ export async function handleRequest(request: Request): Promise<Response> {
             model: payload.model,
             pageTitle: typeof payload.pageTitle === "string" ? payload.pageTitle.slice(0, 200) : undefined,
             pageURL: typeof payload.pageURL === "string" ? payload.pageURL.slice(0, 300) : undefined,
+            menus: Array.isArray(payload.menus) ? payload.menus.filter((m) => typeof m === "string").slice(0, 40) : [],
+            landed: payload.landed === true,
           },
           key,
         );

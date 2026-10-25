@@ -108,6 +108,13 @@ final class TeachController {
     private var performingForThem = false
     private var lastShot: TeachShot?
     private var elements: [TeachElement] = []
+    /// The target app's menu bar, read once per app so the tutor quotes real items.
+    private var menus: [String] = []
+    private var menusFor: pid_t?
+    /// The last outcome was a hit on the step's target, seen by okidoki rather than guessed from pixels.
+    private var landed = false
+    /// What they did while the model was looking; the screen it saw is older than these.
+    private var whileLooking: [String] = []
     private var stepsShown = 0
     private var cleanHits = 0
     private var doItInARow = 0
@@ -143,6 +150,10 @@ final class TeachController {
         modelRetries = 0
         lastShot = nil
         elements = []
+        menus = []
+        menusFor = nil
+        landed = false
+        whileLooking = []
         typedCount = 0
         mouseDownAt = nil
         performingForThem = false
@@ -293,7 +304,12 @@ final class TeachController {
             async let page = BrowserContext.current(app: self.targetApp)
             async let inventory: [AXSeenControl] = Task.detached(priority: .userInitiated) {
                 guard let pid else { return [] }
-                return AXInventory.controls(pid: pid, within: bounds, limit: 110)
+                return AXInventory.controls(pid: pid, within: bounds, limit: 80)
+            }.value
+            let needsMenus = pid != nil && pid != self.menusFor
+            async let menuBar: [String] = Task.detached(priority: .userInitiated) {
+                guard needsMenus, let pid else { return [] }
+                return AXInventory.menus(pid: pid)
             }.value
             guard var captured = await ComputerUseService.shared.capture(screen: screen) else {
                 guard gen == self.generation else { return }
@@ -332,15 +348,13 @@ final class TeachController {
                 for control in found {
                     list.append(TeachElement(id: list.count, label: control.label, role: control.role, rect: control.rect))
                 }
-                for word in words where list.count < 120 {
+                // Accessibility already names what it covers; OCR only adds text with no control under it.
+                let axRects = list.map { $0.rect.insetBy(dx: -2, dy: -2) }
+                for word in words where list.count < 90 {
                     let origin = shot.globalFromFull(word.rect.origin)
                     let rect = CGRect(x: origin.x, y: origin.y, width: word.rect.width / shot.fullPixelsPerPoint, height: word.rect.height / shot.fullPixelsPerPoint)
-                    guard bounds.contains(CGPoint(x: rect.midX, y: rect.midY)) else { continue }
-                    let covered = list.contains { existing in
-                        existing.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: rect.midX, y: rect.midY))
-                            && existing.label.lowercased() == word.text.lowercased()
-                    }
-                    if covered { continue }
+                    let center = CGPoint(x: rect.midX, y: rect.midY)
+                    guard bounds.contains(center), !axRects.contains(where: { $0.contains(center) }) else { continue }
                     list.append(TeachElement(id: list.count, label: word.text, role: "text", rect: rect))
                 }
                 guard let scaled = TeachImage.scaled(captured.full, to: size) else { return nil }
@@ -363,15 +377,20 @@ final class TeachController {
             }
             let known = env.store.memories.map(\.text).filter { $0.lowercased().contains("knows ") && $0.lowercased().contains(app.lowercased()) }
             let pageInfo = await page
+            let menuBarLines = await menuBar
             guard gen == self.generation, self.model.isActive else { return }
+            if needsMenus { self.menus = menuBarLines; self.menusFor = pid }
+            // The screenshot is current; anything they did up to now goes in the log with it.
+            self.noteWhileLooking()
             let request = TeachStepRequest(topic: self.model.topic, app: app, outline: self.outline,
                                            log: Array(self.log.suffix(14)), stepNumber: self.stepsShown + 1,
                                            imageWidth: prepared.shot.sentWidth, imageHeight: prepared.shot.sentHeight,
                                            screenshotBase64: prepared.base64, controls: hints,
                                            mode: self.model.mode.rawValue, known: Array(known.prefix(12)),
                                            milestones: self.model.milestones, language: Self.language(),
-                                           model: env.store.settings.claudeModel,
-                                           pageTitle: pageInfo?.title, pageURL: pageInfo?.url)
+                                           model: env.teachModel,
+                                           pageTitle: pageInfo?.title, pageURL: pageInfo?.url,
+                                           menus: self.menus, landed: self.landed)
             let step = await self.stepProvider(request)
             guard gen == self.generation, self.model.isActive else { return }
             guard let step else {
@@ -379,6 +398,11 @@ final class TeachController {
                 return
             }
             self.modelRetries = 0
+            if self.noteWhileLooking() {
+                // They moved on while the model was reading an older screen. Look again.
+                self.requestStep(after: 0.1, settle: true)
+                return
+            }
             if step.waiting, self.stepsShown < 40 {
                 self.model.say = step.say.isEmpty ? "waiting for it to load…" : step.say
                 self.model.hint = "waiting for the screen"
@@ -433,6 +457,7 @@ final class TeachController {
                                    snapped: resolved.snapped)
         typedCount = 0
         mouseDownAt = nil
+        landed = false
         current = shown
 
         withAnimation(OKMotion.spring) {
@@ -448,9 +473,6 @@ final class TeachController {
         stage?.setThinking(false)
         stage?.present(resolved.scene, animated: true)
         placeBubble(animated: true)
-        if model.mode == .guide, let scene = resolved.scene, scene.hasTarget, step.isPointerStep || step.action == "drag" {
-            showGuide(to: scene)
-        }
         speak(step.say)
         armIdle()
         startFollowing()
@@ -628,9 +650,15 @@ final class TeachController {
         var rect: CGRect
         var snapped = false
         let region = (step.w ?? 0) > 0 && (step.h ?? 0) > 0
-        if let fromElement = elementRect(step.element) {
+        if let id = step.element, let fromElement = elementRect(id) {
             rect = fromElement
             snapped = true
+            // A marker number is easy to misread. When the words don't match the marker, trust the words.
+            if let target = step.target, !TeachGeometry.labelsAgree(elements[id].label, target),
+               let named = TeachGeometry.snap(center: CGPoint(x: rect.midX, y: rect.midY), target: target, pid: targetApp?.processIdentifier,
+                                              elements: elements, screen: screen, region: region) {
+                rect = named
+            }
         } else if let x = step.x, let y = step.y {
             let center = shot.global(x, y)
             if region, let w = step.w, let h = step.h {
@@ -959,8 +987,25 @@ final class TeachController {
             return
         }
 
+        if model.phase == .looking, let step = current {
+            // The model is reading an older screen; remember this for the log, in its own words.
+            switch event.type {
+            case .leftMouseDown, .rightMouseDown:
+                let verb = event.type == .rightMouseDown ? "right-clicked" : "clicked"
+                let onTarget = step.hitRect?.contains(point) ?? false
+                let label = onTarget ? (step.live.label ?? step.live.target ?? "") : TeachGeometry.axLabel(at: cocoa)
+                let place = label.isEmpty ? "at \(Int(point.x)),\(Int(point.y))" : "“\(label)”"
+                whileLooking.append(onTarget ? "\(verb) the target \(place)" : "\(verb) \(place)")
+            case .keyDown:
+                whileLooking.append("pressed \(TeachKeys.combo(for: event))")
+            default:
+                break
+            }
+            return
+        }
         guard model.phase == .waiting, let step = current else { return }
         stage?.cancelGuide()
+        landed = false
 
         switch event.type {
         case .leftMouseDown, .rightMouseDown:
@@ -978,6 +1023,7 @@ final class TeachController {
                 }
                 cleanHits += 1
                 doItInARow = 0
+                landed = true
                 celebrate(at: point)
                 setOutcome("\(verb) the target “\(name)” at \(Int(point.x)),\(Int(point.y))")
                 let wantsSecond = step.live.action == "double_click" && event.clickCount < 2
@@ -994,9 +1040,9 @@ final class TeachController {
             guard step.live.action == "drag", let down = mouseDownAt else { return }
             let distance = hypot(point.x - down.x, point.y - down.y)
             guard distance > 12 else { return }
-            let landed = step.dragTo.map { hypot($0.x - point.x, $0.y - point.y) < 90 } ?? false
-            if landed { celebrate(at: point); cleanHits += 1; if let next = step.live.next { showLookahead(next) } } else { cleanHits = 0 }
-            setOutcome("dragged from \(Int(down.x)),\(Int(down.y)) to \(Int(point.x)),\(Int(point.y))\(landed ? " (onto the target)" : "")")
+            let onTarget = step.dragTo.map { hypot($0.x - point.x, $0.y - point.y) < 90 } ?? false
+            if onTarget { celebrate(at: point); cleanHits += 1; landed = true; if let next = step.live.next { showLookahead(next) } } else { cleanHits = 0 }
+            setOutcome("dragged from \(Int(down.x)),\(Int(down.y)) to \(Int(point.x)),\(Int(point.y))\(onTarget ? " (onto the target)" : "")")
             scheduleVerify(after: 0.4)
 
         case .keyDown:
@@ -1005,6 +1051,7 @@ final class TeachController {
             case "key":
                 if TeachKeys.matches(combo, expected: step.live.key) {
                     cleanHits += 1
+                    landed = true
                     celebrate(at: step.scene.map { TeachGeometry.quartz(local: $0.center, on: screen) })
                     setOutcome("pressed \(combo) — the shortcut")
                     if let next = step.live.next { showLookahead(next) }
@@ -1015,6 +1062,7 @@ final class TeachController {
                 }
             case "type":
                 if combo == "return" {
+                    landed = typedCount > 0
                     setOutcome("typed \(typedCount) characters and pressed return")
                     scheduleVerify(after: 0.4)
                 } else {
@@ -1046,6 +1094,7 @@ final class TeachController {
         guard model.phase == .waiting, let step = current else { return }
         if step.live.action == "open_app", let wanted = step.live.app,
            name.lowercased().contains(wanted.lowercased()) || wanted.lowercased().contains(name.lowercased()) {
+            landed = true
             celebrate(at: nil)
             setOutcome("opened \(name)")
         } else {
@@ -1066,6 +1115,19 @@ final class TeachController {
         log[log.count - 1].outcome = text
         clearIdle()
         if model.stuck { withAnimation(OKMotion.spring) { model.stuck = false } }
+    }
+
+    /// Move what they did while the model was looking into the log. True when there was anything.
+    @discardableResult
+    private func noteWhileLooking() -> Bool {
+        guard !whileLooking.isEmpty else { return false }
+        let note = "while i was checking: " + whileLooking.suffix(6).joined(separator: ", ")
+        whileLooking = []
+        guard !log.isEmpty else { return true }
+        let outcome = log[log.count - 1].outcome
+        log[log.count - 1].outcome = outcome.isEmpty ? note : "\(outcome) · \(note)"
+        if note.contains("clicked the target") { landed = true }
+        return true
     }
 
     private func scheduleVerify(after delay: Double) {
@@ -1171,6 +1233,7 @@ final class TeachController {
         }
         performingForThem = false
         guard model.isActive, current?.id == shown.id else { return }
+        landed = true
         celebrate(at: nil)
         setOutcome("\(narrated): \(results.joined(separator: "; ").prefix(160))")
         if let next = live.next { showLookahead(next) }
@@ -1188,7 +1251,7 @@ final class TeachController {
         case .done:
             stop(completed: true)
         case .waiting:
-            if current != nil { setOutcome("skipped — move on") }
+            if current != nil { landed = false; setOutcome("skipped — move on") }
             modelRetries = 0
             requestStep(after: 0.1, settle: false)
         }
@@ -1450,5 +1513,13 @@ enum TeachGeometry {
 
     static func axLabel(at cocoa: NSPoint) -> String {
         AXInventory.control(at: quartz(cocoa))?.label ?? ""
+    }
+
+    /// "Auto layout" agrees with "auto layout" and with "Add auto layout"; "Frame" does not agree with "Text".
+    static func labelsAgree(_ a: String, _ b: String) -> Bool {
+        let x = a.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let y = b.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !x.isEmpty, !y.isEmpty else { return true }
+        return x.contains(y) || y.contains(x)
     }
 }

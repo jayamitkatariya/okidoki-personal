@@ -68,9 +68,24 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
   const { state, settings, account, enterprise, invoke, updateSettings, notify } = useDashboard();
   // The enterprise row shows for a work account linked to an organization; personal accounts never see it.
   const org = account.kind === "work" && enterprise.status === "ready" ? enterprise.view : null;
-  const unreadChats = enterprise.spaces.reduce((sum, space) => sum + space.unread, 0);
-  const approvals = enterprise.jobs.filter((job) => job.status === "waiting" && !job.decision).length;
+  // The Mac's own view covers every space, not just the open one, and keeps flowing while the panel is closed.
+  const native = account.kind === "work" && state.enterprise?.linked ? state.enterprise : null;
+  const unreadChats = native ? native.unread : enterprise.spaces.reduce((sum, space) => sum + space.unread, 0);
+  const teamApprovals = native
+    ? native.approvals.filter((approval) => !approval.workerIsYou)
+    : enterprise.jobs.filter((job) => job.status === "waiting" && !job.decision).map((job) => ({
+        id: job.id, spaceId: job.spaceId, spaceName: enterprise.spaces.find((space) => space.id === job.spaceId)?.name ?? "a space",
+        prompt: job.prompt, title: job.title, requestedBy: job.requestedBy, workerName: job.workerName, workerIsYou: false,
+        summary: job.preview?.summary ?? "", risk: job.preview?.risk ?? "low", createdAt: new Date(job.createdAt).toISOString(),
+      }));
+  const approvals = teamApprovals.length;
   const workersOnline = enterprise.workers.filter((worker) => worker.online).length;
+  const needsCount = () => waiting.length + teamApprovals.length;
+  const openSpace = (spaceId: string) => {
+    (window as unknown as { __okidokiFocusSpace?: string }).__okidokiFocusSpace = spaceId;
+    window.dispatchEvent(new CustomEvent("okidoki-focus-space", { detail: spaceId }));
+    go("spaces");
+  };
   const nearby = state.nearby?.invites.length ?? 0;
   const runs = state.runs ?? [];
   const waiting = runs.filter((run) => run.status === "waiting" || run.status === "previewing");
@@ -229,12 +244,12 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
               <PixelIcon name="hand" size={15} />
             </span>
             <h2>Needs your attention</h2>
-            {waiting.length ? <span className="tile-count is-hot">{waiting.length}</span> : null}
+            {needsCount() ? <span className="tile-count is-hot">{needsCount()}</span> : null}
             <button className="tile-link" onClick={() => go("runs")}>
               All runs <PixelIcon name="chevron" size={14} />
             </button>
           </header>
-          {waiting.length ? (
+          {needsCount() ? (
             <div className="needs-list">
               {waiting.slice(0, 3).map((run) => (
                 <div className="needs-row" key={run.id}>
@@ -269,6 +284,64 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                 <button className="row is-clickable more-row" onClick={() => go("runs")}>
                   <span className="row-copy">
                     <em>+{waiting.length - 3} more waiting</em>
+                  </span>
+                </button>
+              ) : null}
+              {teamApprovals.slice(0, waiting.length ? 2 : 3).map((approval) => (
+                <div className="needs-row is-team" key={approval.id}>
+                  <span className="kind-icon">
+                    <PixelIcon name="people" size={17} />
+                  </span>
+                  <div className="needs-copy">
+                    <div className="needs-title">
+                      <strong>{approval.title || approval.prompt}</strong>
+                      <RiskBadge risk={approval.risk} />
+                    </div>
+                    <p>
+                      <b>#{approval.spaceName}</b> · {approval.requestedBy} asked{approval.workerName ? ` · on ${approval.workerName}'s Mac` : ""}
+                      {approval.summary ? ` — ${approval.summary}` : ""}
+                    </p>
+                  </div>
+                  <div className="needs-actions">
+                    <Button variant="ghost" size="sm" onClick={() => openSpace(approval.spaceId)}>
+                      Open chat
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (native) invoke("decideSpaceJob", { jobId: approval.id, decision: "decline" });
+                        else void enterprise.actions.decide(approval.id, "decline");
+                        notify("Held", `#${approval.spaceName} · ${approval.title || approval.prompt}`);
+                      }}
+                    >
+                      Not now
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        if (native) invoke("decideSpaceJob", { jobId: approval.id, decision: "approve" });
+                        else void enterprise.actions.decide(approval.id, "approve");
+                        notify("Approved", `#${approval.spaceName} · ${approval.title || approval.prompt}`);
+                      }}
+                    >
+                      Do it
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {teamApprovals.length > (waiting.length ? 2 : 3) ? (
+                <button className="row is-clickable more-row" onClick={() => go("spaces")}>
+                  <span className="row-copy">
+                    <em>+{teamApprovals.length - (waiting.length ? 2 : 3)} more from your team</em>
+                  </span>
+                </button>
+              ) : null}
+              {native && native.pendingJoins > 0 ? (
+                <button className="row is-clickable more-row" onClick={() => go("team")}>
+                  <span className="row-copy">
+                    <em>{native.pendingJoins} {native.pendingJoins === 1 ? "person wants" : "people want"} to join {native.orgName ?? "your organization"}</em>
                   </span>
                 </button>
               ) : null}
@@ -448,7 +521,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
             <span className="tile-icon tone-rose">
               <PixelIcon name="record" size={15} />
             </span>
-            <h2>Skills</h2>
+            <h2>Replay</h2>
             <button className="tile-link" onClick={() => go("skills")}>
               {skills.length ? "Manage" : "Record one"} <PixelIcon name="chevron" size={14} />
             </button>

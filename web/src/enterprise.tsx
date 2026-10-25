@@ -17,6 +17,8 @@ export interface OrgSummary {
   createdAt: number;
   role: OrgRole | "";
   memberCount: number;
+  /** What a new member's Mac says the first time it links. Missing on older deployments. */
+  welcome?: string;
 }
 
 export interface OrgMembershipSummary extends OrgSummary {
@@ -197,7 +199,32 @@ export interface VaultCredential {
   updatedAt: number;
 }
 
+/** How far the organization has got, for admins: who's installed, who's online, who shares. */
+export interface Rollout {
+  members: {
+    id: string;
+    userId: string;
+    name: string;
+    email: string;
+    role: OrgRole;
+    installed: boolean;
+    lastSeenAt: number | null;
+    online: boolean;
+    workerOn: boolean;
+    device: string;
+    skillsPublished: number;
+    joinedAt: number;
+  }[];
+  installed: number;
+  activeToday: number;
+  workersOn: number;
+  skillsShared: number;
+  totalReplays: number;
+  topSkills: { id: string; name: string; runCount: number; publishedBy: string }[];
+}
+
 export interface EnterpriseActions {
+  setWelcome: (orgId: string, welcome: string) => Promise<void>;
   uploadFile: (spaceId: string | null, file: File) => Promise<{ id: string }>;
   deleteFile: (fileId: string) => Promise<void>;
   shareFile: (fileId: string, spaceId: string) => Promise<void>;
@@ -253,6 +280,8 @@ export interface EnterpriseState {
   /** The vault: documents and logins this account may see. */
   files: VaultFile[];
   credentials: VaultCredential[];
+  /** Admins only: adoption across the organization. Null for members. */
+  rollout: Rollout | null;
   actions: EnterpriseActions;
 }
 
@@ -272,7 +301,9 @@ export const ENTERPRISE_OFF: EnterpriseState = {
   sharedSkills: [],
   files: [],
   credentials: [],
+  rollout: null,
   actions: {
+    setWelcome: unavailable,
     uploadFile: unavailable,
     deleteFile: unavailable,
     shareFile: unavailable,
@@ -323,6 +354,9 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
 
   const files = useQuery(anyApi.vault.files, isAuthenticated && accountId && linked ? { accountId } : "skip") as VaultFile[] | undefined;
   const credentials = useQuery(anyApi.vault.credentials, isAuthenticated && accountId && linked ? { accountId } : "skip") as VaultCredential[] | undefined;
+  const admin = view?.role === "owner" || view?.role === "admin";
+  const rollout = useQuery(anyApi.enterprise.rollout, isAuthenticated && accountId && linked && admin ? { accountId } : "skip") as Rollout | null | undefined;
+  const setWelcome = useMutation(anyApi.enterprise.setWelcome);
 
   const uploadUrl = useMutation(anyApi.vault.uploadUrl);
   const saveFile = useMutation(anyApi.vault.saveFile);
@@ -369,6 +403,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
     };
     const wrap = <T,>(run: () => Promise<T>): Promise<T> => run().catch((error) => Promise.reject(new Error(friendlyError(error))));
     return {
+      setWelcome: (orgId, welcome) => wrap(async () => void (await setWelcome({ orgId, welcome }))),
       uploadFile: (spaceId, file) =>
         wrap(async () => {
           // Convex file storage: ask for a one-shot upload URL, post the bytes, then record the file.
@@ -417,7 +452,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
       createCode: (orgId, days, maxUses) => wrap(() => createCode({ orgId, days, maxUses }) as Promise<{ code: string }>),
       revokeCode: (codeId) => wrap(async () => void (await revokeCode({ codeId }))),
     };
-  }, [uploadUrl, saveFile, deleteFile, shareFile, saveCredential, deleteCredential, touchCredential, publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
+  }, [setWelcome, uploadUrl, saveFile, deleteFile, shareFile, saveCredential, deleteCredential, touchCredential, publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
 
   const status: EnterpriseStatus = isLoading
     ? "loading"
@@ -428,8 +463,8 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
         : "ready";
 
   useEffect(() => {
-    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], files: files ?? [], credentials: credentials ?? [], actions });
-  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, sharedSkills, files, credentials, actions, onChange]);
+    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], files: files ?? [], credentials: credentials ?? [], rollout: rollout ?? null, actions });
+  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, sharedSkills, files, credentials, rollout, actions, onChange]);
 
   return null;
 }

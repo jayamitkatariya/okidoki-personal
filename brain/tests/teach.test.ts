@@ -1,5 +1,31 @@
 import { test, expect } from "bun:test";
-import { normalizeTeachStep, teachSystemPrompt } from "../src/teach";
+import { normalizeTeachStep, teachModel, teachSystemPrompt } from "../src/teach";
+
+test("steps are written by Sonnet unless a bigger model was chosen", () => {
+  expect(teachModel(undefined)).toBe("claude-sonnet-5-5");
+  expect(teachModel("claude-haiku-5-5")).toBe("claude-sonnet-5-5");
+  expect(teachModel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+  expect(teachModel("claude-opus-5-5")).toBe("claude-opus-5-5");
+});
+
+test("one drawing per step at most", () => {
+  const step = normalizeTeachStep({
+    action: "click",
+    say: "click it",
+    annotations: [{ kind: "callout", text: "here", x: 1, y: 2 }, { kind: "sketch", x: 3, y: 4 }],
+  });
+  expect(step.annotations).toHaveLength(1);
+  expect(step.annotations[0].kind).toBe("callout");
+});
+
+test("the prompt carries the real menu bar and a landed step", () => {
+  const base = { topic: "tabs", app: "Ghostty", log: [{ say: "open a tab", action: "key", label: "new tab", outcome: "pressed cmd+t — the shortcut" }], stepNumber: 2, imageWidth: 1568, imageHeight: 980 };
+  const prompt = teachSystemPrompt({ ...base, menus: ["File: New Window, New Tab, Close", "View: Toggle Full Screen"], landed: true });
+  expect(prompt).toContain("File: New Window, New Tab, Close");
+  expect(prompt.indexOf("menu bar, exactly as it is")).toBeLessThan(prompt.indexOf("Loose outline from the planner"));
+  expect(prompt).toContain("landed — okidoki saw that last action hit its target.");
+  expect(teachSystemPrompt({ ...base, landed: false })).not.toContain("landed — okidoki");
+});
 
 test("a model step is cleaned into one safe action", () => {
   const step = normalizeTeachStep({
