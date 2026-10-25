@@ -95,6 +95,8 @@ struct DashboardPayload: Encodable {
     var dashboardOpen: Bool
     var sidecar: String
     var version: String
+    /// This Mac's name, for pairing and for the organization to say which Mac did what.
+    var hostName: String
     var savings: Double
     var convexConfigured: Bool
     /// The brain, Convex sync, the Moss index and MCP, as they are right now. The page shows these
@@ -168,8 +170,10 @@ struct DashboardServicesPayload: Encodable {
         var configured: Bool
         /// This Mac holds a device token from a sync login.
         var paired: Bool
-        /// The login it's paired as, for Settings to say so.
+        /// The login it's paired as, for Settings to say so, and its id, so the panel can tell whether
+        /// the person signed in there is the one this Mac is paired as.
         var pairedAs: String
+        var pairedUser: String
         var siteURL: String
         /// ConvexSyncService's own words: "synced just now", "sync secret rejected", "local only"…
         var status: String
@@ -530,6 +534,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                           configured: settings.syncEnabled && !settings.convexSiteURL.isEmpty && KeyStore.deviceToken != nil,
                           paired: KeyStore.deviceToken != nil,
                           pairedAs: KeyStore.deviceEmail ?? "",
+                          pairedUser: KeyStore.deviceUserID ?? "",
                           siteURL: settings.convexSiteURL,
                           status: env.convex.status,
                           lastSyncAt: settings.lastSyncAt),
@@ -596,6 +601,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             dashboardOpen: env.dashboardOpen,
             sidecar: env.sidecar.status.label,
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
+            hostName: Host.current().localizedName ?? "Mac",
             savings: env.store.savings,
             convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty,
             services: services(env),
