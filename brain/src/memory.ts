@@ -259,7 +259,11 @@ async function upsert(index: MemoryEngine, docs: MemoryDoc[]): Promise<number> {
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
-  return Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} timed out`)), ms))]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
+  });
+  return Promise.race([work, limit]).finally(() => clearTimeout(timer));
 }
 
 /** Brings the index in line with the Mac: embeds only new or changed items, drops removed ones. */

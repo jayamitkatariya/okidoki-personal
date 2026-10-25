@@ -550,7 +550,11 @@ export class ReplyAssembler {
         break;
       case "content_block_start": {
         const block = { ...(data.content_block ?? {}) } as Record<string, unknown>;
-        if (block.type === "tool_use") block.input = {};
+        // Open until its stop arrives: a stream cut mid-call must not leave a half-written action behind.
+        if (block.type === "tool_use") {
+          block.input = {};
+          block.__open = true;
+        }
         this.blocks[data.index] = block;
         this.json[data.index] = "";
         break;
@@ -569,6 +573,7 @@ export class ReplyAssembler {
       case "content_block_stop": {
         const block = this.blocks[data.index];
         if (block?.type === "tool_use") {
+          delete block.__open;
           const raw = this.json[data.index];
           try {
             block.input = raw ? JSON.parse(raw) : {};
@@ -592,7 +597,7 @@ export class ReplyAssembler {
 
   /** The reply so far. Unfinished or unreadable tool calls are left out, so what remains is a valid turn. */
   reply(): ModelReply {
-    const content = this.blocks.filter((b) => b && !b.__broken && !(b.type === "tool_use" && b.input === undefined));
+    const content = this.blocks.filter((b) => b && !b.__broken && !b.__open);
     return { content, usage: this.usage, stop_reason: this.stop };
   }
 }

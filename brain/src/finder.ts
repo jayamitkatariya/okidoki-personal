@@ -110,7 +110,7 @@ export async function resolvePdf(url: string, query: string, fetchImpl: Fetch = 
   if (!links.length) return null;
   const words = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1);
   const score = (l: { href: string; text: string }) => {
-    const hay = `${decodeURIComponent(l.href)} ${l.text}`.toLowerCase();
+    const hay = `${safeDecode(l.href)} ${l.text}`.toLowerCase();
     return words.reduce((n, w) => n + (hay.includes(w) ? 1 : 0), 0);
   };
   const best = links.map((l) => ({ l, s: score(l) })).sort((a, b) => b.s - a.s)[0]!.l.href;
@@ -122,8 +122,13 @@ export async function resolvePdf(url: string, query: string, fetchImpl: Fetch = 
   return best;
 }
 
+/** decodeURIComponent that shrugs at a malformed escape (one bad link mustn't sink the whole search). */
+function safeDecode(text: string): string {
+  try { return decodeURIComponent(text); } catch { return text; }
+}
+
 function titleFromURL(url: string): string {
-  const last = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "document.pdf");
+  const last = safeDecode(new URL(url).pathname.split("/").pop() ?? "document.pdf");
   return last.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ");
 }
 

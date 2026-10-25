@@ -27,8 +27,17 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+/** The JSON body as an object. Anything else (no body, not JSON, a bare value) is a 400, never a crash. */
+class BadRequest extends Error {}
 async function body<T>(request: Request): Promise<T> {
-  return (await request.json()) as T;
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    throw new BadRequest("the request body isn't JSON");
+  }
+  if (!parsed || typeof parsed !== "object") throw new BadRequest("the request body must be a JSON object");
+  return parsed as T;
 }
 
 function installedTools(): string[] {
@@ -36,6 +45,18 @@ function installedTools(): string[] {
 }
 
 export async function handleRequest(request: Request): Promise<Response> {
+  try {
+    return await route(request);
+  } catch (error) {
+    if (error instanceof BadRequest) return json({ error: error.message }, 400);
+    // A route that threw must still answer with JSON the Mac can read, never Bun's HTML error page.
+    const message = error instanceof Error ? error.message : "request failed";
+    console.error(`brain: ${new URL(request.url).pathname} failed: ${message}`);
+    return json({ error: message }, 500);
+  }
+}
+
+async function route(request: Request): Promise<Response> {
     const url = new URL(request.url);
     // The entry workbench is a page for this Mac's browser, so it can't carry the sidecar token.
     const portal = await portalRoute(request, url);
@@ -392,7 +413,8 @@ export async function handleRequest(request: Request): Promise<Response> {
     }
 
     if (url.pathname === "/mcp/forget" && request.method === "POST") {
-      const { id } = await body<{ id: string }>(request);
+      const { id } = await body<{ id?: unknown }>(request);
+      if (typeof id !== "string" || !id) return json({ error: "id required" }, 400);
       forget(id);
       return json({ ok: true });
     }
@@ -414,8 +436,8 @@ export async function handleRequest(request: Request): Promise<Response> {
     }
 
     if (url.pathname === "/apify/check" && request.method === "POST") {
-      const { token } = await body<{ token?: string }>(request);
-      const resolved = apifyToken(token);
+      const { token } = await body<{ token?: unknown }>(request);
+      const resolved = apifyToken(typeof token === "string" ? token : undefined);
       if (!resolved) return json({ ok: false, error: "No Apify key configured" });
       return json(await checkToken(resolved));
     }
@@ -432,17 +454,14 @@ export async function handleRequest(request: Request): Promise<Response> {
       }
     }
 
-    if (url.pathname === "/stop" && request.method === "POST") {
-      const { runId } = await body<{ runId: string }>(request);
-      const shellStopped = stop(runId);
-      return json({ stopped: stopConnector(runId) || shellStopped });
-    }
-    if (url.pathname === "/pause" && request.method === "POST") {
-      const { runId } = await body<{ runId: string }>(request);
-      return json({ paused: pause(runId) });
-    }
-    if (url.pathname === "/resume" && request.method === "POST") {
-      const { runId } = await body<{ runId: string }>(request);
+    if (["/stop", "/pause", "/resume"].includes(url.pathname) && request.method === "POST") {
+      const { runId } = await body<{ runId?: unknown }>(request);
+      if (typeof runId !== "string" || !runId) return json({ error: "runId required" }, 400);
+      if (url.pathname === "/stop") {
+        const shellStopped = stop(runId);
+        return json({ stopped: stopConnector(runId) || shellStopped });
+      }
+      if (url.pathname === "/pause") return json({ paused: pause(runId) });
       return json({ resumed: resume(runId) });
     }
 
@@ -451,7 +470,10 @@ export async function handleRequest(request: Request): Promise<Response> {
 
 if (import.meta.main) {
   // idleTimeout defaults to 10 s and would close a slow model call or a job that's quiet for a while.
-  const server = Bun.serve({ port, hostname: "127.0.0.1", idleTimeout: 0, maxRequestBodySize: 64 * 1024 * 1024, fetch: handleRequest });
+  const server = Bun.serve({
+    port, hostname: "127.0.0.1", idleTimeout: 0, maxRequestBodySize: 64 * 1024 * 1024, fetch: handleRequest,
+    error(error) { return json({ error: error.message }, 500); },
+  });
 
 
 let shuttingDown = false;

@@ -302,8 +302,10 @@ export async function callAnthropicStreaming(
       buffer = buffer.slice(newline + 1);
       newline = buffer.indexOf("\n");
       if (!line.startsWith("data:")) continue;
-      let event: { type?: string; index?: number; content_block?: { type?: string }; delta?: { type?: string; partial_json?: string } };
+      let event: { type?: string; index?: number; content_block?: { type?: string }; delta?: { type?: string; partial_json?: string }; error?: unknown };
       try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      // An overload or rate limit arrives as an event on the stream, not as a status code.
+      if (event.type === "error") throw new Error(`model stream error: ${JSON.stringify(event.error ?? event).slice(0, 300)}`);
       if (event.type === "content_block_start" && event.content_block?.type === "tool_use" && toolIndex === null) {
         toolIndex = event.index ?? 0;
       } else if (event.type === "content_block_delta" && event.index === toolIndex && event.delta?.type === "input_json_delta") {
@@ -316,6 +318,8 @@ export async function callAnthropicStreaming(
       }
     }
   }
+  // The lesson is whole once its tool block closes; don't hold the connection open for the rest.
+  await reader.cancel().catch(() => {});
   if (toolIndex === null || !partial.trim()) return null;
   try { return JSON.parse(partial) as Record<string, unknown>; } catch { return null; }
 }

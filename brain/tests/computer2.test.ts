@@ -315,6 +315,30 @@ test("a stream that drops after an action keeps the finished part instead of ask
   expect(sessionFor("run-1")?.pending.map((u) => u.id)).toEqual(["t1"]);
 });
 
+test("a stream cut in the middle of a tool call drops the half-written call rather than sending an empty action", async () => {
+  // Cut after the first delta of t2: t1 is whole, t2 has an open block with partial JSON.
+  const api = fakeAPI([sse(streamed, 10)]);
+  const seen: string[] = [];
+  const out = await driveStep(request(), "sk", api.impl, 55_000, (action) => seen.push(action.id));
+  expect(seen).toEqual(["t1"]);
+  expect(out.actions.map((a) => a.id)).toEqual(["t1"]);
+  const turn = sessionFor("run-1")?.messages[1].content as Array<{ id?: string; type: string }>;
+  expect(turn.filter((b) => b.type === "tool_use").map((b) => b.id)).toEqual(["t1"]);
+
+  // Worst case: the cut lands inside a `finish` call. That must not end the run as a success.
+  resetSessions();
+  const finishing: Array<[string, Record<string, unknown>]> = [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 1 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "f", name: "finish", toolset_name: "computer", input: {} } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"success": true, "summ' } }],
+  ];
+  const retry = reply([{ type: "tool_use", id: "g", name: "left_click", input: { coordinate: [5, 5] } }]);
+  const cut = fakeAPI([sse(finishing, 3), retry]);
+  const again = await driveStep(request(), "sk", cut.impl, 55_000, () => {});
+  expect(again.actions.map((a) => a.type)).not.toContain("done");
+  expect(cut.sent.length).toBeGreaterThanOrEqual(2);
+});
+
 test("the approved plan reaches the model, and it is told to keep going rather than ask", async () => {
   const api = fakeAPI([reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }])]);
   const plan = "Add a 9V battery, a resistor and an LED from the Basic components panel, then wire them in a closed series loop.";

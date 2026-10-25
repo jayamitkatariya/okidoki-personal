@@ -228,7 +228,12 @@ export async function portalRoute(request: Request, url: URL): Promise<Response 
   if (path === "/ace/api/entries" && request.method === "POST") {
     // Same-origin pages only: the workbench posts from /ace/entry on this host.
     const origin = request.headers.get("origin");
-    if (origin && new URL(origin).host !== url.host) return json({ error: "forbidden" }, 403);
+    if (origin) {
+      // "null" (a sandboxed frame, a file:// page) isn't a URL; it isn't this host either.
+      let host = "";
+      try { host = new URL(origin).host; } catch { host = ""; }
+      if (host !== url.host) return json({ error: "forbidden" }, 403);
+    }
     let body: EntryInput;
     try {
       body = (await request.json()) as EntryInput;

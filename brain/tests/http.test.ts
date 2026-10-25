@@ -226,3 +226,21 @@ test("/memory/status reports the index by kind, so the dashboard can show what M
   const sync = await fetch(base + "/memory/sync", { method: "POST", headers, body: JSON.stringify({ memories: [] }) });
   expect(sync.status).toBe(400);
 });
+
+test("a body that isn't JSON, or isn't an object, is a 400 with a reason — never a stack trace", async () => {
+  for (const path of ["/stop", "/pause", "/resume", "/mcp/forget", "/apify/check"]) {
+    const broken = await fetch(`http://localhost${path}`, { method: "POST", headers, body: "{bad" });
+    expect([path, broken.status]).toEqual([path, 400]);
+    expect(((await broken.json()) as { error: string }).error).toContain("JSON");
+    const bare = await fetch(`http://localhost${path}`, { method: "POST", headers, body: "null" });
+    expect([path, bare.status]).toEqual([path, 400]);
+    const missing = await fetch(`http://localhost${path}`, { method: "POST", headers, body: "{}" });
+    // {} is an object; the route then says which field it wanted (apify/check falls back to the environment)
+    expect([path, missing.status]).toEqual([path, path === "/apify/check" ? 200 : 400]);
+  }
+});
+
+test("the workbench's one unauthenticated route treats Origin: null as another host", async () => {
+  const response = await fetch("http://localhost/ace/api/entries", { method: "POST", headers: { origin: "null", "content-type": "application/json" }, body: "{}" });
+  expect(response.status).toBe(403);
+});

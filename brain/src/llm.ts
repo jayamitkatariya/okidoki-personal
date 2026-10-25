@@ -6,6 +6,11 @@ import { normalizeLessonKind, normalizeScene, resolveLessonKind, type Scene } fr
 import { agentTaskDecision } from "./terminal";
 import { needsPlanReview, reviewPlan } from "./plan-review";
 
+/** /think's budget: the Mac gives up at 90 s, so the two model calls together stay under 85. */
+const THINK_TOTAL_MS = 85_000;
+const THINK_FIRST_CALL_MS = 55_000;
+const THINK_REVIEW_MS = 25_000;
+
 const responseTool = {
   name: "okidoki_respond",
   description:
@@ -422,7 +427,9 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(75_000),
+      // The Mac waits 90 s for /think. The first call gets 55 s so that a slow one still leaves the
+      // plan review a real window of its own (up to 25 s) instead of the few seconds that were left.
+      signal: AbortSignal.timeout(THINK_FIRST_CALL_MS),
     });
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 160);
@@ -433,7 +440,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
     for (const block of blocks) {
       if (block.type === "tool_use" && block.input) {
         const input = needsPlanReview(String(block.input.kind))
-          ? await reviewPlan(body, block.input, apiKey, fetchImpl, 75_000 - (Date.now() - started))
+          ? await reviewPlan(body, block.input, apiKey, fetchImpl, Math.min(THINK_REVIEW_MS, THINK_TOTAL_MS - (Date.now() - started)))
           : block.input;
         return { decision: checkConnectorDecision(normalize(input, request.text), request.connectors, catalog), usedModel: true };
       }
