@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
 // A sync is split into many small mutations (see http.ts) so no single transaction or document
@@ -68,6 +68,7 @@ const builders = {
     freedBytes: typeof item.freedBytes === "number" ? item.freedBytes : null,
     builtin: item.builtin ?? null,
     pickedPath: item.pickedPath ?? null,
+    modifiedAt: iso(item.updatedAt ?? item.createdAt),
   }),
   skills: (item: any, accountId: string) => ({
     clientId: String(item.id),
@@ -78,6 +79,7 @@ const builders = {
     source: String(item.source ?? "watch me"),
     runCount: Number(item.runCount ?? 0),
     createdAt: iso(item.createdAt),
+    modifiedAt: iso(item.updatedAt ?? item.createdAt),
   }),
   routines: (item: any, accountId: string) => ({
     clientId: String(item.id),
@@ -92,6 +94,7 @@ const builders = {
     createdAt: iso(item.createdAt),
     lastRunAt: item.lastRunAt ?? null,
     nextRunAt: item.nextRunAt ?? null,
+    modifiedAt: iso(item.updatedAt ?? item.createdAt),
   }),
 };
 
@@ -107,54 +110,61 @@ function unchanged(existing: Record<string, unknown>, next: Record<string, unkno
   return Object.entries(next).every(([key, value]) => JSON.stringify(existing[key]) === JSON.stringify(value));
 }
 
-// Claims the sync for this account. A payload older than the one already accepted is refused, so two
-// overlapping pushes (a slow one finishing after a fast one) can't delete each other's rows.
-export const begin = internalMutation({
-  args: { accountId: v.string(), sentAt: v.number(), device: v.string() },
-  handler: async (ctx, { accountId, sentAt, device }) => {
-    const existing = await ctx.db
-      .query("syncs")
-      .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .first();
-    if (existing && sentAt < existing.sentAt) return { ok: false as const, latest: existing.sentAt };
-    const now = Date.now();
-    if (existing) await ctx.db.patch(existing._id, { sentAt, device, startedAt: now, finishedAt: null });
-    else await ctx.db.insert("syncs", { accountId, sentAt, device, startedAt: now, finishedAt: null });
-    return { ok: true as const, latest: sentAt };
-  },
-});
+async function syncRow(ctx: QueryCtx | MutationCtx, accountId: string) {
+  return await ctx.db
+    .query("syncs")
+    .withIndex("by_account", (q) => q.eq("accountId", accountId))
+    .first();
+}
 
-// Still the newest sync? Checked before each destructive step so a superseded sync stops instead of deleting.
-export const stillCurrent = internalMutation({
-  args: { accountId: v.string(), sentAt: v.number() },
-  handler: async (ctx, { accountId, sentAt }) => {
-    const existing = await ctx.db
-      .query("syncs")
-      .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .first();
-    return !existing || existing.sentAt <= sentAt;
+/** The account's current sync version; 0 before its first sync. */
+export async function versionOf(ctx: QueryCtx | MutationCtx, accountId: string): Promise<number> {
+  return (await syncRow(ctx, accountId))?.version ?? 0;
+}
+
+// Claims the sync for this account and hands out the next version.
+// A Mac that sends `baseVersion` is accepted only on top of exactly that version: anything newer means
+// another Mac synced since it last pulled, so it must pull and merge first (its deletes would otherwise
+// remove what the other Mac just added). Older Macs send only `sentAt`, and a payload older than the
+// last accepted one is refused, as before.
+export const begin = internalMutation({
+  args: { accountId: v.string(), sentAt: v.number(), device: v.string(), baseVersion: v.optional(v.number()) },
+  handler: async (ctx, { accountId, sentAt, device, baseVersion }) => {
+    const existing = await syncRow(ctx, accountId);
+    const current = existing?.version ?? 0;
+    if (baseVersion !== undefined) {
+      if (baseVersion !== current) return { ok: false as const, reason: "behind" as const, version: current, latest: existing?.sentAt ?? 0 };
+    } else if (existing && sentAt < existing.sentAt) {
+      return { ok: false as const, reason: "stale" as const, version: current, latest: existing.sentAt };
+    }
+    const version = current + 1;
+    const now = Date.now();
+    const row = { sentAt: Math.max(sentAt, existing?.sentAt ?? 0), device, startedAt: now, finishedAt: null, version };
+    if (existing) await ctx.db.patch(existing._id, row);
+    else await ctx.db.insert("syncs", { accountId, ...row });
+    return { ok: true as const, version, latest: row.sentAt };
   },
 });
 
 export const finish = internalMutation({
-  args: { accountId: v.string(), sentAt: v.number() },
-  handler: async (ctx, { accountId, sentAt }) => {
-    const existing = await ctx.db
-      .query("syncs")
-      .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .first();
-    if (existing && existing.sentAt === sentAt) await ctx.db.patch(existing._id, { finishedAt: Date.now() });
+  args: { accountId: v.string(), version: v.number() },
+  handler: async (ctx, { accountId, version }) => {
+    const existing = await syncRow(ctx, accountId);
+    if (existing && existing.version === version) await ctx.db.patch(existing._id, { finishedAt: Date.now() });
   },
 });
 
 export const pushMeta = internalMutation({
   args: {
     accountId: v.string(),
+    version: v.number(),
     accounts: v.array(v.any()),
     settings: v.any(),
     connectors: v.array(v.any()),
   },
   handler: async (ctx, args) => {
+    // A superseded sync must not put back an account name or setting the newer one changed.
+    if ((await versionOf(ctx, args.accountId)) !== args.version) return { ok: false };
     const now = Date.now();
     for (const account of args.accounts) {
       const existing = await ctx.db
@@ -197,12 +207,14 @@ export const pushMeta = internalMutation({
       if (!existing) await ctx.db.insert("connectors", { ...document, updatedAt: now });
       else if (!unchanged(existing, document)) await ctx.db.patch(existing._id, { ...document, updatedAt: now });
     }
+    return { ok: true };
   },
 });
 
 export const upsertBatch = internalMutation({
-  args: { accountId: v.string(), table: tableArg, items: v.array(v.any()) },
-  handler: async (ctx, { accountId, table, items }) => {
+  args: { accountId: v.string(), table: tableArg, items: v.array(v.any()), version: v.number() },
+  handler: async (ctx, { accountId, table, items, version }) => {
+    if ((await versionOf(ctx, accountId)) !== version) return { written: 0, superseded: true };
     const now = Date.now();
     let written = 0;
     for (const item of items) {
@@ -212,10 +224,17 @@ export const upsertBatch = internalMutation({
         .withIndex("by_client", (q) => q.eq("clientId", document.clientId))
         .first();
       if (existing && unchanged(existing, document)) continue;
-      const row = stampsOwnTime(table) ? { ...document, updatedAt: now } : document;
+      const stamped = { ...document, syncVersion: version };
+      const row = stampsOwnTime(table) ? { ...stamped, updatedAt: now } : stamped;
       if (existing) await ctx.db.patch(existing._id, row);
       else await ctx.db.insert(table, row as any);
       written++;
+      // Back again (edited on a Mac that hadn't seen the delete): it's no longer deleted.
+      const tombstones = await ctx.db
+        .query("deletions")
+        .withIndex("by_client", (q) => q.eq("clientId", document.clientId))
+        .collect();
+      for (const tombstone of tombstones) await ctx.db.delete(tombstone._id);
 
       if (table === "runs") {
         const runId = String(item.id);
@@ -232,22 +251,37 @@ export const upsertBatch = internalMutation({
         }
       }
     }
-    return { written };
+    return { written, superseded: false };
   },
 });
 
+// The Mac sends only its newest runs and threads. Rows older than the oldest one it sent ("floor") are
+// history it chose not to send, not deletions, so they stay.
+const floorKey = (table: SyncedTable, row: Record<string, any>) => (table === "runs" ? String(row.createdAt ?? "") : table === "threads" ? String(row.updatedAt ?? "") : "");
+
 // Deletes this account's rows the Mac no longer has, one page at a time; the caller loops on the cursor.
+// Each delete leaves a tombstone, so the account's other Macs drop the item too.
 export const removeMissingPage = internalMutation({
-  args: { accountId: v.string(), table: tableArg, keep: v.string(), cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { accountId, table, keep, cursor }) => {
+  args: {
+    accountId: v.string(),
+    table: tableArg,
+    keep: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    version: v.number(),
+    floor: v.optional(v.string()),
+  },
+  handler: async (ctx, { accountId, table, keep, cursor, version, floor }) => {
+    if ((await versionOf(ctx, accountId)) !== version) return { cursor: "", isDone: true, removed: 0, superseded: true };
     const keepSet = new Set(keep.split("\n").filter(Boolean));
     const page = await ctx.db
       .query(table)
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .paginate({ cursor, numItems: 100 });
     let removed = 0;
+    const now = Date.now();
     for (const row of page.page) {
       if (keepSet.has(row.clientId)) continue;
+      if (floor && floorKey(table, row) < floor) continue;
       if (table === "runs") {
         const previews = await ctx.db
           .query("actionPreviews")
@@ -262,9 +296,10 @@ export const removeMissingPage = internalMutation({
         for (const link of links) await ctx.db.delete(link._id);
       }
       await ctx.db.delete(row._id);
+      await ctx.db.insert("deletions", { accountId, table, clientId: row.clientId, syncVersion: version, deletedAt: now });
       removed++;
     }
-    return { cursor: page.continueCursor, isDone: page.isDone, removed };
+    return { cursor: page.continueCursor, isDone: page.isDone, removed, superseded: false };
   },
 });
 
@@ -275,7 +310,7 @@ export const purgeAccountPage = internalMutation({
   handler: async (ctx, { accountId }) => {
     let removed = 0;
     const budget = 200;
-    for (const table of [...SYNCED_TABLES, "actionPreviews", "settings", "snapshots", "shareLinks", "syncs"] as const) {
+    for (const table of [...SYNCED_TABLES, "actionPreviews", "settings", "snapshots", "shareLinks", "deletions", "syncs"] as const) {
       const rows = await ctx.db
         .query(table)
         .withIndex("by_account", (q) => q.eq("accountId", accountId))
@@ -326,15 +361,15 @@ export function trimSnapshot(state: Record<string, any>): Record<string, any> {
 }
 
 export const writeSnapshot = internalMutation({
-  args: { accountId: v.string(), device: v.string(), state: v.any(), sentAt: v.number() },
-  handler: async (ctx, { accountId, device, state, sentAt }) => {
+  args: { accountId: v.string(), device: v.string(), state: v.any(), sentAt: v.number(), version: v.number() },
+  handler: async (ctx, { accountId, device, state, sentAt, version }) => {
     const now = Date.now();
     const existing = await ctx.db
       .query("snapshots")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
       .first();
-    // A newer snapshot already landed (another device, or a faster sync): keep it.
-    if (existing?.sentAt && existing.sentAt > sentAt) return existing.updatedAt;
+    // A newer sync already took over (another device, or a faster push): keep its snapshot.
+    if ((await versionOf(ctx, accountId)) !== version) return existing?.updatedAt ?? now;
     if (existing) await ctx.db.patch(existing._id, { state, device, updatedAt: now, sentAt });
     else await ctx.db.insert("snapshots", { accountId, device, state, updatedAt: now, sentAt });
     return now;
@@ -372,5 +407,81 @@ export const createShare = internalMutation({
       createdAt: Date.now(),
     });
     return { token: args.token, created: true };
+  },
+});
+
+// ---- Pull: what changed for an account since a version, in the Mac's own shape. ----
+
+const pullTableArg = v.union(tableArg, v.literal("deletions"));
+// Small pages for threads: one thread can be most of a megabyte.
+const PULL_PAGE: Record<SyncedTable, number> = { threads: 8, memories: 200, runs: 40, skills: 40, routines: 200 };
+
+/** A synced row as the Mac stores it, so it decodes straight into the Mac's own types. */
+export function toMac(table: SyncedTable, row: Record<string, any>, preview: unknown = null): Record<string, unknown> {
+  const { _id, _creationTime, clientId, accountId, syncVersion, modifiedAt, ...rest } = row;
+  const item: Record<string, any> = { id: clientId, accountID: accountId, ...rest };
+  if (table === "threads" || table === "memories") return item; // they carry the Mac's own updatedAt
+  // The others' updatedAt is the server's write time; the Mac's own edit time is modifiedAt.
+  const { updatedAt: _written, ...other } = item;
+  const edited = modifiedAt ?? row.createdAt;
+  if (table === "runs") {
+    const { threadId, ...run } = other;
+    return { ...run, threadID: threadId ?? null, preview: preview ?? null, updatedAt: edited };
+  }
+  return { ...other, updatedAt: edited };
+}
+
+export const currentVersion = internalQuery({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    const row = await syncRow(ctx, accountId);
+    return { version: row?.version ?? 0, syncing: Boolean(row && row.finishedAt === null && Date.now() - row.startedAt < 10 * 60_000) };
+  },
+});
+
+// `since` 0 is a full pull (every row, including ones written before versions existed); otherwise only
+// rows written by a later sync. Tombstones always come by version: they only exist since versions do.
+export const pullPage = internalQuery({
+  args: { accountId: v.string(), table: pullTableArg, since: v.number(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { accountId, table, since, cursor }) => {
+    const version = await versionOf(ctx, accountId);
+    if (table === "deletions") {
+      const page = await ctx.db
+        .query("deletions")
+        .withIndex("by_account_version", (q) => q.eq("accountId", accountId).gt("syncVersion", since))
+        .paginate({ cursor, numItems: 500 });
+      return {
+        version,
+        items: page.page.map((row) => ({ table: row.table, id: row.clientId, deletedAt: new Date(row.deletedAt).toISOString() })),
+        cursor: page.continueCursor,
+        isDone: page.isDone,
+      };
+    }
+    const options = { cursor, numItems: PULL_PAGE[table] };
+    const page =
+      since > 0
+        ? await ctx.db
+            .query(table)
+            .withIndex("by_account_version", (q) => q.eq("accountId", accountId).gt("syncVersion", since))
+            .paginate(options)
+        : await ctx.db
+            .query(table)
+            .withIndex("by_account", (q) => q.eq("accountId", accountId))
+            .paginate(options);
+    const items: Record<string, unknown>[] = [];
+    for (const row of page.page) {
+      let preview: unknown = null;
+      if (table === "runs") {
+        preview =
+          (
+            await ctx.db
+              .query("actionPreviews")
+              .withIndex("by_run", (q) => q.eq("runId", row.clientId))
+              .first()
+          )?.data ?? null;
+      }
+      items.push(toMac(table, row, preview));
+    }
+    return { version, items, cursor: page.continueCursor, isDone: page.isDone };
   },
 });

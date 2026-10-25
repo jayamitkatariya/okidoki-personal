@@ -50,6 +50,10 @@ export const state = query({
   },
 });
 
+// Newest first and capped, so a long history can't push a query past Convex's read limits.
+const MAX_RUNS = 500;
+const MAX_MEMORIES = 1000;
+
 export const runs = query({
   args: { accountId: v.string() },
   handler: async (ctx, { accountId }) => {
@@ -57,7 +61,8 @@ export const runs = query({
     return await ctx.db
       .query("runs")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .collect();
+      .order("desc")
+      .take(MAX_RUNS);
   },
 });
 
@@ -68,7 +73,8 @@ export const memories = query({
     return await ctx.db
       .query("memories")
       .withIndex("by_account", (q) => q.eq("accountId", accountId))
-      .collect();
+      .order("desc")
+      .take(MAX_MEMORIES);
   },
 });
 

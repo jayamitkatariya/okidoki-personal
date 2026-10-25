@@ -36,8 +36,11 @@ export default defineSchema({
     archived: v.boolean(),
     createdAt: v.string(),
     updatedAt: v.string(),
+    // The account's sync version that last wrote this row, so a Mac can pull only what changed.
+    syncVersion: v.optional(v.number()),
   })
     .index("by_account", ["accountId"])
+    .index("by_account_version", ["accountId", "syncVersion"])
     .index("by_client", ["clientId"]),
 
   memories: defineTable({
@@ -48,8 +51,11 @@ export default defineSchema({
     source: v.string(),
     createdAt: v.string(),
     updatedAt: v.string(),
+    // The account's sync version that last wrote this row, so a Mac can pull only what changed.
+    syncVersion: v.optional(v.number()),
   })
     .index("by_account", ["accountId"])
+    .index("by_account_version", ["accountId", "syncVersion"])
     .index("by_client", ["clientId"]),
 
   runs: defineTable({
@@ -72,8 +78,13 @@ export default defineSchema({
     builtin: v.union(v.string(), v.null()),
     pickedPath: v.union(v.string(), v.null()),
     updatedAt: v.number(),
+    // The Mac's own last-edit time (ISO), for merging the same item edited on two Macs.
+    modifiedAt: v.optional(v.string()),
+    // The account's sync version that last wrote this row, so a Mac can pull only what changed.
+    syncVersion: v.optional(v.number()),
   })
     .index("by_account", ["accountId"])
+    .index("by_account_version", ["accountId", "syncVersion"])
     .index("by_client", ["clientId"])
     .index("by_status", ["accountId", "status"]),
 
@@ -96,8 +107,13 @@ export default defineSchema({
     runCount: v.number(),
     createdAt: v.string(),
     updatedAt: v.number(),
+    // The Mac's own last-edit time (ISO), for merging the same item edited on two Macs.
+    modifiedAt: v.optional(v.string()),
+    // The account's sync version that last wrote this row, so a Mac can pull only what changed.
+    syncVersion: v.optional(v.number()),
   })
     .index("by_account", ["accountId"])
+    .index("by_account_version", ["accountId", "syncVersion"])
     .index("by_client", ["clientId"]),
 
   routines: defineTable({
@@ -114,8 +130,13 @@ export default defineSchema({
     lastRunAt: v.union(v.string(), v.null()),
     nextRunAt: v.union(v.string(), v.null()),
     updatedAt: v.number(),
+    // The Mac's own last-edit time (ISO), for merging the same item edited on two Macs.
+    modifiedAt: v.optional(v.string()),
+    // The account's sync version that last wrote this row, so a Mac can pull only what changed.
+    syncVersion: v.optional(v.number()),
   })
     .index("by_account", ["accountId"])
+    .index("by_account_version", ["accountId", "syncVersion"])
     .index("by_client", ["clientId"]),
 
   connectors: defineTable({
@@ -144,7 +165,22 @@ export default defineSchema({
     device: v.string(),
     startedAt: v.number(),
     finishedAt: v.union(v.number(), v.null()),
+    // Goes up by one with every accepted sync. A Mac pushes on top of the version it last pulled;
+    // anything else is refused so it pulls and merges first.
+    version: v.optional(v.number()),
   }).index("by_account", ["accountId"]),
+
+  // Items a sync removed, so other Macs on the same account remove them too instead of pushing them back.
+  deletions: defineTable({
+    accountId: v.string(),
+    table: v.string(),
+    clientId: v.string(),
+    syncVersion: v.number(),
+    deletedAt: v.number(),
+  })
+    .index("by_account", ["accountId"])
+    .index("by_account_version", ["accountId", "syncVersion"])
+    .index("by_client", ["clientId"]),
 
   shareLinks: defineTable({
     token: v.string(),
@@ -154,6 +190,8 @@ export default defineSchema({
     run: v.any(),
     views: v.number(),
     createdAt: v.number(),
+    // Views are counted at most once every few seconds, so a reload loop can't hammer the row.
+    lastViewedAt: v.optional(v.number()),
   })
     .index("by_token", ["token"])
     .index("by_account", ["accountId"])

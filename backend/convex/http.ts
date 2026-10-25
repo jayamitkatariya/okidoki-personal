@@ -71,10 +71,13 @@ function authorized(request: Request): boolean {
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 
 async function readJson<T>(request: Request): Promise<{ ok: true; body: T } | { ok: false; response: Response }> {
-  const length = Number(request.headers.get("content-length") ?? 0);
-  if (length > MAX_BODY_BYTES) return { ok: false, response: json({ error: "payload too large" }, 413) };
+  const tooLarge = { ok: false as const, response: json({ error: "payload too large" }, 413) };
+  // The header is a hint (and can be missing or wrong); the bytes actually read are what count.
+  if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) return tooLarge;
   try {
-    const body = (await request.json()) as T;
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength > MAX_BODY_BYTES) return tooLarge;
+    const body = JSON.parse(new TextDecoder().decode(bytes)) as T;
     if (!body || typeof body !== "object") return { ok: false, response: json({ error: "bad json" }, 400) };
     return { ok: true, body };
   } catch {
@@ -90,12 +93,15 @@ http.route({
   handler: httpAction(async () => options()),
 });
 
+// A Mac's whole state for one account. Newer Macs pull and merge first and send `baseVersion`, the version
+// they merged; the push is refused (409 "behind") if another Mac synced since. `floors` say how far back
+// the Mac's capped runs and threads go, so older rows aren't taken for deletions.
 http.route({
   path: "/api/sync",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     if (!authorized(request)) return json({ error: "unauthorized" }, 401);
-    const parsed = await readJson<{ accountId?: unknown; device?: unknown; state?: unknown; sentAt?: unknown }>(request);
+    const parsed = await readJson<{ accountId?: unknown; device?: unknown; state?: unknown; sentAt?: unknown; baseVersion?: unknown; floors?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId) || !body.state || typeof body.state !== "object") {
@@ -104,18 +110,30 @@ http.route({
     const accountId = body.accountId;
     const device = typeof body.device === "string" && body.device.trim() ? body.device.trim().slice(0, 120) : "mac";
     const sentAt = typeof body.sentAt === "number" && Number.isFinite(body.sentAt) ? body.sentAt : Date.now();
+    const baseVersion = typeof body.baseVersion === "number" && Number.isInteger(body.baseVersion) && body.baseVersion >= 0 ? body.baseVersion : undefined;
+    const floors = body.floors && typeof body.floors === "object" ? (body.floors as Record<string, unknown>) : {};
+    const floorFor = (table: string) => (typeof floors[table] === "string" && floors[table] ? (floors[table] as string) : undefined);
     const state = body.state as Record<string, any>;
     const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
 
-    const claim = await ctx.runMutation(internal.sync.begin, { accountId, sentAt, device });
-    if (!claim.ok) return json({ error: "stale", detail: "a newer sync for this account already landed", latest: claim.latest }, 409);
+    const claim = await ctx.runMutation(internal.sync.begin, { accountId, sentAt, device, baseVersion });
+    if (!claim.ok) {
+      return claim.reason === "behind"
+        ? json({ error: "behind", detail: "another Mac synced this account since your last pull; pull and merge first", version: claim.version }, 409)
+        : json({ error: "stale", detail: "a newer sync for this account already landed", latest: claim.latest, version: claim.version }, 409);
+    }
+    const version = claim.version;
+    const superseded = (written: number, removed: number) =>
+      json({ error: "superseded", detail: "a newer sync for this account took over", written, removed, version }, 409);
 
-    await ctx.runMutation(internal.sync.pushMeta, {
+    const meta = await ctx.runMutation(internal.sync.pushMeta, {
       accountId,
+      version,
       accounts: list(state.accounts),
       settings: state.settings && typeof state.settings === "object" ? state.settings : {},
       connectors: list(state.connectors),
     });
+    if (!meta.ok) return superseded(0, 0);
 
     let written = 0;
     let removed = 0;
@@ -124,22 +142,23 @@ http.route({
       if (!Array.isArray(state[table])) continue;
       const items = state[table].filter((item: any) => item && typeof item === "object" && isId(item.id));
       for (const batch of batches(items)) {
-        written += (await ctx.runMutation(internal.sync.upsertBatch, { accountId, table, items: batch })).written;
-      }
-      // Deleting is the one step that can't be undone by the next sync, so make sure we're still the newest one.
-      if (!(await ctx.runMutation(internal.sync.stillCurrent, { accountId, sentAt }))) {
-        return json({ error: "stale", detail: "superseded by a newer sync", written, removed }, 409);
+        const result = await ctx.runMutation(internal.sync.upsertBatch, { accountId, table, items: batch, version });
+        if (result.superseded) return superseded(written, removed);
+        written += result.written;
       }
       // One string, not an array: Convex caps array arguments at 8,192 elements.
       const keep = items.map((item: any) => String(item.id)).join("\n");
       let cursor: string | null = null;
       for (;;) {
-        const page: { cursor: string; isDone: boolean; removed: number } = await ctx.runMutation(internal.sync.removeMissingPage, {
+        const page: { cursor: string; isDone: boolean; removed: number; superseded: boolean } = await ctx.runMutation(internal.sync.removeMissingPage, {
           accountId,
           table,
           keep,
           cursor,
+          version,
+          floor: floorFor(table),
         });
+        if (page.superseded) return superseded(written, removed);
         removed += page.removed;
         if (page.isDone) break;
         cursor = page.cursor;
@@ -151,9 +170,47 @@ http.route({
       device,
       state: trimSnapshot(state),
       sentAt,
+      version,
     });
-    await ctx.runMutation(internal.sync.finish, { accountId, sentAt });
-    return json({ ok: true, syncedAt, written, removed });
+    await ctx.runMutation(internal.sync.finish, { accountId, version });
+    return json({ ok: true, syncedAt, written, removed, version });
+  }),
+});
+
+for (const path of ["/api/version", "/api/pull"]) {
+  http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
+}
+
+// The account's sync version, so a Mac can tell in one cheap call whether there is anything to pull.
+http.route({
+  path: "/api/version",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const accountId = new URL(request.url).searchParams.get("accountId");
+    if (!isId(accountId)) return json({ error: "accountId required" }, 400);
+    return json(await ctx.runQuery(internal.sync.currentVersion, { accountId }));
+  }),
+});
+
+// One page of what changed in a table since a version (0: everything), or of the tombstones
+// (`table: "deletions"`). The Mac loops on `cursor` until `isDone`, table by table.
+http.route({
+  path: "/api/pull",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<{ accountId?: unknown; table?: unknown; since?: unknown; cursor?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    const tables: string[] = [...SYNCED_TABLES, "deletions"];
+    if (!isId(body.accountId) || typeof body.table !== "string" || !tables.includes(body.table)) {
+      return json({ error: "accountId and a table required" }, 400);
+    }
+    const since = typeof body.since === "number" && Number.isInteger(body.since) && body.since >= 0 ? body.since : 0;
+    const cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : null;
+    const page = await ctx.runQuery(internal.sync.pullPage, { accountId: body.accountId, table: body.table as any, since, cursor });
+    return json(page);
   }),
 });
 

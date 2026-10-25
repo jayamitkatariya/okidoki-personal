@@ -21,7 +21,10 @@ export const get = query({
   },
 });
 
-// Counts an open of the share page. Unauthenticated on purpose: the page itself is public.
+const VIEW_WINDOW_MS = 10_000;
+
+// Counts an open of the share page. Unauthenticated on purpose: the page itself is public. Opens within
+// a few seconds of the last counted one aren't counted, so reloading in a loop can't hammer the row.
 export const viewed = mutation({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
@@ -29,7 +32,10 @@ export const viewed = mutation({
       .query("shareLinks")
       .withIndex("by_token", (q) => q.eq("token", token))
       .first();
-    if (link) await ctx.db.patch(link._id, { views: link.views + 1 });
+    if (!link) return;
+    const now = Date.now();
+    if (link.lastViewedAt && now - link.lastViewedAt < VIEW_WINDOW_MS) return;
+    await ctx.db.patch(link._id, { views: link.views + 1, lastViewedAt: now });
   },
 });
 
