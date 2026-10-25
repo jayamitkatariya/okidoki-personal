@@ -3,6 +3,7 @@ import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
+import ImageIO
 import ScreenCaptureKit
 
 // MARK: - Geometry
@@ -53,6 +54,16 @@ public struct ComputerAction: Codable, Equatable, Sendable {
     public var times: Int?
     /// Modifier keys held during a click, e.g. "cmd" or "cmd+shift".
     public var modifiers: String?
+    /// v2: the model's tool call this action answers.
+    public var toolUseID: String?
+    /// v2: the tool the model called ("left_click", "click_element", "run_script", …).
+    public var tool: String?
+    /// v2: a member of the computer use toolset (its result must say so).
+    public var member: Bool?
+    /// v2: number of a control from the step's numbered list, for `click_element`.
+    public var element: Int?
+    /// v2: "left", "right" or "middle", for `click_element`.
+    public var button: String?
 
     public init(type: String, x: Double? = nil, y: Double? = nil,
                 fromX: Double? = nil, fromY: Double? = nil, toX: Double? = nil, toY: Double? = nil,
@@ -75,6 +86,7 @@ public struct ComputerAction: Codable, Equatable, Sendable {
         case app, text, key, dx, dy, seconds, reason, summary, say
         case script, lang, language, target
         case width, height, times, count, modifiers, modifier
+        case toolUseID = "id", tool, member, element, button
     }
 
     public init(from decoder: Decoder) throws {
@@ -104,6 +116,11 @@ public struct ComputerAction: Codable, Equatable, Sendable {
         times = (num(.times) ?? num(.count)).map { Int($0) }
         modifiers = (try? c.decodeIfPresent(String.self, forKey: .modifiers))
             ?? (try? c.decodeIfPresent(String.self, forKey: .modifier))
+        toolUseID = try? c.decodeIfPresent(String.self, forKey: .toolUseID)
+        tool = try? c.decodeIfPresent(String.self, forKey: .tool)
+        member = try? c.decodeIfPresent(Bool.self, forKey: .member)
+        element = num(.element).map { Int($0) }
+        button = try? c.decodeIfPresent(String.self, forKey: .button)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -131,6 +148,11 @@ public struct ComputerAction: Codable, Equatable, Sendable {
         try c.encodeIfPresent(height, forKey: .height)
         try c.encodeIfPresent(times, forKey: .times)
         try c.encodeIfPresent(modifiers, forKey: .modifiers)
+        try c.encodeIfPresent(toolUseID, forKey: .toolUseID)
+        try c.encodeIfPresent(tool, forKey: .tool)
+        try c.encodeIfPresent(member, forKey: .member)
+        try c.encodeIfPresent(element, forKey: .element)
+        try c.encodeIfPresent(button, forKey: .button)
     }
 
     public var dictionary: [String: Any] {
@@ -399,8 +421,8 @@ public enum EventActuator {
     /// trips across the screen are easy to follow.
     nonisolated static func glideDuration(distance: Double, pace: Double) -> Double {
         guard pace > 0, distance >= 2 else { return 0 }
-        let base = 0.12 + distance / 2600
-        return min(max(base, 0.14), 0.6) * pace
+        let base = 0.1 + distance / 3200
+        return min(max(base, 0.12), 0.35) * pace
     }
 
     /// Eased path from `origin` to `target`: slow start, slow finish, like a hand moving a mouse.
@@ -424,8 +446,9 @@ public enum EventActuator {
             let steps = max(6, Int(duration * 120))
             let slice = duration / Double(steps)
             let source = makeSource()
+            let type: CGEventType = leftButtonHeld ? .leftMouseDragged : .mouseMoved
             for point in glidePoints(from: origin, to: target, steps: steps) {
-                post(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left))
+                post(CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left))
                 pause(slice)
             }
         }
@@ -443,7 +466,7 @@ public enum EventActuator {
     }
 
     /// Modifier keys named in text like "cmd+shift", in press order. Nil when a name is unknown.
-    nonisolated static func modifierKeys(_ text: String?) -> [(code: CGKeyCode, flag: CGEventFlags)]? {
+    public nonisolated static func modifierKeys(_ text: String?) -> [(code: CGKeyCode, flag: CGEventFlags)]? {
         guard let text, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         var keys: [(code: CGKeyCode, flag: CGEventFlags)] = []
         for piece in VirtualKeys.pieces(of: text) {
@@ -578,12 +601,12 @@ public enum EventActuator {
                     down?.flags = flags.union(.maskNonCoalesced)
                     if !unicode.isEmpty { down?.keyboardSetUnicodeString(stringLength: unicode.count, unicodeString: &unicode) }
                     post(down)
-                    pause(0.008)
+                    pause(0.005)
                     let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false)
                     up?.flags = flags.union(.maskNonCoalesced)
                     if !unicode.isEmpty { up?.keyboardSetUnicodeString(stringLength: unicode.count, unicodeString: &unicode) }
                     post(up)
-                    pause(0.010)
+                    pause(0.006)
                 case .unicode(var buffer):
                     let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
                     down?.flags = .maskNonCoalesced
@@ -720,6 +743,55 @@ public enum EventActuator {
         return true
     }
 
+    /// Where the pointer is now, in Quartz global points.
+    public nonisolated static func currentPoint() -> CGPoint {
+        CGEvent(source: nil)?.location ?? .zero
+    }
+
+    /// The left button is held down by `mouseButton(down:)`, so moves are drags.
+    nonisolated(unsafe) static var leftButtonHeld = false
+
+    /// Presses or releases the left button where the pointer is, for drags the model builds step by step.
+    public static func mouseButton(down: Bool) async {
+        guard canPost else { return }
+        await Task.detached(priority: .userInitiated) {
+            let point = currentPoint()
+            let source = makeSource()
+            post(stamp(down ? .leftMouseDown : .leftMouseUp, at: point, button: .left, clickState: 1, source: source))
+            leftButtonHeld = down
+            pause(0.03)
+        }.value
+    }
+
+    /// Holds a key or combo down for `seconds` (at most 10), then lets go.
+    @discardableResult
+    public static func holdKey(_ combo: String, seconds: Double) async -> Bool {
+        guard canPost, let resolved = resolveCombo(combo, layout: KeyLayout.currentMap()) else { return false }
+        let hold = min(max(seconds, 0.05), 10)
+        let source = makeSource()
+        var flags: CGEventFlags = []
+        for modifier in resolved.mods {
+            flags.insert(modifier.flag)
+            let down = CGEvent(keyboardEventSource: source, virtualKey: modifier.code, keyDown: true)
+            down?.flags = flags
+            post(down)
+        }
+        let down = CGEvent(keyboardEventSource: source, virtualKey: resolved.code, keyDown: true)
+        down?.flags = flags
+        post(down)
+        try? await Task.sleep(nanoseconds: UInt64(hold * 1_000_000_000))
+        let up = CGEvent(keyboardEventSource: source, virtualKey: resolved.code, keyDown: false)
+        up?.flags = flags
+        post(up)
+        for modifier in resolved.mods.reversed() {
+            flags.remove(modifier.flag)
+            let release = CGEvent(keyboardEventSource: source, virtualKey: modifier.code, keyDown: false)
+            release?.flags = flags
+            post(release)
+        }
+        return true
+    }
+
     public static func scroll(dy: Double, dx: Double = 0, at point: CGPoint?) async {
         guard canPost else { return }
         if let point { await move(to: point) }
@@ -819,18 +891,20 @@ public enum AXSearch {
         var best: (element: AXUIElement, found: AXFound, score: Int)?
         let started = Date()
         let keys = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXIdentifierAttribute,
-                    kAXPlaceholderValueAttribute, kAXValueAttribute, kAXRoleAttribute]
+                    kAXPlaceholderValueAttribute, kAXValueAttribute, kAXRoleAttribute,
+                    kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute]
         while !queue.isEmpty && visited < 2600 && Date().timeIntervalSince(started) < 1.6 {
             let element = queue.removeFirst()
             visited += 1
-            let got = strings(keys, of: element)
+            let raw = batch(element, keys)
+            let got = raw.prefix(7).map { $0.map(asString) ?? "" }
             let (title, description, help, identifier, placeholder, value, role) = (got[0], got[1], got[2], got[3], got[4], got[5], got[6])
             let fields = [title, description, help, identifier, placeholder]
             let exact = fields.contains { $0.lowercased().trimmingCharacters(in: .whitespaces) == needle }
                 || (value.count < 80 && value.lowercased().trimmingCharacters(in: .whitespaces) == needle)
             let contains = fields.contains { !$0.isEmpty && $0.lowercased().contains(needle) }
                 || (value.count < 80 && value.lowercased().contains(needle))
-            if (exact || contains), let rect = frame(of: element) {
+            if (exact || contains), let rect = frame(position: raw[7], size: raw[8]) {
                 let lowerRole = role.lowercased()
                 let specificRole = ["button", "menuitem", "menubaritem", "text", "link", "cell", "check", "radio", "popup", "tab", "field", "row", "image", "static", "slider", "disclosure", "combobox", "incrementor"]
                     .contains { lowerRole.contains($0) }
@@ -851,14 +925,39 @@ public enum AXSearch {
                     }
                 }
             }
-            var childrenRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-               let children = childrenRef as? [AXUIElement] {
+            if let children = raw[9] as? [AXUIElement] {
                 queue.append(contentsOf: children.prefix(120))
             }
         }
         guard let best else { return nil }
         return (best.element, best.found)
+    }
+
+    /// Several attributes in one round trip to the app instead of one call each. Missing ones are nil.
+    nonisolated static func batch(_ element: AXUIElement, _ names: [String]) -> [AnyObject?] {
+        var raw: CFArray?
+        let status = AXUIElementCopyMultipleAttributeValues(element, names as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &raw)
+        guard status == .success, let values = raw as? [AnyObject], values.count == names.count else {
+            return names.map { name in
+                var value: CFTypeRef?
+                return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+            }
+        }
+        return values.map { value in
+            if value is NSNull { return nil }
+            if CFGetTypeID(value) == AXValueGetTypeID(), AXValueGetType(value as! AXValue) == .axError { return nil }
+            return value
+        }
+    }
+
+    nonisolated static func frame(position: AnyObject?, size: AnyObject?) -> CGRect? {
+        guard let position, let size,
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero
+        var extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(size as! AXValue, .cgSize, &extent) else { return nil }
+        return CGRect(origin: origin, size: extent)
     }
 
     /// Presses or opens the menu of a labeled control. More reliable than a coordinate click when it succeeds.
@@ -922,24 +1021,36 @@ public enum AXSearch {
     /// scroll area are skipped. Interactive controls come before plain text so a long document
     /// can't push the buttons off the list. Bounded in time and count.
     public static func controls(pid: pid_t, visible: CGRect, limit: Int = 150, budget: TimeInterval = 1.4) -> [AXControl] {
+        snapshot(pid: pid, visible: visible, limit: limit, budget: budget).map(\.control)
+    }
+
+    /// One control and the element behind it, so a click can press exactly that control later.
+    public struct Entry: @unchecked Sendable {
+        public var control: AXControl
+        public var element: AXUIElement
+    }
+
+    /// Actionable controls inside `visible` with their elements. One batched attribute read per element.
+    public static func snapshot(pid: pid_t, visible: CGRect, limit: Int = 150, budget: TimeInterval = 1.4) -> [Entry] {
         guard AXIsProcessTrusted() else { return [] }
         enableTree(pid: pid)
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
         var queue: [(element: AXUIElement, clip: CGRect)] = roots(of: app).map { ($0, visible) }
-        var interactive: [AXControl] = []
-        var text: [AXControl] = []
+        var interactive: [Entry] = []
+        var text: [Entry] = []
         var seen = Set<String>()
         var visited = 0
         let started = Date()
         let keys = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXPlaceholderValueAttribute,
-                    kAXValueAttribute, kAXHelpAttribute]
+                    kAXValueAttribute, kAXHelpAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute]
         while !queue.isEmpty && visited < 3000 && interactive.count < limit && Date().timeIntervalSince(started) < budget {
             let (element, clip) = queue.removeFirst()
             visited += 1
-            let got = strings(keys, of: element)
+            let raw = batch(element, keys)
+            let got = raw.prefix(6).map { $0.map(asString) ?? "" }
             let role = got[0]
-            let rect = frame(of: element)
+            let rect = frame(position: raw[6], size: raw[7])
             var childClip = clip
             if clippingRoles.contains(role), let rect {
                 childClip = clip.intersection(rect)
@@ -961,18 +1072,77 @@ public enum AXSearch {
                         seen.insert(key)
                         let control = AXControl(role: shortRole(role), label: showValue ? "\(cleaned) = \(value)" : cleaned,
                                                 x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
-                        if isText { if text.count < limit / 3 { text.append(control) } } else { interactive.append(control) }
+                        let entry = Entry(control: control, element: element)
+                        if isText { if text.count < limit / 3 { text.append(entry) } } else { interactive.append(entry) }
                     }
                 }
             }
-            var childrenRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-               let children = childrenRef as? [AXUIElement] {
+            if let children = raw[8] as? [AXUIElement] {
                 queue.append(contentsOf: children.prefix(120).map { ($0, childClip) })
             }
         }
         return Array((interactive + text).prefix(limit))
     }
+
+    /// Brings an app to the front through accessibility and raises its main window. Works when a
+    /// plain activation request from a background app is refused.
+    public nonisolated static func raise(pid: pid_t) {
+        guard AXIsProcessTrusted() else { return }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            var raw: CFTypeRef?
+            if AXUIElementCopyAttributeValue(app, attribute as CFString, &raw) == .success, let raw,
+               CFGetTypeID(raw) == AXUIElementGetTypeID() {
+                AXUIElementPerformAction(raw as! AXUIElement, kAXRaiseAction as CFString)
+                return
+            }
+        }
+    }
+
+    /// Where an element is now, for checking a remembered control hasn't moved before pressing it.
+    public nonisolated static func currentFrame(of element: AXUIElement) -> CGRect? {
+        let raw = batch(element, [kAXPositionAttribute, kAXSizeAttribute])
+        return frame(position: raw[0], size: raw[1])
+    }
+
+    /// Presses a remembered control: an accessibility action when it advertises one.
+    @discardableResult
+    public nonisolated static func perform(_ action: String, on element: AXUIElement) -> Bool {
+        press(element, action: action)
+    }
+
+    /// Role and label of whatever is under a point, for narrating and checking a click.
+    public nonisolated static func describe(at point: CGPoint) -> (role: String, label: String)? {
+        guard AXIsProcessTrusted() else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.3)
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit) == .success, let hit else { return nil }
+        let raw = batch(hit, [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, kAXPlaceholderValueAttribute])
+        let got = raw.map { $0.map(asString) ?? "" }
+        let value = got[3].count <= 60 ? got[3] : ""
+        let label = [got[1], got[2], got[4], value].first { !$0.isEmpty } ?? ""
+        return (got[0], label.replacingOccurrences(of: "\n", with: " "))
+    }
+
+    /// The focused element of the frontmost app: its role, whether it is a text input, and its value.
+    public nonisolated static func focusedInput(pid: pid_t) -> (role: String, value: String?)? {
+        guard AXIsProcessTrusted() else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let element = raw as! AXUIElement
+        let values = batch(element, [kAXRoleAttribute, kAXValueAttribute])
+        let role = values[0].map(asString) ?? ""
+        let value = values[1].flatMap { $0 is String ? ($0 as! String) : nil }
+        return (role, value)
+    }
+
+    public nonisolated static let textInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"]
 
     static func shortRole(_ role: String) -> String {
         let trimmed = role.hasPrefix("AX") ? String(role.dropFirst(2)) : role
@@ -1052,9 +1222,18 @@ public enum AppResolver {
     ]
 
     static func normalize(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US"))
+        visible(value).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+
+    /// Drops invisible direction and zero-width marks some apps put in their names (WhatsApp is "\u{200E}WhatsApp").
+    public static func visible(_ value: String) -> String {
+        let invisible: Set<Unicode.Scalar> = ["\u{200B}", "\u{200C}", "\u{200D}", "\u{200E}", "\u{200F}", "\u{202A}", "\u{202B}",
+                                              "\u{202C}", "\u{202D}", "\u{202E}", "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}", "\u{FEFF}"]
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: value.unicodeScalars.filter { !invisible.contains($0) })
+        return String(scalars).trimmingCharacters(in: .whitespaces)
     }
 
     static func searchDirectories() -> [URL] {
@@ -1208,6 +1387,59 @@ public enum ScriptActuator {
         }
     }
 
+    /// Apps a script sends Apple events to: `tell application "X"`, `application id "…"`, JXA `Application("X")`.
+    public static func targets(of source: String) -> [String] {
+        let patterns = [
+            #"(?i)\b(?:tell\s+)?(?:application|app)\s+id\s+"([^"]+)""#,
+            #"(?i)\btell\s+(?:application|app)\s+"([^"]+)""#,
+            #"(?i)\bapplication\s+"([^"]+)""#,
+            #"\bApplication\(\s*["']([^"']+)["']\s*\)"#,
+        ]
+        var found: [String] = []
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(source.startIndex..., in: source)
+            for match in regex.matches(in: source, range: range) {
+                guard let r = Range(match.range(at: 1), in: source) else { continue }
+                let name = String(source[r]).trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty, !found.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { found.append(name) }
+            }
+        }
+        return found
+    }
+
+    public enum Consent: Equatable, Sendable { case granted, denied, notDetermined, unknown }
+
+    /// Whether okidoki may send Apple events to the app, asked without showing a prompt.
+    /// Unknown when the app isn't running (macOS can only answer for running apps).
+    public static func consent(bundleID: String) -> Consent {
+        var address = AEAddressDesc()
+        let bytes = Array(bundleID.utf8)
+        let created = bytes.withUnsafeBytes { AECreateDesc(typeApplicationBundleID, $0.baseAddress, bytes.count, &address) }
+        guard created == noErr else { return .unknown }
+        defer { AEDisposeDesc(&address) }
+        switch AEDeterminePermissionToAutomateTarget(&address, typeWildCard, typeWildCard, false) {
+        case noErr: return .granted
+        case OSStatus(errAEEventNotPermitted): return .denied
+        case OSStatus(errAEEventWouldRequireUserConsent): return .notDetermined
+        default: return .unknown
+        }
+    }
+
+    /// The bundle identifier for a scripted app name.
+    public static func bundleID(forScriptTarget name: String) -> String? {
+        if name.contains("."), !name.contains(" ") { return name }
+        switch name.lowercased() {
+        case "system events": return "com.apple.systemevents"
+        case "finder": return "com.apple.finder"
+        default: break
+        }
+        if let running = NSWorkspace.shared.runningApplications.first(where: {
+            AppResolver.normalize($0.localizedName ?? "") == AppResolver.normalize(name)
+        }), let id = running.bundleIdentifier { return id }
+        return AppResolver.resolve(name: name)?.bundleID
+    }
+
     public static func run(language: String, source: String, timeout: Double = 30) async -> String {
         let language = normalizeLanguage(language)
         let source = source
@@ -1265,6 +1497,8 @@ public enum ScriptActuator {
             process.arguments = [file.path]
         }
 
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
         do { try process.run() } catch {
             try? stdout.close()
             return "couldn't start the script"
@@ -1275,10 +1509,8 @@ public enum ScriptActuator {
             if running === process { running = nil }
             runningLock.unlock()
         }
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
+        // Wakes the moment the script ends instead of polling.
+        _ = finished.wait(timeout: .now() + timeout)
         if process.isRunning {
             process.terminate()
             try? stdout.close()
@@ -1287,8 +1519,8 @@ public enum ScriptActuator {
         try? stdout.close()
         var output = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
         // osascript prefixes errors with the temp file's path; the line:column is all that helps.
-        output = output.replacingOccurrences(of: directory.path + "/script.[a-z]+:", with: "line ",
-                                             options: .regularExpression)
+        output = output.replacingOccurrences(of: "(/private)?" + NSRegularExpression.escapedPattern(for: directory.path) + "/script\\.[a-z]+:",
+                                             with: "line ", options: .regularExpression)
         let clipped = output.count > 4000 ? String(output.prefix(4000)) + "…" : output
         let text = clipped.trimmingCharacters(in: .whitespacesAndNewlines)
         if process.terminationStatus != 0 {
@@ -1371,15 +1603,103 @@ public final class ComputerUseService {
 
     /// One display, as sent to the model plus the full-resolution original for zooming.
     public struct Screenshot: @unchecked Sendable {
+        /// The encoded image: PNG, or JPEG when `mediaType` says so.
         public var png: Data
         public var box: ScreenBox
         public var imageWidth: Double
         public var imageHeight: Double
         public var full: CGImage
+        public var mediaType: String
 
-        public init(png: Data, box: ScreenBox, imageWidth: Double, imageHeight: Double, full: CGImage) {
+        public init(png: Data, box: ScreenBox, imageWidth: Double, imageHeight: Double, full: CGImage, mediaType: String = "image/png") {
             self.png = png; self.box = box; self.imageWidth = imageWidth; self.imageHeight = imageHeight; self.full = full
+            self.mediaType = mediaType
         }
+    }
+
+    /// The largest image the driving model reads without shrinking it.
+    public struct ImageLimits: Sendable, Equatable {
+        public var longEdge: Double
+        /// Newer models count ⌈w/28⌉·⌈h/28⌉ visual tokens.
+        public var visualTokens: Int?
+        /// Older models cap the pixel count.
+        public var pixels: Double?
+
+        public static let highResolution = ImageLimits(longEdge: 2576, visualTokens: 4784, pixels: nil)
+        public static let standard = ImageLimits(longEdge: 1568, visualTokens: nil, pixels: 1_150_000)
+
+        public static func forModel(_ model: String) -> ImageLimits {
+            let name = model.lowercased()
+            let newer = ["claude-haiku-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-7", "claude-opus-4-8",
+                         "claude-fable", "claude-mythos"]
+            return newer.contains { name.hasPrefix($0) } ? .highResolution : .standard
+        }
+    }
+
+    /// Size to send: never larger than the display in points (1 image pixel = 1 point), and inside the model's limits.
+    public nonisolated static func sendSize(pixelWidth: Double, pixelHeight: Double, pointWidth: Double, pointHeight: Double,
+                                            limits: ImageLimits) -> (width: Int, height: Int) {
+        guard pixelWidth > 0, pixelHeight > 0 else { return (0, 0) }
+        var scale = min(1, pointWidth / pixelWidth)
+        let longEdge = max(pixelWidth, pixelHeight) * scale
+        if longEdge > limits.longEdge { scale *= limits.longEdge / longEdge }
+        if let pixels = limits.pixels {
+            let count = pixelWidth * pixelHeight * scale * scale
+            if count > pixels { scale *= (pixels / count).squareRoot() }
+        }
+        func size(_ s: Double) -> (Int, Int) {
+            (max(1, Int((pixelWidth * s).rounded(.down))), max(1, Int((pixelHeight * s).rounded(.down))))
+        }
+        if let budget = limits.visualTokens {
+            for _ in 0..<12 {
+                let (w, h) = size(scale)
+                let tokens = Int((Double(w) / 28).rounded(.up)) * Int((Double(h) / 28).rounded(.up))
+                if tokens <= budget { break }
+                scale *= (Double(budget) / Double(tokens)).squareRoot() * 0.995
+            }
+        }
+        let (w, h) = size(scale)
+        return (w, h)
+    }
+
+    /// The driving loop's capture: the cached display filter, sized for the model, PNG or JPEG.
+    /// Teach and the other features keep using `capture(screen:)`.
+    public func captureForDriving(screen: NSScreen, limits: ImageLimits, jpeg: Bool) async -> Screenshot? {
+        guard CGPreflightScreenCaptureAccess() else {
+            _ = CGRequestScreenCaptureAccess()
+            return nil
+        }
+        for attempt in 0..<2 {
+            guard let entry = await DisplayFilterCache.shared.filter(for: screen) else { break }
+            let scale = max(screen.backingScaleFactor, 1)
+            let pointW = entry.display.frame.width > 0 ? entry.display.frame.width : CGFloat(entry.display.width)
+            let pointH = entry.display.frame.height > 0 ? entry.display.frame.height : CGFloat(entry.display.height)
+            let config = SCStreamConfiguration()
+            config.width = Int((pointW * scale).rounded())
+            config.height = Int((pointH * scale).rounded())
+            config.showsCursor = false
+            config.scalesToFit = false
+            config.captureResolution = .best
+            guard let image = try? await SCScreenshotManager.captureImage(contentFilter: entry.filter, configuration: config),
+                  image.width > 0, image.height > 0 else {
+                DisplayFilterCache.shared.invalidate()
+                if attempt == 0 { continue }
+                break
+            }
+            let bounds = entry.display.frame
+            let box = ScreenBox(x: bounds.origin.x, y: bounds.origin.y, width: bounds.size.width, height: bounds.size.height)
+            let encoded = await Task.detached(priority: .userInitiated) { () -> (Data, Double, Double)? in
+                let size = Self.sendSize(pixelWidth: Double(image.width), pixelHeight: Double(image.height),
+                                         pointWidth: Double(pointW), pointHeight: Double(pointH), limits: limits)
+                guard let scaled = Self.resized(image, to: size) else { return nil }
+                let data = jpeg ? Self.jpegData(scaled, quality: 0.85) : Self.pngData(scaled)
+                return data.map { ($0, Double(scaled.width), Double(scaled.height)) }
+            }.value
+            guard let encoded else { return nil }
+            return Screenshot(png: encoded.0, box: box, imageWidth: encoded.1, imageHeight: encoded.2, full: image,
+                              mediaType: jpeg ? "image/jpeg" : "image/png")
+        }
+        return await capture(screen: screen)
     }
 
     /// A magnified crop of a screenshot. `rect` is the region in screenshot pixels.
@@ -1505,6 +1825,23 @@ public final class ComputerUseService {
         NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
+    /// JPEG through ImageIO, optionally shrunk so the long edge is at most `maxLongEdge` pixels.
+    public nonisolated static func jpegData(_ image: CGImage, maxLongEdge: Double? = nil, quality: Double = 0.85) -> Data? {
+        var source = image
+        if let maxLongEdge {
+            let longEdge = Double(max(image.width, image.height))
+            if longEdge > maxLongEdge {
+                let factor = maxLongEdge / longEdge
+                source = resized(image, to: (max(1, Int(Double(image.width) * factor)), max(1, Int(Double(image.height) * factor)))) ?? image
+            }
+        }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, source, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+
     nonisolated private static func captureCLI(rect: CGRect) -> Screenshot? {
         guard CGPreflightScreenCaptureAccess() else { return nil }
         let temp = FileManager.default.temporaryDirectory
@@ -1555,14 +1892,52 @@ public final class ComputerUseService {
     public func runningApps() -> [AppInfo] {
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && !$0.isTerminated }
-            .map { AppInfo(name: $0.localizedName ?? "", bundleID: $0.bundleIdentifier ?? "",
+            .map { AppInfo(name: AppResolver.visible($0.localizedName ?? ""), bundleID: $0.bundleIdentifier ?? "",
                            pid: $0.processIdentifier, isActive: $0.isActive) }
     }
 
     public func frontmost() -> AppInfo? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        return AppInfo(name: app.localizedName ?? "", bundleID: app.bundleIdentifier ?? "",
+        return AppInfo(name: AppResolver.visible(app.localizedName ?? ""), bundleID: app.bundleIdentifier ?? "",
                        pid: app.processIdentifier, isActive: true)
+    }
+
+    /// True when the app has a normal, on-screen window (not minimized, not hidden).
+    public nonisolated static func hasVisibleWindow(pid: pid_t) -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return true
+        }
+        return list.contains { info in
+            guard (info[kCGWindowOwnerPID as String] as? Int32) == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: Double] else { return false }
+            return (bounds["Width"] ?? 0) > 80 && (bounds["Height"] ?? 0) > 60
+        }
+    }
+
+    /// Brings a running app forward and makes sure a window shows: an app with every window closed
+    /// or minimized gets a reopen (what clicking its Dock icon does).
+    private func surface(_ running: NSRunningApplication, timeout: Double) async {
+        let pid = running.processIdentifier
+        running.unhide()
+        running.activate()
+        await waitForFrontmost(bundleID: running.bundleIdentifier, name: running.localizedName, timeout: min(timeout, 0.8))
+        if frontmost()?.pid != pid {
+            // macOS can refuse activation asked for by a background app; accessibility can still raise it.
+            await Task.detached(priority: .userInitiated) { AXSearch.raise(pid: pid) }.value
+            await waitForFrontmost(bundleID: running.bundleIdentifier, name: running.localizedName, timeout: 0.8)
+        }
+        if frontmost()?.pid == pid, Self.hasVisibleWindow(pid: pid) { return }
+        // Every window closed or minimized, or still behind: reopen it the way the Dock icon does.
+        if let url = running.bundleURL {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: config)
+        }
+        let deadline = Date().addingTimeInterval(1.5)
+        while Date() < deadline, frontmost()?.pid != pid || !Self.hasVisibleWindow(pid: pid) {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
     }
 
     private func runningMatch(named name: String) -> AppInfo? {
@@ -1581,15 +1956,7 @@ public final class ComputerUseService {
     public func openApp(named name: String) async throws -> String {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if let running = runningMatch(named: cleaned) {
-            let label = running.name.isEmpty ? cleaned : running.name
-            if frontmost()?.pid == running.pid {
-                let title = AXSearch.focusedWindowTitle(pid: running.pid)
-                return "\(label) is already frontmost\(title.isEmpty ? "" : " (window “\(title.prefix(60))”)") — go straight to the next step"
-            }
-            let app = NSWorkspace.shared.runningApplications.first { $0.processIdentifier == running.pid }
-            app?.activate()
-            await waitForFrontmost(bundleID: running.bundleID, name: running.name, timeout: 4)
-            return "focused \(label) — it's frontmost now, go straight to the next step"
+            return await bringForward(running, label: running.name.isEmpty ? cleaned : running.name, timeout: 4)
         }
         let resolved = await Task.detached(priority: .userInitiated) { AppResolver.resolve(name: cleaned) }.value
         if let resolved {
@@ -1603,6 +1970,10 @@ public final class ComputerUseService {
             }
             let bundle = resolved.bundleID.isEmpty ? nil : resolved.bundleID
             await waitForFrontmost(bundleID: bundle, name: display, timeout: 8)
+            if let bundle, frontmost()?.bundleID != bundle,
+               let launched = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundle }) {
+                await surface(launched, timeout: 1)
+            }
             return "opened \(display)"
         }
         let open = Process()
@@ -1620,15 +1991,7 @@ public final class ComputerUseService {
     public func activateApp(named name: String) async -> String {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if let running = runningMatch(named: cleaned) {
-            let label = running.name.isEmpty ? cleaned : running.name
-            if frontmost()?.pid == running.pid {
-                let title = AXSearch.focusedWindowTitle(pid: running.pid)
-                return "\(label) is already frontmost\(title.isEmpty ? "" : " (window “\(title.prefix(60))”)") — go straight to the next step"
-            }
-            let app = NSWorkspace.shared.runningApplications.first { $0.processIdentifier == running.pid }
-            app?.activate()
-            await waitForFrontmost(bundleID: running.bundleID, name: running.name, timeout: 3)
-            return "focused \(label) — it's frontmost now, go straight to the next step"
+            return await bringForward(running, label: running.name.isEmpty ? cleaned : running.name, timeout: 3)
         }
         let resolved = await Task.detached(priority: .userInitiated) { AppResolver.resolve(name: cleaned) }.value
         if let resolved {
@@ -1638,9 +2001,31 @@ public final class ComputerUseService {
             _ = try? await NSWorkspace.shared.openApplication(at: resolved.url, configuration: config)
             let bundle = resolved.bundleID.isEmpty ? nil : resolved.bundleID
             await waitForFrontmost(bundleID: bundle, name: display, timeout: 6)
+            if let bundle, frontmost()?.bundleID != bundle,
+               let launched = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundle }) {
+                await surface(launched, timeout: 1)
+            }
             return "opened \(display)"
         }
         return "couldn't find \(cleaned)"
+    }
+
+    /// Front and showing a window, or a result that says what is still missing.
+    private func bringForward(_ running: AppInfo, label: String, timeout: Double) async -> String {
+        let alreadyFront = frontmost()?.pid == running.pid
+        if alreadyFront, Self.hasVisibleWindow(pid: running.pid) {
+            let title = AXSearch.focusedWindowTitle(pid: running.pid)
+            return "\(label) is already frontmost\(title.isEmpty ? "" : " (window “\(title.prefix(60))”)") — go straight to the next step"
+        }
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == running.pid }) else {
+            return "couldn't find \(label) running"
+        }
+        await surface(app, timeout: timeout)
+        let front = frontmost()?.pid == running.pid
+        let window = Self.hasVisibleWindow(pid: running.pid)
+        if front && window { return "focused \(label) — it's frontmost with a window open, go straight to the next step" }
+        if front { return "\(label) is frontmost but has no window open — use its File menu or a shortcut like cmd+n to open one" }
+        return "couldn't bring \(label) to the front — try clicking its window or its Dock icon"
     }
 
     private func waitForFrontmost(bundleID: String? = nil, name: String? = nil, timeout: Double) async {
@@ -1680,18 +2065,30 @@ public final class ComputerUseService {
     /// center in screenshot pixels. Runs off the main thread with a time budget.
     public func visibleControls(box: ScreenBox, imageWidth: Double, imageHeight: Double,
                                 limit: Int = 150) async -> [[String: Any]] {
-        guard let pid = frontmost()?.pid, imageWidth > 0, imageHeight > 0, box.width > 0, box.height > 0 else { return [] }
+        await visibleSnapshot(box: box, imageWidth: imageWidth, imageHeight: imageHeight, limit: limit).controls
+    }
+
+    /// Numbered controls for the model (ids from 1) and the elements behind them, for `click_element`.
+    public func visibleSnapshot(box: ScreenBox, imageWidth: Double, imageHeight: Double, limit: Int = 150,
+                                budget: TimeInterval = 1.2) async -> (controls: [[String: Any]], elements: [Int: AXSearch.Entry]) {
+        guard let pid = frontmost()?.pid, imageWidth > 0, imageHeight > 0, box.width > 0, box.height > 0 else { return ([], [:]) }
         let found = await Task.detached(priority: .userInitiated) {
-            AXSearch.controls(pid: pid, visible: box.cgRect, limit: limit)
+            AXSearch.snapshot(pid: pid, visible: box.cgRect, limit: limit, budget: budget)
         }.value
-        return found.map { control in
+        var controls: [[String: Any]] = []
+        var elements: [Int: AXSearch.Entry] = [:]
+        for (index, entry) in found.enumerated() {
+            let id = index + 1
+            let control = entry.control
             let point = Self.mapPoint(CGPoint(x: control.rect.midX, y: control.rect.midY), box: box,
                                       imageWidth: imageWidth, imageHeight: imageHeight)
-            return ["role": control.role, "label": String(control.label.prefix(60)),
-                    "x": Int(point.x.rounded()), "y": Int(point.y.rounded()),
-                    "w": Int((control.width / box.width * imageWidth).rounded()),
-                    "h": Int((control.height / box.height * imageHeight).rounded())]
+            controls.append(["id": id, "role": control.role, "label": String(control.label.prefix(60)),
+                             "x": Int(point.x.rounded()), "y": Int(point.y.rounded()),
+                             "w": Int((control.width / box.width * imageWidth).rounded()),
+                             "h": Int((control.height / box.height * imageHeight).rounded())])
+            elements[id] = entry
         }
+        return (controls, elements)
     }
 
     // MARK: Coordinate mapping
@@ -1734,6 +2131,7 @@ public final class ComputerUseService {
                                             : action.type == "jxa" ? "javascript"
                                             : action.type == "applescript" ? "applescript" : nil)
             let source = action.script ?? action.text ?? ""
+            if let blocked = await scriptPermissionProblem(source) { return blocked }
             let result = await ScriptActuator.run(language: language ?? "applescript", source: source)
             // A denied Apple event with no prompt is usually a grant left over from an older build.
             // Clear it once so macOS asks the user again, and let the model retry the same script.
@@ -1762,6 +2160,47 @@ public final class ComputerUseService {
         default:
             return "unknown action \(action.type)"
         }
+    }
+
+    /// Called with an app's name just before a script makes macOS ask the user whether okidoki may control it.
+    public var onPermissionPrompt: ((String) -> Void)?
+
+    /// Scripted testing runs unattended: a permission prompt nobody answers stalls the run, so scripts
+    /// to apps okidoki may not control yet are refused with guidance instead.
+    public static var avoidsPermissionPrompts: Bool { UserDefaults.standard.bool(forKey: "drivingAvoidPrompts") }
+
+    /// Why a script shouldn't run (okidoki isn't allowed to control an app it talks to), or nil.
+    func scriptPermissionProblem(_ source: String) async -> String? {
+        let avoid = Self.avoidsPermissionPrompts
+        for name in ScriptActuator.targets(of: source) {
+            guard let id = await Task.detached(priority: .userInitiated, operation: { ScriptActuator.bundleID(forScriptTarget: name) }).value,
+                  id != Bundle.main.bundleIdentifier else { continue }
+            var consent = await Task.detached(priority: .userInitiated) { ScriptActuator.consent(bundleID: id) }.value
+            if consent == .unknown, avoid, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                // macOS only answers for running apps: start it in the background and ask again.
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = false
+                _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: config)
+                let deadline = Date().addingTimeInterval(2.5)
+                while Date() < deadline, !NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == id }) {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                consent = await Task.detached(priority: .userInitiated) { ScriptActuator.consent(bundleID: id) }.value
+            }
+            switch consent {
+            case .granted, .unknown:
+                continue
+            case .denied where avoid:
+                return "script not run: okidoki isn't allowed to control \(name) (System Settings › Privacy & Security › Automation) — do this with clicks and keys instead"
+            case .notDetermined where avoid:
+                return "script not run: okidoki hasn't been allowed to control \(name) yet, and asking would put a macOS permission prompt in front of the user — do this with clicks and keys instead"
+            case .notDetermined:
+                onPermissionPrompt?(name)
+            case .denied:
+                continue
+            }
+        }
+        return nil
     }
 
     /// Keys and clicks go to the frontmost app. When the action names another running app, bring it up first.

@@ -369,6 +369,9 @@ export interface ComputerRequest {
   zoomBase64?: string;
   zoom?: { x: number; y: number; width: number; height: number; imageWidth: number; imageHeight: number };
   screenshotBase64?: string;
+  /** image/png (default) or image/jpeg. */
+  screenshotMediaType?: string;
+  previousMediaType?: string;
   canClick?: boolean;
   canSee?: boolean;
   /** True when driving okidoki's private Mac (a VM): no scripts or accessibility, only clicks and keys. */
@@ -376,6 +379,84 @@ export interface ComputerRequest {
   settings?: {
     claudeModel?: string;
   };
+}
+
+/** What the Mac sees at one step of a v2 run. */
+export interface DriveObservation {
+  app?: string;
+  windowTitle?: string;
+  imageWidth: number;
+  imageHeight: number;
+  screenshotBase64?: string;
+  /** image/png or image/jpeg. */
+  mediaType?: string;
+  /** Numbered controls of the frontmost app, centers in screenshot pixels. */
+  controls?: Array<ComputerControl & { id?: number }>;
+  scripting?: string;
+  canClick?: boolean;
+  canSee?: boolean;
+  /** Short facts from the Mac, e.g. that the screen changed during the last batch. */
+  notes?: string[];
+}
+
+/** The outcome of one action from the model's last batch. */
+export interface DriveResult {
+  /** The tool_use id the action came with. */
+  id: string;
+  result: string;
+  isError?: boolean;
+  /** Not run because an earlier action in the batch failed. */
+  skipped?: boolean;
+  /** A zoom crop, for zoom results. */
+  imageBase64?: string;
+  mediaType?: string;
+}
+
+export interface DriveRequest {
+  runID: string;
+  goal: string;
+  step: number;
+  observation: DriveObservation;
+  results?: DriveResult[];
+  /** Compact history, used only to restart the conversation if the brain lost it. */
+  history?: ComputerHistoryEntry[];
+  /** The previous run in the same thread, for "again" and "continue". */
+  previous?: { goal: string; summary?: string; steps?: string[] };
+  remote?: boolean;
+  /** Use the stronger model for this one turn. */
+  escalate?: boolean;
+  effort?: "none" | "low" | "medium" | "high";
+  settings?: { claudeModel?: string };
+}
+
+/** One action for the Mac, in the field names ComputerAction decodes, tagged with its tool call. */
+export interface DriveAction {
+  id: string;
+  tool: string;
+  member: boolean;
+  type: string;
+  x?: number;
+  y?: number;
+  from_x?: number;
+  from_y?: number;
+  to_x?: number;
+  to_y?: number;
+  width?: number;
+  height?: number;
+  dx?: number;
+  dy?: number;
+  text?: string;
+  key?: string;
+  times?: number;
+  seconds?: number;
+  script?: string;
+  lang?: string;
+  app?: string;
+  element?: number;
+  button?: string;
+  modifiers?: string;
+  summary?: string;
+  reason?: string;
 }
 
 export type ComputerAct = {
