@@ -6,6 +6,7 @@ import { isPage, type Page } from "./nav";
 import { HomePage } from "./pages/HomePage";
 import { TeamPage } from "./pages/TeamPage";
 import { SpacesPage } from "./pages/SpacesPage";
+import { VaultPage } from "./pages/VaultPage";
 import { RunsPage } from "./pages/RunsPage";
 import { LivePage } from "./pages/LivePage";
 import { HistoryPage } from "./pages/HistoryPage";
@@ -84,6 +85,7 @@ function Root() {
       {page === "settings" ? <SettingsPage go={setPage} /> : null}
       {page === "spaces" ? <SpacesPage go={setPage} /> : null}
       {page === "team" ? <TeamPage go={setPage} /> : null}
+      {page === "vault" ? <VaultPage go={setPage} /> : null}
     </AppShell>
   );
 }

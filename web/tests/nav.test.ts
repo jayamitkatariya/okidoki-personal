@@ -14,6 +14,7 @@ describe("sidebar navigation by account kind", () => {
     for (const id of personal) expect(work).toContain(id);
     expect(work).toContain("spaces");
     expect(work).toContain("team");
+    expect(work).toContain("vault");
     expect(navFor("work").find((group) => group.enterprise)?.label).toBe("enterprise");
   });
 

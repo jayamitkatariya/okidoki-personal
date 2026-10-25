@@ -1,6 +1,6 @@
 import type { AccountKind } from "./types";
 
-export type Page = "home" | "runs" | "live" | "history" | "memory" | "skills" | "toolbox" | "settings" | "spaces" | "team";
+export type Page = "home" | "runs" | "live" | "history" | "memory" | "skills" | "toolbox" | "settings" | "spaces" | "team" | "vault";
 
 export interface NavItem {
   id: Page;
@@ -38,6 +38,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "spaces", title: "Spaces", icon: "chat" },
       { id: "team", title: "Team", icon: "people" },
+      { id: "vault", title: "Vault", icon: "lock" },
     ],
   },
   {
@@ -60,6 +61,7 @@ export const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   settings: { title: "Settings", subtitle: "Input, voice, permissions, look" },
   spaces: { title: "Spaces", subtitle: "Group chats with colleagues, an agent and a worker" },
   team: { title: "Team", subtitle: "Your organization, its people and join codes" },
+  vault: { title: "Vault", subtitle: "Confidential documents and shared logins" },
 };
 
 /** The sidebar for an account: the enterprise group appears only for a work account. */

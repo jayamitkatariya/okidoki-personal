@@ -268,6 +268,75 @@ describe("shared skills", () => {
   });
 });
 
+describe("vault", () => {
+  async function org() {
+    const { t, login } = await setup();
+    const jay = await login("jay", "jay@acme.com");
+    const sam = await login("sam", "sam@acme.com");
+    const pat = await login("pat", "pat@acme.com");
+    await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
+    await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
+    await pat.as.mutation(api.orgs.join, { code, accountId: pat.accountId });
+    const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Finance" });
+    await sam.as.mutation(api.spaces.join, { spaceId });
+    return { t, jay, sam, pat, spaceId };
+  }
+
+  test("documents scoped to a space are seen by its members only; org-wide ones by everyone", async () => {
+    const { t, jay, sam, pat, spaceId } = await org();
+    const storageId = await t.run(async (ctx) => ctx.storage.store(new Blob(["q3 numbers"], { type: "text/plain" })));
+    await jay.as.mutation(api.vault.saveFile, { accountId: jay.accountId, spaceId, storageId, name: "Q3.csv", size: 10, mime: "text/csv" });
+    const wide = await t.run(async (ctx) => ctx.storage.store(new Blob(["handbook"], { type: "text/plain" })));
+    await sam.as.mutation(api.vault.saveFile, { accountId: sam.accountId, spaceId: null, storageId: wide, name: "Handbook.pdf", size: 8, mime: "application/pdf" });
+
+    expect((await sam.as.query(api.vault.files, { accountId: sam.accountId })).map((f: any) => [f.name, f.spaceName, f.canDelete])).toEqual([
+      ["Handbook.pdf", "", true],
+      ["Q3.csv", "Finance", false],
+    ]);
+    expect((await pat.as.query(api.vault.files, { accountId: pat.accountId })).map((f: any) => f.name)).toEqual(["Handbook.pdf"]);
+    const files = await jay.as.query(api.vault.files, { accountId: jay.accountId });
+    expect(files.every((f: any) => typeof f.url === "string")).toBe(true);
+
+    // sharing into the chat produces a file line with a link; a stranger to the space can't
+    const q3 = files.find((f: any) => f.name === "Q3.csv");
+    await expect(pat.as.mutation(api.vault.shareFile, { fileId: q3.id, spaceId })).rejects.toThrow(/join the space/);
+    await sam.as.mutation(api.vault.shareFile, { fileId: q3.id, spaceId });
+    const last = (await jay.as.query(api.chat.messages, { spaceId })).at(-1);
+    expect([last.kind, last.text, last.file.name, typeof last.file.url]).toEqual(["file", "Q3.csv", "Q3.csv", "string"]);
+
+    // a plain member can't delete someone else's file; an admin can
+    await expect(sam.as.mutation(api.vault.deleteFile, { fileId: q3.id })).rejects.toThrow(/uploader or an admin/);
+    const handbook = files.find((f: any) => f.name === "Handbook.pdf");
+    await jay.as.mutation(api.vault.deleteFile, { fileId: handbook.id });
+    expect((await pat.as.query(api.vault.files, { accountId: pat.accountId }))).toEqual([]);
+    await expect(jay.as.mutation(api.vault.saveFile, { accountId: jay.accountId, spaceId: null, storageId, name: "huge.zip", size: 60 * 1024 * 1024, mime: "application/zip" })).rejects.toThrow(/50 MB/);
+  });
+
+  test("credentials hold ciphertext only, follow space scope, and remember who used them", async () => {
+    const { jay, sam, pat, spaceId } = await org();
+    const saved = await jay.as.mutation(api.vault.saveCredential, { accountId: jay.accountId, spaceId, site: "stripe.com", username: "finance@acme.com", ciphertext: "b64cipher", iv: "b64iv", keyVersion: 1, note: "" });
+    await expect(jay.as.mutation(api.vault.saveCredential, { accountId: jay.accountId, spaceId: null, site: "x", username: "u", ciphertext: "", iv: "", keyVersion: 1, note: "" })).rejects.toThrow(/didn't encrypt/);
+
+    const mine = await sam.as.query(api.vault.credentials, { accountId: sam.accountId });
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ site: "stripe.com", username: "finance@acme.com", ciphertext: "b64cipher", iv: "b64iv", spaceName: "Finance", canEdit: false, lastUsedBy: "" });
+    expect(Object.keys(mine[0])).not.toContain("password");
+    expect(await pat.as.query(api.vault.credentials, { accountId: pat.accountId })).toEqual([]);
+
+    await sam.as.mutation(api.vault.touchCredential, { credentialId: saved.id });
+    expect((await jay.as.query(api.vault.credentials, { accountId: jay.accountId }))[0].lastUsedBy).toBe("sam");
+    await pat.as.mutation(api.vault.touchCredential, { credentialId: saved.id });
+    expect((await jay.as.query(api.vault.credentials, { accountId: jay.accountId }))[0].lastUsedBy).toBe("sam");
+
+    await expect(sam.as.mutation(api.vault.saveCredential, { accountId: sam.accountId, credentialId: saved.id, spaceId, site: "stripe.com", username: "u", ciphertext: "c", iv: "i", keyVersion: 1, note: "" })).rejects.toThrow(/whoever added it or an admin/);
+    await expect(sam.as.mutation(api.vault.deleteCredential, { credentialId: saved.id })).rejects.toThrow(/whoever added it or an admin/);
+    await jay.as.mutation(api.vault.deleteCredential, { credentialId: saved.id });
+    expect(await sam.as.query(api.vault.credentials, { accountId: sam.accountId })).toEqual([]);
+  });
+});
+
 describe("spaces and chat", () => {
   test("members of the organization see a space, but only those who joined read its chat", async () => {
     const { login } = await setup();

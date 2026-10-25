@@ -282,6 +282,40 @@ export default defineSchema({
     .index("by_space", ["spaceId"])
     .index("by_source", ["sourceSkillId"]),
 
+  // Confidential documents, kept in Convex file storage. A file belongs to a space or to the whole organization.
+  spaceFiles: defineTable({
+    orgId: v.id("organizations"),
+    spaceId: v.union(v.id("spaces"), v.null()),
+    storageId: v.id("_storage"),
+    name: v.string(),
+    size: v.number(),
+    mime: v.string(),
+    uploadedBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_space", ["spaceId"]),
+
+  // Logins for sites and tools. The secret is encrypted in the browser with the organization's
+  // vault passphrase before it's sent; the backend only ever holds ciphertext.
+  spaceCredentials: defineTable({
+    orgId: v.id("organizations"),
+    spaceId: v.union(v.id("spaces"), v.null()),
+    site: v.string(),
+    username: v.string(),
+    ciphertext: v.string(),
+    iv: v.string(),
+    keyVersion: v.number(),
+    note: v.string(),
+    createdBy: v.id("users"),
+    lastUsedAt: v.union(v.number(), v.null()),
+    lastUsedBy: v.union(v.id("users"), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_space", ["spaceId"]),
+
   joinCodes: defineTable({
     code: v.string(),
     orgId: v.id("organizations"),

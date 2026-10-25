@@ -11,6 +11,7 @@ import "./styles/toolbox.css";
 import "./styles/settings.css";
 import "./styles/team.css";
 import "./styles/spaces.css";
+import "./styles/vault.css";
 import "./styles/share.css";
 import "./styles/dashboard.css";
 

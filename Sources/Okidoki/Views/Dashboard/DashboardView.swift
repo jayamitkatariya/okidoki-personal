@@ -603,6 +603,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "deleteKey":
             if let provider = payload["provider"] as? String { env.deleteKey(provider: provider) }
+        case "saveVaultPassphrase":
+            // The organization's vault passphrase, kept with the other secrets so jobs here can use shared logins.
+            if let orgID = payload["orgId"] as? String, !orgID.isEmpty {
+                if let passphrase = payload["passphrase"] as? String, !passphrase.isEmpty { KeyStore.set(passphrase, for: "vault:\(orgID)") }
+                else { KeyStore.delete("vault:\(orgID)") }
+            }
         case "installTool":
             if let id = payload["id"] as? String, let tool = ToolCatalog.tool(id: id) { env.installTool(tool) }
         case "connectApple":

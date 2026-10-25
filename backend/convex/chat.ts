@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { createJob, mentionsAgent } from "./jobs";
 import { peopleIn, requireSpaceMember, spaceAccess } from "./spaces";
 
@@ -18,9 +19,16 @@ export const messages = query({
       .withIndex("by_space_time", (q) => q.eq("spaceId", spaceId))
       .order("desc")
       .take(PAGE);
-    return rows.reverse().map((row) => {
+    const out = [];
+    for (const row of rows.reverse()) {
       const person = row.authorId ? people.get(row.authorId) : null;
-      return {
+      // A file line carries a fresh download link; a deleted file stays as its name.
+      let file: { name: string; size: number; mime: string; url: string | null } | null = null;
+      if (row.kind === "file" && row.fileId) {
+        const doc = await ctx.db.get(row.fileId as Id<"spaceFiles">);
+        if (doc) file = { name: doc.name, size: doc.size, mime: doc.mime, url: await ctx.storage.getUrl(doc.storageId) };
+      }
+      out.push({
         id: row._id,
         author: row.author,
         authorId: row.authorId,
@@ -30,10 +38,12 @@ export const messages = query({
         text: row.text,
         runId: row.runId,
         fileId: row.fileId,
+        file,
         createdAt: row.createdAt,
         isYou: row.authorId === access.userId,
-      };
-    });
+      });
+    }
+    return out;
   },
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
-import { clockLabel, cx, dayLabel, duration, relativeTime } from "../lib";
+import { clockLabel, cx, dayLabel, duration, formatBytes, relativeTime } from "../lib";
 import type { Page } from "../nav";
 import type { Account, RunStatus } from "../types";
 import type { Job, JobStatus, Space, SpaceMember, SpaceMessage, WorkerPolicy } from "../enterprise";
@@ -304,6 +304,18 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
                 {group.messages.map((message) =>
                   message.kind === "run" ? (
                     <JobCard key={message.id} job={message.runId ? jobById.get(message.runId) : undefined} go={go} />
+                  ) : message.kind === "file" ? (
+                    <div className="space-bubble space-file" key={message.id}>
+                      <PixelIcon name="sticker" size={15} />
+                      {message.file?.url ? (
+                        <a href={message.file.url} target="_blank" rel="noreferrer" download={message.file.name}>
+                          {message.file.name}
+                        </a>
+                      ) : (
+                        <span className="is-gone">{message.text} (deleted)</span>
+                      )}
+                      {message.file ? <em>{formatBytes(message.file.size)}</em> : null}
+                    </div>
                   ) : (
                     <div className={cx("space-bubble", message.kind !== "text" && `is-${message.kind}`)} key={message.id}>
                       <Markdown text={message.text} />

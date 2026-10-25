@@ -91,6 +91,8 @@ export interface SpaceMessage {
   text: string;
   runId: string | null;
   fileId: string | null;
+  /** For file lines: the file as it is now, with a fresh link; null once deleted. */
+  file?: { name: string; size: number; mime: string; url: string | null } | null;
   createdAt: number;
   isYou: boolean;
 }
@@ -164,7 +166,44 @@ export interface SharedSkill {
   updatedAt: number;
 }
 
+export interface VaultFile {
+  id: string;
+  spaceId: string | null;
+  spaceName: string;
+  name: string;
+  size: number;
+  mime: string;
+  url: string | null;
+  uploadedBy: string;
+  canDelete: boolean;
+  createdAt: number;
+}
+
+export interface VaultCredential {
+  id: string;
+  spaceId: string | null;
+  spaceName: string;
+  site: string;
+  username: string;
+  ciphertext: string;
+  iv: string;
+  keyVersion: number;
+  note: string;
+  createdBy: string;
+  canEdit: boolean;
+  lastUsedAt: number | null;
+  lastUsedBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface EnterpriseActions {
+  uploadFile: (spaceId: string | null, file: File) => Promise<{ id: string }>;
+  deleteFile: (fileId: string) => Promise<void>;
+  shareFile: (fileId: string, spaceId: string) => Promise<void>;
+  saveCredential: (input: { credentialId?: string; spaceId: string | null; site: string; username: string; ciphertext: string; iv: string; keyVersion: number; note: string }) => Promise<{ id: string }>;
+  deleteCredential: (credentialId: string) => Promise<void>;
+  touchCredential: (credentialId: string) => Promise<void>;
   publishSkill: (spaceId: string | null, skill: { id: string; name: string; summary: string; steps: unknown[] }) => Promise<{ id: string; version: number }>;
   unpublishSkill: (sharedId: string) => Promise<void>;
   rollbackSkill: (sharedId: string) => Promise<void>;
@@ -211,6 +250,9 @@ export interface EnterpriseState {
   workers: WorkerInfo[];
   /** Skills published to the organization or its spaces. */
   sharedSkills: SharedSkill[];
+  /** The vault: documents and logins this account may see. */
+  files: VaultFile[];
+  credentials: VaultCredential[];
   actions: EnterpriseActions;
 }
 
@@ -228,7 +270,15 @@ export const ENTERPRISE_OFF: EnterpriseState = {
   jobs: [],
   workers: [],
   sharedSkills: [],
+  files: [],
+  credentials: [],
   actions: {
+    uploadFile: unavailable,
+    deleteFile: unavailable,
+    shareFile: unavailable,
+    saveCredential: unavailable,
+    deleteCredential: unavailable,
+    touchCredential: unavailable,
     publishSkill: unavailable,
     unpublishSkill: unavailable,
     rollbackSkill: unavailable,
@@ -271,6 +321,16 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
 
   const sharedSkills = useQuery(anyApi.sharedSkills.list, isAuthenticated && accountId && linked ? { accountId } : "skip") as SharedSkill[] | undefined;
 
+  const files = useQuery(anyApi.vault.files, isAuthenticated && accountId && linked ? { accountId } : "skip") as VaultFile[] | undefined;
+  const credentials = useQuery(anyApi.vault.credentials, isAuthenticated && accountId && linked ? { accountId } : "skip") as VaultCredential[] | undefined;
+
+  const uploadUrl = useMutation(anyApi.vault.uploadUrl);
+  const saveFile = useMutation(anyApi.vault.saveFile);
+  const deleteFile = useMutation(anyApi.vault.deleteFile);
+  const shareFile = useMutation(anyApi.vault.shareFile);
+  const saveCredential = useMutation(anyApi.vault.saveCredential);
+  const deleteCredential = useMutation(anyApi.vault.deleteCredential);
+  const touchCredential = useMutation(anyApi.vault.touchCredential);
   const publishSkill = useMutation(anyApi.sharedSkills.publish);
   const unpublishSkill = useMutation(anyApi.sharedSkills.unpublish);
   const rollbackSkill = useMutation(anyApi.sharedSkills.rollback);
@@ -309,6 +369,20 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
     };
     const wrap = <T,>(run: () => Promise<T>): Promise<T> => run().catch((error) => Promise.reject(new Error(friendlyError(error))));
     return {
+      uploadFile: (spaceId, file) =>
+        wrap(async () => {
+          // Convex file storage: ask for a one-shot upload URL, post the bytes, then record the file.
+          const url = (await uploadUrl({ accountId: account() })) as string;
+          const response = await fetch(url, { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
+          if (!response.ok) throw new Error("the upload didn't go through");
+          const { storageId } = (await response.json()) as { storageId: string };
+          return (await saveFile({ accountId: account(), spaceId, storageId, name: file.name, size: file.size, mime: file.type || "application/octet-stream" })) as { id: string };
+        }),
+      deleteFile: (fileId) => wrap(async () => void (await deleteFile({ fileId }))),
+      shareFile: (fileId, spaceId) => wrap(async () => void (await shareFile({ fileId, spaceId }))),
+      saveCredential: (input) => wrap(() => saveCredential({ accountId: account(), ...input }) as Promise<{ id: string }>),
+      deleteCredential: (credentialId) => wrap(async () => void (await deleteCredential({ credentialId }))),
+      touchCredential: (credentialId) => wrap(async () => void (await touchCredential({ credentialId }))),
       publishSkill: (spaceId, skill) => wrap(() => publishSkill({ accountId: account(), spaceId, skill }) as Promise<{ id: string; version: number }>),
       unpublishSkill: (sharedId) => wrap(async () => void (await unpublishSkill({ sharedId }))),
       rollbackSkill: (sharedId) => wrap(async () => void (await rollbackSkill({ sharedId }))),
@@ -343,7 +417,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
       createCode: (orgId, days, maxUses) => wrap(() => createCode({ orgId, days, maxUses }) as Promise<{ code: string }>),
       revokeCode: (codeId) => wrap(async () => void (await revokeCode({ codeId }))),
     };
-  }, [publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
+  }, [uploadUrl, saveFile, deleteFile, shareFile, saveCredential, deleteCredential, touchCredential, publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
 
   const status: EnterpriseStatus = isLoading
     ? "loading"
@@ -354,8 +428,8 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
         : "ready";
 
   useEffect(() => {
-    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], actions });
-  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, sharedSkills, actions, onChange]);
+    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], files: files ?? [], credentials: credentials ?? [], actions });
+  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, sharedSkills, files, credentials, actions, onChange]);
 
   return null;
 }

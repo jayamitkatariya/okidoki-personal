@@ -19,6 +19,7 @@ import type * as share from "../share.js";
 import type * as sharedSkills from "../sharedSkills.js";
 import type * as spaces from "../spaces.js";
 import type * as sync from "../sync.js";
+import type * as vault from "../vault.js";
 
 import type {
   ApiFromModules,
@@ -38,6 +39,7 @@ declare const fullApi: ApiFromModules<{
   sharedSkills: typeof sharedSkills;
   spaces: typeof spaces;
   sync: typeof sync;
+  vault: typeof vault;
 }>;
 
 /**
