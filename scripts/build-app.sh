@@ -96,10 +96,10 @@ cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # overrides the choice ("-" forces ad-hoc).
 IDENTITY="${OKIDOKI_CODESIGN_IDENTITY:-}"
 if [ -z "$IDENTITY" ]; then
-  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)"
 fi
 if [ -z "$IDENTITY" ]; then
-  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)"
 fi
 if [ -z "$IDENTITY" ]; then
   echo "▸ No signing certificate found; using an ad-hoc signature (permissions will be asked again after each build)."
