@@ -370,7 +370,7 @@ private struct NotchContent: View {
                             .transition(rowTransition)
                     }
                     ForEach(shownLive) { run in
-                        NotchLiveRow(run: run, env: env, detailed: model.expanded, animating: model.presented)
+                        NotchLiveRow(run: run, env: env, animating: model.presented)
                             .transition(rowTransition)
                     }
                     if model.live.count > shownLive.count && model.expanded {
@@ -619,7 +619,6 @@ private struct RecordingDot: View {
 private struct NotchLiveRow: View {
     var run: NotchRunItem
     let env: AppEnvironment
-    var detailed: Bool
     var animating: Bool
     @State private var hovering = false
 

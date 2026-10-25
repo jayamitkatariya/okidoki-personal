@@ -34,7 +34,6 @@ public enum FrameMatcher {
         var data: [Float]
         var width: Int
         var height: Int
-        subscript(_ x: Int, _ y: Int) -> Float { data[y * width + x] }
     }
 
     /// Template long edge in the coarse pass. Small enough that the pass is cheap, big enough
@@ -80,7 +79,7 @@ public enum FrameMatcher {
         guard let coarseT = gray(template, scale: coarseScale), let coarseH = gray(haystack, scale: coarseScale),
               coarseT.width >= 3, coarseT.height >= 3 else { return [] }
         let coarseMap = nccMap(haystack: coarseH, template: coarseT)
-        let candidates = peaks(in: coarseMap, width: coarseH.width, height: coarseH.height,
+        let candidates = peaks(in: coarseMap, width: coarseH.width,
                                suppress: max(coarseT.width, coarseT.height) / 2, limit: 8, floor: 0.45)
         guard !candidates.isEmpty else { return [] }
 
@@ -275,10 +274,10 @@ public enum FrameMatcher {
         return scores
     }
 
-    struct Peak { var x: Int; var y: Int; var score: Float }
+    struct Peak { var x: Int; var y: Int }
 
     /// Highest-scoring local maxima, at least `suppress` pixels apart.
-    static func peaks(in map: [Float], width: Int, height: Int, suppress: Int, limit: Int, floor: Float) -> [Peak] {
+    static func peaks(in map: [Float], width: Int, suppress: Int, limit: Int, floor: Float) -> [Peak] {
         var indexed: [(index: Int, score: Float)] = []
         indexed.reserveCapacity(map.count / 8)
         for (index, score) in map.enumerated() where score >= floor { indexed.append((index, score)) }
@@ -288,7 +287,7 @@ public enum FrameMatcher {
             let x = entry.index % width
             let y = entry.index / width
             if picked.contains(where: { abs($0.x - x) <= suppress && abs($0.y - y) <= suppress }) { continue }
-            picked.append(Peak(x: x, y: y, score: entry.score))
+            picked.append(Peak(x: x, y: y))
             if picked.count >= limit { break }
         }
         return picked

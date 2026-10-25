@@ -1,4 +1,4 @@
-import type { Decision, NativeContext, TeachMark, TeachPlanStep, ThinkRequest } from "./types";
+import type { Decision, TeachMark, TeachPlanStep, ThinkRequest } from "./types";
 import { terminalDecision } from "./terminal";
 import { clipboardFor } from "./llm";
 

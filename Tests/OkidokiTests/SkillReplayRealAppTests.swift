@@ -9,8 +9,9 @@ import XCTest
 /// Accessibility permission, since nothing can be looked up without it.
 @MainActor
 final class SkillReplayRealAppTests: XCTestCase {
-    private var textEdit: NSRunningApplication?
-    private var launchedTextEdit = false
+    /// Set when these tests started TextEdit themselves; it is quit once the whole class is done,
+    /// since a later test would otherwise find it still running and leave it open.
+    nonisolated(unsafe) private static var launchedTextEdit = false
 
     override func setUp() async throws {
         try await super.setUp()
@@ -18,9 +19,17 @@ final class SkillReplayRealAppTests: XCTestCase {
         try XCTSkipIf(ProcessInfo.processInfo.environment["CI"] != nil, "no display on CI")
     }
 
-    override func tearDown() async throws {
-        if launchedTextEdit { textEdit?.terminate() }
-        try await super.tearDown()
+    override class func tearDown() {
+        if launchedTextEdit {
+            // The untitled documents the tests made would otherwise hold the quit up on a save prompt.
+            let quit = Process()
+            quit.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            quit.arguments = ["-e", "tell application id \"com.apple.TextEdit\" to quit saving no"]
+            try? quit.run()
+            quit.waitUntilExit()
+            launchedTextEdit = false
+        }
+        super.tearDown()
     }
 
     // MARK: Helpers
@@ -28,7 +37,7 @@ final class SkillReplayRealAppTests: XCTestCase {
     private func openTextEdit() async throws -> (pid: pid_t, window: AXUIElement) {
         let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == "com.apple.TextEdit" }
         if running == nil {
-            launchedTextEdit = true
+            Self.launchedTextEdit = true
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
             process.arguments = ["-a", "TextEdit", "--args", "-NSQuitAlwaysKeepsWindows", "NO"]
@@ -38,9 +47,11 @@ final class SkillReplayRealAppTests: XCTestCase {
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
             if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.TextEdit" }) {
-                textEdit = app
                 app.activate()
-                if let window = frontWindow(pid: app.processIdentifier) { return (app.processIdentifier, window) }
+                if let window = frontWindow(pid: app.processIdentifier) {
+                    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                    return (app.processIdentifier, window)
+                }
                 // A fresh TextEdit shows the open panel; a new document gives us a plain window.
                 let newDoc = Process()
                 newDoc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -53,26 +64,38 @@ final class SkillReplayRealAppTests: XCTestCase {
         throw XCTSkip("TextEdit didn't come up")
     }
 
+    /// A document window. The open panel a fresh TextEdit shows can't be moved or resized, so a
+    /// focused window that isn't a standard one doesn't count.
     private func frontWindow(pid: pid_t) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
+        let isDocument = { (window: AXUIElement) in
+            AXSearch.stringAttribute(kAXSubroleAttribute, of: window) == kAXStandardWindowSubrole as String
+        }
         var ref: CFTypeRef?
         for key in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
             if AXUIElementCopyAttributeValue(app, key as CFString, &ref) == .success, let ref,
-               CFGetTypeID(ref) == AXUIElementGetTypeID() {
+               CFGetTypeID(ref) == AXUIElementGetTypeID(), isDocument(ref as! AXUIElement) {
                 return (ref as! AXUIElement)
             }
         }
         var windowsRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-           let windows = windowsRef as? [AXUIElement] { return windows.first }
+           let windows = windowsRef as? [AXUIElement] { return windows.first(where: isDocument) }
         return nil
     }
 
-    private func set(_ window: AXUIElement, frame: CGRect) {
+    /// Moves and resizes the window, then waits until it reports the new frame and the app has
+    /// had a moment to lay its controls out again.
+    private func set(_ window: AXUIElement, frame: CGRect) async throws {
         var origin = frame.origin
         var size = frame.size
         if let value = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) }
         if let value = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, SkillTargetResolver.frame(of: window) != frame {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        try await Task.sleep(nanoseconds: 400_000_000)
     }
 
     /// First element with a label in the window, breadth-first: a toolbar button or a close box.
@@ -120,8 +143,7 @@ final class SkillReplayRealAppTests: XCTestCase {
         let mainHeight = NSScreen.screens[0].frame.height
         // Quartz-space rect near the top-left of the visible area.
         let start = CGRect(x: screen.minX + 60, y: mainHeight - screen.maxY + 60, width: 640, height: 420)
-        set(window, frame: start)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        try await set(window, frame: start)
         guard let control = someLabelledControl(in: window) else { throw XCTSkip("no labelled control in the TextEdit window") }
         let clickPoint = CGPoint(x: control.frame.midX, y: control.frame.midY)
         let target = recordedTarget(at: clickPoint)
@@ -137,8 +159,7 @@ final class SkillReplayRealAppTests: XCTestCase {
 
         // Move and grow the window; the control must be found at its new place.
         let moved = CGRect(x: start.minX + 180, y: start.minY + 140, width: 820, height: 560)
-        set(window, frame: moved)
-        try await Task.sleep(nanoseconds: 500_000_000)
+        try await set(window, frame: moved)
         let after = SkillTargetResolver.resolve(step, pid: pid, recorded: clickPoint)
         XCTAssertTrue(after.verified, "control should be re-found after the window moved")
         let seen = SkillTargetResolver.labelAndRole(in: pid, at: after.point!)
@@ -164,15 +185,13 @@ final class SkillReplayRealAppTests: XCTestCase {
         let screen = NSScreen.main!.visibleFrame
         let mainHeight = NSScreen.screens[0].frame.height
         let start = CGRect(x: screen.minX + 60, y: mainHeight - screen.maxY + 60, width: 640, height: 420)
-        set(window, frame: start)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        try await set(window, frame: start)
         // A label the window certainly doesn't have, recorded in the middle of the window.
         let point = CGPoint(x: start.midX, y: start.midY)
         let step = SkillStep(text: "click “Nonexistent Control”", app: "TextEdit", x: point.x, y: point.y,
                              action: "click", label: "Nonexistent Control", role: "AXButton", window: start)
         let moved = start.offsetBy(dx: 200, dy: 100)
-        set(window, frame: moved)
-        try await Task.sleep(nanoseconds: 500_000_000)
+        try await set(window, frame: moved)
         let result = SkillTargetResolver.resolve(step, pid: pid, recorded: point)
         XCTAssertFalse(result.verified)
         XCTAssertEqual(result.point!.x, point.x + 200, accuracy: 2)

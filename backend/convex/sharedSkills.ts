@@ -40,7 +40,7 @@ export function parameterNames(steps: unknown): string[] {
   return names;
 }
 
-async function view(ctx: QueryCtx | MutationCtx, row: Doc<"spaceSkills">, people: Map<string, { name: string }>, me: Id<"users">, admin: boolean, spaceNames: Map<string, string>) {
+function view(row: Doc<"spaceSkills">, people: Map<string, { name: string }>, me: Id<"users">, admin: boolean, spaceNames: Map<string, string>) {
   return {
     id: row._id,
     spaceId: row.spaceId,
@@ -81,7 +81,7 @@ export const list = query({
       .withIndex("by_org", (q) => q.eq("orgId", link.orgId))
       .collect();
     const out = [];
-    for (const row of rows) out.push(await view(ctx, row, people, link.userId, admin, spaceNames));
+    for (const row of rows) out.push(view(row, people, link.userId, admin, spaceNames));
     out.sort((a, b) => Number(Boolean(a.spaceId)) - Number(Boolean(b.spaceId)) || b.updatedAt - a.updatedAt);
     return out;
   },

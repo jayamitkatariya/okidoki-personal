@@ -410,7 +410,6 @@ final class AppEnvironment: ObservableObject {
         summon.dismiss()
         answerController.close()
         ghost.cancel()
-        if teach.model.isActive { teach.resumeAfterQuestion() }
         notch.noteListening(false)
         notch.collapse()
     }
@@ -603,8 +602,7 @@ final class AppEnvironment: ObservableObject {
         if BrainService.mentionsClipboard(text) {
             let priorTurns = (store.thread(thread.id)?.messages ?? []).map(\.text)
             clipboard = BrainService.relevantClipboard(NSPasteboard.general.string(forType: .string) ?? "",
-                                                       request: text, history: priorTurns,
-                                                       hasScreenshot: screenshot != nil, hasDocument: !document.isEmpty)
+                                                       request: text, history: priorTurns)
         }
         let request = BrainRequest(text: text, appName: appName, bundleID: bundleID,
                                    threadID: thread.id, screenshotPNG: screenshot,
@@ -661,8 +659,6 @@ final class AppEnvironment: ObservableObject {
             let card = makeAnswerCard(decision: decision, request: request, threadID: threadID, run: run)
             present(card, source: source)
             speak(decision.speak.isEmpty ? decision.answer : decision.speak)
-            // A question asked mid-lesson: the answer is up, the lesson carries on underneath.
-            if teach.isActive { teach.resumeAfterQuestion() }
 
         case .memory:
             let run = store.createRun(kind: .answer, title: decision.title, prompt: request.text,
@@ -722,7 +718,7 @@ final class AppEnvironment: ObservableObject {
                       editLabel: nil, onEdit: nil, runID: run.id)
             } else {
                 let outline = decision.teachPlan.isEmpty ? decision.teachSteps : decision.teachPlan.map(\.say)
-                teach.start(topic: topic, outline: outline, appBundleID: request.bundleID, requestText: request.text,
+                teach.start(topic: topic, outline: outline, appBundleID: request.bundleID,
                             runID: run.id, threadID: threadID)
                 toast(title: "teaching · \(topic)", detail: "i'll point, you do it · it moves on as you go · esc stops",
                       kind: .info, undoLabel: "stop", onUndo: { [weak self] in self?.teach.stop(completed: false) },
@@ -1413,7 +1409,7 @@ final class AppEnvironment: ObservableObject {
                 return
             }
             let target = run.pickedPath ?? run.prompt
-            ghost.begin(target: target, appName: run.preview?.apps.first ?? "app", runID: run.id)
+            ghost.begin(target: target, runID: run.id)
         case .computerUse:
             beginDriving(run)
         case .connector:

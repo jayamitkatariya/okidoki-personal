@@ -19,13 +19,6 @@ enum TeachMode: String {
     case guide
     /// The same lesson again with hints held back.
     case practice
-
-    var title: String {
-        switch self {
-        case .guide: return "guide me"
-        case .practice: return "your turn"
-        }
-    }
 }
 
 @MainActor

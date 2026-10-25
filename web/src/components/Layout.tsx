@@ -394,7 +394,7 @@ function CommandPalette({
   onClose: () => void;
   onNavigate: (page: Page) => void;
 }) {
-  const { state, invoke, notify } = useDashboard();
+  const { invoke, notify } = useDashboard();
   const [query, setQuery] = useState("");
   const [askMode, setAskMode] = useState(false);
   const [index, setIndex] = useState(0);

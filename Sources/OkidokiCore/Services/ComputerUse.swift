@@ -1359,7 +1359,7 @@ public final class ComputerUseService {
 
     /// Size the screenshot should be sent at: never larger than the display in points
     /// (1 image pixel = 1 point on Retina), and inside the API's limits.
-    public nonisolated static func sendSize(pixelWidth: Double, pixelHeight: Double, pointWidth: Double, pointHeight: Double) -> (width: Int, height: Int) {
+    public nonisolated static func sendSize(pixelWidth: Double, pixelHeight: Double, pointWidth: Double) -> (width: Int, height: Int) {
         guard pixelWidth > 0, pixelHeight > 0 else { return (0, 0) }
         var scale = min(1, pointWidth / pixelWidth)
         let longEdge = max(pixelWidth, pixelHeight) * scale
@@ -1437,9 +1437,9 @@ public final class ComputerUseService {
         return context.makeImage()
     }
 
-    public nonisolated static func encodeForModel(_ image: CGImage, pointWidth: Double, pointHeight: Double) -> (png: Data, width: Double, height: Double)? {
+    public nonisolated static func encodeForModel(_ image: CGImage, pointWidth: Double) -> (png: Data, width: Double, height: Double)? {
         let size = sendSize(pixelWidth: Double(image.width), pixelHeight: Double(image.height),
-                            pointWidth: pointWidth, pointHeight: pointHeight)
+                            pointWidth: pointWidth)
         guard let scaled = resized(image, to: size), let png = pngData(scaled) else { return nil }
         return (png, Double(scaled.width), Double(scaled.height))
     }
@@ -1462,13 +1462,13 @@ public final class ComputerUseService {
         }
         guard let raw = await captureDisplayImage(screen) else { return nil }
         let encoded = await Task.detached(priority: .userInitiated) {
-            Self.encodeForModel(raw.image, pointWidth: raw.pointWidth, pointHeight: raw.pointHeight)
+            Self.encodeForModel(raw.image, pointWidth: raw.pointWidth)
         }.value
         guard let encoded else { return nil }
         return Screenshot(png: encoded.png, box: raw.box, imageWidth: encoded.width, imageHeight: encoded.height, full: raw.image)
     }
 
-    private func captureDisplayImage(_ screen: NSScreen) async -> (image: CGImage, box: ScreenBox, pointWidth: CGFloat, pointHeight: CGFloat)? {
+    private func captureDisplayImage(_ screen: NSScreen) async -> (image: CGImage, box: ScreenBox, pointWidth: CGFloat)? {
         let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
             ?? CGMainDisplayID()
         do {
@@ -1495,7 +1495,7 @@ public final class ComputerUseService {
             let bounds = display.frame
             let box = ScreenBox(x: bounds.origin.x, y: bounds.origin.y,
                                 width: bounds.size.width, height: bounds.size.height)
-            return (image, box, pointW, pointH)
+            return (image, box, pointW)
         } catch {
             return nil
         }
@@ -1520,7 +1520,7 @@ public final class ComputerUseService {
             try? FileManager.default.removeItem(at: temp)
             guard let rep = NSBitmapImageRep(data: data),
                   rep.pixelsWide > 0, rep.pixelsHigh > 0, let image = rep.cgImage,
-                  let encoded = encodeForModel(image, pointWidth: rect.width, pointHeight: rect.height) else { return nil }
+                  let encoded = encodeForModel(image, pointWidth: rect.width) else { return nil }
             return Screenshot(png: encoded.png, box: ScreenBox(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height),
                               imageWidth: encoded.width, imageHeight: encoded.height, full: image)
         } catch {

@@ -43,12 +43,12 @@ public enum ChatCommands {
         if context.replaying, Self.stopWords.contains(t) || t.hasPrefix("stop replay") || t.hasPrefix("stop the replay") {
             return .stopReplay
         }
-        if let command = startRecordingCommand(t, raw: text) { return command }
+        if let command = startRecordingCommand(t) { return command }
         if Self.listPhrases.contains(t) || t.hasPrefix("list my skills") || t.hasPrefix("list skills")
             || t.hasPrefix("what skills") || t.hasPrefix("which skills") || t.hasPrefix("show my skills") || t.hasPrefix("show me my skills") {
             return .listSkills
         }
-        if let command = renameCommand(t, raw: text, skills: context.skills) { return command }
+        if let command = renameCommand(t, skills: context.skills) { return command }
         if let command = deleteCommand(t, skills: context.skills) { return command }
         return replayCommand(t, skills: context.skills, hasReplayed: context.hasReplayed)
     }
@@ -85,7 +85,7 @@ public enum ChatCommands {
         return nil
     }
 
-    private static func startRecordingCommand(_ t: String, raw: String) -> ChatCommand? {
+    private static func startRecordingCommand(_ t: String) -> ChatCommand? {
         for prefix in ["watch me do ", "watch me ", "record what i do", "record me ", "record a skill called ", "record a skill named ",
                        "record a new skill called ", "record skill ", "record a skill", "record a new skill", "start recording ", "start recording",
                        "new skill called ", "new skill named ", "teach you to ", "teach you how to ", "learn this: ", "learn how i "] {
@@ -106,7 +106,7 @@ public enum ChatCommands {
         "what did you learn", "what do you know how to do", "which skills do i have",
     ]
 
-    private static func renameCommand(_ t: String, raw: String, skills: [Skill]) -> ChatCommand? {
+    private static func renameCommand(_ t: String, skills: [Skill]) -> ChatCommand? {
         guard let match = t.range(of: "^rename (the |my )?(skill )?(.+?)( skill)? (to|as) (.+)$", options: .regularExpression) else { return nil }
         let parts = String(t[match]).replacingOccurrences(of: "^rename (the |my )?(skill )?", with: "", options: .regularExpression)
         guard let split = parts.range(of: " (to|as) ", options: .regularExpression) else { return nil }

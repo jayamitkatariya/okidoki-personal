@@ -371,13 +371,6 @@ final class PrivateMacService: NSObject, ObservableObject {
         machineStopped(error: nil)
     }
 
-    /// For app termination: a graceful request now, the plug pulled by the caller's deadline.
-    func requestStopForQuit() -> Bool {
-        guard let vm = machine, phase == .running, vm.canRequestStop else { return false }
-        phase = .stopping
-        return (try? vm.requestStop()) != nil
-    }
-
     private func machineStopped(error: Error?) {
         if let error { self.error = Self.describe(error) }
         bootedAt = nil
@@ -420,7 +413,7 @@ final class PrivateMacService: NSObject, ObservableObject {
     private func ensureWindow(for vm: VZVirtualMachine) {
         if let windowController, windowController.machineView.virtualMachine === vm { return }
         windowController?.close()
-        windowController = PrivateMacWindowController(machine: vm, service: self)
+        windowController = PrivateMacWindowController(machine: vm)
     }
 
     /// Brings the VM window up for the user to look at or finish Setup Assistant in.
@@ -491,10 +484,8 @@ enum PrivateMacError: LocalizedError {
 final class PrivateMacWindowController: NSObject, NSWindowDelegate {
     private(set) var window: NSWindow?
     let machineView = VZVirtualMachineView()
-    private weak var service: PrivateMacService?
 
-    init(machine: VZVirtualMachine, service: PrivateMacService) {
-        self.service = service
+    init(machine: VZVirtualMachine) {
         super.init()
         machineView.virtualMachine = machine
         machineView.capturesSystemKeys = false
@@ -584,7 +575,7 @@ final class PrivateMacComputer: ComputerTarget {
             guard let display = image.cropping(to: crop) else { return nil }
             let box = ScreenBox(x: 0, y: 0, width: inWindow.width, height: inWindow.height)
             let encoded = await Task.detached(priority: .userInitiated) {
-                ComputerUseService.encodeForModel(display, pointWidth: inWindow.width, pointHeight: inWindow.height)
+                ComputerUseService.encodeForModel(display, pointWidth: inWindow.width)
             }.value
             guard let encoded else { return nil }
             return ComputerUseService.Screenshot(png: encoded.png, box: box, imageWidth: encoded.width,

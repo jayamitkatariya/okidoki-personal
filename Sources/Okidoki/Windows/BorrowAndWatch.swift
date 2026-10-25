@@ -91,7 +91,7 @@ final class GhostCursorController {
 
     init(environment: AppEnvironment) { self.env = environment }
 
-    func begin(target: String, appName: String, runID: String) {
+    func begin(target: String, runID: String) {
         guard !model.visible else { return }
         self.runID = runID
         cancelled = false

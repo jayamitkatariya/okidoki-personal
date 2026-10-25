@@ -7,12 +7,6 @@ import type { JoinCode, OrgMember, OrgRole, OrgView } from "../enterprise";
 import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const ROLE_LABEL: Record<OrgRole, string> = { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" };
-const ROLE_HINT: Record<OrgRole, string> = {
-  owner: "Runs the organization",
-  admin: "Manages people and codes",
-  member: "Works in spaces",
-  agent: "A login that only runs jobs",
-};
 const AVATAR_COLORS = ["44E45E", "1FB57A", "3DDC97", "0B8A5E", "B8F26B", "8FB7FF", "F2B84B", "E97A6B"];
 
 // Members aren't accounts on this Mac, so give each one a steady colour from their email.

@@ -939,7 +939,7 @@ struct OverlayIconButton: View {
                 .font(.system(size: size * 0.44, weight: .medium))
                 .foregroundStyle(hovering ? (tint ?? palette.hoverInk) : palette.secondary)
                 .frame(width: size, height: size)
-                .background { plate(palette) }
+                .background { plate() }
                 .contentShape(Rectangle())
         }
         .buttonStyle(OverlayPressStyle(pressedScale: 0.88))
@@ -951,7 +951,7 @@ struct OverlayIconButton: View {
     }
 
     @ViewBuilder
-    private func plate(_ palette: OverlayPalette) -> some View {
+    private func plate() -> some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
         let tone = tint ?? .white
         ZStack {

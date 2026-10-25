@@ -19,7 +19,7 @@ final class FrameMatcherTests: XCTestCase {
     }
 
     /// A plain-looking window with a few "controls" drawn at known places.
-    private func screen(size: CGSize, windowAt origin: CGPoint, seed: UInt64 = 7) -> CGImage {
+    private func screen(size: CGSize, windowAt origin: CGPoint) -> CGImage {
         return draw(size: size) {
         NSColor(white: 0.93, alpha: 1).setFill()
         NSRect(origin: .zero, size: size).fill()

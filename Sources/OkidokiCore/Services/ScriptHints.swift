@@ -14,7 +14,7 @@ public enum ScriptHints {
         if let cached = cached(path) { return cached }
         let text = await Task.detached(priority: .utility) { () -> String in
             guard let xml = runSDEF(path: path) else { return "" }
-            return summarize(sdefXML: xml, appName: appURL.deletingPathExtension().lastPathComponent)
+            return summarize(sdefXML: xml)
         }.value
         store(text, for: path)
         return text
@@ -56,7 +56,7 @@ public enum ScriptHints {
 
     /// Parses the sdef XML into "classes — …; commands — …" per suite. Standard Suite is
     /// collapsed to its command names since every scriptable app has it.
-    nonisolated public static func summarize(sdefXML: Data, appName: String) -> String {
+    nonisolated public static func summarize(sdefXML: Data) -> String {
         let parser = XMLParser(data: sdefXML)
         let collector = Collector()
         parser.delegate = collector

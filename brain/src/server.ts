@@ -138,33 +138,6 @@ export async function handleRequest(request: Request): Promise<Response> {
       }
     }
 
-    if (url.pathname === "/teach/concept" && request.method === "POST") {
-      try {
-        const payload = await body<Partial<ConceptRequest>>(request);
-        if (!payload.topic) {
-          return json({ error: "topic required" }, 400);
-        }
-        const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await conceptLesson(
-          {
-            topic: payload.topic,
-            context: payload.context,
-            pageTitle: payload.pageTitle,
-            pageURL: payload.pageURL,
-            screenshotBase64: payload.screenshotBase64,
-            imageWidth: payload.imageWidth,
-            imageHeight: payload.imageHeight,
-            language: payload.language,
-            model: payload.model,
-          },
-          key,
-        );
-        return json(result);
-      } catch (error) {
-        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
-      }
-    }
-
     // Newline-delimited JSON: an "intro" line as soon as the title and first sentence exist, then
     // the full "lesson" (or an "error"). Lets the app start talking while the model is still drawing.
     if (url.pathname === "/teach/concept/stream" && request.method === "POST") {

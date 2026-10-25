@@ -7,7 +7,7 @@ import OkidokiCore
 final class TeachLab {
     private var index = Int(ProcessInfo.processInfo.environment["OKIDOKI_TEACH_LAB_START"] ?? "") ?? 0
 
-    func next(for request: TeachStepRequest, elements: [TeachElement], shot: TeachShot?) -> TeachLiveStep? {
+    func next(elements: [TeachElement], shot: TeachShot?) -> TeachLiveStep? {
         guard let shot else { return TeachLiveStep(action: "look", say: "i can't see the screen in the lab.") }
         let w = shot.sentWidth
         let h = shot.sentHeight

@@ -235,18 +235,18 @@ final class ComputerUseTests: XCTestCase {
 
     func testScreenshotSendSizeStaysWithinModelLimits() {
         // 14" MacBook Pro: 3024×1964 pixels, 1512×982 points. Must fit the ~1.15 MP budget.
-        let laptop = ComputerUseService.sendSize(pixelWidth: 3024, pixelHeight: 1964, pointWidth: 1512, pointHeight: 982)
+        let laptop = ComputerUseService.sendSize(pixelWidth: 3024, pixelHeight: 1964, pointWidth: 1512)
         XCTAssertLessThanOrEqual(Double(laptop.width * laptop.height), ComputerUseService.maxImagePixels + 2000)
         XCTAssertLessThanOrEqual(laptop.width, 1512)
         XCTAssertEqual(Double(laptop.width) / Double(laptop.height), 3024.0 / 1964.0, accuracy: 0.01)
 
         // 5K display at 2x: the long edge must come under 1568.
-        let big = ComputerUseService.sendSize(pixelWidth: 5120, pixelHeight: 2880, pointWidth: 2560, pointHeight: 1440)
+        let big = ComputerUseService.sendSize(pixelWidth: 5120, pixelHeight: 2880, pointWidth: 2560)
         XCTAssertLessThanOrEqual(big.width, Int(ComputerUseService.maxImageLongEdge))
         XCTAssertLessThanOrEqual(Double(big.width * big.height), ComputerUseService.maxImagePixels + 2000)
 
         // A small 1x display is sent as-is.
-        let small = ComputerUseService.sendSize(pixelWidth: 1280, pixelHeight: 800, pointWidth: 1280, pointHeight: 800)
+        let small = ComputerUseService.sendSize(pixelWidth: 1280, pixelHeight: 800, pointWidth: 1280)
         XCTAssertEqual(small.width, 1280)
         XCTAssertEqual(small.height, 800)
     }
@@ -397,13 +397,13 @@ final class ComputerUseTests: XCTestCase {
           </suite>
         </dictionary>
         """.data(using: .utf8)!
-        let summary = ScriptHints.summarize(sdefXML: xml, appName: "Notes")
+        let summary = ScriptHints.summarize(sdefXML: xml)
         XCTAssertTrue(summary.contains("Standard Suite commands: open, quit"), summary)
         XCTAssertTrue(summary.contains("note (name, body; contains attachment)"), summary)
         XCTAssertFalse(summary.contains("secret"), summary)
         XCTAssertTrue(summary.contains("show [note]"), summary)
         XCTAssertTrue(summary.contains("make [new, with properties]"), summary)
-        XCTAssertEqual(ScriptHints.summarize(sdefXML: Data("not xml".utf8), appName: "x"), "")
+        XCTAssertEqual(ScriptHints.summarize(sdefXML: Data("not xml".utf8)), "")
     }
 
     func testSDEFOfARealScriptableApp() async {

@@ -134,7 +134,7 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
     @discardableResult
     private func prepare(topic: String, appBundleID: String, runID: String?, threadID: String?) -> NSRunningApplication? {
         guard let env else { return nil }
-        if isActive { dismiss(completed: false, quiet: true) }
+        if isActive { dismiss(completed: false) }
         self.topic = topic
         generation += 1
         let gen = generation
@@ -480,7 +480,7 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
         }
     }
 
-    func dismiss(completed: Bool, quiet: Bool = false) {
+    func dismiss(completed: Bool) {
         generation += 1
         resolveBeat()
         env?.speaker.stop()

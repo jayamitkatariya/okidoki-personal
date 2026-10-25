@@ -252,8 +252,7 @@ public final class BrainService {
     /// Anything looser — "this", "fix this", "summarize" — made whatever happened to be on the
     /// clipboard ride along with ordinary questions, so the model answered the clipboard instead
     /// of what was typed. Mirrors the brain's `clipboardFor`.
-    public static func relevantClipboard(_ clipboard: String, request text: String, history: [String],
-                                         hasScreenshot: Bool, hasDocument: Bool) -> String {
+    public static func relevantClipboard(_ clipboard: String, request text: String, history: [String]) -> String {
         let trimmed = clipboard.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, mentionsClipboard(text) else { return "" }
         func squash(_ s: String) -> String {

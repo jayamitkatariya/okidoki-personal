@@ -34,7 +34,6 @@ final class BrainSidecar: ObservableObject {
     private(set) var baseURL: URL
 
     private var process: Process?
-    private var startedAt: Date?
     private var logHandle: FileHandle?
     private var intentionalStop = false
     private var healthTimer: Timer?
@@ -121,7 +120,6 @@ final class BrainSidecar: ObservableObject {
         do {
             try process.run()
             self.process = process
-            startedAt = Date()
             Task { await waitForHealth() }
         } catch {
             status = .failed(error.localizedDescription)
@@ -380,7 +378,6 @@ enum BrainExecEvent {
 
 struct BrainExecResult {
     var summary: String
-    var freedBytes: Int64?
     var success: Bool
 }
 
@@ -481,7 +478,7 @@ final class BrainClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (bytes, response) = try await URLSession.shared.bytes(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                return BrainExecResult(summary: "The execution service rejected this job. Review the plan and try again.", freedBytes: nil, success: false)
+                return BrainExecResult(summary: "The execution service rejected this job. Review the plan and try again.", success: false)
             }
             var summary = ""
             var freed: Int64?
@@ -521,10 +518,10 @@ final class BrainClient {
                     }
                 }
             }
-            if let failure { return BrainExecResult(summary: failure, freedBytes: nil, success: false) }
-            return BrainExecResult(summary: success ? summary : "The connection ended before the result arrived. Check this run before trying again.", freedBytes: freed, success: success)
+            if let failure { return BrainExecResult(summary: failure, success: false) }
+            return BrainExecResult(summary: success ? summary : "The connection ended before the result arrived. Check this run before trying again.", success: success)
         } catch {
-            return BrainExecResult(summary: "Lost connection to the job. It may still be running. Stop it or check its output before trying again.", freedBytes: nil, success: false)
+            return BrainExecResult(summary: "Lost connection to the job. It may still be running. Stop it or check its output before trying again.", success: false)
         }
     }
 
@@ -646,29 +643,9 @@ final class BrainClient {
         }
     }
 
-    struct ConceptEnvelope: Decodable {
-        var lesson: ConceptLesson?
-        var error: String?
-        var warnings: [String]?
-    }
-
     struct ConceptFollowEnvelope: Decodable {
         var follow: ConceptFollowUp?
         var error: String?
-    }
-
-    /// A narrated 2D/3D lesson for the stage. The sidecar also fetches real molecule data and a photo card.
-    func teachConcept(topic: String, context: String, pageTitle: String?, pageURL: String?,
-                      screenshotBase64: String?, imageWidth: Double, imageHeight: Double,
-                      language: String?, model: String) async -> (lesson: ConceptLesson?, error: String?) {
-        var body: [String: Any] = ["topic": topic, "context": context, "imageWidth": imageWidth, "imageHeight": imageHeight, "model": model]
-        if let pageTitle { body["pageTitle"] = pageTitle }
-        if let pageURL { body["pageURL"] = pageURL }
-        if let screenshotBase64 { body["screenshotBase64"] = screenshotBase64 }
-        if let language { body["language"] = language }
-        guard let data = await postJSON("teach/concept", body: body, timeout: 120) else { return (nil, "the brain didn't answer") }
-        guard let envelope = try? JSONDecoder().decode(ConceptEnvelope.self, from: data) else { return (nil, "bad reply") }
-        return (envelope.lesson, envelope.error)
     }
 
     /// What the streaming concept endpoint reports, in order: maybe an intro, then a lesson or an error.
@@ -686,8 +663,9 @@ final class BrainClient {
         var error: String?
     }
 
-    /// Same lesson as `teachConcept`, but the title and intro arrive as soon as the model has
-    /// written them, so narration can start while the scene is still being drawn.
+    /// A narrated 2D/3D lesson for the stage; the sidecar also fetches real molecule data and a
+    /// photo card. The title and intro arrive as soon as the model has written them, so narration
+    /// can start while the scene is still being drawn.
     func teachConceptStream(topic: String, context: String, pageTitle: String?, pageURL: String?,
                             screenshotBase64: String?, imageWidth: Double, imageHeight: Double,
                             language: String?, model: String) -> AsyncStream<ConceptStreamEvent> {

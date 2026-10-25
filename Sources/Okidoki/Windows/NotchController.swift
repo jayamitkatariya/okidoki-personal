@@ -13,7 +13,6 @@ struct NotchToast: Identifiable, Equatable {
     var undoLabel: String?
     var editLabel: String?
     var runID: String?
-    var createdAt: Date = Date()
     var expiresAt: Date
 }
 

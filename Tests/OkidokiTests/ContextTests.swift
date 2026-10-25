@@ -44,29 +44,27 @@ final class ContextTests: XCTestCase {
     func testClipboardTravelsOnlyWhenTheRequestNamesIt() {
         let answer = "**Make the repo closed** means change a repository from public to private."
         let copied = BrainService.relevantClipboard(answer, request: "and how do i do that on github?",
-                                                    history: ["explain this to me", answer],
-                                                    hasScreenshot: false, hasDocument: false)
+                                                    history: ["explain this to me", answer])
         XCTAssertEqual(copied, "", "a copied answer never goes back to the model as clipboard")
         XCTAssertEqual(BrainService.relevantClipboard(answer, request: "what's on my clipboard?",
-                                                      history: ["explain this to me", answer],
-                                                      hasScreenshot: false, hasDocument: false), "",
+                                                      history: ["explain this to me", answer]), "",
                        "even when asked by name, an echo of the chat stays out")
         // Named outright: it goes along.
         XCTAssertEqual(BrainService.relevantClipboard("a long article", request: "summarize what i copied",
-                                                      history: [], hasScreenshot: false, hasDocument: false), "a long article")
+                                                      history: []), "a long article")
         XCTAssertEqual(BrainService.relevantClipboard("git fetch origin main", request: "explain my clipboard",
-                                                      history: [], hasScreenshot: false, hasDocument: false), "git fetch origin main")
+                                                      history: []), "git fetch origin main")
         XCTAssertEqual(BrainService.relevantClipboard("call mom at 5", request: "note this",
-                                                      history: [], hasScreenshot: false, hasDocument: false), "call mom at 5")
+                                                      history: []), "call mom at 5")
         // Typed questions stand on their own; whatever is on the clipboard stays out of them.
         for request in ["open safari private browsing", "explain this to me", "fix this error", "summarize this page",
                         "copy that file to the desktop", "what's this", "teach me how to use notes"] {
             XCTAssertEqual(BrainService.relevantClipboard("git fetch origin main", request: request,
-                                                          history: [], hasScreenshot: false, hasDocument: false), "",
+                                                          history: []), "",
                            "\"\(request)\" must not drag the clipboard along")
         }
         XCTAssertEqual(BrainService.relevantClipboard("git fetch", request: "do this",
-                                                      history: [], hasScreenshot: true, hasDocument: false), "")
+                                                      history: []), "")
         XCTAssertTrue(BrainService.mentionsClipboard("paste what I copied"))
         XCTAssertFalse(BrainService.mentionsClipboard("how do i fix this"))
     }

@@ -29,7 +29,6 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
     private weak var env: AppEnvironment?
     private var panel: SimPanel?
     private var controlPanel: SimControlPanel?
-    private var webView: WKWebView?
     private var escLocal: Any?
     private var escGlobal: Any?
     private var moveObserver: NSObjectProtocol?
@@ -102,7 +101,6 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
         control.orderFrontRegardless()
         self.panel = panel
         self.controlPanel = control
-        self.webView = webView
         installMonitors()
         moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification,
                                                               object: control, queue: .main) { [weak self] note in
@@ -116,7 +114,6 @@ final class SimOverlayController: NSObject, WKNavigationDelegate {
         controlPanel?.orderOut(nil)
         panel = nil
         controlPanel = nil
-        webView = nil
         if let escLocal { NSEvent.removeMonitor(escLocal) }
         if let escGlobal { NSEvent.removeMonitor(escGlobal) }
         escLocal = nil; escGlobal = nil

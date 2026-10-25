@@ -12,7 +12,6 @@ struct TeachElement: Equatable {
     var role: String
     /// Quartz global points, origin top-left of the main display.
     var rect: CGRect
-    var source: String
 }
 
 /// A screenshot and the numbers needed to map between its pixels and the screen.
@@ -55,7 +54,6 @@ struct TeachShot: @unchecked Sendable {
 struct TeachShownStep: Equatable {
     var id = UUID()
     var live: TeachLiveStep
-    var number: Int
     var scene: TeachScene?
     /// Quartz global rect that counts as "on the target" for a click.
     var hitRect: CGRect?
@@ -63,7 +61,6 @@ struct TeachShownStep: Equatable {
     /// Global center, for "do it for me".
     var actGlobal: CGPoint?
     var actFrom: CGPoint?
-    var retry: Bool
     var snapped: Bool
 }
 
@@ -117,7 +114,6 @@ final class TeachController {
     private var modelRetries = 0
     private var confirmContinuation: CheckedContinuation<Bool, Never>?
     private var current: TeachShownStep?
-    private var askingQuestion = false
     private var practiceRound = false
     private var lab: TeachLab?
     private var lastPointerUpdate: TimeInterval = 0
@@ -132,10 +128,10 @@ final class TeachController {
 
     /// Legacy string-steps entry (skills, canned library). The steps become the outline.
     func start(topic: String, steps: [String], runID: String?, threadID: String?) {
-        start(topic: topic, outline: steps, appBundleID: "", requestText: "", runID: runID, threadID: threadID)
+        start(topic: topic, outline: steps, appBundleID: "", runID: runID, threadID: threadID)
     }
 
-    func start(topic: String, outline: [String], appBundleID: String, requestText: String, runID: String?, threadID: String?,
+    func start(topic: String, outline: [String], appBundleID: String, runID: String?, threadID: String?,
                mode forced: TeachMode? = nil) {
         if model.isActive { stop(completed: false, quiet: true) }
         guard let env else { return }
@@ -150,7 +146,6 @@ final class TeachController {
         typedCount = 0
         mouseDownAt = nil
         performingForThem = false
-        askingQuestion = false
         practiceRound = false
         current = nil
 
@@ -335,7 +330,7 @@ final class TeachController {
                 let words = await TeachImage.recognizeText(in: captured.full, fast: true)
                 var list: [TeachElement] = []
                 for control in found {
-                    list.append(TeachElement(id: list.count, label: control.label, role: control.role, rect: control.rect, source: "ax"))
+                    list.append(TeachElement(id: list.count, label: control.label, role: control.role, rect: control.rect))
                 }
                 for word in words where list.count < 120 {
                     let origin = shot.globalFromFull(word.rect.origin)
@@ -346,7 +341,7 @@ final class TeachController {
                             && existing.label.lowercased() == word.text.lowercased()
                     }
                     if covered { continue }
-                    list.append(TeachElement(id: list.count, label: word.text, role: "text", rect: rect, source: "ocr"))
+                    list.append(TeachElement(id: list.count, label: word.text, role: "text", rect: rect))
                 }
                 guard let scaled = TeachImage.scaled(captured.full, to: size) else { return nil }
                 let markers = list.map { TeachImage.Marker(id: $0.id, rect: shot.sentRect($0.rect)) }
@@ -409,7 +404,7 @@ final class TeachController {
 
     /// The model behind each step; the lab swaps in scripted steps.
     private func stepProvider(_ request: TeachStepRequest) async -> TeachLiveStep? {
-        if let lab { return lab.next(for: request, elements: elements, shot: lastShot) }
+        if let lab { return lab.next(elements: elements, shot: lastShot) }
         return await env?.teachStep(request)
     }
 
@@ -433,9 +428,9 @@ final class TeachController {
         if let milestone = step.milestone { model.milestone = max(0, min(max(0, model.milestones.count - 1), milestone)) }
 
         let resolved = resolve(step)
-        let shown = TeachShownStep(live: step, number: stepsShown, scene: resolved.scene, hitRect: resolved.hit,
+        let shown = TeachShownStep(live: step, scene: resolved.scene, hitRect: resolved.hit,
                                    dragTo: resolved.dragTo, actGlobal: resolved.actGlobal, actFrom: resolved.actFrom,
-                                   retry: retry, snapped: resolved.snapped)
+                                   snapped: resolved.snapped)
         typedCount = 0
         mouseDownAt = nil
         current = shown
@@ -930,7 +925,7 @@ final class TeachController {
     }
 
     private func handle(_ event: NSEvent) {
-        guard model.isActive, !askingQuestion else { return }
+        guard model.isActive else { return }
         if event.type == .keyDown, event.keyCode == 53, !expectsEscape {
             if model.phase == .confirm { resolveConfirm(false); return }
             stop(completed: model.phase == .done)
@@ -1043,7 +1038,7 @@ final class TeachController {
     }
 
     private func handleActivation(_ app: NSRunningApplication?) {
-        guard model.isActive, !performingForThem, !askingQuestion, let app,
+        guard model.isActive, !performingForThem, let app,
               app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
         let name = app.localizedName ?? "an app"
         targetApp = app
@@ -1186,7 +1181,7 @@ final class TeachController {
 
     /// "next" / "skip": move past the current step without doing it. Also retries after the model went quiet.
     func skipStep() {
-        guard model.isActive, !askingQuestion else { return }
+        guard model.isActive else { return }
         switch model.phase {
         case .looking, .confirm:
             return
@@ -1236,26 +1231,6 @@ final class TeachController {
 
     // MARK: Questions mid-lesson
 
-    /// Hold the lesson while answering a question.
-    func pauseForQuestion() {
-        guard model.isActive else { return }
-        askingQuestion = true
-        pendingVerify?.cancel()
-        clearIdle()
-        env?.speaker.stop()
-        if model.phase == .waiting {
-            model.hint = "ask away — i'll hold the step"
-        }
-    }
-
-    func resumeAfterQuestion() {
-        guard model.isActive, askingQuestion else { return }
-        askingQuestion = false
-        guard let shown = current, model.phase == .waiting else { return }
-        model.hint = Self.hint(for: shown.live, mode: model.mode)
-        armIdle()
-    }
-
     /// What the lesson is about right now, for a question's context.
     var questionContext: String {
         guard model.isActive else { return "" }
@@ -1269,15 +1244,12 @@ final class TeachController {
         let t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         switch t {
         case "next", "skip", "move on", "go on", "continue":
-            askingQuestion = false
             skipStep()
             return true
         case "do it", "do it for me", "you do it", "just do it":
-            askingQuestion = false
             if model.phase == .confirm { resolveConfirm(true) } else { doItForThem() }
             return true
         case "go back", "back", "again", "show that again", "repeat":
-            askingQuestion = false
             replayCurrent()
             return true
         case "stop", "stop the lesson", "quit", "enough", "cancel":
@@ -1328,7 +1300,7 @@ final class TeachController {
         let threadID = model.threadID
         practiceRound = true
         stop(completed: true, keepRun: true)
-        start(topic: topic, outline: steps, appBundleID: bundle, requestText: "", runID: runID, threadID: threadID, mode: .practice)
+        start(topic: topic, outline: steps, appBundleID: bundle, runID: runID, threadID: threadID, mode: .practice)
         practiceRound = true
     }
 
@@ -1375,7 +1347,7 @@ final class TeachController {
     /// A scripted lesson that cycles every drawing without a model, to check the visuals.
     func startLab() {
         lab = TeachLab()
-        start(topic: "teach lab", outline: [], appBundleID: "", requestText: "", runID: nil, threadID: nil, mode: .guide)
+        start(topic: "teach lab", outline: [], appBundleID: "", runID: nil, threadID: nil, mode: .guide)
     }
 }
 
