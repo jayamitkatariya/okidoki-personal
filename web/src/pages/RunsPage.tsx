@@ -293,8 +293,10 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
               className="run-thread"
               title="Open thread"
               onClick={() => {
+                // Set before navigating for a History that hasn't mounted; the event is for one that has.
                 (window as unknown as { __okidokiOpenThread?: string }).__okidokiOpenThread = thread.id;
                 (window as unknown as { okidokiNavigate?: (page: string) => void }).okidokiNavigate?.("history");
+                window.dispatchEvent(new CustomEvent("okidoki-open-thread", { detail: thread.id }));
               }}
             >
               <PixelIcon name="link" size={13} />

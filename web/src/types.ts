@@ -148,7 +148,12 @@ export interface ServicesState {
   convex: {
     enabled: boolean;
     configured: boolean;
-    hasSecret: boolean;
+    /** This Mac holds a device token from a sync login. */
+    paired: boolean;
+    /** The login it's paired as (an email), or "". */
+    pairedAs: string;
+    /** The login's user id, so the panel can tell whether it's paired as the person signed in here. */
+    pairedUser: string;
     siteURL: string;
     /** Native's own words: "synced just now", "sync secret rejected", "local only"… */
     status: string;
@@ -406,6 +411,8 @@ export interface NativeState {
   dashboardOpen: boolean;
   sidecar: string;
   version: string;
+  /** This Mac's name. Missing on Convex snapshots and older builds. */
+  hostName?: string;
   savings: number;
   convexConfigured: boolean;
   /** Missing on Convex snapshots and older builds. */

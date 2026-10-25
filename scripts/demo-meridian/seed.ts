@@ -26,7 +26,8 @@ const env = Object.fromEntries(
     .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).replace(/^["']|["']$/g, "")]),
 );
 const site = (env.CONVEX_SITE_URL ?? "").replace(/\/$/, "");
-const secret = env.OKIDOKI_SYNC_SECRET ?? "";
+// The demo Mac's own device token (keys.json → convexDevice), or one minted for the purpose.
+const secret = env.OKIDOKI_DEVICE_TOKEN ?? "";
 
 export const SKILL_ID = "MERIDIAN-FILE-ACE-ENTRY";
 
@@ -112,7 +113,7 @@ async function vaultUpload(accountId: string, name: string, bytes: Uint8Array, s
 }
 
 async function main() {
-  if (!site || !secret) throw new Error(".env needs CONVEX_SITE_URL and OKIDOKI_SYNC_SECRET");
+  if (!site || !secret) throw new Error(".env needs CONVEX_SITE_URL and OKIDOKI_DEVICE_TOKEN (this Mac's token from keys.json)");
   mkdirSync(SUPPORT, { recursive: true });
   const skill = aceEntrySkill();
 

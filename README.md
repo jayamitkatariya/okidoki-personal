@@ -22,15 +22,22 @@ make test     # Swift tests
 
 Copy `backend/.env.local.example` to `backend/.env.local` only if you run the sync backend.
 There is no bring-your-own-key: the app ships with its service credentials. A credential the build
-leaves out (say Moss, or the Convex sync secret) can be added under Settings › Keys; the panel shows
-which ones the build ships and which are missing. Anything it stores
+leaves out (say Moss) can be added under Settings › Keys, and a key saved there wins over the one
+the build ships, so a revoked shipped key is replaced without a new build; the panel shows which
+ones the build ships and which are missing. Anything it stores
 locally lives in a private file on your Mac (`~/Library/Application Support/Okidoki/keys.json`,
 readable only by its owner), never in the repository or the Keychain. Settings › Sync holds the
-switch for Convex, with the last push's result; Settings › Advanced shows the brain, the Moss
-index (what it holds and when it last synced) and MCP servers as they are right now, rechecked
-while the panel is open.
+switch for Convex, with the last push's result and whether this Mac is paired; Settings › Advanced
+shows the brain, the Moss index (what it holds and when it last synced) and MCP servers as they
+are right now, rechecked while the panel is open.
 
-Service credentials (Anthropic, Cartesia, Moss, Apify, the Convex sync secret) are never
+Sync has no shared secret. Signing in to sync (Settings › Sync) pairs the Mac: the panel asks the
+deployment for a device token, the Mac keeps it in `keys.json`, and the deployment keeps only its
+hash. Every `/api/*` route resolves the token to that login and refuses an account another login
+owns, so one Mac can never read or write another person's data. Signing out retires the token;
+`devices.list` / `devices.revoke` manage a login's paired Macs.
+
+Service credentials (Anthropic, Cartesia, Moss, Apify) are never
 compiled in. Put them in a gitignored `.env` at the repo root (`ANTHROPIC_API_KEY=…`, `APIFY_API_KEY=…`
 and so on); `make app` copies it into the bundle as `service.env`, leaving out `CONVEX_DEPLOY_KEY`
 and `VITE_*`, which are build-only. The launch environment, `OKIDOKI_ENV_FILE`,
@@ -56,7 +63,7 @@ the same thing; a work account that isn't signed in just sees how to sign in.
   job: a run card appears in the chat with status, steps, output, and — when the run wants an
   okay — **Do it / Not now** buttons anyone in the space can press.
 - **Worker.** Settings › Worker › *Accept jobs from my spaces* makes this Mac take those jobs. It
-  polls the deployment every few seconds over the same secret-guarded route sync uses, runs the
+  polls the deployment every few seconds over the same paired route sync uses, runs the
   job through the ordinary request pipeline in a thread of its own (no card at the cursor, nothing
   spoken), and mirrors what happens back into the chat. A space set to **Private Mac** only hands
   jobs to Macs whose computer target is the private Mac; **Hosted VM** is listed as coming soon.
@@ -117,8 +124,8 @@ mocked logins), `cd web && bun test`, and
 - **The vault takes files from the Mac.** “add the CBP 3461 to the compliance vault” fetches the
   agency's current PDF (known forms in `FormCatalog`, anything else found by a web search in the
   brain, a pasted link as is), checks it really is a PDF, and files it org-wide or into a space over
-  `/api/vault/upload-url` and `/api/vault/save` (sync secret, the account's membership). A newer copy
-  replaces the old one; a space gets a file line in its chat.
+  `/api/vault/upload-url` and `/api/vault/save` (the Mac's pairing, the account's membership). A newer
+  copy replaces one's own older one (an admin's replaces anyone's); a space gets a file line in its chat.
 - **The Entry Workbench** (`brain/src/portal.ts`, `http://127.0.0.1:4319/ace/entry`) is a CBP Form
   7501 entry summary a brokerage files through: real port, carrier, country and HTS reference data,
   FY2027 MPF/HMF, transmissions to ACE's certification environment kept in `ace-entries.json`. A

@@ -55,6 +55,12 @@ function writeStored(key: string, value: string) {
 
 // The hosted panel sees only what the Mac synced, so everything that lives on the Mac
 // (keys, permissions, installed tools) starts empty rather than borrowing demo values.
+const HOSTED_APPEARANCE_KEY = "okidoki.hosted.appearance";
+function hostedAppearance(): Partial<Settings> {
+  const saved = localStorage.getItem(HOSTED_APPEARANCE_KEY);
+  return saved === "light" || saved === "dark" || saved === "system" ? { appearance: saved } : {};
+}
+
 function fromCloud(cloud: CloudState, accountId: string): NativeState {
   const snapshot = cloud.snapshot ?? {};
   return {
@@ -77,7 +83,8 @@ function fromCloud(cloud: CloudState, accountId: string): NativeState {
     // The snapshot's version is the Mac's schema number, not an app version; the other assistants' files aren't here.
     version: typeof snapshot.version === "string" ? snapshot.version : "",
     memorySources: [],
-    settings: { ...demoState.settings, ...(snapshot.settings ?? {}) },
+    // The hosted panel's theme is its own choice, kept in this browser; the Mac's snapshot doesn't override it.
+    settings: { ...demoState.settings, ...(snapshot.settings ?? {}), ...hostedAppearance() },
     accounts: cloud.accounts,
     currentAccountID: accountId,
     signedOut: false,
@@ -193,6 +200,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
           pushToast("Do this on your Mac", "This panel shows what your Mac synced. It can't act from here yet.", "info");
           return;
         }
+        if (patch.appearance) localStorage.setItem(HOSTED_APPEARANCE_KEY, patch.appearance);
         setSettings(next);
         return;
       }
@@ -263,6 +271,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
           url={cloudUrl}
           accountId={accountId}
           claimAccounts={native ? (nativeState?.accounts ?? null) : null}
+          pairedUser={native ? (nativeState?.services?.convex.pairedUser ?? "") : null}
+          device={nativeState?.hostName ?? "Mac"}
           spaceId={spaceId}
           onChange={setCloud}
           onEnterprise={setEnterprise}

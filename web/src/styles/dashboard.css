@@ -162,7 +162,8 @@
 .workspace-switcher .account-pop { top: calc(100% + 8px); bottom: auto; transform-origin: top center; }
 
 .side-ask { flex-shrink: 0; height: 40px; color: var(--muted); margin-bottom: 22px; }
-.nav { flex: 1; min-height: 0; overflow-y: auto; gap: 20px; padding: 2px; margin: -2px; scroll-padding: 2px; }
+/* 4px of padding so a focused item's outline (2px + 2px offset) isn't clipped by the scrolling column */
+.nav { flex: 1; min-height: 0; overflow-y: auto; gap: 20px; padding: 4px; margin: -4px; scroll-padding: 4px; }
 .nav-group { gap: 2px; }
 .nav-label {
   padding: 0 12px 6px;

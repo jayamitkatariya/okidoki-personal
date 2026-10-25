@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MotionConfig } from "motion/react";
 import { DashboardProvider, useDashboard } from "./store";
 import { AppShell, AuthGate } from "./components/Layout";
@@ -40,6 +40,14 @@ function Root() {
   useEffect(() => {
     if (window.location.hash !== `#/${page}`) window.location.hash = `#/${page}`;
   }, [page]);
+
+  // A deep link into a Settings section (#/keys) on first load: the page effect above rewrites the
+  // hash to #/settings, so the section has to be remembered here rather than read back from it.
+  const initialSection = useRef(initial.section);
+  useEffect(() => {
+    if (initialSection.current) jumpToSettingsSection(initialSection.current);
+    initialSection.current = undefined;
+  }, []);
 
   useEffect(() => {
     const onHash = () => {

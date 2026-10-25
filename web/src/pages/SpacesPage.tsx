@@ -412,7 +412,11 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
           event.preventDefault();
           setDragging(true);
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragLeave={(event) => {
+          // Children fire dragleave too (the drop overlay itself is one); only leaving the container counts.
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          setDragging(false);
+        }}
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
@@ -453,7 +457,7 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
                 </div>
                 {group.messages.map((message) =>
                   message.kind === "run" ? (
-                    <JobCard key={message.id} job={message.runId ? jobById.get(message.runId) : undefined} go={go} />
+                    <JobCard key={message.id} job={message.runId ? jobById.get(message.runId) : undefined} settled={jobs.length > 0} go={go} />
                   ) : message.kind === "file" ? (
                     <div className="space-bubble space-file" key={message.id}>
                       <PixelIcon name="sticker" size={15} />
@@ -503,7 +507,18 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
       </div>
 
       <footer className={cx("space-composer", tab !== "chat" && "is-hidden")}>
-        <input ref={fileRef} type="file" multiple hidden onChange={(event) => void attach(event.target.files ?? [])} />
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            // Cleared so the same file can be chosen again (after a failed upload, say).
+            event.target.value = "";
+            void attach(files);
+          }}
+        />
         <IconButton icon="clip" label="Attach a file" onClick={() => fileRef.current?.click()} />
         <textarea
           ref={composerRef}
@@ -580,15 +595,17 @@ const JOB_TO_RUN: Record<JobStatus, RunStatus> = {
   cancelled: "cancelled",
 };
 
-function JobCard({ job, go }: { job: Job | undefined; go: (page: Page) => void }) {
+function JobCard({ job, settled = true, go }: { job: Job | undefined; settled?: boolean; go: (page: Page) => void }) {
   const { enterprise, notify, state, native, account } = useDashboard();
   const ensureWorker = useEnsureWorker();
   const [busy, setBusy] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
   if (!job) {
+    // The chat keeps more history than the jobs query (its latest hundred): an older run's card has
+    // nothing to show but shouldn't look like it's still going.
     return (
       <div className="space-bubble job-card is-ghost">
-        <em>Working on it…</em>
+        <em>{settled ? "An earlier run; its details have scrolled out of reach." : "Working on it…"}</em>
       </div>
     );
   }

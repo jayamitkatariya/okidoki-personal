@@ -36,8 +36,14 @@ export function TeamPage({ go }: { go: (page: Page) => void }) {
   const pendingCode = settings.pendingJoinCode ?? "";
   const tried = useRef<string>("");
   useEffect(() => {
-    if (enterprise.status !== "ready" || enterprise.view || !pendingCode || tried.current === pendingCode) return;
+    if (enterprise.status !== "ready" || !pendingCode || tried.current === pendingCode) return;
     tried.current = pendingCode;
+    // Already in an organization with this account: the invitation has nothing to do, and must not
+    // keep being offered. (Joining another one is done from Team with a fresh work account.)
+    if (enterprise.view) {
+      updateSettings({ pendingJoinCode: "", pendingJoinOrgName: "" });
+      return;
+    }
     enterprise.actions
       .join(pendingCode)
       .then((result) => notify("Joined", result.name))
@@ -274,15 +280,19 @@ function OrgPage({ view }: { view: OrgView }) {
   const advertising = state.nearby?.advertising ?? null;
   const [inviting, setInviting] = useState(false);
 
-  // One day, twenty people: an open door for a room, not a permanent one.
+  // One day, twenty people: an open door for a room, not a permanent one. The same door is reused
+  // while it's still open, and closing it revokes the code, so codes don't pile up with every toggle.
   const openDoor = async (on: boolean) => {
     if (!on) {
       invoke("nearbyStop");
+      const current = advertising ? view.codes.find((item) => item.code === advertising.code) : null;
+      if (current) void enterprise.actions.revokeCode(current.id).catch(() => {});
       return;
     }
     setInviting(true);
     try {
-      const result = await enterprise.actions.createCode(view.org.id, 1, 20);
+      const reusable = view.codes.find((item) => item.maxUses === 20 && item.expiresAt > Date.now() + 60 * 60_000 && item.uses < item.maxUses);
+      const result = reusable ?? (await enterprise.actions.createCode(view.org.id, 1, 20));
       invoke("nearbyInvite", { orgId: view.org.id, orgName: view.org.name, code: result.code });
       notify("Open to nearby Macs", `Colleagues on this network can join ${view.org.name} for a day`);
     } catch (error) {
@@ -308,13 +318,15 @@ function OrgPage({ view }: { view: OrgView }) {
     setDomain(org.domain);
   }, [org.name, org.domain]);
 
-  const attempt = async (task: () => Promise<unknown>, done?: [string, string?]) => {
+  const attempt = async (task: () => Promise<unknown>, done?: [string, string?]): Promise<boolean> => {
     setBusy(true);
     try {
       await task();
       if (done) notify(done[0], done[1]);
+      return true;
     } catch (error) {
       notify("That didn't work", error instanceof Error ? error.message : String(error), "warning");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -541,7 +553,7 @@ function OrgPage({ view }: { view: OrgView }) {
             variant="primary"
             disabled={!name.trim() || busy}
             onClick={() =>
-              void attempt(() => enterprise.actions.rename(org.id, name, domain), ["Saved", name.trim()]).then(() => setEditing(false))
+              void attempt(() => enterprise.actions.rename(org.id, name, domain), ["Saved", name.trim()]).then((ok) => ok && setEditing(false))
             }
           >
             Save

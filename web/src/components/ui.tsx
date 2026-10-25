@@ -675,7 +675,7 @@ export function ThemeToggle({ onToggle }: { onToggle: (next: "light" | "dark") =
   };
 
   return (
-    <button ref={ref} className="theme-toggle" onClick={handle} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} title={dark ? "Light" : "Dark"}>
+    <button ref={ref} className="theme-toggle" onClick={handle} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} data-tip={dark ? "Light mode" : "Dark mode"}>
       <PixelIcon name={dark ? "sun" : "moon"} size={14} />
     </button>
   );

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConvexReactClient, useConvexAuth, useMutation, useQuery } from "convex/react";
+import { ConvexReactClient, useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { ConvexAuthProvider, useAuthActions } from "@convex-dev/auth/react";
 import { anyApi } from "convex/server";
 import type { Account, NativeState } from "./types";
@@ -71,6 +71,9 @@ export function Cloud(props: {
   url: string;
   accountId: string | null;
   claimAccounts: Account[] | null;
+  /** Inside the Mac app: the login this Mac is paired as, "" when it isn't; null in a browser. */
+  pairedUser: string | null;
+  device: string;
   spaceId: string | null;
   onChange: (state: CloudState) => void;
   onEnterprise: (state: EnterpriseState) => void;
@@ -78,15 +81,16 @@ export function Cloud(props: {
   const client = clientFor(props.url);
   return (
     <ConvexAuthProvider client={client} storageNamespace={props.url}>
-      <CloudBridge accountId={props.accountId} claimAccounts={props.claimAccounts} onChange={props.onChange} />
+      <CloudBridge accountId={props.accountId} claimAccounts={props.claimAccounts} pairedUser={props.pairedUser} device={props.device} onChange={props.onChange} />
       <EnterpriseBridge accountId={props.accountId} spaceId={props.spaceId} onChange={props.onEnterprise} />
     </ConvexAuthProvider>
   );
 }
 
-function CloudBridge({ accountId, claimAccounts, onChange }: { accountId: string | null; claimAccounts: Account[] | null; onChange: (state: CloudState) => void }) {
+function CloudBridge({ accountId, claimAccounts, pairedUser, device, onChange }: { accountId: string | null; claimAccounts: Account[] | null; pairedUser: string | null; device: string; onChange: (state: CloudState) => void }) {
   const { isLoading, isAuthenticated } = useConvexAuth();
   const actions = useAuthActions();
+  const pair = useAction(anyApi.devices.pair);
   const me = useQuery(anyApi.accounts.me, isAuthenticated ? {} : "skip") as { id: string; email: string } | null | undefined;
   const mine = useQuery(anyApi.accounts.mine, isAuthenticated ? {} : "skip") as Account[] | undefined;
   const boot = useQuery(anyApi.dashboard.bootstrap, isAuthenticated && accountId ? { accountId } : "skip") as
@@ -106,6 +110,21 @@ function CloudBridge({ accountId, claimAccounts, onChange }: { accountId: string
     const accounts = claimAccounts.map(({ id, name, email, kind, colorHex, createdAt }) => ({ id, name, email, kind, colorHex, createdAt }));
     void claim({ accounts }).then((result: { taken: string[] }) => setTaken(result.taken));
   }, [me, claimAccounts, claim]);
+
+  // Inside the Mac app: the Mac itself needs a token to sync, take jobs and act on the organization.
+  // One is minted the first time this login is seen on a Mac that isn't paired as it (a fresh
+  // install, a different login, a revoked token); the Mac keeps it and the backend keeps its hash.
+  const pairedFor = useRef("");
+  useEffect(() => {
+    if (!me || pairedUser === null || pairedUser === me.id || pairedFor.current === me.id) return;
+    pairedFor.current = me.id;
+    pair({ device })
+      .then((result: { token: string; userId: string }) => invoke("pairDevice", { token: result.token, userId: result.userId, email: me.email }))
+      .catch((error: unknown) => {
+        console.warn("[okidoki] pairing failed", error);
+        pairedFor.current = "";
+      });
+  }, [me, pairedUser, device, pair]);
 
   // Inside the Mac app: accounts this login owns that another Mac created come here too, so their threads
   // and memory sync in. A reinstalled Mac gets its accounts back the same way.
@@ -134,6 +153,9 @@ function CloudBridge({ accountId, claimAccounts, onChange }: { accountId: string
   }, []);
   const signOut = useCallback(async () => {
     claimedFor.current = "";
+    pairedFor.current = "";
+    // The Mac retires its token first, while it still has the login to do it with.
+    invoke("unpairDevice");
     await latestActions.current.signOut();
   }, []);
 

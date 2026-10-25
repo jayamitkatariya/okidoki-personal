@@ -29,15 +29,16 @@ is at <http://localhost:6791>.
 
 Set these in the Convex deployment (for cloud: `npx convex env set ...`; for
 self-hosted: `npx convex env set` targets the deployment from `.env.local`).
-The sync endpoints reject every request until `OKIDOKI_SYNC_SECRET` is set.
+There is no sync secret: a Mac pairs with a login (`devices.pair`, called by the
+panel after sign-in) and sends its own token.
 
 ```bash
-npx convex env set OKIDOKI_SYNC_SECRET "<same secret you paste into the app>"
 npx convex env set OKIDOKI_SHARE_BASE_URL "https://your-hosted-panel.example.com"
 ```
 
 The native app pushes its state to `http://127.0.0.1:3211/api/sync` with the
-bearer secret saved on the Mac. Each sync runs as small batched mutations
+device token saved on the Mac; the route resolves it to the login and refuses
+any account that login doesn't own (403). Each sync runs as small batched mutations
 (unchanged items are skipped), and the snapshot the panel loads is trimmed to fit
 in one document; the full history stays on the Mac.
 
@@ -61,6 +62,6 @@ Share links stay public by design: the random token is the permission.
 
 ## Security note
 
-Without a login nothing synced is readable. The Mac still writes with the shared
-`OKIDOKI_SYNC_SECRET`, and linking trusts that account ids are random UUIDs only
-the Mac knows. Per-device tokens (pairing a Mac to a login) replace both next.
+Without a login nothing synced is readable, and nothing is writable without a
+paired Mac's token. The deployment keeps only token hashes (`deviceTokens`); a
+login lists and revokes its Macs, and signing out on a Mac retires its own.

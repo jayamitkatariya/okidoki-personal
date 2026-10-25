@@ -310,9 +310,16 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        if (native) invoke("decideSpaceJob", { jobId: approval.id, decision: "decline" });
-                        else void enterprise.actions.decide(approval.id, "decline");
-                        notify("Held", `#${approval.spaceName} · ${approval.title || approval.prompt}`);
+                        const label = `#${approval.spaceName} · ${approval.title || approval.prompt}`;
+                        if (native) {
+                          invoke("decideSpaceJob", { jobId: approval.id, decision: "decline" });
+                          notify("Held", label);
+                        } else {
+                          enterprise.actions
+                            .decide(approval.id, "decline")
+                            .then(() => notify("Held", label))
+                            .catch((error: Error) => notify("That didn't work", error.message, "warning"));
+                        }
                       }}
                     >
                       Not now
@@ -321,9 +328,16 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                       variant="primary"
                       size="sm"
                       onClick={() => {
-                        if (native) invoke("decideSpaceJob", { jobId: approval.id, decision: "approve" });
-                        else void enterprise.actions.decide(approval.id, "approve");
-                        notify("Approved", `#${approval.spaceName} · ${approval.title || approval.prompt}`);
+                        const label = `#${approval.spaceName} · ${approval.title || approval.prompt}`;
+                        if (native) {
+                          invoke("decideSpaceJob", { jobId: approval.id, decision: "approve" });
+                          notify("Approved", label);
+                        } else {
+                          enterprise.actions
+                            .decide(approval.id, "approve")
+                            .then(() => notify("Approved", label))
+                            .catch((error: Error) => notify("That didn't work", error.message, "warning"));
+                        }
                       }}
                     >
                       Do it

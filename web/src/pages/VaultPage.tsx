@@ -60,7 +60,7 @@ export function VaultPage({ go }: { go: (page: Page) => void }) {
           />
         }
       />
-      {tab === "documents" ? <Documents /> : <Credentials />}
+      {tab === "documents" ? <Documents /> : <Credentials key={enterprise.view?.org.id ?? ""} />}
     </div>
   );
 }
@@ -105,10 +105,14 @@ function Documents() {
       <div
         className={cx("vault-drop", dragging && "is-over")}
         onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
           event.preventDefault();
           setDragging(true);
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragLeave={(event) => {
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          setDragging(false);
+        }}
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
@@ -121,7 +125,17 @@ function Documents() {
           <Button size="sm" variant="secondary" onClick={() => inputRef.current?.click()}>
             Choose files
           </Button>
-          <input ref={inputRef} type="file" multiple hidden onChange={(event) => void upload(event.target.files ?? [])} />
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              void upload(files);
+            }}
+          />
         </div>
         <label className="vault-drop-target">
           <span>Into</span>

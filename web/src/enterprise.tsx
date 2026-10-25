@@ -137,7 +137,6 @@ export interface Job {
 }
 
 export interface WorkerInfo {
-  accountId: string;
   userId: string;
   name: string;
   device: string;
@@ -501,7 +500,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
     ? "loading"
     : !isAuthenticated
       ? "signedOut"
-      : (accountId && view === undefined) || memberships === undefined || domainOrg === undefined
+      : (accountId && view === undefined) || memberships === undefined || domainOrg === undefined || (linked && spaces === undefined)
         ? "loading"
         : "ready";
 

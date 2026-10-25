@@ -125,7 +125,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.filter((section) => (native || section.id !== "sync-login") && (account.kind === "work" || !["organization", "worker"].includes(section.id))).map((section) => (
+          {SECTIONS.filter((section) => (native || !["keys", "sync-login"].includes(section.id)) && (account.kind === "work" || !["organization", "worker"].includes(section.id))).map((section) => (
             <button key={section.id} className={cx("settings-nav-item", active === section.id && "is-active")} onClick={() => jump(section.id)}>
               <PixelIcon name={section.icon} size={15} />
               {section.label}
@@ -298,9 +298,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
               <PrefRow title="Screen borrowing" detail="A ghost cursor, ten seconds at a time">
                 <Switch label="Screen borrowing" checked={settings.screenBorrowing} onChange={(value) => updateSettings({ screenBorrowing: value })} />
               </PrefRow>
-              <PrefRow title="Hide in screenshots" detail="Keep the overlay out of captures">
-                <Switch label="Hide in screenshots" checked={settings.hideInScreenshots} onChange={(value) => updateSettings({ hideInScreenshots: value })} />
-              </PrefRow>
               <PrefRow title="See the screen" detail="Send the front window, browser tab and a small screenshot with each request, so okidoki knows what it's about. Never stored.">
                 <Switch label="See the screen" checked={settings.screenContext ?? true} onChange={(value) => updateSettings({ screenContext: value })} />
               </PrefRow>
@@ -366,22 +363,10 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
               <PrefRow title="Quiet mode" detail="Silent during calls and screen shares">
                 <Switch label="Quiet mode" checked={settings.quietMode} onChange={(value) => updateSettings({ quietMode: value })} />
               </PrefRow>
-              <PrefRow title="Notifications">
-                <Segmented
-                  options={[
-                    { value: "everything", label: "All" },
-                    { value: "approvalsAndDone", label: "Approvals + done" },
-                    { value: "silent", label: "None" },
-                  ]}
-                  value={settings.notificationStyle}
-                  onChange={(value) => updateSettings({ notificationStyle: value as typeof settings.notificationStyle })}
-                  compact
-                />
-              </PrefRow>
             </div>
           </SettingsSection>
 
-          <SettingsSection id="appearance" title="Appearance" description="The glow follows your real cursor, since macOS doesn't let apps recolor it.">
+          <SettingsSection id="appearance" title="Appearance" description="How the panel and the pointer behave.">
             <div className="pref-group">
               <PrefRow title="Theme">
                 <Segmented
@@ -393,9 +378,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                   value={settings.appearance}
                   onChange={(value) => updateSettings({ appearance: value as typeof settings.appearance })}
                 />
-              </PrefRow>
-              <PrefRow title="Cursor glow">
-                <Swatches value={settings.cursorGlowHex} onPick={(color) => updateSettings({ cursorGlowHex: color })} />
               </PrefRow>
               <PrefRow title="Driving pace" detail="How the pointer moves when okidoki drives an app for you">
                 <Segmented
@@ -596,7 +578,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                       variant="secondary"
                       size="sm"
                       icon="refresh"
-                      disabled={!state.services?.convex.hasSecret}
+                      disabled={!state.services?.convex.paired}
                       onClick={() => {
                         invoke("syncNow");
                         notify("Syncing", "Pushing this Mac's state to Convex", "info");
@@ -606,11 +588,19 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                     </Button>
                   </PrefRow>
                 ) : null}
-                {settings.syncEnabled && state.services && !state.services.convex.hasSecret ? (
-                  <PrefRow title="Sync secret missing" detail="Convex rejects pushes without it. Add the deployment's sync secret under Keys › Convex sync.">
-                    <Button variant="secondary" size="sm" icon="key" onClick={() => jump("keys")}>
-                      Keys
-                    </Button>
+                {settings.syncEnabled && state.services ? (
+                  <PrefRow
+                    title="This Mac"
+                    detail={
+                      state.services.convex.paired
+                        ? `Paired as ${state.services.convex.pairedAs || "your login"}. Only accounts that login owns sync from here; signing out unpairs it.`
+                        : "Not paired yet. Sign in below and this Mac gets its own key to your deployment; nothing is shared between Macs."
+                    }
+                  >
+                    <span className={cx("pref-value", state.services.convex.paired && "is-on")}>
+                      <i />
+                      {state.services.convex.paired ? "paired" : "not paired"}
+                    </span>
                   </PrefRow>
                 ) : null}
               </div>
@@ -739,7 +729,7 @@ function syncDetail(services: ServicesState | null | undefined, enabled: boolean
   if (!enabled) return "Off. Everything stays on this Mac.";
   if (!services) return "On.";
   if (!services.convex.siteURL) return "On, but there's no deployment URL. Set CONVEX_SITE_URL in the build's .env.";
-  if (!services.convex.hasSecret) return "On, but the sync secret is missing, so nothing can be pushed yet.";
+  if (!services.convex.paired) return "On, but this Mac isn't paired with a login yet, so nothing can be pushed.";
   return "On. Pushed a few seconds after anything changes.";
 }
 

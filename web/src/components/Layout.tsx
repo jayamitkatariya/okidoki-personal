@@ -308,7 +308,7 @@ export function AppShell({
         <div className="sidebar-bottom">
           <div
             className={cx("sidebar-foot", convexConnected ? "is-live" : native ? "is-local" : "")}
-            data-tip={`${convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"} · v${state.version}`}
+            data-tip={`${convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}${state.version ? ` · v${state.version}` : ""}`}
           >
             <i />
             <span>{convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}</span>
@@ -402,8 +402,8 @@ function RailTip({ rail, enabled }: { rail: React.RefObject<HTMLElement | null>;
     const show = (target: HTMLElement | null) => {
       if (target === shown) return;
       shown = target;
-      // an open menu speaks for itself
-      if (!target || target.getAttribute("aria-expanded") === "true") return hideTip();
+      // an open menu speaks for itself, and a tip must not float over it
+      if (!target || target.getAttribute("aria-expanded") === "true" || root.querySelector('[aria-expanded="true"]')) return hideTip();
       const rect = target.getBoundingClientRect();
       setTip({ text: target.dataset.tip ?? "", x: rect.right + 12, y: rect.top + rect.height / 2, on: true });
     };
@@ -430,6 +430,7 @@ function RailTip({ rail, enabled }: { rail: React.RefObject<HTMLElement | null>;
     root.addEventListener("focusin", onFocus);
     root.addEventListener("focusout", hide);
     root.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
     return () => {
       root.removeEventListener("pointerover", onOver);
       root.removeEventListener("pointerdown", onDown);
@@ -437,6 +438,7 @@ function RailTip({ rail, enabled }: { rail: React.RefObject<HTMLElement | null>;
       root.removeEventListener("focusin", onFocus);
       root.removeEventListener("focusout", hide);
       root.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
       hideTip();
     };
   }, [rail, enabled]);
