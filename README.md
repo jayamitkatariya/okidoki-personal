@@ -3,6 +3,13 @@
 A macOS assistant that lives in the notch and a control panel. Summon it by shaking
 the pointer, ask for something, and approve what it wants to do before it does it.
 
+## How we use Convex
+
+Convex is the shared backend behind sync and the enterprise side. Memory, runs, skills and routines
+sync between Macs through HTTP actions; Spaces chat, jobs, Team and the Vault are realtime `useQuery`
+subscriptions, with documents in Convex file storage, Convex Auth for sign-in, and a cron that reaps
+lost worker jobs. The full feature-by-feature breakdown and commit log are in [hackathon.md](hackathon.md).
+
 ## Layout
 
 - `Sources/` — the native macOS app (Swift, SwiftUI and AppKit).
