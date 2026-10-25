@@ -47,6 +47,8 @@ export function AppShell({
   const [addAccount, setAddAccount] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   // the rail starts closed; opening it is remembered, and narrow windows force it closed
   const [expanded, setExpanded] = useState(() => localStorage.getItem(SIDEBAR_KEY) === "open");
   const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches);
@@ -67,6 +69,11 @@ export function AppShell({
   useLayoutEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
   }, [page]);
+
+  // the current page stays in view on a rail too short to show every item
+  useEffect(() => {
+    navRef.current?.querySelector(".nav-active")?.scrollIntoView({ block: "nearest" });
+  }, [page, collapsed]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -161,7 +168,7 @@ export function AppShell({
 
   return (
     <div className={cx("app", collapsed && "is-collapsed")}>
-      <aside id="sidebar" className={cx("sidebar", collapsed && "is-collapsed")} aria-label="Workspace navigation">
+      <aside id="sidebar" ref={railRef} className={cx("sidebar", collapsed && "is-collapsed")} aria-label="Workspace navigation">
         <div className="brand">
           <button
             className={cx("brand-mark", tone)}
@@ -273,7 +280,7 @@ export function AppShell({
           <KeyHint>⌘K</KeyHint>
         </button>
 
-        <nav className="nav" aria-label="Main navigation">
+        <nav className="nav" ref={navRef} aria-label="Main navigation">
           {nav.map((group) => (
             <div className={cx("nav-group", group.enterprise && "nav-group-enterprise")} key={group.label}>
               <span className="nav-label">{group.label}</span>
@@ -310,6 +317,7 @@ export function AppShell({
           </div>
         </div>
       </aside>
+      <RailTip rail={railRef} enabled={collapsed} />
 
       <main className="main">
         <header className="workspace-bar">
@@ -377,6 +385,68 @@ export function AppShell({
       <AddAccountModal open={addAccount} onClose={() => setAddAccount(false)} />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
+  );
+}
+
+/** The collapsed rail's labels. One tip floats above the page, so the scrolling icon column can't clip it. */
+function RailTip({ rail, enabled }: { rail: React.RefObject<HTMLElement | null>; enabled: boolean }) {
+  const [tip, setTip] = useState({ text: "", x: 0, y: 0, on: false });
+
+  useEffect(() => {
+    const root = rail.current;
+    if (!root || !enabled) return;
+    let shown: HTMLElement | null = null;
+    // a click puts the tip away until the pointer moves on to another item
+    let dismissed: HTMLElement | null = null;
+    const hideTip = () => setTip((current) => (current.on ? { ...current, on: false } : current));
+    const show = (target: HTMLElement | null) => {
+      if (target === shown) return;
+      shown = target;
+      // an open menu speaks for itself
+      if (!target || target.getAttribute("aria-expanded") === "true") return hideTip();
+      const rect = target.getBoundingClientRect();
+      setTip({ text: target.dataset.tip ?? "", x: rect.right + 12, y: rect.top + rect.height / 2, on: true });
+    };
+    const tipOf = (node: EventTarget | null) => (node instanceof Element ? node.closest<HTMLElement>("[data-tip]") : null);
+    const onOver = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      const target = tipOf(event.target);
+      if (target && target === dismissed) return;
+      dismissed = null;
+      show(target);
+    };
+    const onDown = (event: PointerEvent) => {
+      dismissed = tipOf(event.target);
+      show(null);
+    };
+    const onFocus = (event: FocusEvent) => {
+      const target = tipOf(event.target);
+      if (target?.matches(":focus-visible")) show(target);
+    };
+    const hide = () => show(null);
+    root.addEventListener("pointerover", onOver);
+    root.addEventListener("pointerdown", onDown);
+    root.addEventListener("pointerleave", hide);
+    root.addEventListener("focusin", onFocus);
+    root.addEventListener("focusout", hide);
+    root.addEventListener("scroll", hide, true);
+    return () => {
+      root.removeEventListener("pointerover", onOver);
+      root.removeEventListener("pointerdown", onDown);
+      root.removeEventListener("pointerleave", hide);
+      root.removeEventListener("focusin", onFocus);
+      root.removeEventListener("focusout", hide);
+      root.removeEventListener("scroll", hide, true);
+      hideTip();
+    };
+  }, [rail, enabled]);
+
+  if (!enabled) return null;
+  return createPortal(
+    <div className={cx("rail-tip", tip.on && "is-on")} style={{ left: tip.x, top: tip.y }} aria-hidden="true">
+      {tip.text}
+    </div>,
+    document.body,
   );
 }
 

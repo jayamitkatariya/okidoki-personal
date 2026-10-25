@@ -99,7 +99,9 @@
 .sidebar.is-collapsed .workspace-switcher { margin-bottom: 12px; }
 .sidebar.is-collapsed .workspace-switcher .account { justify-content: center; padding: 6px; }
 .sidebar.is-collapsed .workspace-switcher .account-pop { left: calc(100% + 10px); top: 0; transform-origin: top left; }
-.sidebar.is-collapsed .nav { gap: 10px; overflow: visible; }
+/* the icon column scrolls whenever it outgrows the window; a 64px rail has no room for a scrollbar */
+.sidebar.is-collapsed .nav { gap: 10px; scrollbar-width: none; }
+.sidebar.is-collapsed .nav::-webkit-scrollbar { display: none; }
 .sidebar.is-collapsed .nav-group { gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
 .sidebar.is-collapsed .nav-group:first-child { padding-top: 0; border-top: 0; }
 .sidebar.is-collapsed .nav-item { justify-content: center; height: 40px; padding: 0; }
@@ -109,45 +111,33 @@
 .sidebar.is-collapsed .sidebar-bottom { padding-top: 12px; margin-top: 12px; }
 .sidebar.is-collapsed .sidebar-foot { position: relative; justify-content: center; height: 28px; padding: 0; }
 .sidebar.is-collapsed .sidebar-foot i { width: 7px; height: 7px; flex-basis: 7px; }
-/* Short windows: the icon column scrolls (tooltips clip) rather than spilling over the footer. */
-@media (max-height: 720px) {
-  .sidebar.is-collapsed .nav { overflow-y: auto; }
+/* hover tips for the collapsed rail: they float above the page, so the scrolling column never clips them,
+   and they arrive only after a beat */
+.rail-tip {
+  position: fixed;
+  z-index: 40;
+  padding: 6px 9px;
+  border-radius: var(--r-sm);
+  background: #14100f;
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-4px, -50%);
+  transition: opacity 0.14s var(--ease) 0s, transform 0.2s var(--ease) 0s;
 }
-
-/* hover tips: only while collapsed, only for pointers, and only after a beat */
-@media (hover: hover) {
-  .sidebar.is-collapsed [data-tip] { position: relative; }
-  .sidebar.is-collapsed [data-tip]::after {
-    content: attr(data-tip);
-    position: absolute;
-    left: calc(100% + 12px);
-    top: 50%;
-    z-index: 40;
-    padding: 6px 9px;
-    border-radius: var(--r-sm);
-    background: #14100f;
-    color: #fff;
-    font-family: var(--sans);
-    font-size: 11.5px;
-    font-weight: 500;
-    line-height: 1.2;
-    letter-spacing: 0;
-    text-transform: none;
-    white-space: nowrap;
-    box-shadow: var(--shadow-md);
-    pointer-events: none;
-    opacity: 0;
-    transform: translate(-4px, -50%);
-    transition: opacity 0.14s var(--ease) 0s, transform 0.2s var(--ease) 0s;
-  }
-  :root[data-theme="dark"] .sidebar.is-collapsed [data-tip]::after { background: var(--tile-hover); color: var(--ink); box-shadow: var(--shadow-md), inset 0 0 0 1px var(--line-strong); }
-  .sidebar.is-collapsed [data-tip]:hover::after,
-  .sidebar.is-collapsed [data-tip]:focus-visible::after {
-    opacity: 1;
-    transform: translate(0, -50%);
-    transition-delay: 0.35s;
-  }
-  .sidebar.is-collapsed .account.is-open::after { display: none; }
+:root[data-theme="dark"] .rail-tip { background: var(--tile-hover); color: var(--ink); box-shadow: var(--shadow-md), inset 0 0 0 1px var(--line-strong); }
+.rail-tip.is-on {
+  opacity: 1;
+  transform: translate(0, -50%);
+  transition-delay: 0.35s;
 }
 
 /* the workspace switcher sits above the nav, the way a studio picker sits above a menu */
@@ -172,7 +162,7 @@
 .workspace-switcher .account-pop { top: calc(100% + 8px); bottom: auto; transform-origin: top center; }
 
 .side-ask { flex-shrink: 0; height: 40px; color: var(--muted); margin-bottom: 22px; }
-.nav { flex: 1; min-height: 0; overflow-y: auto; gap: 20px; padding: 2px; margin: -2px; }
+.nav { flex: 1; min-height: 0; overflow-y: auto; gap: 20px; padding: 2px; margin: -2px; scroll-padding: 2px; }
 .nav-group { gap: 2px; }
 .nav-label {
   padding: 0 12px 6px;
