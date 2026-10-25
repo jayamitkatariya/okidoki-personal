@@ -68,35 +68,48 @@ public enum TeachKeys {
     /// Two quick taps of the shift key, on its own: the learner's "next" that needs no voice
     /// and no button. Either shift counts. Any other key, modifier or click in between starts the
     /// count over, so shift+letter typing never trips it.
+    ///
+    /// Driven by the modifier *state*, not by key codes or `flagsChanged` events: the state is
+    /// readable from any app without input-monitoring rights (`NSEvent.modifierFlags`), and
+    /// remapped or synthetic keyboards report odd key codes for the same shift.
     public struct DoubleTap {
         public static let leftShift: UInt16 = 56
         public static let rightShift: UInt16 = 60
         public static let leftOption: UInt16 = 58
         public static let rightOption: UInt16 = 61
-        public var keyCodes: Set<UInt16>
         public var modifier: NSEvent.ModifierFlags
+        /// Longest gap between the two releases.
         public var window: TimeInterval
-        private var down = false
+        /// Longest hold that still reads as a tap. Shift held for a capital letter is usually
+        /// longer, so typing with a lost keyDown can't complete a tap by itself.
+        public var maxHold: TimeInterval
+        private var downAt: TimeInterval?
         private var lastTapAt: TimeInterval?
 
-        public init(keyCodes: Set<UInt16> = [DoubleTap.leftShift, DoubleTap.rightShift],
-                    modifier: NSEvent.ModifierFlags = .shift, window: TimeInterval = 0.4) {
-            self.keyCodes = keyCodes
+        public init(modifier: NSEvent.ModifierFlags = .shift, window: TimeInterval = 0.5, maxHold: TimeInterval = 0.35) {
             self.modifier = modifier
             self.window = window
+            self.maxHold = maxHold
         }
 
         /// Feed every `flagsChanged`. True on the release that completes the second tap.
         public mutating func flagsChanged(keyCode: UInt16, flags: NSEvent.ModifierFlags, at time: TimeInterval) -> Bool {
+            update(flags: flags, at: time)
+        }
+
+        /// Feed the current modifier state whenever it may have changed (an event, or a poll).
+        /// True on the release that completes the second tap.
+        public mutating func update(flags: NSEvent.ModifierFlags, at time: TimeInterval) -> Bool {
             let all: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
             let others = flags.intersection(all.subtracting(modifier))
-            guard keyCodes.contains(keyCode), others.isEmpty else { reset(); return false }
+            guard others.isEmpty else { reset(); return false }
             if flags.contains(modifier) {
-                down = true
+                if downAt == nil { downAt = time }
                 return false
             }
-            guard down else { reset(); return false }
-            down = false
+            guard let pressedAt = downAt else { return false }
+            downAt = nil
+            guard time - pressedAt <= maxHold else { reset(); return false }
             if let last = lastTapAt, time - last <= window {
                 lastTapAt = nil
                 return true
@@ -107,7 +120,7 @@ public enum TeachKeys {
 
         /// Anything else they do breaks the double tap.
         public mutating func reset() {
-            down = false
+            downAt = nil
             lastTapAt = nil
         }
     }

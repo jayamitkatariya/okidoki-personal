@@ -50,6 +50,40 @@ final class TeachToolkitTests: XCTestCase {
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.command], at: 5.1))
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 5.2))
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 5.3), "⌘⇧ then ⇧ is not a double tap")
+
+        // Shift held for a capital letter is a hold, not a tap, even when the letter's keyDown is lost.
+        tap.reset()
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 6))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 6.6))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 6.7))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 6.8), "a long hold then a tap is not a double tap")
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 6.9))
+        XCTAssertTrue(tap.flagsChanged(keyCode: left, flags: [], at: 7.0), "two short taps after it are")
+
+        // The key code doesn't matter (a remapped or synthetic shift reports 0); the modifier state does.
+        tap.reset()
+        XCTAssertFalse(tap.flagsChanged(keyCode: 0, flags: [.shift], at: 8))
+        XCTAssertFalse(tap.flagsChanged(keyCode: 0, flags: [], at: 8.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: 0, flags: [.shift], at: 8.2))
+        XCTAssertTrue(tap.flagsChanged(keyCode: 0, flags: [], at: 8.3))
+    }
+
+    func testDoubleTapFedFromPollsSeesTheSameTaps() {
+        // A poller reports the state every tick, held or not; repeats must not count as new presses
+        // or forget the first tap.
+        var tap = TeachKeys.DoubleTap()
+        var t = 0.0
+        func tick(_ down: Bool, _ n: Int) -> Bool {
+            var fired = false
+            for _ in 0..<n { t += 1.0 / 60.0; if tap.update(flags: down ? [.shift] : [], at: t) { fired = true } }
+            return fired
+        }
+        XCTAssertFalse(tick(false, 30))
+        XCTAssertFalse(tick(true, 6))
+        XCTAssertFalse(tick(false, 8))
+        XCTAssertFalse(tick(true, 6))
+        XCTAssertTrue(tick(false, 1), "second release fires")
+        XCTAssertFalse(tick(false, 60), "and nothing after it without another pair")
     }
 
     func testStepsAreWrittenBySonnetUnlessABiggerModelWasChosen() {

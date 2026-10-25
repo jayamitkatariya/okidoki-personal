@@ -93,7 +93,13 @@ async function route(request: Request): Promise<Response> {
       try {
         const payload = await body<ThinkRequest>(request);
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await think(payload, key);
+        // The Mac drops the connection when the user backs out of the question; the model call
+        // stops with it instead of finishing an answer nobody will see.
+        const fetchUntilGone = ((input, init) => fetch(input, {
+          ...init,
+          signal: init?.signal ? AbortSignal.any([init.signal, request.signal]) : request.signal,
+        })) as typeof fetch;
+        const result = await think(payload, key, fetchUntilGone);
         return json(result);
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);

@@ -11,6 +11,12 @@ enum NotchMotion {
     /// changed colour; a spring reads as a surface that responded to you.
     static let hover = Animation.spring(response: 0.26, dampingFraction: 0.8)
     static let rowRemoval = Animation.easeOut(duration: 0.12)
+    /// Words move faster than the shape. They're gone before the island starts to fold, and
+    /// arrive once it has mostly opened, so text is never sliced by a moving edge.
+    static let wordsOut = Animation.easeOut(duration: 0.1)
+    static let wordsIn = Animation.easeOut(duration: 0.2).delay(0.08)
+    /// The two bands (closed mark, open control bar) crossfade in place.
+    static let band = Animation.easeInOut(duration: 0.18)
 }
 
 private enum NotchInk {
@@ -61,6 +67,10 @@ struct NotchRootView: View {
                                      flushTop: m.hasNotch)
         return NotchContent(model: model, env: env)
             .frame(width: model.islandWidth)
+            // The content takes its destination width at once and the shape springs around it.
+            // Animating this width too re-laid rows out at every in-between size, which sent the
+            // closed band's mark and label drifting across the open island as it folded.
+            .animation(nil, value: model.islandWidth)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGSize.self) { proxy in
                 proxy.size
@@ -71,6 +81,7 @@ struct NotchRootView: View {
             }
             .opacity(presented ? 1 : 0)
             .blur(radius: presented ? 0 : 3)
+            .animation(presented ? NotchMotion.wordsIn : NotchMotion.wordsOut, value: presented)
             .frame(width: width, height: height, alignment: .top)
             .background(NotchIslandBackground(clearTop: m.bandHeight))
             .clipShape(shape)
@@ -183,7 +194,7 @@ private struct NotchContent: View {
                     .padding(.horizontal, inset)
                     .padding(.top, model.expanded ? 8 : (m.hasNotch ? 10 : 6))
                     .padding(.bottom, 14)
-                    .transition(.opacity)
+                    .transition(wordsTransition)
             }
         }
         .frame(maxWidth: .infinity)
@@ -193,37 +204,58 @@ private struct NotchContent: View {
 
     /// Closed, logo and status sit against the camera so the pair reads as one centered mark.
     /// Open, the band becomes a control bar: input mode on the left, quiet and settings on the right.
-    @ViewBuilder private var band: some View {
-        if model.expanded {
+    ///
+    /// Both layers are always there, each laid out at its own fixed width, and only their opacity
+    /// changes. Swapping views instead left the outgoing bar in the column at its old width while
+    /// it faded, and a column holding anything wider than the island sits off-centre, which
+    /// pushed the card and the closed band's label out past the edge for the whole fold.
+    private var band: some View {
+        ZStack {
+            closedBand
+                .frame(width: model.compactWidth)
+                .opacity(model.expanded ? 0 : 1)
+                .allowsHitTesting(!model.expanded)
+            controlBar
+                .frame(width: m.expandedWidth)
+                .opacity(model.expanded ? 1 : 0)
+                .allowsHitTesting(model.expanded)
+        }
+        .frame(width: model.islandWidth, height: m.bandHeight)
+        .animation(NotchMotion.band, value: model.expanded)
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 0) {
             HStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    NotchModeSwitch(mode: model.inputMode) { env.store.settings.defaultInput = $0 }
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity)
-                if m.hasNotch {
-                    Color.clear.frame(width: m.notchWidth)
-                } else {
-                    OKLogo(size: 14)
-                }
-                HStack(spacing: 6) {
-                    Spacer(minLength: 0)
-                    NotchIconButton(symbol: model.quiet ? "moon.fill" : "moon",
-                                    help: model.quiet ? "Turn off quiet" : "Quiet",
-                                    size: 24, filled: true, active: model.quiet) {
-                        env.store.settings.quietMode.toggle()
-                    }
-                    NotchIconButton(symbol: "gearshape.fill", help: "Settings", size: 24, filled: true) {
-                        model.onClose?()
-                        env.openDashboard(.settings)
-                    }
-                }
-                .frame(maxWidth: .infinity)
+                NotchModeSwitch(mode: model.inputMode) { env.store.settings.defaultInput = $0 }
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, m.shoulder + 12)
-            .frame(height: m.bandHeight)
-            .transition(.opacity)
-        } else if m.hasNotch {
+            .frame(maxWidth: .infinity)
+            if m.hasNotch {
+                Color.clear.frame(width: m.notchWidth)
+            } else {
+                OKLogo(size: 14)
+            }
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                NotchIconButton(symbol: model.quiet ? "moon.fill" : "moon",
+                                help: model.quiet ? "Turn off quiet" : "Quiet",
+                                size: 24, filled: true, active: model.quiet) {
+                    env.store.settings.quietMode.toggle()
+                }
+                NotchIconButton(symbol: "gearshape.fill", help: "Settings", size: 24, filled: true) {
+                    model.onClose?()
+                    env.openDashboard(.settings)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, m.shoulder + 12)
+        .frame(height: m.bandHeight)
+    }
+
+    @ViewBuilder private var closedBand: some View {
+        if m.hasNotch {
             HStack(spacing: 0) {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
@@ -398,16 +430,25 @@ private struct NotchContent: View {
                             .transition(rowTransition)
                     }
                     if model.expanded && isEmpty && model.caption == nil {
-                        greeting.transition(.opacity)
+                        openOnly(greeting)
+                            .transition(wordsTransition)
                     }
                 }
             }
             if model.expanded {
-                footer
+                openOnly(footer)
                     .padding(.top, isEmpty && model.caption == nil ? 2 : 12)
-                    .transition(.opacity)
+                    .transition(wordsTransition)
             }
         }
+    }
+
+    /// Rows that exist only while open keep the open width as they fade out, so the fold never
+    /// reflows their words; the outer frame keeps them no wider than the column they sit in.
+    private func openOnly<V: View>(_ view: V) -> some View {
+        view
+            .frame(width: m.expandedWidth - inset * 2)
+            .frame(width: model.islandWidth - inset * 2)
     }
 
     // MARK: Home
@@ -474,8 +515,14 @@ private struct NotchContent: View {
     // MARK: Helpers
 
     private var rowTransition: AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .offset(y: -6)),
+        .asymmetric(insertion: .opacity.combined(with: .offset(y: -6)).animation(NotchMotion.content),
                     removal: .opacity.animation(NotchMotion.rowRemoval))
+    }
+
+    /// Words fade on their own clock, out before the shape folds and in once it has opened.
+    private var wordsTransition: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(NotchMotion.wordsIn),
+                    removal: .opacity.animation(NotchMotion.wordsOut))
     }
 
     private func moreLink(_ title: String, action: @escaping () -> Void) -> some View {

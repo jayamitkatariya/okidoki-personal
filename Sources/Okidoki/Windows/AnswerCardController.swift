@@ -255,6 +255,8 @@ final class AnswerCardController {
 
     fileprivate func userClosed() {
         if pending != nil, current === pending {
+            // Closing the thinking card is backing out of the follow-up: stop it, don't just hide it.
+            env?.cancelForegroundRequest()
             suppressResultsUntilIdle()
         }
         let card = current

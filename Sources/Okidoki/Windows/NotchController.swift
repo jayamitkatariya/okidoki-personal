@@ -239,10 +239,13 @@ final class NotchModel: ObservableObject {
     var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !approvals.isEmpty || !live.isEmpty || recording != nil || listening || caption != nil }
     var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !approvals.isEmpty || !live.isEmpty || recording != nil || caption != nil }
 
+    /// Closed with something to show: wide enough for one card.
+    var compactWidth: CGFloat { metrics.clampWidth(360 + metrics.shoulder * 2) }
+
     var islandWidth: CGFloat {
         let m = metrics
         if expanded { return m.expandedWidth }
-        if hasBody { return m.clampWidth(360 + m.shoulder * 2) }
+        if hasBody { return compactWidth }
         return m.clampWidth(m.hasNotch ? m.notchWidth + m.shoulder * 2 + 148 : 236)
     }
 

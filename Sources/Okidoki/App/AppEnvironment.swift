@@ -76,6 +76,10 @@ final class AppEnvironment: ObservableObject {
     /// Window, browser tab and a small screenshot, gathered while the capsule opens so the brain
     /// can see what the request is about. Finished (or given up on) by the time they submit.
     private var summonContext: Task<ScreenContext?, Never>?
+    /// The request the user is waiting on at the capsule or the card. Backing out (esc, the ✕, a
+    /// shake, closing the thinking card) cancels it, so a question they walked away from never
+    /// answers later, speaks, or starts a run on its own.
+    private var foregroundRequest: Task<Void, Never>?
     private var watchRunID: String?
     /// How many passes a queued skill replay should make, by run id.
     private var pendingReplays: [String: Int] = [:]
@@ -180,6 +184,8 @@ final class AppEnvironment: ObservableObject {
                 guard let self else { return }
                 self.shake.sensitivity = settings.shakeSensitivity
                 self.shake.isEnabled = settings.okidokiEnabled
+                // A false shake in voice mode opens the mic, so it takes one more turn to be sure.
+                self.shake.deliberate = settings.defaultInput == .voice
                 self.notch.model.quiet = settings.quietMode || self.inCall
                 self.applyAppearance(settings.appearance)
             }
@@ -313,10 +319,21 @@ final class AppEnvironment: ObservableObject {
             guard parts.count == 2 else { return }
             Task { await EventActuator.click(at: CGPoint(x: parts[0], y: parts[1])) }
         }
+        // A lesson on the frontmost app, straight to the tutor (no router); what it does goes to teach.log.
+        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.teach"), object: nil, queue: .main) { [weak self] note in
+            guard let topic = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !topic.isEmpty else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                let run = self.store.createRun(kind: .teach, title: topic, prompt: topic, threadID: nil, status: .running)
+                self.store.startRun(run.id)
+                self.teach.start(topic: topic, outline: [], appBundleID: "", runID: run.id, threadID: nil)
+            }
+        }
         center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.stop"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 if self.driver.isActive { self.driver.cancel(reason: "stopped by the test script") }
+                if self.teach.isActive { self.teach.stop(completed: false) }
             }
         }
     }
@@ -389,6 +406,8 @@ final class AppEnvironment: ObservableObject {
     }
 
     func startSummon() {
+        // Reaching for it while it's up puts it away, request and all, the same as esc or a shake.
+        if summon.model.isVisible { dismissSummon(); return }
         let front = NSWorkspace.shared.frontmostApplication
         summonContext?.cancel()
         summonContext = nil
@@ -440,12 +459,29 @@ final class AppEnvironment: ObservableObject {
     func dismissSummon() {
         summonContext?.cancel()
         summonContext = nil
+        cancelForegroundRequest()
         draw.dismissAll()
         summon.dismiss()
         answerController.close()
         ghost.cancel()
         notch.noteListening(false)
         notch.collapse()
+    }
+
+    /// Runs a request the user is waiting on in front of them. Only one is ever in flight: a new
+    /// one replaces (and cancels) the last, and `cancelForegroundRequest` drops it on the floor.
+    private func startForegroundRequest(_ work: @escaping @MainActor () async -> Void) {
+        foregroundRequest?.cancel()
+        let task = Task { @MainActor in await work() }
+        foregroundRequest = task
+    }
+
+    /// The user backed out of the question they were waiting on. The pipeline checks for this
+    /// after every pause and before anything that would show, say or start something.
+    func cancelForegroundRequest() {
+        guard let task = foregroundRequest else { return }
+        foregroundRequest = nil
+        task.cancel()
     }
 
     /// Dev-only: stage the two overlay surfaces so their chrome can be reviewed
@@ -512,13 +548,16 @@ final class AppEnvironment: ObservableObject {
             return
         }
         let pendingContext = claimSummonContext()
-        Task {
-            let screenContext = await awaitSummonContext(pendingContext)
-            await handleRequest(text: text, appName: appName, bundleID: bundleID, threadID: nil,
-                                screenshot: screenshot, selection: selection,
-                                attachmentName: attachmentName, documentText: "", source: "summon",
-                                screenContext: screenContext)
-            summon.hideInput()
+        startForegroundRequest { [weak self] in
+            guard let self else { return }
+            let screenContext = await self.awaitSummonContext(pendingContext)
+            guard !Task.isCancelled else { return }
+            await self.handleRequest(text: text, appName: appName, bundleID: bundleID, threadID: nil,
+                                     screenshot: screenshot, selection: selection,
+                                     attachmentName: attachmentName, documentText: "", source: "summon",
+                                     screenContext: screenContext)
+            guard !Task.isCancelled else { return }
+            self.summon.hideInput()
         }
     }
 
@@ -533,10 +572,10 @@ final class AppEnvironment: ObservableObject {
             approveRun(runID)
             return
         }
-        Task {
-            await handleRequest(text: text, appName: "mac", bundleID: "", threadID: threadID,
-                                screenshot: nil, selection: nil, attachmentName: "",
-                                documentText: "", source: "followup")
+        startForegroundRequest { [weak self] in
+            await self?.handleRequest(text: text, appName: "mac", bundleID: "", threadID: threadID,
+                                      screenshot: nil, selection: nil, attachmentName: "",
+                                      documentText: "", source: "followup")
         }
     }
 
@@ -654,6 +693,7 @@ final class AppEnvironment: ObservableObject {
                 document = DocumentReader.read(url: url) ?? ""
                 docName = url.lastPathComponent
             }
+            guard !Task.isCancelled else { return }
         }
 
         let thread: OkidokiCore.ChatThread
@@ -693,6 +733,7 @@ final class AppEnvironment: ObservableObject {
                 let formatter = ISO8601DateFormatter()
                 events = today.prefix(10).map { BrainNativeEvent(title: $0.title, start: formatter.string(from: $0.start)) }
             }
+            guard !Task.isCancelled else { return }
         }
         let history = (store.thread(thread.id)?.messages ?? []).map { BrainMessage(role: $0.role.rawValue, text: $0.text) }
         // The account's current notes; anything else it remembers is found by meaning in the memory index.
@@ -719,10 +760,13 @@ final class AppEnvironment: ObservableObject {
                 break
             }
         }
+        // Backing out aborts the call, which reads as a failure above; the user asked for silence.
+        guard !Task.isCancelled else { return }
         if let decision {
             await handleDecision(decision, request: request, threadID: thread.id, source: source)
         } else {
             let result = await BrainService(store: store).think(request)
+            guard !Task.isCancelled else { return }
             await handleDecision(result.decision, request: request, threadID: thread.id, source: source)
         }
     }
@@ -731,6 +775,7 @@ final class AppEnvironment: ObservableObject {
     static func isUnattended(_ source: String) -> Bool { source == "space" || source == "routine" }
 
     private func handleDecision(_ decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
+        guard !Task.isCancelled else { return }
         var decision = withoutShowOrDoChoice(decision, request: request)
         if Self.isUnattended(source), let needsPerson = Self.needsSomeoneHere(decision.kind) {
             // A lesson, a recording, the ghost cursor or a drawing takes over this Mac's screen and
@@ -819,7 +864,7 @@ final class AppEnvironment: ObservableObject {
                 let outline = decision.teachPlan.isEmpty ? decision.teachSteps : decision.teachPlan.map(\.say)
                 teach.start(topic: topic, outline: outline, appBundleID: request.bundleID,
                             runID: run.id, threadID: threadID)
-                toast(title: "teaching · \(topic)", detail: "i'll point, you do it · it moves on as you go · esc stops",
+                toast(title: "teaching · \(topic)", detail: "i'll point, you do it · ⇧⇧ or \"next\" moves on · esc stops",
                       kind: .info, undoLabel: "stop", onUndo: { [weak self] in self?.teach.stop(completed: false) },
                       editLabel: nil, onEdit: nil, runID: run.id)
             }
@@ -859,6 +904,8 @@ final class AppEnvironment: ObservableObject {
     func present(_ card: AnswerCardModel, source: String) {
         // Routines and space jobs report elsewhere; a card at the cursor would interrupt whoever's at this Mac.
         guard !Self.isUnattended(source) else { return }
+        // A request the user backed out of has nothing to show.
+        guard !Task.isCancelled else { return }
         if card.onClose == nil {
             card.onClose = { [weak self] in self?.answerController.close() }
         }
@@ -1060,6 +1107,7 @@ final class AppEnvironment: ObservableObject {
             } else {
                 file = await pickFile(kind: pick, prompt: "choose a \(pick)")
             }
+            guard !Task.isCancelled else { return }
             if file == nil && folder == nil {
                 let card = AnswerCardModel(title: "no file chosen",
                                            text: "okay — nothing happened. pick a file when you're ready, or drag one into the dashboard and ask again.",
@@ -1085,6 +1133,7 @@ final class AppEnvironment: ObservableObject {
                 } else {
                     workingDirectory = NSHomeDirectory()
                 }
+                guard !Task.isCancelled else { return }
             }
         }
 
@@ -1223,6 +1272,7 @@ final class AppEnvironment: ObservableObject {
             } else if let file = await pickFile(kind: pick, prompt: "choose a \(pick)") {
                 decision.commands = PlaceholderFiller.fill(decision.commands, file: file, folder: nil)
             }
+            guard !Task.isCancelled else { return }
         }
         await prepareTask(decision: decision, request: request, threadID: threadID, source: "summon")
     }
@@ -1230,6 +1280,7 @@ final class AppEnvironment: ObservableObject {
     private func prepareBorrow(decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
         if !store.settings.screenBorrowing { store.settings.screenBorrowing = true }
         if !EventActuator.canPost { _ = await PermissionsService.shared.request(.accessibility) }
+        guard !Task.isCancelled else { return }
         let target = decision.quickAction?.title ?? request.text
         let preview = ActionPreview(summary: decision.previewSummary.isEmpty ? "click \(target)" : decision.previewSummary,
                                     risk: .medium,
@@ -1284,6 +1335,7 @@ final class AppEnvironment: ObservableObject {
         if !store.settings.screenBorrowing { store.settings.screenBorrowing = true }
         if !EventActuator.canPost { _ = await PermissionsService.shared.request(.accessibility) }
         if !CGPreflightScreenCaptureAccess() { _ = await PermissionsService.shared.request(.screen) }
+        guard !Task.isCancelled else { return }
         let goal = request.text.isEmpty ? decision.title : request.text
         let apps = decision.apps
         let preview = ActionPreview(summary: decision.previewSummary.isEmpty ? "drive it end to end" : decision.previewSummary,
@@ -3318,6 +3370,8 @@ final class AppEnvironment: ObservableObject {
     func speak(_ text: String) {
         // Not for typed requests, and quiet during calls, screen shares and quiet mode; the card still shows the answer.
         guard store.settings.voiceEnabled, !typedTurn, !store.settings.quietMode, !inCall else { return }
+        // Nor for a request the user backed out of.
+        guard !Task.isCancelled else { return }
         speaker.speak(text, voiceID: store.settings.voiceID, speed: store.settings.voiceSpeed)
     }
 

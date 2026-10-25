@@ -10,6 +10,16 @@ sync between Macs through HTTP actions; Spaces chat, jobs, Team and the Vault ar
 subscriptions, with documents in Convex file storage, Convex Auth for sign-in, and a cron that reaps
 lost worker jobs. The full feature-by-feature breakdown and commit log are in [hackathon.md](hackathon.md).
 
+## How we use Cartesia
+
+Cartesia is okidoki's voice. Every spoken reply (answer cards, finished runs, computer-use narration,
+Teach lessons and the concept stage) goes through Sonic-3 on Cartesia's TTS bytes endpoint, with the
+voice picked in Settings (nine built-in Cartesia voices) and the speed setting passed as
+`generation_config.speed`; captions in the notch follow the audio. Saving a key checks it and the
+voice catalog right away. If a reply fails (bad key, no credits, a retired voice, rate limiting), the
+Mac's own voice finishes it and a single toast says why. The code is in
+[Speech.swift](Sources/OkidokiCore/Services/Speech.swift).
+
 ## Layout
 
 - `Sources/` — the native macOS app (Swift, SwiftUI and AppKit).

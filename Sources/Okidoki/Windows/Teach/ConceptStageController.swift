@@ -65,7 +65,7 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
     private var pendingLoad: String?
     private var generation = 0
     private var escMonitors: [Any] = []
-    private var shiftTap = TeachKeys.DoubleTap()
+    private let shiftTap = ShiftTapWatcher()
     private var spaceObservers: [NSObjectProtocol] = []
     private var beatDoneContinuation: CheckedContinuation<Void, Never>?
     private var saidSoFar: [String] = []
@@ -485,6 +485,7 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
         generation += 1
         resolveBeat()
         env?.speaker.stop()
+        shiftTap.stop()
         for monitor in escMonitors { NSEvent.removeMonitor(monitor) }
         escMonitors = []
         for observer in spaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer); NotificationCenter.default.removeObserver(observer) }
@@ -675,11 +676,17 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
     }
 
     /// Esc closes the stage; two quick taps of shift move on a beat, same as the in-app lesson.
+    /// The taps are read from the modifier state (see `ShiftTapWatcher`), so they work whichever
+    /// app has the keyboard; the monitors only break a tap when something else is pressed.
     private func installKeys() {
         for monitor in escMonitors { NSEvent.removeMonitor(monitor) }
         escMonitors = []
-        shiftTap.reset()
-        let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .scrollWheel]
+        shiftTap.onDoubleTap = { [weak self] in
+            guard let self, self.isActive else { return }
+            self.next()
+        }
+        shiftTap.start()
+        let mask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel]
         if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
             if event.type == .keyDown, event.keyCode == 53 { Task { @MainActor in self?.handleKey(event) }; return nil }
             Task { @MainActor in self?.handleKey(event) }
@@ -692,11 +699,7 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
 
     private func handleKey(_ event: NSEvent) {
         guard isActive else { return }
-        if event.type == .flagsChanged {
-            if shiftTap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags, at: event.timestamp) { next() }
-            return
-        }
-        shiftTap.reset()
+        shiftTap.interrupt()
         if event.type == .keyDown, event.keyCode == 53 { dismiss(completed: model.phase == .done) }
     }
 

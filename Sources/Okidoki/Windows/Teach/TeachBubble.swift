@@ -108,14 +108,17 @@ struct TeachBubbleView: View {
 
 // MARK: - Bar
 
-/// The slim bar at the bottom: progress, voice and stop. Nothing to press to move on — the
-/// lesson follows what the learner does. Confirm and done show their buttons only in those phases.
+/// The slim bar at the bottom: progress, the two things you can ask for (do it, next), voice and
+/// stop. The lesson follows what the learner does on its own; the buttons are for when they'd
+/// rather not wait, or want okidoki's hands. Confirm and done show their buttons only in those phases.
 struct TeachBarView: View {
     @ObservedObject var model: TeachModel
     @Environment(\.colorScheme) private var scheme
     var accent: Color
     var onConfirm: () -> Void
     var onSkip: () -> Void
+    var onNext: () -> Void
+    var onDoIt: () -> Void
     var onVoice: () -> Void
     var onPractice: () -> Void
     var onStop: () -> Void
@@ -131,6 +134,10 @@ struct TeachBarView: View {
                 controls
             }
             Spacer(minLength: 6)
+            if model.phase == .looking || model.phase == .waiting {
+                actions
+                Rectangle().fill(theme.line).frame(width: 1, height: 18)
+            }
             trailing
         }
         .padding(.horizontal, 14)
@@ -143,7 +150,30 @@ struct TeachBarView: View {
         }
     }
 
-    static let width: CGFloat = 460
+    static let width: CGFloat = 520
+
+    /// "do it" borrows okidoki's hands for this step; "next" moves on without it, even mid-look.
+    private var actions: some View {
+        HStack(spacing: 6) {
+            Button("do it") { onDoIt() }
+                .buttonStyle(OKButtonStyle(kind: .ghost, compact: true))
+                .disabled(model.phase != .waiting)
+                .opacity(model.phase == .waiting ? 1 : 0.45)
+                .help("okidoki does this step for you")
+            Button {
+                onNext()
+            } label: {
+                HStack(spacing: 5) {
+                    Text("next")
+                    Text("⇧⇧")
+                        .font(.okMono(8.5))
+                        .opacity(0.7)
+                }
+            }
+            .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+            .help("move on · or tap shift twice")
+        }
+    }
 
     @ViewBuilder private var progress: some View {
         HStack(spacing: 8) {
@@ -241,10 +271,6 @@ struct TeachBarView: View {
             }
             .buttonStyle(.plain)
             .help(model.voice ? "voice on" : "voice off")
-            Text("⇧⇧ next")
-                .font(.okMono(8))
-                .foregroundStyle(theme.tertiary.opacity(0.7))
-                .help("tap shift twice to move on")
             Text("esc")
                 .font(.okMono(8))
                 .foregroundStyle(theme.tertiary.opacity(0.7))

@@ -115,6 +115,17 @@ final class TeachController {
     private var landed = false
     /// What they did while the model was looking; the screen it saw is older than these.
     private var whileLooking: [String] = []
+    /// The target they hit during that look, by name, and whether the ring up at the time was the
+    /// model's guess at the next step rather than the step it was checking.
+    private var hitWhileLooking: String?
+    private var lookaheadShown = false
+    /// They asked to move on; the step that arrives must not be the one they skipped.
+    private var skipRequested = false
+    private var skipInsisted = 0
+    private var lookStartedAt: Date?
+    /// What the last request told the model about the hit, and how often a seen hit was overruled.
+    private var askedLanded = false
+    private var landedInsisted = 0
     private var stepsShown = 0
     private var cleanHits = 0
     private var doItInARow = 0
@@ -125,11 +136,46 @@ final class TeachController {
     private var lab: TeachLab?
     private var lastPointerUpdate: TimeInterval = 0
     /// ⇧⇧ — the learner's "next", usable even while the model is looking.
-    private var shiftTap = TeachKeys.DoubleTap()
+    private let shiftTap = ShiftTapWatcher()
+    /// Scroll distance since the step went up; a nudge of the trackpad isn't a reason to look again.
+    private var scrolled: CGFloat = 0
+    private var lastMouseMoveForwarded: TimeInterval = 0
 
     private static let barSize = CGSize(width: TeachBarView.width, height: 56)
 
     init(environment: AppEnvironment) { self.env = environment }
+
+    // MARK: Trace
+
+    /// A line per thing the lesson did, in `Application Support/Okidoki/teach.log`, when the app
+    /// runs with OKIDOKI_TEACH_TRACE=1 or the dev hooks. Off, it costs one boolean.
+    private static let tracing: Bool = {
+        let env = ProcessInfo.processInfo.environment
+        return env["OKIDOKI_TEACH_TRACE"] == "1" || env["OKIDOKI_DEV_HOOKS"] == "1"
+    }()
+
+    private static let traceURL: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("Okidoki/teach.log")
+    }()
+
+    private func trace(_ line: @autoclosure () -> String) {
+        guard Self.tracing else { return }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let text = "\(stamp) \(line())\n"
+        let url = Self.traceURL
+        Task.detached(priority: .utility) {
+            guard let data = text.data(using: .utf8) else { return }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+            } else {
+                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: url)
+            }
+        }
+    }
 
     var isActive: Bool { model.isActive }
 
@@ -156,11 +202,19 @@ final class TeachController {
         menusFor = nil
         landed = false
         whileLooking = []
+        hitWhileLooking = nil
+        lookaheadShown = false
+        skipRequested = false
+        skipInsisted = 0
+        lookStartedAt = nil
+        askedLanded = false
+        landedInsisted = 0
         typedCount = 0
         mouseDownAt = nil
         performingForThem = false
         practiceRound = false
         current = nil
+        scrolled = 0
 
         targetApp = resolveApp(bundleID: appBundleID)
         if let app = targetApp, !app.isActive { app.activate(options: []) }
@@ -191,6 +245,7 @@ final class TeachController {
         stagePanel?.orderFrontRegardless()
         barPanel?.orderFrontRegardless()
         installMonitors()
+        trace("start topic=\"\(topic)\" app=\(model.appName) mode=\(model.mode.rawValue) outline=\(self.outline.count) ax=\(AXIsProcessTrusted()) screen=\(CGPreflightScreenCaptureAccess())")
         requestStep(after: 0.2, settle: false)
     }
 
@@ -266,6 +321,8 @@ final class TeachController {
             accent: Color(accent),
             onConfirm: { [weak self] in self?.resolveConfirm(true) },
             onSkip: { [weak self] in self?.resolveConfirm(false) },
+            onNext: { [weak self] in self?.forceNext() },
+            onDoIt: { [weak self] in self?.doItForThem() },
             onVoice: { [weak self] in self?.toggleVoice() },
             onPractice: { [weak self] in self?.startPractice() },
             onStop: { [weak self] in self?.stop(completed: self?.model.phase == .done) }
@@ -281,17 +338,20 @@ final class TeachController {
     // MARK: Loop
 
     /// Look at the screen and ask for the next step. `settle` waits for the app to stop changing first.
-    private func requestStep(after delay: Double, settle: Bool) {
+    private func requestStep(after delay: Double, settle: Bool, hint: String? = nil) {
         guard model.isActive, let env else { return }
         generation += 1
         let gen = generation
         pendingVerify?.cancel()
         pendingVerify = nil
+        scrollSettle?.cancel()
+        scrollSettle = nil
         clearIdle()
         stopFollowing()
         model.phase = .looking
         model.stuck = false
-        model.hint = stepsShown == 0 ? "looking at \(model.appName)…" : "checking…"
+        model.hint = hint ?? (stepsShown == 0 ? "looking at \(model.appName)…" : "checking…")
+        lookStartedAt = Date()
         stage?.setThinking(true)
         Task { [weak self] in
             guard let self else { return }
@@ -393,25 +453,75 @@ final class TeachController {
                                            model: env.teachModel,
                                            pageTitle: pageInfo?.title, pageURL: pageInfo?.url,
                                            menus: self.menus, landed: self.landed)
+            self.trace("ask step=\(request.stepNumber) landed=\(self.landed) elements=\(prepared.elements.count) last=\"\(self.log.last.map { "\($0.action) \($0.label ?? "") → \($0.outcome)" } ?? "")\"")
+            self.askedLanded = self.landed
+            let asked = Date()
             let step = await self.stepProvider(request)
             guard gen == self.generation, self.model.isActive else { return }
-            guard let step else {
+            guard var step else {
+                self.trace("no answer after \(Int(Date().timeIntervalSince(asked)))s")
                 self.retryAfterSilence()
                 return
             }
+            self.trace("answer in \(String(format: "%.1f", Date().timeIntervalSince(asked)))s action=\(step.action) done=\(step.previousDone) waiting=\(step.waiting) element=\(step.element.map(String.init) ?? "-") xy=\(step.x.map { Int($0) } ?? -1),\(step.y.map { Int($0) } ?? -1) target=\"\(step.target ?? "")\" say=\"\(step.say)\"")
             self.modelRetries = 0
-            if self.noteWhileLooking() {
-                // They moved on while the model was reading an older screen. Look again.
-                self.requestStep(after: 0.1, settle: true)
-                return
-            }
             if step.waiting, self.stepsShown < 40 {
                 self.model.say = step.say.isEmpty ? "waiting for it to load…" : step.say
                 self.model.hint = "waiting for the screen"
                 self.requestStep(after: 0.9, settle: true)
                 return
             }
-            self.apply(step)
+            if self.skipRequested {
+                self.skipRequested = false
+                if !step.previousDone, step.action != "done", self.skipInsisted < 2 {
+                    // It taught the skipped step again. Say so plainly and ask once more.
+                    self.skipInsisted += 1
+                    self.trace("skip: the model re-taught the step, insisting")
+                    self.whileLooking = []
+                    self.setOutcome("skipped — they don't want this step; move past it to the one after")
+                    self.requestStep(after: 0.1, settle: false, hint: "okay — next")
+                    return
+                }
+                self.skipInsisted = 0
+                // Whatever it is now, it isn't "not quite" — they chose to move on.
+                step.previousDone = true
+            }
+            // okidoki watched the click land on the ring, and the model — reading a screen from
+            // before or without a visible effect — hands the same step back, pointing at the same
+            // spot. Sending them to click it again is the lesson getting stuck; the step is done.
+            // A retry that points somewhere else is a correction, and shows.
+            if !step.previousDone, step.action != "done", self.askedLanded || self.hitWhileLooking != nil,
+               let before = self.current?.actGlobal, let again = self.resolve(step).actGlobal,
+               hypot(again.x - before.x, again.y - before.y) < 40, self.landedInsisted < 1 {
+                self.landedInsisted += 1
+                self.trace("landed: the model re-taught the step at the same spot, insisting")
+                let was = self.log.last?.outcome ?? ""
+                self.noteWhileLooking()
+                self.setOutcome("\(was.isEmpty ? "hit the target" : was) — okidoki saw it land on that exact control, so this step is done; teach the step after it, or whatever the screen needs now")
+                self.landed = true
+                self.requestStep(after: 0.1, settle: true, hint: "nice — checking")
+                return
+            }
+            self.landedInsisted = 0
+            // They kept going while the model read an older screen. The step still goes up — a
+            // dropped answer would only mean another long look at a blank ring — but it's checked
+            // against the screen as it is now straight away, and if they already landed what it
+            // says, it isn't read out to them a second time.
+            let hit = self.hitWhileLooking
+            let hitOnGuess = hit != nil && self.lookaheadShown
+            let acted = self.whileLooking.contains { !$0.hasPrefix("said next") }
+            self.noteWhileLooking()
+            self.apply(step, speakIt: hit == nil)
+            guard acted, step.action != "done", self.model.phase == .waiting else { return }
+            if let hit, hitOnGuess || !step.previousDone {
+                // The ring they hit was this very step (the guess, or the same step shown again).
+                self.landed = true
+                self.cleanHits += 1
+                self.setOutcome("hit the target “\(hit)” while i was still checking")
+            }
+            self.model.hint = hit != nil ? "nice — checking" : "checking what you did"
+            self.model.provisional = true
+            self.scheduleVerify(after: hit != nil ? 0.2 : 0.6)
         }
     }
 
@@ -424,7 +534,7 @@ final class TeachController {
             return
         }
         model.phase = .waiting
-        model.hint = "i couldn't reach the model — tap ⌥ twice or say \"next\" to retry, esc to stop"
+        model.hint = "i couldn't reach the model — ⇧⇧ or \"next\" to retry, esc to stop"
         stage?.setThinking(false)
     }
 
@@ -440,7 +550,7 @@ final class TeachController {
         return Locale.current.localizedString(forLanguageCode: String(code.prefix(2))) ?? code
     }
 
-    private func apply(_ step: TeachLiveStep) {
+    private func apply(_ step: TeachLiveStep, speakIt: Bool = true) {
         if step.action == "done" {
             finish(summary: step.summary ?? step.say, say: step.say)
             return
@@ -460,6 +570,9 @@ final class TeachController {
         typedCount = 0
         mouseDownAt = nil
         landed = false
+        scrolled = 0
+        lookaheadShown = false
+        hitWhileLooking = nil
         current = shown
 
         withAnimation(OKMotion.spring) {
@@ -475,7 +588,8 @@ final class TeachController {
         stage?.setThinking(false)
         stage?.present(resolved.scene, animated: true)
         placeBubble(animated: true)
-        speak(step.say)
+        if speakIt { speak(step.say) }
+        trace("show step=\(stepsShown) retry=\(retry) scene=\(resolved.scene?.kind ?? "none") snapped=\(resolved.snapped) hit=\(resolved.hit.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "-") act=\(resolved.actGlobal.map { "\(Int($0.x)),\(Int($0.y))" } ?? "-")")
         armIdle()
         startFollowing()
         if let scene = resolved.scene, !shown.snapped, scene.kind == "ring", step.hasPoint, step.element == nil {
@@ -821,9 +935,12 @@ final class TeachController {
         }
         let keys = guess.action == "key" ? TeachKeys.caps(guess.key) : []
         var scene: TeachScene?
+        var hit: CGRect?
         if let rect {
-            scene = buildScene(rect: rect, region: false, screen: screen, label: guess.label, keys: keys, also: (nil, nil), drawings: []).scene
+            let built = buildScene(rect: rect, region: false, screen: screen, label: guess.label, keys: keys, also: (nil, nil), drawings: [])
+            scene = built.scene
             scene?.provisional = true
+            hit = built.hit
         }
         withAnimation(OKMotion.spring) {
             model.say = guess.say
@@ -831,9 +948,19 @@ final class TeachController {
             model.provisional = true
             model.hint = "next, probably"
         }
+        // The guess is what's on screen now, so a click on it counts as a hit on it — the
+        // ring, the hit area and the label all move to the guess, not just the drawing.
         var provisional = current
         provisional?.scene = scene
+        provisional?.hitRect = hit
+        provisional?.actGlobal = rect.map { CGPoint(x: $0.midX, y: $0.midY) }
+        provisional?.dragTo = nil
+        provisional?.live.label = guess.label
+        provisional?.live.target = guess.label
+        provisional?.live.action = guess.action
         current = provisional
+        lookaheadShown = scene != nil
+        trace("lookahead action=\(guess.action) label=\"\(guess.label ?? "")\" hit=\(hit.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "-")")
         stage?.present(scene, animated: true)
         stage?.setThinking(true)
         placeBubble(animated: true)
@@ -902,20 +1029,22 @@ final class TeachController {
 
     private func installMonitors() {
         removeMonitors()
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown, .flagsChanged, .scrollWheel, .mouseMoved, .leftMouseDragged]
+        shiftTap.onDoubleTap = { [weak self] in self?.forceNext() }
+        shiftTap.start()
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown, .scrollWheel, .mouseMoved, .leftMouseDragged]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
-            Task { @MainActor in self?.handle(event) }
+            self?.take(event)
         }) {
             monitors.append(global)
         }
         if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
             if event.type == .keyDown, event.keyCode == 53 {
-                Task { @MainActor in self?.handle(event) }
+                self?.take(event)
                 return nil
             }
-            if event.type == .mouseMoved || event.type == .flagsChanged { Task { @MainActor in self?.handle(event) } }
-            // Typing in okidoki's own windows isn't a lesson action, but it does break a ⇧⇧ in progress.
-            else if event.type == .keyDown { Task { @MainActor in self?.shiftTap.reset() } }
+            if event.type == .mouseMoved { self?.take(event) }
+            // Typing or clicking in okidoki's own windows isn't a lesson action, but it does break a ⇧⇧ in progress.
+            else { self?.take(nil) }
             return event
         }) {
             monitors.append(local)
@@ -939,7 +1068,29 @@ final class TeachController {
         }
     }
 
+    /// Monitors run on the main thread; handling the event right there keeps clicks, releases and
+    /// keys in the order they happened. `nil` is input in okidoki's own windows: not a lesson
+    /// action, but it still breaks a ⇧⇧ in progress.
+    private nonisolated func take(_ event: NSEvent?) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { self.receive(event) }
+        } else {
+            Task { @MainActor in self.receive(event) }
+        }
+    }
+
+    private func receive(_ event: NSEvent?) {
+        guard let event else { shiftTap.interrupt(); return }
+        if event.type == .mouseMoved || event.type == .leftMouseDragged {
+            // The pointer reports hundreds of moves a second; the hover glow needs thirty.
+            guard event.timestamp - lastMouseMoveForwarded > 0.033 else { return }
+            lastMouseMoveForwarded = event.timestamp
+        }
+        handle(event)
+    }
+
     private func removeMonitors() {
+        shiftTap.stop()
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         monitors = []
         if let appObserver { NSWorkspace.shared.notificationCenter.removeObserver(appObserver) }
@@ -958,13 +1109,7 @@ final class TeachController {
 
     private func handle(_ event: NSEvent) {
         guard model.isActive else { return }
-        if event.type == .flagsChanged {
-            if shiftTap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags, at: event.timestamp) {
-                forceNext()
-            }
-            return
-        }
-        if event.type != .mouseMoved, event.type != .leftMouseDragged { shiftTap.reset() }
+        if event.type != .mouseMoved, event.type != .leftMouseDragged { shiftTap.interrupt() }
         if event.type == .keyDown, event.keyCode == 53, !expectsEscape {
             if model.phase == .confirm { resolveConfirm(false); return }
             stop(completed: model.phase == .done)
@@ -984,37 +1129,46 @@ final class TeachController {
         if let panel = barPanel, panel.frame.contains(cocoa) { return }
 
         if event.type == .scrollWheel {
-            guard let step = current, step.scene?.hasTarget == true, model.phase == .waiting else { return }
-            // Scrolling moves the control: dim, then look again once they stop.
-            stage?.setThinking(true)
-            scrollSettle?.cancel()
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, self.model.isActive, self.model.phase == .waiting else { return }
-                self.setOutcome("scrolled; the view moved")
-                self.requestStep(after: 0.1, settle: true)
-            }
-            scrollSettle = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+            handleScroll(event)
             return
         }
 
         if model.phase == .looking, let step = current {
             // The model is reading an older screen; remember this for the log, in its own words.
+            // A hit on the ring that's up counts now: the tick shows, and the step that arrives is
+            // checked against it instead of being read out as if nothing happened.
             switch event.type {
             case .leftMouseDown, .rightMouseDown:
                 let verb = event.type == .rightMouseDown ? "right-clicked" : "clicked"
-                let onTarget = step.hitRect?.contains(point) ?? false
-                let label = onTarget ? (step.live.label ?? step.live.target ?? "") : TeachGeometry.axLabel(at: cocoa)
+                let under = TeachGeometry.axLabel(at: cocoa)
+                let onTarget = isOnTarget(step, point: point, axLabel: under)
+                let label = onTarget ? (step.live.label ?? step.live.target ?? under) : under
                 let place = label.isEmpty ? "at \(Int(point.x)),\(Int(point.y))" : "“\(label)”"
+                if onTarget, hitWhileLooking == nil {
+                    hitWhileLooking = label.isEmpty ? "it" : label
+                    celebrate(at: point)
+                    model.hint = "nice — still checking"
+                }
                 whileLooking.append(onTarget ? "\(verb) the target \(place)" : "\(verb) \(place)")
             case .keyDown:
-                whileLooking.append("pressed \(TeachKeys.combo(for: event))")
+                let combo = TeachKeys.combo(for: event)
+                if step.live.action == "key", TeachKeys.matches(combo, expected: step.live.key), hitWhileLooking == nil {
+                    hitWhileLooking = combo
+                    celebrate(at: nil)
+                    model.hint = "nice — still checking"
+                    whileLooking.append("pressed \(combo) — the shortcut")
+                } else {
+                    whileLooking.append("pressed \(combo)")
+                }
             default:
                 break
             }
             return
         }
         guard model.phase == .waiting, let step = current else { return }
+        // A release, or a drag that isn't the step, carries no news; only a fresh action may
+        // overwrite whether the last one landed.
+        if event.type == .leftMouseUp, step.live.action != "drag" { return }
         stage?.cancelGuide()
         landed = false
 
@@ -1024,8 +1178,8 @@ final class TeachController {
             if step.live.action == "drag" { return }
             let right = event.type == .rightMouseDown
             let verb = right ? "right-clicked" : (event.clickCount >= 2 ? "double-clicked" : "clicked")
-            let onTarget = step.hitRect?.contains(point) ?? false
             let label = TeachGeometry.axLabel(at: cocoa)
+            let onTarget = isOnTarget(step, point: point, axLabel: label)
             let name = step.live.label ?? step.live.target ?? label
             if onTarget, step.live.isPointerStep {
                 if step.live.action == "type" {
@@ -1078,6 +1232,7 @@ final class TeachController {
                     scheduleVerify(after: 0.4)
                 } else {
                     typedCount += 1
+                    landed = true
                     setOutcome("typed \(typedCount) characters so far")
                     scheduleVerify(after: 1.8)
                 }
@@ -1089,6 +1244,66 @@ final class TeachController {
         default:
             break
         }
+    }
+
+    /// Scrolling moves the control out from under its ring. A nudge of the trackpad is ignored; a
+    /// real scroll dims the marks, and once it stops the ring follows the control by name through
+    /// accessibility when it can, so the lesson doesn't stall on a model call for a scroll.
+    private func handleScroll(_ event: NSEvent) {
+        guard let step = current, step.scene?.hasTarget == true, model.phase == .waiting else { return }
+        scrolled += abs(event.scrollingDeltaY) + abs(event.scrollingDeltaX)
+        let moved = scrolled >= 20
+        if moved { stage?.setThinking(true) }
+        scrollSettle?.cancel()
+        let id = step.id
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.model.isActive, self.model.phase == .waiting, self.current?.id == id else { return }
+            guard self.scrolled >= 20 else { self.stage?.setThinking(false); return }
+            self.scrolled = 0
+            self.followTargetAfterScroll(step)
+        }
+        scrollSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func followTargetAfterScroll(_ step: TeachShownStep) {
+        let name = (step.live.target ?? step.live.label ?? "").trimmingCharacters(in: .whitespaces)
+        guard let pid = targetApp?.processIdentifier, let screen, let was = step.actGlobal, !name.isEmpty,
+              step.live.action != "drag" else {
+            setOutcome("scrolled; the view moved")
+            requestStep(after: 0.1, settle: true)
+            return
+        }
+        let bounds = TeachGeometry.quartzRect(of: screen)
+        let gen = generation
+        Task { [weak self] in
+            let found = await Task.detached(priority: .userInitiated) { AXSearch.find(target: name, pid: pid, near: was) }.value
+            guard let self, gen == self.generation, self.model.isActive, self.model.phase == .waiting, self.current?.id == step.id else { return }
+            let rect = found?.rect ?? .zero
+            let dx = rect.midX - was.x
+            let dy = rect.midY - was.y
+            // The same control, moved along one axis and still on this screen; anything else is a new view.
+            let sameAxis = abs(dx) < 60 || abs(dy) < 60
+            let similar = rect.width > 4 && rect.height > 4 && rect.width < bounds.width * 0.6 && rect.height < bounds.height * 0.5
+            guard found != nil, similar, sameAxis, bounds.insetBy(dx: 8, dy: 8).contains(CGPoint(x: rect.midX, y: rect.midY)) else {
+                self.setOutcome("scrolled; the view moved")
+                self.requestStep(after: 0.1, settle: true)
+                return
+            }
+            self.trace("scroll: “\(name)” followed by \(Int(dx)),\(Int(dy))")
+            if abs(dx) > 1 || abs(dy) > 1 { self.shiftScene(dx: dx, dy: dy) }
+            self.stage?.setThinking(false)
+            self.armIdle()
+        }
+    }
+
+    /// Inside the ring's hit area, or — when the ring never found its control, or found the wrong
+    /// one — on a control whose accessibility name is exactly the step's target.
+    private func isOnTarget(_ step: TeachShownStep, point: CGPoint, axLabel: String) -> Bool {
+        if step.hitRect?.contains(point) == true { return true }
+        guard let target = step.live.target?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !target.isEmpty,
+              !axLabel.isEmpty else { return false }
+        return axLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == target
     }
 
     private var expectsEscape: Bool {
@@ -1103,11 +1318,16 @@ final class TeachController {
         targetApp = app
         model.appName = name
         guard model.phase == .waiting, let step = current else { return }
+        let wasLanded = landed
         if step.live.action == "open_app", let wanted = step.live.app,
            name.lowercased().contains(wanted.lowercased()) || wanted.lowercased().contains(name.lowercased()) {
             landed = true
             celebrate(at: nil)
             setOutcome("opened \(name)")
+        } else if let done = log.last?.outcome, !done.isEmpty {
+            // A click that brought the app forward: keep what they clicked, add where they are now.
+            setOutcome("\(done) · now in \(name)")
+            landed = wasLanded
         } else {
             setOutcome("switched to \(name)")
         }
@@ -1123,6 +1343,7 @@ final class TeachController {
 
     private func setOutcome(_ text: String) {
         guard !log.isEmpty else { return }
+        trace("outcome phase=\(model.phase) landed=\(landed) \"\(text)\"")
         log[log.count - 1].outcome = text
         clearIdle()
         if model.stuck { withAnimation(OKMotion.spring) { model.stuck = false } }
@@ -1131,13 +1352,14 @@ final class TeachController {
     /// Move what they did while the model was looking into the log. True when there was anything.
     @discardableResult
     private func noteWhileLooking() -> Bool {
+        hitWhileLooking = nil
         guard !whileLooking.isEmpty else { return false }
         let note = "while i was checking: " + whileLooking.suffix(6).joined(separator: ", ")
         whileLooking = []
         guard !log.isEmpty else { return true }
         let outcome = log[log.count - 1].outcome
         log[log.count - 1].outcome = outcome.isEmpty ? note : "\(outcome) · \(note)"
-        if note.contains("clicked the target") { landed = true }
+        if note.contains("the target") || note.contains("the shortcut") { landed = true }
         return true
     }
 
@@ -1253,14 +1475,19 @@ final class TeachController {
 
     // MARK: Voice commands
 
-    /// "next" / "skip" / ⇧⇧: move past the current step without doing it. Works while the model is
-    /// still looking too — that look is dropped and a fresh one starts — so nobody waits out a slow call.
+    /// "next" / "skip" / ⇧⇧ / the bar's button: move past the current step without doing it.
     func skipStep() {
         forceNext()
     }
 
+    /// Something changes on screen the instant they ask: the step's ring goes (or the model's
+    /// guess at the next step takes its place) and one look starts. While the tutor is already
+    /// looking, a step is on its way; asking again only notes that they want to move past
+    /// whatever it turns out to be — restarting the look would push that step further out, and
+    /// pressing again and again would mean it never arrives at all.
     func forceNext() {
         guard model.isActive, !performingForThem else { return }
+        trace("next phase=\(model.phase) sinceShift=\(String(format: "%.2f", CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .flagsChanged)))")
         switch model.phase {
         case .confirm:
             // "do it for me" is waiting on a yes; a no moves the lesson on by itself.
@@ -1269,23 +1496,54 @@ final class TeachController {
         case .done:
             stop(completed: true)
             return
-        case .looking, .waiting:
-            if current != nil { landed = false; setOutcome("skipped — move on") }
+        case .looking:
+            let stuck = lookStartedAt.map { Date().timeIntervalSince($0) > 25 } ?? false
+            guard stuck else {
+                skipRequested = true
+                whileLooking.append("said next — move on")
+                withAnimation(OKMotion.spring) { model.hint = "on it — the next step is coming" }
+                return
+            }
+            // A look that long is a lost call; start over.
+            if current != nil { setOutcome("skipped — move on") }
+        case .waiting:
+            guard let shown = current else { break }
+            landed = false
+            setOutcome("skipped — move on")
+            clearIdle()
+            if let next = shown.live.next {
+                showLookahead(next)
+            } else {
+                withAnimation(OKMotion.spring) {
+                    model.say = "okay — finding the next step"
+                    model.why = ""
+                    model.provisional = true
+                }
+                stage?.present(nil, animated: true)
+                placeBubble(animated: true)
+            }
         }
+        skipRequested = true
         whileLooking = []
+        hitWhileLooking = nil
         scrollSettle?.cancel()
         scrollSettle = nil
+        scrolled = 0
         modelRetries = 0
-        requestStep(after: 0.1, settle: false)
+        requestStep(after: 0.1, settle: false, hint: "okay — next")
     }
 
     /// "do it": borrow their hands for this one step, then keep teaching.
     func doItForThem() {
-        guard model.isActive, model.phase == .waiting, let shown = current else { return }
+        guard model.isActive, !performingForThem, let shown = current else { return }
+        if model.phase == .confirm { resolveConfirm(true); return }
+        guard model.phase == .waiting else { return }
         guard shown.live.isDoable, shown.actGlobal != nil || shown.live.action == "key" || shown.live.action == "open_app" else {
             skipStep()
             return
         }
+        pendingVerify?.cancel()
+        scrollSettle?.cancel()
         doItInARow += 1
         Task { [weak self] in
             guard let self else { return }
@@ -1331,8 +1589,8 @@ final class TeachController {
         case "next", "skip", "move on", "go on", "continue":
             skipStep()
             return true
-        case "do it", "do it for me", "you do it", "just do it":
-            if model.phase == .confirm { resolveConfirm(true) } else { doItForThem() }
+        case "do it", "do it for me", "you do it", "just do it", "yes":
+            doItForThem()
             return true
         case "go back", "back", "again", "show that again", "repeat":
             replayCurrent()
@@ -1350,6 +1608,8 @@ final class TeachController {
     private func finish(summary: String, say: String) {
         generation += 1
         pendingVerify?.cancel()
+        scrollSettle?.cancel()
+        scrollSettle = nil
         clearIdle()
         stopFollowing()
         withAnimation(OKMotion.spring) {
@@ -1391,10 +1651,12 @@ final class TeachController {
 
     func stop(completed: Bool, quiet: Bool = false, keepRun: Bool = false) {
         guard model.isActive else { return }
+        trace("stop completed=\(completed) steps=\(stepsShown)")
         generation += 1
         pendingVerify?.cancel()
         pendingVerify = nil
         scrollSettle?.cancel()
+        scrollSettle = nil
         clearIdle()
         stopFollowing()
         removeMonitors()
@@ -1510,7 +1772,7 @@ enum TeachGeometry {
                 return l.contains(needle) || (needle.contains(l) && l.count > 2)
             }
             if let hit = loose.filter({ plausible($0.rect, slack: 120) }).min(by: { distance($0.rect) < distance($1.rect) }) {
-                return hit.rect
+                return wordRect(in: hit, needle: needle)
             }
         }
         // Any small element right under the guess.
@@ -1531,6 +1793,19 @@ enum TeachGeometry {
             return found.rect
         }
         return nil
+    }
+
+    /// OCR often reads a whole row as one line ("Notes File Edit View"). A ring on the row would
+    /// land on the wrong word, so narrow it to where the wanted word sits along the line.
+    static func wordRect(in element: TeachElement, needle: String) -> CGRect {
+        let label = element.label.lowercased()
+        guard element.role == "text", label.count > needle.count + 2,
+              let range = label.range(of: needle) else { return element.rect }
+        let total = CGFloat(max(1, label.count))
+        let start = CGFloat(label.distance(from: label.startIndex, to: range.lowerBound)) / total
+        let span = CGFloat(needle.count) / total
+        let r = element.rect
+        return CGRect(x: r.minX + r.width * start - 3, y: r.minY, width: max(16, r.width * span + 6), height: r.height)
     }
 
     static func axLabel(at cocoa: NSPoint) -> String {
