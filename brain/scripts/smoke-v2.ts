@@ -22,6 +22,12 @@ if (!key) {
   process.exit(1);
 }
 const shot = readFileSync(file).toString("base64");
+// Shows any rejected request, so a reset conversation explains itself.
+const logged = (async (url: string | URL | Request, init?: RequestInit) => {
+  const response = await fetch(url, init);
+  if (!response.ok) console.log(`  HTTP ${response.status}: ${(await response.clone().text()).slice(0, 400)}`);
+  return response;
+}) as typeof fetch;
 const mediaType = file.endsWith(".png") ? "image/png" : "image/jpeg";
 const observation = {
   app: "Notes",
@@ -44,7 +50,7 @@ for (let step = 0; step < 4; step++) {
   const firsts: number[] = [];
   const out = await driveStep(
     { runID: "smoke", goal, step, observation, results, effort: effort as "low", settings: { claudeModel: model } },
-    key, fetch, 55_000, stream ? () => firsts.push(Date.now() - started) : undefined,
+    key, logged, 55_000, stream ? () => firsts.push(Date.now() - started) : undefined,
   );
   const after = sessionFor("smoke")?.messages.length ?? 0;
   const kept = step === 0 || after > before;

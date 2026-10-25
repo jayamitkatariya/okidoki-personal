@@ -422,6 +422,8 @@ export interface DriveRequest {
   history?: ComputerHistoryEntry[];
   /** The previous run in the same thread, for "again" and "continue". */
   previous?: { goal: string; summary?: string; steps?: string[] };
+  /** The plan the user approved before the run started, when it says more than the goal. */
+  plan?: string;
   remote?: boolean;
   /** Use the stronger model for this one turn. */
   escalate?: boolean;

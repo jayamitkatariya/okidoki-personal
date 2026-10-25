@@ -109,6 +109,12 @@ export function toolsFor(remote: boolean): unknown[] {
 
 // MARK: - Instructions
 
+function planText(request: DriveRequest): string {
+  const plan = request.plan?.replace(/\s+/g, " ").trim();
+  if (!plan || plan.toLowerCase() === request.goal.trim().toLowerCase()) return "";
+  return `The plan the user approved: ${plan.slice(0, 600)}`;
+}
+
 function previousRunText(request: DriveRequest): string {
   const prev = request.previous;
   if (!prev?.goal) return "";
@@ -127,9 +133,11 @@ export function systemPromptV2(request: DriveRequest): string {
     `You are okidoki, driving the user's real Mac to finish a task for them. They watch every move live and can press Esc to take over.`,
     ``,
     `The task: ${request.goal}`,
+    planText(request),
     previousRunText(request),
     ``,
     `Finish every part of the task as asked: keep the apps, sources, destinations, formats, quantities, order and anything they said not to do. Opening an app or reaching a screen is only a step unless that is the whole task. Never quietly do an easier version.`,
+    `Keep going until the whole task is done. Never stop to ask whether to continue or which way to do something the task or plan already covers: choose sensibly and do it. Long, fiddly jobs (wiring a circuit, filling a form, laying out a slide) are expected; work through them step by step, zooming in on small targets.`,
     ``,
     `How to act`,
     `- The screen is a Mac. In the computer tools, super is ⌘ Command and alt is ⌥ Option.`,
@@ -148,7 +156,7 @@ export function systemPromptV2(request: DriveRequest): string {
     `Finishing`,
     `- Leave the result on screen for the user: bring the app forward and open or select what you made or changed so its content is readable (the note itself, not just its title in a list; the document; the page; the sent message), even when a script did the work.`,
     `- Call finish with success true on its own, in a turn after you have seen a screenshot that shows the whole task done. A finish sent in the same turn as other actions is held back until you have looked. summary says what was achieved and where.`,
-    `- Call finish with success false after several different approaches have failed, saying what blocked you.`,
+    `- Call finish with success false only when something truly blocks you (a sign-in, a payment, a permission prompt, a missing app) or after several different approaches have failed, saying what blocked you. A question back to the user is not a reason to stop.`,
     ``,
     `Rules`,
     `- Never type passwords, secrets, payment details or 2FA codes. If a sign-in or payment screen blocks the task, finish with success false and say so.`,
@@ -164,9 +172,10 @@ function remoteSystemPromptV2(request: DriveRequest): string {
     `You are okidoki, driving the user's PRIVATE MAC: a separate, clean macOS in a virtual machine that only you use. The user's own Mac is untouched and they are not watching; they read your summary.`,
     ``,
     `The task: ${request.goal}`,
+    planText(request),
     previousRunText(request),
     ``,
-    `Finish every part of the task as asked. Opening an app or reaching a screen is only a step unless that is the whole task. Never quietly do an easier version.`,
+    `Finish every part of the task as asked. Opening an app or reaching a screen is only a step unless that is the whole task. Never quietly do an easier version. Keep going until it is done; never stop to ask whether to continue.`,
     ``,
     `How to act`,
     `- The screen is a Mac. In the computer tools, super is ⌘ Command and alt is ⌥ Option.`,
@@ -374,6 +383,8 @@ type Session = {
   pending: ToolUse[];
   lastApp?: string;
   used: number;
+  /** Optional request fields the API said this run's model doesn't take; left out from then on. */
+  unsupported: Set<string>;
 };
 
 const SESSION_TTL_MS = 20 * 60_000;
@@ -405,6 +416,7 @@ function newSession(request: DriveRequest): Session {
     messages: [],
     pending: [],
     used: Date.now(),
+    unsupported: new Set(),
   };
 }
 
@@ -439,15 +451,16 @@ export function userTurn(session: Session, request: DriveRequest): Message {
   }
   const byID = new Map((request.results ?? []).map((r) => [r.id, r]));
   const content = session.pending.map((use, index) => {
-    const member = isMember(use);
-    const { content: blocks, isError } = resultContent(byID.get(use.id), member);
+    // The result must name a toolset exactly when its call did: the API rejects a guess either way,
+    // and the model sometimes sends a computer action without toolset_name.
+    const { content: blocks, isError } = resultContent(byID.get(use.id), Boolean(use.toolset_name));
     const last = index === session.pending.length - 1;
     const block: Record<string, unknown> = {
       type: "tool_result",
       tool_use_id: use.id,
       content: last ? [...blocks, ...observationBlocks(obs, "", app, session.remote)] : blocks,
     };
-    if (member) block.toolset_name = "computer";
+    if (use.toolset_name) block.toolset_name = use.toolset_name;
     if (isError) block.is_error = true;
     return block;
   });
@@ -468,9 +481,17 @@ function failure(reason: string, error?: string): DriveResponse {
  * effort "low" | "medium" | "high" lets the model think (adaptive thinking, the 5.5 default) that much.
  * "none" forces a tool call, which on the 5.5 models skips thinking entirely: fastest, least deliberate.
  */
+/** Only Haiku 5.5 takes a forced tool call; Sonnet and Opus 5.5 reject it. */
+export function acceptsForcedToolChoice(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("claude-haiku-5-5");
+}
+
 export function requestBody(session: Session, messages: Message[], model: string, effort: string) {
-  const forced = effort === "none";
-  return {
+  const off = (field: string) => session.unsupported.has(`${model}|${field}`);
+  const forced = effort === "none" && acceptsForcedToolChoice(model) && !off("tool_choice");
+  // "none" on a model that can't be forced falls back to the lightest thinking.
+  const level = effort === "none" ? "low" : effort;
+  const body: Record<string, unknown> = {
     model,
     max_tokens: 4096,
     system: [{ type: "text", text: session.system, cache_control: { type: "ephemeral" } }],
@@ -478,17 +499,29 @@ export function requestBody(session: Session, messages: Message[], model: string
     messages,
     // Automatic caching moves the breakpoint to the newest block, so each turn reads the last one's prefix.
     cache_control: { type: "ephemeral" },
-    ...(forced ? {} : { output_config: { effort } }),
-    context_management: {
+    tool_choice: forced ? { type: "any" } : { type: "auto" },
+  };
+  if (!forced && !off("output_config")) body.output_config = { effort: level };
+  if (!off("context_management")) {
+    body.context_management = {
       edits: [{
         type: "clear_tool_uses_20250919",
         trigger: { type: "input_tokens", value: 40_000 },
         keep: { type: "tool_uses", value: 4 },
         clear_at_least: { type: "input_tokens", value: 12_000 },
       }],
-    },
-    tool_choice: forced ? { type: "any" } : { type: "auto" },
-  };
+    };
+  }
+  return body;
+}
+
+/** Which optional request field a 400 says the model doesn't take, if that's what it says. */
+export function unsupportedField(error: string | undefined): "tool_choice" | "output_config" | "context_management" | undefined {
+  if (!error || !/model 400/.test(error)) return undefined;
+  if (/tool_choice/i.test(error)) return "tool_choice";
+  if (/output_config|effort/i.test(error)) return "output_config";
+  if (/context_management|clear_tool_uses|context-management/i.test(error)) return "context_management";
+  return undefined;
 }
 
 type ModelReply = { content?: Array<Record<string, unknown>>; usage?: unknown; stop_reason?: string };
@@ -680,6 +713,14 @@ export async function driveStep(
 
   let messages = [...session.messages, userTurn(session, request)];
   let result = await callModel(requestBody(session, messages, model, effort), apiKey, fetchImpl, deadline, onToolUse);
+  // A model that doesn't take an optional field (a forced tool call, effort, context management):
+  // leave it out for the rest of the run and ask again, rather than end the run.
+  for (let i = 0; i < 3 && !result.reply; i++) {
+    const field = unsupportedField(result.error);
+    if (!field || session.unsupported.has(`${model}|${field}`)) break;
+    session.unsupported.add(`${model}|${field}`);
+    result = await callModel(requestBody(session, messages, model, effort), apiKey, fetchImpl, deadline, onToolUse);
+  }
 
   if (!result.reply && conversationBroken(result.error)) {
     // Start the conversation over from the step summary rather than fail the run.

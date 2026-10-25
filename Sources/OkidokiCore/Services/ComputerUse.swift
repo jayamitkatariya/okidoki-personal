@@ -820,7 +820,9 @@ public enum EventActuator {
         CGWarpMouseCursorPosition(point)
         CGAssociateMouseAndMouseCursorPosition(1)
         let source = makeSource()
-        post(CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left))
+        // While the button is held a plain move would read as "released" and break the drag.
+        post(CGEvent(mouseEventSource: source, mouseType: leftButtonHeld ? .leftMouseDragged : .mouseMoved,
+                     mouseCursorPosition: point, mouseButton: .left))
     }
 
     nonisolated static func cursorIsNear(_ point: CGPoint, tolerance: CGFloat = 4) -> Bool {
