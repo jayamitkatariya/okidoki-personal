@@ -124,8 +124,8 @@ final class TeachController {
     private var practiceRound = false
     private var lab: TeachLab?
     private var lastPointerUpdate: TimeInterval = 0
-    /// ⌥⌥ — the learner's "next", usable even while the model is looking.
-    private var optionTap = TeachKeys.DoubleTap()
+    /// ⇧⇧ — the learner's "next", usable even while the model is looking.
+    private var shiftTap = TeachKeys.DoubleTap()
 
     private static let barSize = CGSize(width: TeachBarView.width, height: 56)
 
@@ -914,6 +914,8 @@ final class TeachController {
                 return nil
             }
             if event.type == .mouseMoved || event.type == .flagsChanged { Task { @MainActor in self?.handle(event) } }
+            // Typing in okidoki's own windows isn't a lesson action, but it does break a ⇧⇧ in progress.
+            else if event.type == .keyDown { Task { @MainActor in self?.shiftTap.reset() } }
             return event
         }) {
             monitors.append(local)
@@ -957,12 +959,12 @@ final class TeachController {
     private func handle(_ event: NSEvent) {
         guard model.isActive else { return }
         if event.type == .flagsChanged {
-            if optionTap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags, at: event.timestamp) {
+            if shiftTap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags, at: event.timestamp) {
                 forceNext()
             }
             return
         }
-        if event.type != .mouseMoved, event.type != .leftMouseDragged { optionTap.reset() }
+        if event.type != .mouseMoved, event.type != .leftMouseDragged { shiftTap.reset() }
         if event.type == .keyDown, event.keyCode == 53, !expectsEscape {
             if model.phase == .confirm { resolveConfirm(false); return }
             stop(completed: model.phase == .done)
@@ -1251,7 +1253,7 @@ final class TeachController {
 
     // MARK: Voice commands
 
-    /// "next" / "skip" / ⌥⌥: move past the current step without doing it. Works while the model is
+    /// "next" / "skip" / ⇧⇧: move past the current step without doing it. Works while the model is
     /// still looking too — that look is dropped and a fresh one starts — so nobody waits out a slow call.
     func skipStep() {
         forceNext()

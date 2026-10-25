@@ -16,33 +16,40 @@ final class TeachToolkitTests: XCTestCase {
         XCTAssertEqual(TeachKeys.combo(keyCode: 36, characters: "\r", flags: []), "return")
     }
 
-    func testTwoQuickTapsOfLeftOptionMeanNext() {
+    func testTwoQuickTapsOfShiftMeanNext() {
         var tap = TeachKeys.DoubleTap()
-        let left = TeachKeys.DoubleTap.leftOption
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 0))
+        let left = TeachKeys.DoubleTap.leftShift
+        let right = TeachKeys.DoubleTap.rightShift
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 0))
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 0.1))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 0.2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 0.2))
         XCTAssertTrue(tap.flagsChanged(keyCode: left, flags: [], at: 0.3), "second release inside the window")
 
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 1))
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 1.1))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 2))
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 2.1), "too slow — a fresh first tap")
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 2.2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 2.2))
         XCTAssertTrue(tap.flagsChanged(keyCode: left, flags: [], at: 2.3))
 
-        // Right option, a chord, or a key in between doesn't count.
-        XCTAssertFalse(tap.flagsChanged(keyCode: 61, flags: [.option], at: 3))
-        XCTAssertFalse(tap.flagsChanged(keyCode: 61, flags: [], at: 3.1))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 4))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 4.1))
+        // Either shift key works, and they can be mixed.
+        XCTAssertFalse(tap.flagsChanged(keyCode: right, flags: [.shift], at: 3))
+        XCTAssertFalse(tap.flagsChanged(keyCode: right, flags: [], at: 3.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 3.2))
+        XCTAssertTrue(tap.flagsChanged(keyCode: left, flags: [], at: 3.3), "right then left shift")
+
+        // Option, a chord, or a key in between doesn't count.
+        XCTAssertFalse(tap.flagsChanged(keyCode: TeachKeys.DoubleTap.leftOption, flags: [.option], at: 4))
+        XCTAssertFalse(tap.flagsChanged(keyCode: TeachKeys.DoubleTap.leftOption, flags: [], at: 4.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 4.2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 4.3))
         tap.reset()
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 4.2))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 4.3), "a keystroke between the taps broke it")
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option, .command], at: 5))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 4.4))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 4.5), "a keystroke between the taps broke it")
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift, .command], at: 5))
         XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.command], at: 5.1))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 5.2))
-        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 5.3), "⌘⌥ then ⌥ is not a double tap")
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.shift], at: 5.2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 5.3), "⌘⇧ then ⇧ is not a double tap")
     }
 
     func testStepsAreWrittenBySonnetUnlessABiggerModelWasChosen() {

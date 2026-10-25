@@ -241,10 +241,10 @@ struct TeachBarView: View {
             }
             .buttonStyle(.plain)
             .help(model.voice ? "voice on" : "voice off")
-            Text("⌥⌥ next")
+            Text("⇧⇧ next")
                 .font(.okMono(8))
                 .foregroundStyle(theme.tertiary.opacity(0.7))
-                .help("tap the left option key twice to move on")
+                .help("tap shift twice to move on")
             Text("esc")
                 .font(.okMono(8))
                 .foregroundStyle(theme.tertiary.opacity(0.7))

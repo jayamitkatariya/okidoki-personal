@@ -65,25 +65,33 @@ public enum TeachKeys {
         return normalize(expected).map { glyphs[$0] ?? $0.uppercased() }
     }
 
-    /// Two quick taps of the left option key, on its own: the learner's "next" that needs no voice
-    /// and no button. Any other key, modifier or click in between starts the count over.
+    /// Two quick taps of the shift key, on its own: the learner's "next" that needs no voice
+    /// and no button. Either shift counts. Any other key, modifier or click in between starts the
+    /// count over, so shift+letter typing never trips it.
     public struct DoubleTap {
+        public static let leftShift: UInt16 = 56
+        public static let rightShift: UInt16 = 60
         public static let leftOption: UInt16 = 58
-        public var keyCode: UInt16
+        public static let rightOption: UInt16 = 61
+        public var keyCodes: Set<UInt16>
+        public var modifier: NSEvent.ModifierFlags
         public var window: TimeInterval
         private var down = false
         private var lastTapAt: TimeInterval?
 
-        public init(keyCode: UInt16 = DoubleTap.leftOption, window: TimeInterval = 0.4) {
-            self.keyCode = keyCode
+        public init(keyCodes: Set<UInt16> = [DoubleTap.leftShift, DoubleTap.rightShift],
+                    modifier: NSEvent.ModifierFlags = .shift, window: TimeInterval = 0.4) {
+            self.keyCodes = keyCodes
+            self.modifier = modifier
             self.window = window
         }
 
         /// Feed every `flagsChanged`. True on the release that completes the second tap.
         public mutating func flagsChanged(keyCode: UInt16, flags: NSEvent.ModifierFlags, at time: TimeInterval) -> Bool {
-            let others = flags.intersection([.command, .control, .shift])
-            guard keyCode == self.keyCode, others.isEmpty else { reset(); return false }
-            if flags.contains(.option) {
+            let all: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+            let others = flags.intersection(all.subtracting(modifier))
+            guard keyCodes.contains(keyCode), others.isEmpty else { reset(); return false }
+            if flags.contains(modifier) {
                 down = true
                 return false
             }
