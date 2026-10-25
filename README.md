@@ -33,6 +33,42 @@ or `~/Library/Application Support/Okidoki/service.env` override it. When `APIFY_
 Apify connector in Toolbox starts switched on and the brain uses that key for actor runs.
 Cloud sync stays off until it's switched on in Settings.
 
+## Enterprise: work accounts, spaces, workers, the vault
+
+The same app, toggled by the account switcher. Pick a **Work** account and the sidebar gains an
+*enterprise* group — **Spaces**, **Team**, **Vault** — and Settings gains **Organization** and
+**Worker**. Pick a personal account and none of it is there. Everything enterprise lives on the
+Convex deployment behind the sync login (Settings › Sync login), because colleagues have to see
+the same thing; a work account that isn't signed in just sees how to sign in.
+
+- **Team.** Link a work account to an organization: create one (you're its owner), enter a
+  six-character join code, or ask to join the organization that owns your email domain (an admin
+  lets you in). Owners and admins manage roles (owner · admin · member · agent) and codes. On a
+  Mac, **Let nearby Macs join** announces a one-day code over Bonjour (`_okidoki._tcp`); any
+  okidoki on the same Wi-Fi with a work account sees "Join Acme" and joins with one click.
+- **Spaces.** Group chats inside the organization. Anyone in the organization can see and join a
+  space; its chat, files and jobs answer only members. Mention `@okidoki` and the message becomes a
+  job: a run card appears in the chat with status, steps, output, and — when the run wants an
+  okay — **Do it / Not now** buttons anyone in the space can press.
+- **Worker.** Settings › Worker › *Accept jobs from my spaces* makes this Mac take those jobs. It
+  polls the deployment every few seconds over the same secret-guarded route sync uses, runs the
+  job through the ordinary request pipeline in a thread of its own (no card at the cursor, nothing
+  spoken), and mirrors what happens back into the chat. A space set to **Private Mac** only hands
+  jobs to Macs whose computer target is the private Mac; **Hosted VM** is listed as coming soon.
+- **Shared skills.** The share button on a skill publishes it to a space or the whole organization.
+  Colleagues see the apps it needs and its `{{parameters}}`, and pull it onto their own Mac to
+  replay there (screen pictures stay behind; replay works from labels and the brain's look).
+  Republishing bumps the version and keeps history for a rollback. Worker Macs receive a space's
+  shared skills with each job, so "replay the expense report" works on a Mac that never recorded it.
+- **Vault.** Documents go to Convex file storage, scoped to a space or the organization, and can be
+  dropped into a chat. Logins are sealed in the panel with the organization's vault passphrase
+  (PBKDF2 + AES-GCM) before they leave the Mac; the deployment stores ciphertext only. The
+  passphrase is remembered in the panel's storage and in `keys.json`, next to the other secrets.
+
+Checks: `cd backend && npm test` (organizations, spaces, chat, jobs and the worker routes, shared
+skills, vault — against an in-memory Convex with mocked logins), `cd web && bun test`, and
+`swift test --filter 'SpaceWorkerTests|NearbyTests'`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
