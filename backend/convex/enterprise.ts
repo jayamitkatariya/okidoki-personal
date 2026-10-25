@@ -3,10 +3,10 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { postMessage } from "./chat";
-import { decideJob, linkFor, spaceMemberOf, workerOnline } from "./jobs";
+import { decideJob, linkFor, workerOnline } from "./jobs";
 import { activeMembership } from "./orgs";
 import { requiredApps } from "./sharedSkills";
-import { addMember, peopleIn } from "./spaces";
+import { addMember, peopleIn, spaceMemberOf } from "./spaces";
 
 // The Mac's view of its organization, served over the secret-guarded worker routes. The notch
 // and the cursor card read it, so approvals, unread chats and shared skills reach people without
@@ -221,6 +221,7 @@ export const recordSkillRunForAccount = internalMutation({
     const link = await requireLink(ctx, accountId);
     const row = await ctx.db.get(sharedId);
     if (!row || row.orgId !== link.orgId) return { ok: false as const };
+    if (row.spaceId && !(await spaceMemberOf(ctx, row.spaceId, link.userId))) return { ok: false as const };
     await ctx.db.patch(row._id, { runCount: row.runCount + 1 });
     return { ok: true as const };
   },

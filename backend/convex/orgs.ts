@@ -31,9 +31,14 @@ function domainOf(email: string | undefined): string {
   return at < 0 ? "" : email!.slice(at + 1).toLowerCase();
 }
 
+const CODE_LENGTH = 8;
+
+// Eight characters from a 32-letter alphabet: 2^40 codes, from the platform's random source.
 function randomCode(): string {
+  const bytes = new Uint8Array(CODE_LENGTH);
+  crypto.getRandomValues(bytes);
   let code = "";
-  for (let index = 0; index < 6; index += 1) code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  for (const byte of bytes) code += CODE_ALPHABET[byte % CODE_ALPHABET.length];
   return code;
 }
 
@@ -362,6 +367,33 @@ async function ownerCount(ctx: MutationCtx, orgId: Id<"organizations">): Promise
   return rows.filter((row) => row.status === "active" && row.role === "owner").length;
 }
 
+/**
+ * Ends a membership and everything that hung off it: the user's rows in the organization's spaces
+ * and their worker. Otherwise a later rejoin would quietly put them back in every private space,
+ * and Rollout would keep counting a Mac that no longer belongs.
+ */
+export async function endMembership(ctx: MutationCtx, membership: Doc<"memberships">) {
+  const spaces = await ctx.db
+    .query("spaces")
+    .withIndex("by_org", (q) => q.eq("orgId", membership.orgId))
+    .collect();
+  for (const space of spaces) {
+    const row = await ctx.db
+      .query("spaceMembers")
+      .withIndex("by_space_user", (q) => q.eq("spaceId", space._id).eq("userId", membership.userId))
+      .first();
+    if (row) await ctx.db.delete(row._id);
+  }
+  if (membership.accountClientId) {
+    const workers = await ctx.db
+      .query("workers")
+      .withIndex("by_account", (q) => q.eq("accountClientId", membership.accountClientId!))
+      .collect();
+    for (const worker of workers) if (worker.orgId === membership.orgId) await ctx.db.delete(worker._id);
+  }
+  await ctx.db.delete(membership._id);
+}
+
 export const remove = mutation({
   args: { membershipId: v.id("memberships") },
   handler: async (ctx, { membershipId }) => {
@@ -370,7 +402,7 @@ export const remove = mutation({
     const me = await requireAdmin(ctx, row.orgId);
     if (row.userId === me.userId) throw new Error("leave the organization instead");
     if (row.role === "owner" && me.role !== "owner") throw new Error("only an owner can remove an owner");
-    await ctx.db.delete(row._id);
+    await endMembership(ctx, row);
   },
 });
 
@@ -380,7 +412,7 @@ export const leave = mutation({
     const membership = await activeMembership(ctx, orgId);
     if (!membership) return;
     if (membership.role === "owner" && (await ownerCount(ctx, orgId)) <= 1) throw new Error("make someone else an owner first");
-    await ctx.db.delete(membership._id);
+    await endMembership(ctx, membership);
   },
 });
 
@@ -388,15 +420,16 @@ export const createCode = mutation({
   args: { orgId: v.id("organizations"), days: v.number(), maxUses: v.number() },
   handler: async (ctx, { orgId, days, maxUses }) => {
     const me = await requireAdmin(ctx, orgId);
-    let code = randomCode();
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    let code = "";
+    for (let attempt = 0; attempt < 5 && !code; attempt += 1) {
+      const candidate = randomCode();
       const clash = await ctx.db
         .query("joinCodes")
-        .withIndex("by_code", (q) => q.eq("code", code))
+        .withIndex("by_code", (q) => q.eq("code", candidate))
         .first();
-      if (!clash) break;
-      code = randomCode();
+      if (!clash) code = candidate;
     }
+    if (!code) throw new Error("couldn't make a fresh code; try again");
     const now = Date.now();
     await ctx.db.insert("joinCodes", {
       code,

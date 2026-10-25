@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { beforeEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { anyApi } from "convex/server";
 import schema from "../convex/schema";
 import { trimSnapshot } from "../convex/sync";
@@ -9,7 +9,6 @@ import { trimSnapshot } from "../convex/sync";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 const api = anyApi as any;
-const secret = "test-sync-secret";
 
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 24, 12, minute)).toISOString().replace(".000", "");
 
@@ -67,12 +66,20 @@ function macState(accountId = "acct-1") {
 
 type MacState = ReturnType<typeof macState>;
 
-function setup() {
-  process.env.OKIDOKI_SYNC_SECRET = secret;
+async function setup() {
   const t = convexTest(schema, modules);
+  // The Mac belongs to jay's login and is paired: its token is what every route sees.
+  const userId = await t.run((ctx) => ctx.db.insert("users", { name: "jay", email: "jay@example.com" }));
+  const jay = t.withIdentity({ subject: `${userId}|s1` });
+  const { token } = await jay.action(api.devices.pair, { device: "test mac" });
+  const pairAnother = async (name: string) => {
+    const other = await t.run((ctx) => ctx.db.insert("users", { name, email: `${name}@example.com` }));
+    const as = t.withIdentity({ subject: `${other}|s-${name}` });
+    return { as, token: (await as.action(api.devices.pair, { device: `${name}'s mac` })).token };
+  };
   const request = async (path: string, init: { method?: string; body?: unknown; auth?: string | null } = {}) => {
     const headers: Record<string, string> = { "content-type": "application/json" };
-    const auth = init.auth === undefined ? secret : init.auth;
+    const auth = init.auth === undefined ? token : init.auth;
     if (auth !== null) headers.authorization = `Bearer ${auth}`;
     const response = await t.fetch(path, {
       method: init.method ?? "POST",
@@ -86,16 +93,12 @@ function setup() {
   const push = (state: MacState, extra: Record<string, unknown> = {}) =>
     request("/api/sync", { body: { accountId: state.currentAccountID, device: "test mac", sentAt: (clock += 1_000), state, ...extra } });
   const rows = (table: string) => t.run(async (ctx) => (await ctx.db.query(table as any).collect()) as any[]);
-  return { t, request, push, rows };
+  return { t, request, push, rows, jay, token, pairAnother };
 }
-
-beforeEach(() => {
-  process.env.OKIDOKI_SYNC_SECRET = secret;
-});
 
 describe("pushing from the Mac", () => {
   test("a push lands every item in its table, and the same state again writes nothing", async () => {
-    const { push, rows } = setup();
+    const { push, rows } = await setup();
     const state = macState();
     const first = await push(state);
     expect(first.status).toBe(200);
@@ -117,7 +120,7 @@ describe("pushing from the Mac", () => {
   });
 
   test("an item removed on the Mac is removed from Convex, with its run's preview and share link", async () => {
-    const { push, request, rows } = setup();
+    const { push, request, rows } = await setup();
     const state = macState();
     await push(state);
     const shared = await request("/api/share", { body: { accountId: "acct-1", accountName: "Jay", runId: "acct-1-r1", run: state.runs[0] } });
@@ -135,7 +138,7 @@ describe("pushing from the Mac", () => {
   });
 
   test("a payload that leaves a table out never wipes it", async () => {
-    const { push, rows } = setup();
+    const { push, rows } = await setup();
     const state = macState();
     await push(state);
     const { threads: _threads, memories: _memories, ...partial } = state;
@@ -146,7 +149,7 @@ describe("pushing from the Mac", () => {
   });
 
   test("one account's push never touches another account's rows", async () => {
-    const { push, rows } = setup();
+    const { push, rows } = await setup();
     await push(macState("acct-1"));
     await push(macState("acct-2"));
     await push({ ...macState("acct-1"), threads: [], memories: [], runs: [], skills: [], routines: [] });
@@ -156,7 +159,7 @@ describe("pushing from the Mac", () => {
   });
 
   test("a push stamped older than the last accepted one is refused before it writes", async () => {
-    const { request, rows } = setup();
+    const { request, rows } = await setup();
     const state = macState();
     const newer = await request("/api/sync", { body: { accountId: "acct-1", device: "a", sentAt: 5_000, state } });
     expect(newer.status).toBe(200);
@@ -167,7 +170,7 @@ describe("pushing from the Mac", () => {
   });
 
   test("a thread too big for one document keeps its newest messages", async () => {
-    const { push, rows } = setup();
+    const { push, rows } = await setup();
     const state = macState();
     const filler = "x".repeat(9_000);
     state.threads[0].messages = Array.from({ length: 120 }, (_, index) => ({ id: `m${index}`, role: "user", text: `${index} ${filler}`, createdAt: at(index % 60) }));
@@ -179,16 +182,16 @@ describe("pushing from the Mac", () => {
   });
 
   test("bad requests are refused with a reason", async () => {
-    const { request } = setup();
+    const { request } = await setup();
     expect((await request("/api/sync", { body: { state: macState() } })).status).toBe(400);
     expect((await request("/api/sync", { body: { accountId: "acct-1" } })).status).toBe(400);
     expect((await request("/api/sync", { body: { accountId: "x".repeat(200), state: macState() } })).status).toBe(400);
   });
 });
 
-describe("the sync secret", () => {
-  test("every route but the public share page needs it", async () => {
-    const { request } = setup();
+describe("pairing", () => {
+  test("every route but the public share page needs a paired Mac's token", async () => {
+    const { request } = await setup();
     const routes: [string, string, unknown][] = [
       ["/api/sync", "POST", { accountId: "acct-1", state: macState() }],
       ["/api/bootstrap?accountId=acct-1", "GET", undefined],
@@ -197,21 +200,57 @@ describe("the sync secret", () => {
     ];
     for (const [path, method, body] of routes) {
       expect((await request(path, { method, body, auth: null })).status).toBe(401);
-      expect((await request(path, { method, body, auth: "wrong-secret" })).status).toBe(401);
+      expect((await request(path, { method, body, auth: "okd_wrong-token-that-nobody-paired-00000000000" })).status).toBe(401);
+      expect((await request(path, { method, body, auth: "" })).status).toBe(401);
     }
   });
 
-  test("a deployment without a secret refuses everyone", async () => {
-    const { request } = setup();
-    delete process.env.OKIDOKI_SYNC_SECRET;
-    expect((await request("/api/sync", { body: { accountId: "acct-1", state: macState() } })).status).toBe(401);
-    expect((await request("/api/sync", { body: { accountId: "acct-1", state: macState() }, auth: "" })).status).toBe(401);
+  test("a paired Mac reaches only the accounts its login owns", async () => {
+    const { request, push, pairAnother } = await setup();
+    await push(macState());
+    const eve = await pairAnother("eve");
+    const routes: [string, string, unknown][] = [
+      ["/api/sync", "POST", { accountId: "acct-1", state: macState() }],
+      ["/api/version?accountId=acct-1", "GET", undefined],
+      ["/api/pull", "POST", { accountId: "acct-1", table: "threads", since: 0 }],
+      ["/api/bootstrap?accountId=acct-1", "GET", undefined],
+      ["/api/purge", "POST", { accountId: "acct-1" }],
+      ["/api/share", "POST", { accountId: "acct-1", runId: "r", run: {} }],
+      ["/api/worker/poll", "POST", { accountId: "acct-1", device: "m", kind: "thisMac", enabled: true }],
+      ["/api/enterprise/send", "POST", { accountId: "acct-1", spaceId: "x", text: "hi" }],
+      ["/api/vault/upload-url", "POST", { accountId: "acct-1" }],
+    ];
+    for (const [path, method, body] of routes) {
+      expect([path, (await request(path, { method, body, auth: eve.token })).status]).toEqual([path, 403]);
+    }
+    // nothing of jay's was touched
+    expect((await request("/api/bootstrap?accountId=acct-1", { method: "GET" })).body.state.threads).toHaveLength(1);
+    // eve's own, unclaimed account is hers to sync
+    expect((await request("/api/sync", { body: { accountId: "acct-eve", device: "m", sentAt: 5, state: macState("acct-eve") }, auth: eve.token })).status).toBe(200);
+  });
+
+  test("a revoked token stops working at once; who-am-i tells a Mac which it is", async () => {
+    const { request, jay, token } = await setup();
+    expect((await request("/api/whoami", { method: "GET" })).body.device).toBe("test mac");
+    const [mine] = await jay.query(api.devices.list, {});
+    expect(mine.device).toBe("test mac");
+    await jay.mutation(api.devices.revoke, { tokenId: mine.id });
+    expect((await request("/api/whoami", { method: "GET" })).status).toBe(401);
+    expect((await request("/api/sync", { body: { accountId: "acct-1", state: macState() }, auth: token })).status).toBe(401);
+    expect(await jay.query(api.devices.list, {})).toEqual([]);
+  });
+
+  test("signing out on the Mac retires its token", async () => {
+    const { request, jay } = await setup();
+    expect((await request("/api/unpair", { method: "POST" })).status).toBe(200);
+    expect((await request("/api/whoami", { method: "GET" })).status).toBe(401);
+    expect(await jay.query(api.devices.list, {})).toEqual([]);
   });
 });
 
 describe("reading synced data back", () => {
   test("bootstrap hands the Mac its last snapshot", async () => {
-    const { push, request } = setup();
+    const { push, request } = await setup();
     expect((await request("/api/bootstrap?accountId=acct-1", { method: "GET" })).body).toEqual({ state: null, updatedAt: 0 });
     await push(macState());
     const boot = await request("/api/bootstrap?accountId=acct-1", { method: "GET" });
@@ -220,11 +259,10 @@ describe("reading synced data back", () => {
   });
 
   test("only the login that claimed an account can read it", async () => {
-    const { t, push } = setup();
+    const { t, push, jay } = await setup();
+    // The first push from jay's paired Mac places the account under jay's login.
     await push(macState());
-    const owner = await t.run((ctx) => ctx.db.insert("users", { name: "jay", email: "jay@example.com" }));
     const stranger = await t.run((ctx) => ctx.db.insert("users", { name: "eve", email: "eve@example.com" }));
-    const jay = t.withIdentity({ subject: `${owner}|s1` });
     const eve = t.withIdentity({ subject: `${stranger}|s2` });
     const account = { id: "acct-1", name: "Jay", email: "jay@example.com", kind: "personal", colorHex: "1FB57A", createdAt: at(0) };
 
@@ -249,7 +287,7 @@ describe("reading synced data back", () => {
 
 describe("purge and share", () => {
   test("purging an account removes all of it, page by page, and leaves other accounts alone", async () => {
-    const { push, request, rows } = setup();
+    const { push, request, rows } = await setup();
     const big = macState("acct-1");
     big.runs = Array.from({ length: 260 }, (_, index) => ({ ...big.runs[0], id: `run-${index}`, preview: undefined as any }));
     await push(big);
@@ -267,7 +305,7 @@ describe("purge and share", () => {
   });
 
   test("sharing a run twice keeps one link, refreshes it, and the public page leaves private fields out", async () => {
-    const { push, request, rows } = setup();
+    const { push, request, rows } = await setup();
     const state = macState();
     await push(state);
     const run = { ...state.runs[0], accountID: "acct-1" };
@@ -323,7 +361,7 @@ describe("versions, pulls and merges between Macs", () => {
   }
 
   test("a push on top of the version it pulled is accepted; one that's behind is refused before it writes", async () => {
-    const { push, request, rows } = setup();
+    const { push, request, rows } = await setup();
     const state = macState();
     expect((await request("/api/version?accountId=acct-1", { method: "GET" })).body).toEqual({ version: 0, syncing: false });
 
@@ -344,7 +382,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("a pull since a version returns only what changed after it, shaped like the Mac's own items", async () => {
-    const { push, request } = setup();
+    const { push, request } = await setup();
     const state = macState();
     await push(state, { baseVersion: 0 });
 
@@ -380,7 +418,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("a delete leaves a tombstone the account's other Macs pull; the item coming back clears it", async () => {
-    const { push, request, rows } = setup();
+    const { push, request, rows } = await setup();
     const state = macState();
     await push(state, { baseVersion: 0 });
     await push({ ...state, memories: [], skills: [] }, { baseVersion: 1 });
@@ -401,7 +439,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("runs older than the Mac's floor stay when it sends only its newest ones", async () => {
-    const { push, rows } = setup();
+    const { push, rows } = await setup();
     const state = macState();
     state.runs = [0, 1, 2].map((index) => ({ ...state.runs[0], id: `run-${index}`, createdAt: at(10 + index), preview: undefined as any }));
     await push(state, { baseVersion: 0 });
@@ -418,7 +456,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("an older Mac without versions still syncs, and moves the version on so newer Macs pull", async () => {
-    const { push, request } = setup();
+    const { push, request } = await setup();
     const legacy = await push(macState());
     expect(legacy.body).toMatchObject({ ok: true, version: 1 });
     expect((await request("/api/version?accountId=acct-1", { method: "GET" })).body.version).toBe(1);
@@ -427,7 +465,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("a sync overtaken by a newer one stops before it writes, deletes, or replaces the snapshot", async () => {
-    const { t, push, rows } = setup();
+    const { t, push, rows } = await setup();
     await push(macState(), { baseVersion: 0 });
     const mine = await t.mutation(internal.sync.begin, { accountId: "acct-1", sentAt: 1, device: "slow mac", baseVersion: 1 });
     expect(mine).toMatchObject({ ok: true, version: 2 });
@@ -447,7 +485,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("a pull pages through a big table and a full pull includes rows from before versions existed", async () => {
-    const { t, push, request } = setup();
+    const { t, push, request } = await setup();
     const state = macState();
     state.threads = Array.from({ length: 25 }, (_, index) => ({ ...state.threads[0], id: `thread-${index}` }));
     await push(state, { baseVersion: 0 });
@@ -463,7 +501,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("purging an account removes its tombstones and sync version too", async () => {
-    const { push, request, rows } = setup();
+    const { push, request, rows } = await setup();
     await push(macState(), { baseVersion: 0 });
     await push({ ...macState(), memories: [] }, { baseVersion: 1 });
     expect(await rows("deletions")).toHaveLength(1);
@@ -473,7 +511,7 @@ describe("versions, pulls and merges between Macs", () => {
   });
 
   test("share page views are counted at most once every few seconds", async () => {
-    const { t, push, request, rows } = setup();
+    const { t, push, request, rows } = await setup();
     const state = macState();
     await push(state);
     const { body } = await request("/api/share", { body: { accountId: "acct-1", runId: state.runs[0].id, run: state.runs[0] } });

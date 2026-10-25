@@ -3,24 +3,24 @@ import { describe, expect, test } from "vitest";
 import { anyApi } from "convex/server";
 import schema from "../convex/schema";
 
-// The Mac putting a document into the vault itself (a form it found on the web), over the sync
-// secret, as the account's linked member.
+// The Mac putting a document into the vault itself (a form it found on the web), as the paired
+// login's linked member.
 
 const modules = import.meta.glob("../convex/**/*.ts");
 const api = anyApi as any;
-const secret = "test-sync-secret";
-const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
 
 async function team() {
   const t = convexTest(schema, modules);
-  process.env.OKIDOKI_SYNC_SECRET = secret;
+  const tokens: Record<string, string> = {};
   const login = async (name: string) => {
     const userId = await t.run(async (ctx) => ctx.db.insert("users", { name, email: `${name}@meridian.test` }));
     const as = t.withIdentity({ subject: `${userId}|session-${name}` });
     const accountId = `acct-${name}`;
     await as.mutation(api.accounts.claim, { accounts: [{ id: accountId, name, email: `${name}@meridian.test`, kind: "work", colorHex: "44E45E", createdAt: "2026-10-24" }] });
+    tokens[accountId] = (await as.action(api.devices.pair, { device: `${name}'s Mac` })).token;
     return { as, accountId };
   };
+  const headersFor = (body: unknown) => ({ authorization: `Bearer ${tokens[String((body as { accountId?: unknown })?.accountId)] ?? tokens["acct-jay"]}`, "content-type": "application/json" });
   const jay = await login("jay");
   const sam = await login("sam");
   await jay.as.mutation(api.orgs.create, { name: "Meridian Trade Services", domain: "", accountId: jay.accountId });
@@ -28,15 +28,18 @@ async function team() {
   const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
   await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
   const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Compliance" });
-  const post = (path: string, body: unknown, auth = headers) => t.fetch(path, { method: "POST", headers: auth, body: JSON.stringify(body) });
+  const post = (path: string, body: unknown, auth?: Record<string, string>) => t.fetch(path, { method: "POST", headers: auth ?? headersFor(body), body: JSON.stringify(body) });
   const pdf = (text: string) => t.run(async (ctx) => ctx.storage.store(new Blob([`%PDF-1.7 ${text}`], { type: "application/pdf" })));
-  return { t, jay, sam, spaceId, post, pdf };
+  const headers = headersFor({ accountId: jay.accountId });
+  return { t, jay, sam, spaceId, post, pdf, headers };
 }
 
 describe("vault from the Mac", () => {
-  test("needs the secret and a linked account", async () => {
-    const { post } = await team();
-    expect((await post("/api/vault/upload-url", { accountId: "acct-jay" }, { ...headers, authorization: "Bearer wrong" })).status).toBe(401);
+  test("needs a paired Mac and a linked account", async () => {
+    const { post, headers } = await team();
+    expect((await post("/api/vault/upload-url", { accountId: "acct-jay" }, { ...headers, authorization: "Bearer okd_wrong-token-that-nobody-paired-00000000000" })).status).toBe(401);
+    // another login's account, even with a good token
+    expect((await post("/api/vault/upload-url", { accountId: "acct-sam" }, headers)).status).toBe(403);
     expect(await (await post("/api/vault/upload-url", { accountId: "acct-nobody" })).json()).toEqual({ ok: false, reason: "link this account to an organization first" });
     const ok = await (await post("/api/vault/upload-url", { accountId: "acct-jay" })).json();
     expect(ok.ok).toBe(true);
@@ -62,12 +65,22 @@ describe("vault from the Mac", () => {
       .toEqual({ ok: false, reason: "join #Compliance first" });
     expect(await (await post("/api/vault/save", { accountId: jay.accountId, storageId: await pdf("x"), name: "x.pdf", mime: "application/pdf", space: "Legal" })).json())
       .toEqual({ ok: false, reason: "there's no space called “Legal”" });
+
+    // A plain member's same-named upload sits beside the owner's org-wide form instead of replacing it.
+    const beside = await (await post("/api/vault/save", { accountId: sam.accountId, storageId: await pdf("sam's"), name: "CBP Form 7501.pdf", mime: "application/pdf", space: "" })).json();
+    expect(beside).toMatchObject({ ok: true, replaced: false });
+    const wideNow = (await jay.as.query(api.vault.files, { accountId: jay.accountId })).filter((f: any) => f.name === "CBP Form 7501.pdf");
+    expect(wideNow.map((f: any) => f.uploadedBy).sort()).toEqual(["jay", "sam"]);
+    // The owner (an admin) revising it replaces both.
+    const revised = await (await post("/api/vault/save", { accountId: jay.accountId, storageId: await pdf("7501 v2"), name: "CBP Form 7501.pdf", mime: "application/pdf", space: "" })).json();
+    expect(revised).toMatchObject({ ok: true, replaced: true });
+    expect((await jay.as.query(api.vault.files, { accountId: jay.accountId })).filter((f: any) => f.name === "CBP Form 7501.pdf")).toHaveLength(1);
   });
 });
 
 describe("demo seed", () => {
   test("turns the linked org into Meridian once, however often it runs", async () => {
-    const { t, jay } = await team();
+    const { t, jay, headers } = await team();
     const skill = { id: "skill-ace", name: "file ACE entry", summary: "7501", steps: [{ id: "s1", text: "switch to Safari", app: "Safari", action: "switch" }] };
     const first = await t.mutation(api.seedDemo.meridian, { accountId: jay.accountId, skill });
     const again = await t.mutation(api.seedDemo.meridian, { accountId: jay.accountId, skill });

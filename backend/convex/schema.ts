@@ -20,6 +20,19 @@ export default defineSchema({
     .index("by_client", ["clientId"])
     .index("by_owner", ["ownerId"]),
 
+  // One row per paired Mac. The Mac holds the token; the backend keeps only its SHA-256, and every
+  // HTTP route resolves the token to the login that paired it before touching any account.
+  deviceTokens: defineTable({
+    tokenHash: v.string(),
+    userId: v.id("users"),
+    device: v.string(),
+    createdAt: v.number(),
+    lastUsedAt: v.number(),
+    revokedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_hash", ["tokenHash"])
+    .index("by_user", ["userId"]),
+
   settings: defineTable({
     accountId: v.string(),
     data: v.any(),
@@ -243,6 +256,7 @@ export default defineSchema({
     joinedAt: v.number(),
   })
     .index("by_space", ["spaceId"])
+    .index("by_space_user", ["spaceId", "userId"])
     .index("by_user", ["userId"]),
 
   spaceMessages: defineTable({

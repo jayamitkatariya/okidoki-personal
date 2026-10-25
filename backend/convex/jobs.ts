@@ -3,16 +3,22 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { skillsForWorker } from "./sharedSkills";
-import { peopleIn, requireSpaceMember, spaceAccess } from "./spaces";
+import { peopleIn, requireSpaceMember, spaceAccess, spaceMemberOf } from "./spaces";
+
+export { spaceMemberOf };
 
 // Jobs for the agent in a space. The panel creates them from chat (`@okidoki …`) and answers
-// approvals; a worker Mac takes them over the secret-guarded HTTP routes and reports back.
-// Workers are trusted the way sync is: the Mac proves it holds the sync secret, and names the
-// work account it is running as; that account must be linked to a login in the organization.
+// approvals; a worker Mac takes them over the paired HTTP routes and reports back. The route has
+// already checked the Mac's token belongs to the login that owns the work account it names; here
+// that account must also be linked to a membership in the organization.
 
 const WORKER_STALE_MS = 45_000;
 /// A job whose worker hasn't been heard from this long is given up on.
 const JOB_LOST_MS = 2 * 60_000;
+/// A held job that hasn't reported anything for this long is stuck, however alive its Mac's heartbeat is.
+const JOB_STUCK_MS = 30 * 60_000;
+/// A cancelled job the Mac hasn't confirmed within this window is closed without it.
+const CANCEL_GRACE_MS = 2 * 60_000;
 const OUTPUT_TAIL = 8_000;
 const HELD = ["accepted", "running", "waiting"];
 const MENTION = /(^|[^\w@])@okidoki\b/i;
@@ -43,28 +49,26 @@ async function workerFor(ctx: QueryCtx | MutationCtx, accountId: string | null):
     .first();
 }
 
-/** Whether the Mac holding this job has gone quiet for long enough that nobody should wait on it. */
+/**
+ * Whether nobody should wait on this job any more: its Mac stopped heart-beating, it hasn't
+ * reported anything for half an hour (a run hung in place keeps heart-beating), or it was
+ * cancelled and the Mac never confirmed.
+ */
 export async function workerLost(ctx: QueryCtx | MutationCtx, job: Doc<"spaceRuns">, now = Date.now()): Promise<boolean> {
   if (!HELD.includes(job.status)) return false;
+  if (now - job.updatedAt > JOB_STUCK_MS) return true;
+  if (job.decision === "decline" && now - job.updatedAt > CANCEL_GRACE_MS) return true;
   const worker = await workerFor(ctx, job.workerAccountId);
   return !worker || now - worker.lastSeenAt > JOB_LOST_MS;
 }
 
-/** The work account's organization membership, through the secret-trusted account id. */
+/** The work account's active organization membership. */
 export async function linkFor(ctx: QueryCtx | MutationCtx, accountId: string): Promise<Doc<"memberships"> | null> {
   const link = await ctx.db
     .query("memberships")
     .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
     .first();
   return link && link.status === "active" ? link : null;
-}
-
-export async function spaceMemberOf(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">, userId: Id<"users">): Promise<Doc<"spaceMembers"> | null> {
-  const rows = await ctx.db
-    .query("spaceMembers")
-    .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
-    .collect();
-  return rows.find((row) => row.userId === userId) ?? null;
 }
 
 async function postAgentLine(ctx: MutationCtx, job: Doc<"spaceRuns">, text: string) {
@@ -178,7 +182,6 @@ export const workersFor = query({
       .withIndex("by_org", (q) => q.eq("orgId", link.orgId))
       .collect();
     return rows.map((worker) => ({
-      accountId: worker.accountClientId,
       userId: worker.userId,
       name: people.get(worker.userId)?.name ?? "Someone",
       device: worker.device,
@@ -352,6 +355,9 @@ export const update = internalMutation({
   handler: async (ctx, { accountId, jobId, status, runClientId, title, summary, output, steps, preview, say }) => {
     const job = await ctx.db.get(jobId);
     if (!job || job.workerAccountId !== accountId) return { ok: false as const };
+    // A Mac whose membership ended stops being heard, even on a job it still holds.
+    const link = await linkFor(ctx, accountId);
+    if (!link || link.orgId !== job.orgId) return { ok: false as const };
     if (["done", "failed", "cancelled"].includes(job.status)) return { ok: true as const };
     const now = Date.now();
     const patch: Partial<Doc<"spaceRuns">> = { updatedAt: now };
@@ -359,8 +365,9 @@ export const update = internalMutation({
       if (!["accepted", "running", "waiting", "done", "failed", "cancelled"].includes(status)) throw new Error("unknown status");
       patch.status = status;
       if (["done", "failed", "cancelled"].includes(status)) patch.endedAt = now;
-      // A fresh wait clears the previous answer so a second approval is asked for again.
-      if (status === "waiting") patch.decision = "";
+      // A fresh wait clears the previous answer so a second approval is asked for again. The same
+      // update sent twice (the first reply was lost) must not erase an answer given in between.
+      if (status === "waiting" && job.status !== "waiting") patch.decision = "";
     }
     if (runClientId !== undefined) patch.runClientId = runClientId;
     if (title !== undefined) patch.title = title.slice(0, 120);

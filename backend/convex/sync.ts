@@ -129,7 +129,9 @@ export async function versionOf(ctx: QueryCtx | MutationCtx, accountId: string):
 // last accepted one is refused, as before.
 export const begin = internalMutation({
   args: { accountId: v.string(), sentAt: v.number(), device: v.string(), baseVersion: v.optional(v.number()) },
-  handler: async (ctx, { accountId, sentAt, device, baseVersion }) => {
+  handler: async (ctx, { accountId, sentAt: claimed, device, baseVersion }) => {
+    // A Mac with a clock far in the future must not lock every other Mac out as "stale".
+    const sentAt = Math.min(claimed, Date.now() + 5 * 60_000);
     const existing = await syncRow(ctx, accountId);
     const current = existing?.version ?? 0;
     if (baseVersion !== undefined) {
@@ -161,25 +163,30 @@ export const pushMeta = internalMutation({
     accounts: v.array(v.any()),
     settings: v.any(),
     connectors: v.array(v.any()),
+    // The login whose Mac pushed. Only the account being synced is placed under it; the other
+    // accounts in the Mac's list are described, never claimed, so a colleague's isn't taken over.
+    ownerId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     // A superseded sync must not put back an account name or setting the newer one changed.
     if ((await versionOf(ctx, args.accountId)) !== args.version) return { ok: false };
     const now = Date.now();
     for (const account of args.accounts) {
+      const clientId = String(account.id);
       const existing = await ctx.db
         .query("accounts")
-        .withIndex("by_client", (q) => q.eq("clientId", String(account.id)))
+        .withIndex("by_client", (q) => q.eq("clientId", clientId))
         .first();
       const document = {
-        clientId: String(account.id),
+        clientId,
         name: String(account.name ?? ""),
         email: String(account.email ?? ""),
         kind: String(account.kind ?? "personal"),
         colorHex: String(account.colorHex ?? "1FB57A"),
         createdAt: iso(account.createdAt),
       };
-      if (!existing) await ctx.db.insert("accounts", { ...document, updatedAt: now });
+      const owner = clientId === args.accountId && args.ownerId ? { ownerId: args.ownerId } : {};
+      if (!existing) await ctx.db.insert("accounts", { ...document, ...owner, updatedAt: now });
       else if (!unchanged(existing, document)) await ctx.db.patch(existing._id, { ...document, updatedAt: now });
     }
 
@@ -319,6 +326,18 @@ export const purgeAccountPage = internalMutation({
       removed += rows.length;
       if (removed >= budget) return { removed, done: false };
     }
+    // The account's place in an organization goes too: its membership is unlinked and its worker forgotten.
+    const links = await ctx.db
+      .query("memberships")
+      .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
+      .collect();
+    for (const link of links) await ctx.db.patch(link._id, { accountClientId: null });
+    const workers = await ctx.db
+      .query("workers")
+      .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
+      .collect();
+    for (const worker of workers) await ctx.db.delete(worker._id);
+    removed += workers.length;
     const account = await ctx.db
       .query("accounts")
       .withIndex("by_client", (q) => q.eq("clientId", accountId))

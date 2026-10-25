@@ -1,8 +1,9 @@
 import { httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
+import { httpAction, type ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { byteSize, SYNCED_TABLES, trimSnapshot } from "./sync";
 import { auth } from "./auth";
+import { hashToken, looksLikeToken } from "./devices";
 import type { Id } from "./_generated/dataModel";
 
 // Groups items into mutation-sized batches: at most 50 items or ~4 MB of arguments each.
@@ -47,24 +48,25 @@ function options() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
-// Same length and content, compared without short-circuiting on the first differing byte.
-function sameSecret(given: string, expected: string): boolean {
-  const a = new TextEncoder().encode(given);
-  const b = new TextEncoder().encode(expected);
-  let diff = a.length ^ b.length;
-  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return diff === 0;
-}
+type Caller = { userId: Id<"users">; device: string; tokenHash: string };
 
-function authorized(request: Request): boolean {
-  const secret = process.env.OKIDOKI_SYNC_SECRET?.trim();
-  if (!secret) {
-    console.error("OKIDOKI_SYNC_SECRET is not set; rejecting request. Run `npx convex env set OKIDOKI_SYNC_SECRET ...`.");
-    return false;
-  }
+/** The paired Mac behind the bearer token, or null. Looked up by hash, so the token never touches the database. */
+async function authenticate(ctx: ActionCtx, request: Request): Promise<Caller | null> {
   const header = request.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match ? sameSecret(match[1].trim(), secret) : false;
+  const token = match?.[1].trim() ?? "";
+  if (!looksLikeToken(token)) return null;
+  const tokenHash = await hashToken(token);
+  const found = await ctx.runMutation(internal.devices.resolve, { tokenHash });
+  return found ? { ...found, tokenHash } : null;
+}
+
+const unauthorized = () => json({ error: "unauthorized", detail: "pair this Mac: sign in to sync in the control panel" }, 401);
+const forbidden = () => json({ error: "forbidden", detail: "that account belongs to another login" }, 403);
+
+/** Whether the paired login owns the account a request names. Checked after the body is read, before anything is touched. */
+async function owns(ctx: ActionCtx, caller: Caller, accountId: string): Promise<boolean> {
+  return ctx.runMutation(internal.devices.owns, { userId: caller.userId, accountId });
 }
 
 // Convex caps HTTP action bodies at 20 MiB; refuse early with a clear message instead of a platform error.
@@ -100,7 +102,8 @@ http.route({
   path: "/api/sync",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown; device?: unknown; state?: unknown; sentAt?: unknown; baseVersion?: unknown; floors?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
@@ -108,6 +111,7 @@ http.route({
       return json({ error: "accountId and state required" }, 400);
     }
     const accountId = body.accountId;
+    if (!(await owns(ctx, caller, accountId))) return forbidden();
     const device = typeof body.device === "string" && body.device.trim() ? body.device.trim().slice(0, 120) : "mac";
     const sentAt = typeof body.sentAt === "number" && Number.isFinite(body.sentAt) ? body.sentAt : Date.now();
     const baseVersion = typeof body.baseVersion === "number" && Number.isInteger(body.baseVersion) && body.baseVersion >= 0 ? body.baseVersion : undefined;
@@ -128,6 +132,7 @@ http.route({
 
     const meta = await ctx.runMutation(internal.sync.pushMeta, {
       accountId,
+      ownerId: caller.userId,
       version,
       accounts: list(state.accounts),
       settings: state.settings && typeof state.settings === "object" ? state.settings : {},
@@ -186,9 +191,11 @@ http.route({
   path: "/api/version",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const accountId = new URL(request.url).searchParams.get("accountId");
     if (!isId(accountId)) return json({ error: "accountId required" }, 400);
+    if (!(await owns(ctx, caller, accountId))) return forbidden();
     return json(await ctx.runQuery(internal.sync.currentVersion, { accountId }));
   }),
 });
@@ -199,7 +206,8 @@ http.route({
   path: "/api/pull",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown; table?: unknown; since?: unknown; cursor?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
@@ -207,6 +215,7 @@ http.route({
     if (!isId(body.accountId) || typeof body.table !== "string" || !tables.includes(body.table)) {
       return json({ error: "accountId and a table required" }, 400);
     }
+    if (!(await owns(ctx, caller, body.accountId))) return forbidden();
     const since = typeof body.since === "number" && Number.isInteger(body.since) && body.since >= 0 ? body.since : 0;
     const cursor = typeof body.cursor === "string" && body.cursor ? body.cursor : null;
     const page = await ctx.runQuery(internal.sync.pullPage, { accountId: body.accountId, table: body.table as any, since, cursor });
@@ -224,9 +233,11 @@ http.route({
   path: "/api/bootstrap",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const accountId = new URL(request.url).searchParams.get("accountId");
     if (!isId(accountId)) return json({ error: "accountId required" }, 400);
+    if (!(await owns(ctx, caller, accountId))) return forbidden();
     const result = await ctx.runQuery(internal.dashboard.forDevice, { accountId });
     return json({ state: result?.state ?? null, updatedAt: result?.updatedAt ?? 0 });
   }),
@@ -238,15 +249,17 @@ http.route({
   handler: httpAction(async () => options()),
 });
 
-// The Mac deleted an account: drop everything synced for it. Guarded by the same secret as sync.
+// The Mac deleted an account: drop everything synced for it. Only the login that owns it may.
 http.route({
   path: "/api/purge",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     if (!isId(parsed.body.accountId)) return json({ error: "accountId required" }, 400);
+    if (!(await owns(ctx, caller, parsed.body.accountId))) return forbidden();
     let removed = 0;
     for (let i = 0; i < 500; i++) {
       const page = await ctx.runMutation(internal.sync.purgeAccountPage, { accountId: parsed.body.accountId });
@@ -267,13 +280,15 @@ http.route({
   path: "/api/share",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown; accountName?: unknown; run?: unknown; runId?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId) || !isId(body.runId) || !body.run || typeof body.run !== "object") {
       return json({ error: "accountId, runId and run required" }, 400);
     }
+    if (!(await owns(ctx, caller, body.accountId))) return forbidden();
     if (byteSize(body.run) > 800_000) return json({ error: "run too large to share; trim its output" }, 413);
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
     const result = await ctx.runMutation(internal.sync.createShare, {
@@ -303,7 +318,7 @@ http.route({
   }),
 });
 
-// ---- Worker: a Mac work account that runs the agent's jobs for its spaces. Same secret as sync. ----
+// ---- Worker: a Mac work account that runs the agent's jobs for its spaces. Same pairing as sync. ----
 
 for (const path of ["/api/worker/poll", "/api/worker/accept", "/api/worker/update"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
@@ -314,11 +329,13 @@ http.route({
   path: "/api/worker/poll",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown; device?: unknown; kind?: unknown; enabled?: unknown; state?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId)) return json({ error: "accountId required" }, 400);
+    if (!(await owns(ctx, caller, body.accountId))) return forbidden();
     const device = typeof body.device === "string" ? body.device : "mac";
     const kind = body.kind === "privateMac" ? "privateMac" : "thisMac";
     const enabled = body.enabled !== false && body.state !== "off";
@@ -335,17 +352,19 @@ http.route({
   }),
 });
 
-// ---- The Mac acting on its organization: approvals, chat, shared skills. Same secret as sync. ----
+// ---- The Mac acting on its organization: approvals, chat, shared skills. Same pairing as sync. ----
 
 for (const path of ["/api/enterprise/decide", "/api/enterprise/send", "/api/enterprise/read", "/api/enterprise/join-space", "/api/enterprise/skill", "/api/enterprise/skill-run", "/api/enterprise/publish"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
 }
 
-async function enterpriseCall(request: Request, run: (body: Record<string, unknown>) => Promise<unknown>): Promise<Response> {
-  if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+async function enterpriseCall(ctx: ActionCtx, request: Request, run: (body: Record<string, unknown>) => Promise<unknown>): Promise<Response> {
+  const caller = await authenticate(ctx, request);
+  if (!caller) return unauthorized();
   const parsed = await readJson<Record<string, unknown>>(request);
   if (!parsed.ok) return parsed.response;
   if (!isId(parsed.body.accountId)) return json({ error: "accountId required" }, 400);
+  if (!(await owns(ctx, caller, parsed.body.accountId))) return forbidden();
   try {
     return json(await run(parsed.body));
   } catch (error) {
@@ -360,7 +379,7 @@ http.route({
   path: "/api/enterprise/decide",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       if (!isId(body.jobId)) throw new Error("jobId required");
       return ctx.runMutation(internal.enterprise.decideForAccount, { accountId: body.accountId as string, jobId: body.jobId as any, decision: String(body.decision ?? "") });
     })),
@@ -370,7 +389,7 @@ http.route({
   path: "/api/enterprise/send",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       if (!isId(body.spaceId)) throw new Error("spaceId required");
       return ctx.runMutation(internal.enterprise.sendForAccount, { accountId: body.accountId as string, spaceId: body.spaceId as any, text: String(body.text ?? "") });
     })),
@@ -380,7 +399,7 @@ http.route({
   path: "/api/enterprise/read",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       if (!isId(body.spaceId)) throw new Error("spaceId required");
       return ctx.runMutation(internal.enterprise.markReadForAccount, { accountId: body.accountId as string, spaceId: body.spaceId as any });
     })),
@@ -390,7 +409,7 @@ http.route({
   path: "/api/enterprise/join-space",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       if (!isId(body.spaceId)) throw new Error("spaceId required");
       return ctx.runMutation(internal.enterprise.joinSpaceForAccount, { accountId: body.accountId as string, spaceId: body.spaceId as any });
     })),
@@ -400,7 +419,7 @@ http.route({
   path: "/api/enterprise/skill",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       if (!isId(body.sharedId)) throw new Error("sharedId required");
       const skill = await ctx.runQuery(internal.enterprise.pullSkill, { accountId: body.accountId as string, sharedId: body.sharedId as any });
       return { skill };
@@ -411,7 +430,7 @@ http.route({
   path: "/api/enterprise/skill-run",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       if (!isId(body.sharedId)) throw new Error("sharedId required");
       return ctx.runMutation(internal.enterprise.recordSkillRunForAccount, { accountId: body.accountId as string, sharedId: body.sharedId as any });
     })),
@@ -421,7 +440,7 @@ http.route({
   path: "/api/enterprise/publish",
   method: "POST",
   handler: httpAction(async (ctx, request) =>
-    enterpriseCall(request, async (body) => {
+    enterpriseCall(ctx, request, async (body) => {
       const skill = body.skill && typeof body.skill === "object" ? (body.skill as Record<string, unknown>) : null;
       if (!skill || !isId(skill.id) || typeof skill.name !== "string" || !Array.isArray(skill.steps)) throw new Error("skill required");
       return ctx.runMutation(internal.enterprise.publishForAccount, {
@@ -436,11 +455,13 @@ http.route({
   path: "/api/worker/accept",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown; jobId?: unknown; device?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId) || !isId(body.jobId)) return json({ error: "accountId and jobId required" }, 400);
+    if (!(await owns(ctx, caller, body.accountId))) return forbidden();
     const job = await ctx.runMutation(internal.jobs.accept, { accountId: body.accountId, jobId: body.jobId as any, device: typeof body.device === "string" ? body.device : "mac" });
     return json({ job });
   }),
@@ -450,35 +471,72 @@ http.route({
   path: "/api/worker/update",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<Record<string, unknown>>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId) || !isId(body.jobId)) return json({ error: "accountId and jobId required" }, 400);
+    if (!(await owns(ctx, caller, body.accountId))) return forbidden();
     const str = (value: unknown) => (typeof value === "string" ? value : undefined);
-    const result = await ctx.runMutation(internal.jobs.update, {
-      accountId: body.accountId,
-      jobId: body.jobId as any,
-      status: str(body.status),
-      runClientId: str(body.runClientId),
-      title: str(body.title),
-      summary: str(body.summary),
-      output: str(body.output),
-      steps: Array.isArray(body.steps) ? body.steps : undefined,
-      preview: body.preview !== undefined ? body.preview : undefined,
-      say: str(body.say),
-    });
-    return json(result);
+    try {
+      const result = await ctx.runMutation(internal.jobs.update, {
+        accountId: body.accountId,
+        jobId: body.jobId as any,
+        status: str(body.status),
+        runClientId: str(body.runClientId),
+        title: str(body.title),
+        summary: str(body.summary),
+        output: str(body.output),
+        steps: Array.isArray(body.steps) ? body.steps : undefined,
+        preview: body.preview !== undefined ? body.preview : undefined,
+        say: str(body.say),
+      });
+      return json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const match = /Uncaught Error: ([^\n]+)/.exec(message);
+      return json({ error: (match?.[1] ?? message).trim() }, 400);
+    }
+  }),
+});
+
+// Signing out on the Mac retires its token.
+http.route({
+  path: "/api/unpair",
+  method: "OPTIONS",
+  handler: httpAction(async () => options()),
+});
+
+http.route({
+  path: "/api/unpair",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
+    await ctx.runMutation(internal.devices.revokeByHash, { tokenHash: caller.tokenHash });
+    return json({ ok: true });
+  }),
+});
+
+// Who this token belongs to, so the Mac can tell a stale token from a network problem.
+http.route({
+  path: "/api/whoami",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
+    return json({ ok: true, userId: caller.userId, device: caller.device });
   }),
 });
 
 http.route({
   path: "/health",
   method: "GET",
-  handler: httpAction(async () => json({ ok: true, service: "okidoki-convex", syncConfigured: Boolean(process.env.OKIDOKI_SYNC_SECRET) })),
+  handler: httpAction(async () => json({ ok: true, service: "okidoki-convex" })),
 });
 
-// ---- The Mac adding a document to the vault (a form it found on the web). Same secret as sync. ----
+// ---- The Mac adding a document to the vault (a form it found on the web). Same pairing as sync. ----
 
 for (const path of ["/api/vault/upload-url", "/api/vault/save"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
@@ -488,10 +546,12 @@ http.route({
   path: "/api/vault/upload-url",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     if (!isId(parsed.body.accountId)) return json({ error: "accountId required" }, 400);
+    if (!(await owns(ctx, caller, parsed.body.accountId))) return forbidden();
     return json(await ctx.runMutation(internal.vault.uploadUrlForAccount, { accountId: parsed.body.accountId }));
   }),
 });
@@ -500,11 +560,13 @@ http.route({
   path: "/api/vault/save",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const caller = await authenticate(ctx, request);
+    if (!caller) return unauthorized();
     const parsed = await readJson<{ accountId?: unknown; storageId?: unknown; name?: unknown; mime?: unknown; space?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
     if (!isId(body.accountId)) return json({ error: "accountId required" }, 400);
+    if (!(await owns(ctx, caller, body.accountId))) return forbidden();
     if (!isId(body.storageId)) return json({ error: "storageId required" }, 400);
     if (typeof body.name !== "string" || !body.name.trim()) return json({ error: "name required" }, 400);
     return json(await ctx.runMutation(internal.vault.saveFileForAccount, {

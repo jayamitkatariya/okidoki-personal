@@ -15,17 +15,24 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 3));
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const people: Record<string, { as: ReturnType<typeof t.withIdentity>; accountId: string }> = {};
+  const people: Record<string, { as: ReturnType<typeof t.withIdentity>; accountId: string; token: string }> = {};
   const login = async (name: string, email: string) => {
     const userId = await t.run(async (ctx) => ctx.db.insert("users", { name, email }));
     const as = t.withIdentity({ subject: `${userId}|session-${name}` });
     const accountId = `acct-${name}`;
-    // Each Mac work account is claimed by its login, exactly as the Mac app does after sign-in.
+    // Each Mac work account is claimed by its login and the Mac paired, exactly as the panel does after sign-in.
     await as.mutation(api.accounts.claim, { accounts: [{ id: accountId, name, email, kind: "work", colorHex: "44E45E", createdAt: "2026-10-24" }] });
-    people[name] = { as, accountId };
+    const { token } = await as.action(api.devices.pair, { device: `${name}'s Mac` });
+    people[name] = { as, accountId, token };
     return people[name];
   };
-  return { t, login, people };
+  // The Mac's HTTP calls, each sent with the token of the login that owns the account it names.
+  const tokenFor = (accountId: unknown) => Object.values(people).find((person) => person.accountId === accountId)?.token ?? "okd_nobody-has-this-token-at-all-0000000000000";
+  const post = (path: string, body: unknown, token = tokenFor((body as { accountId?: unknown })?.accountId)) =>
+    t.fetch(path, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const postJSON = (path: string, body: unknown) => post(path, body).then((r) => r.json());
+  const postStatus = (path: string, body: unknown) => post(path, body).then(async (r) => ({ status: r.status, ...(await r.json()) }));
+  return { t, login, people, tokenFor, post, postJSON, postStatus };
 }
 
 describe("organizations", () => {
@@ -47,7 +54,7 @@ describe("organizations", () => {
     await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
     const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
     const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 1 });
-    expect(code).toMatch(/^[A-Z2-9]{6}$/);
+    expect(code).toMatch(/^[A-Z2-9]{8}$/);
 
     const joined = await sam.as.mutation(api.orgs.join, { code: code.toLowerCase(), accountId: sam.accountId });
     expect(joined.name).toBe("Acme");
@@ -97,12 +104,8 @@ describe("organizations", () => {
 });
 
 describe("agent jobs and the worker", () => {
-  const secret = "test-sync-secret";
-  const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
-
   async function team() {
-    const { t, login } = await setup();
-    process.env.OKIDOKI_SYNC_SECRET = secret;
+    const { t, login, postJSON: post } = await setup();
     const jay = await login("jay", "jay@acme.com");
     const sam = await login("sam", "sam@acme.com");
     await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
@@ -112,7 +115,6 @@ describe("agent jobs and the worker", () => {
     const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Ops" });
     await sam.as.mutation(api.spaces.join, { spaceId });
     await tick();
-    const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
     return { t, jay, sam, spaceId, post };
   }
 
@@ -160,7 +162,7 @@ describe("agent jobs and the worker", () => {
   });
 
   test("approvals flow through the chat, and the wrong kind of worker is skipped", async () => {
-    const { jay, sam, spaceId, post } = await team();
+    const { t, jay, sam, spaceId, post } = await team();
     const { jobId } = await sam.as.mutation(api.chat.send, { spaceId, text: "hey @okidoki, clean up my mac" });
     await post("/api/worker/accept", { accountId: jay.accountId, jobId, device: "Jay's Mac" });
     await post("/api/worker/update", { accountId: jay.accountId, jobId, status: "waiting", preview: { summary: "Empty caches", risk: "medium" } });
@@ -186,9 +188,11 @@ describe("agent jobs and the worker", () => {
     expect(off.jobs).toEqual([]);
     expect((await sam.as.query(api.jobs.workersFor, { accountId: sam.accountId })).find((w: any) => w.name === "jay").online).toBe(false);
 
-    // an outsider's Mac is refused at the door
+    // an unpaired Mac is refused at the door; a paired one naming a colleague's account is refused too
     const stranger = await post("/api/worker/poll", { accountId: "acct-nobody", device: "x", kind: "thisMac", enabled: true });
-    expect(stranger.ok).toBe(false);
+    expect(stranger.error).toBe("unauthorized");
+    const borrowed = await t.fetch("/api/worker/poll", { method: "POST", headers: { authorization: `Bearer ${sam.token}`, "content-type": "application/json" }, body: JSON.stringify({ accountId: jay.accountId, device: "x", kind: "thisMac", enabled: true }) });
+    expect(borrowed.status).toBe(403);
     const unauthorized = await (await import("convex-test")).convexTest(schema, modules).fetch("/api/worker/poll", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(unauthorized.status).toBe(401);
   });
@@ -208,8 +212,7 @@ describe("agent jobs and the worker", () => {
   });
 
   test("alone in a space every line is for the agent; once a colleague joins it has to be asked", async () => {
-    const { t, login } = await setup();
-    process.env.OKIDOKI_SYNC_SECRET = secret;
+    const { login, postJSON: post } = await setup();
     const jay = await login("jay", "jay@acme.com");
     const sam = await login("sam", "sam@acme.com");
     await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
@@ -221,7 +224,6 @@ describe("agent jobs and the worker", () => {
     expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].prompt).toBe("tidy my downloads folder");
 
     // jay's own Mac takes it: a one-person team still works end to end
-    const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
     const polled = await post("/api/worker/poll", { accountId: jay.accountId, device: "Jay's Mac", kind: "thisMac", enabled: true, state: "ready" });
     expect(polled.jobs.map((j: any) => j.id)).toEqual([solo.jobId]);
     await post("/api/worker/accept", { accountId: jay.accountId, jobId: solo.jobId, device: "Jay's Mac" });
@@ -295,6 +297,53 @@ describe("agent jobs and the worker", () => {
     await jay.as.mutation(api.jobs.cancel, { jobId: second });
     expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("cancelled");
   });
+
+  test("a job that stops reporting is reaped even while its Mac keeps heart-beating; a cancel the Mac ignores closes on its own", async () => {
+    const { t, jay, sam, spaceId, post } = await team();
+    const { jobId } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki reconcile the ledger" });
+    await post("/api/worker/poll", { accountId: sam.accountId, device: "m", kind: "thisMac", enabled: true });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId, device: "m" });
+    await post("/api/worker/update", { accountId: sam.accountId, jobId, status: "running" });
+
+    // the run hung in place half an hour ago; the Mac itself is fine
+    await t.run(async (ctx) => ctx.db.patch(jobId, { updatedAt: Date.now() - 31 * 60_000 }));
+    await post("/api/worker/poll", { accountId: sam.accountId, device: "m", kind: "thisMac", enabled: true });
+    expect(await t.mutation(internal.jobs.reapLost, {})).toEqual({ reaped: 1 });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("failed");
+
+    // cancelled, but the Mac never confirms: closed after the grace period
+    const { jobId: second } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki once more" });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId: second, device: "m" });
+    await jay.as.mutation(api.jobs.cancel, { jobId: second });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0]).toMatchObject({ status: "accepted", decision: "decline" });
+    expect(await t.mutation(internal.jobs.reapLost, {})).toEqual({ reaped: 0 });
+    await t.run(async (ctx) => ctx.db.patch(second, { updatedAt: Date.now() - 3 * 60_000 }));
+    expect(await t.mutation(internal.jobs.reapLost, {})).toEqual({ reaped: 1 });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("failed");
+  });
+
+  test("a repeated 'waiting' update keeps an answer given in between; a removed member's Mac is no longer heard", async () => {
+    const { t, jay, sam, spaceId, post } = await team();
+    const { jobId } = await jay.as.mutation(api.chat.send, { spaceId, text: "@okidoki ship it" });
+    await post("/api/worker/poll", { accountId: sam.accountId, device: "m", kind: "thisMac", enabled: true });
+    await post("/api/worker/accept", { accountId: sam.accountId, jobId, device: "m" });
+    await post("/api/worker/update", { accountId: sam.accountId, jobId, status: "waiting", preview: { summary: "git push", risk: "medium" } });
+    await jay.as.mutation(api.jobs.decide, { jobId, decision: "approve" });
+    // the Mac's first reply was lost and it sends the same update again
+    await post("/api/worker/update", { accountId: sam.accountId, jobId, status: "waiting", preview: { summary: "git push", risk: "medium" } });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].decision).toBe("approve");
+
+    // jay removes sam; sam's Mac can't write into the space any more, and sam is out of its spaces
+    const view = await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId });
+    await jay.as.mutation(api.orgs.remove, { membershipId: view.members.find((m: any) => m.name === "sam").id });
+    expect(await post("/api/worker/update", { accountId: sam.accountId, jobId, status: "done", say: "pushed" })).toEqual({ ok: false });
+    expect((await jay.as.query(api.jobs.forSpace, { spaceId }))[0].status).toBe("waiting");
+    const members = await t.run(async (ctx) => ctx.db.query("spaceMembers").withIndex("by_space", (q) => q.eq("spaceId", spaceId)).collect());
+    expect(members.map((m: any) => m.userId)).not.toContain(view.members.find((m: any) => m.name === "sam").userId);
+    expect(await t.run(async (ctx) => ctx.db.query("workers").withIndex("by_account", (q) => q.eq("accountClientId", sam.accountId)).first())).toBeNull();
+    // the panel's worker list names nobody's account id
+    expect(Object.keys((await jay.as.query(api.jobs.workersFor, { accountId: jay.accountId }))[0] ?? {})).not.toContain("accountId");
+  });
 });
 
 describe("deleting a space", () => {
@@ -350,8 +399,7 @@ describe("shared skills", () => {
   ];
 
   async function org() {
-    const { t, login } = await setup();
-    process.env.OKIDOKI_SYNC_SECRET = "s";
+    const { t, login, postJSON: post } = await setup();
     const jay = await login("jay", "jay@acme.com");
     const sam = await login("sam", "sam@acme.com");
     await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
@@ -359,8 +407,6 @@ describe("shared skills", () => {
     const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
     await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
     const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Finance" });
-    const post = (path: string, body: unknown) =>
-      t.fetch(path, { method: "POST", headers: { authorization: "Bearer s", "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
     return { t, jay, sam, spaceId, post };
   }
 
@@ -401,6 +447,33 @@ describe("shared skills", () => {
     await expect(sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId, skill: { id: "skill-2", name: "x", summary: "", steps: [] } })).rejects.toThrow(/no steps/);
     await jay.as.mutation(api.sharedSkills.unpublish, { sharedId: listed[0].id });
     expect(await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId })).toEqual([]);
+  });
+
+  test("a skill shared with one space is invisible to colleagues outside it", async () => {
+    const { t, jay, sam, spaceId, post } = await org();
+    const pat = await (async () => {
+      const userId = await t.run(async (ctx) => ctx.db.insert("users", { name: "pat", email: "pat@acme.com" }));
+      const as = t.withIdentity({ subject: `${userId}|session-pat` });
+      await as.mutation(api.accounts.claim, { accounts: [{ id: "acct-pat", name: "pat", email: "pat@acme.com", kind: "work", colorHex: "44E45E", createdAt: "2026-10-24" }] });
+      const { token } = await as.action(api.devices.pair, { device: "pat's Mac" });
+      return { as, accountId: "acct-pat", token };
+    })();
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 1, maxUses: 1 });
+    await pat.as.mutation(api.orgs.join, { code, accountId: pat.accountId });
+
+    await sam.as.mutation(api.spaces.join, { spaceId });
+    const { id } = await sam.as.mutation(api.sharedSkills.publish, { accountId: sam.accountId, spaceId, skill: { id: "skill-3", name: "Wire the payroll", summary: "", steps } });
+    await jay.as.mutation(api.sharedSkills.publish, { accountId: jay.accountId, spaceId: null, skill: { id: "skill-4", name: "Everyone's", summary: "", steps } });
+
+    // pat is in the organization but not in Finance
+    expect((await pat.as.query(api.sharedSkills.list, { accountId: pat.accountId })).map((s: any) => s.name)).toEqual(["Everyone's"]);
+    expect((await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId })).map((s: any) => s.name)).toEqual(["Everyone's", "Wire the payroll"]);
+    await pat.as.mutation(api.sharedSkills.recordRun, { sharedId: id });
+    expect((await jay.as.query(api.sharedSkills.list, { accountId: jay.accountId })).find((s: any) => s.id === id).runCount).toBe(0);
+    const pulled = await t.fetch("/api/enterprise/skill", { method: "POST", headers: { authorization: `Bearer ${pat.token}`, "content-type": "application/json" }, body: JSON.stringify({ accountId: pat.accountId, sharedId: id }) });
+    expect(await pulled.json()).toEqual({ skill: null });
+    void post;
   });
 });
 
@@ -544,12 +617,8 @@ describe("spaces and chat", () => {
 });
 
 describe("the Mac's view of the organization", () => {
-  const secret = "test-sync-secret";
-  const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
-
   async function team() {
-    const { t, login } = await setup();
-    process.env.OKIDOKI_SYNC_SECRET = secret;
+    const { t, login, postStatus: post, tokenFor } = await setup();
     const jay = await login("jay", "jay@acme.com");
     const sam = await login("sam", "sam@acme.com");
     await jay.as.mutation(api.orgs.create, { name: "Acme", domain: "", accountId: jay.accountId });
@@ -557,13 +626,12 @@ describe("the Mac's view of the organization", () => {
     const { code } = await jay.as.mutation(api.orgs.createCode, { orgId, days: 7, maxUses: 5 });
     await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
     const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Ops" });
-    const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, ...(await r.json()) }));
     const poll = (accountId: string) => post("/api/worker/poll", { accountId, device: "mac", kind: "thisMac", enabled: false });
-    return { t, jay, sam, orgId, spaceId, post, poll };
+    return { t, jay, sam, orgId, spaceId, post, poll, tokenFor };
   }
 
   test("the poll carries the organization: spaces with unread counts, approvals in my spaces, shared skills", async () => {
-    const { jay, sam, orgId, spaceId, post, poll } = await team();
+    const { t, jay, sam, orgId, spaceId, post, poll, tokenFor } = await team();
     await jay.as.mutation(api.enterprise.setWelcome, { orgId, welcome: "Start with 'replay the expense report'." });
 
     // Sam isn't in Ops yet: he sees the space, not its approvals. The worker switch is off and the summary still comes.
@@ -596,7 +664,9 @@ describe("the Mac's view of the organization", () => {
     // Reading marks the chat read; a stranger's Mac can't do any of this.
     await post("/api/enterprise/read", { accountId: sam.accountId, spaceId });
     expect((await poll(sam.accountId)).summary.spaces.find((s: any) => s.name === "Ops").unread).toBe(0);
-    expect((await post("/api/enterprise/decide", { accountId: "acct-nobody", jobId, decision: "approve" })).status).toBe(400);
+    expect((await post("/api/enterprise/decide", { accountId: "acct-nobody", jobId, decision: "approve" })).status).toBe(401);
+    // sam's Mac can't answer as jay
+    expect((await t.fetch("/api/enterprise/decide", { method: "POST", headers: { authorization: `Bearer ${tokenFor(sam.accountId)}`, "content-type": "application/json" }, body: JSON.stringify({ accountId: jay.accountId, jobId, decision: "approve" }) })).status).toBe(403);
   });
 
   test("a request typed at the cursor becomes a job in the space; shared skills are pulled by id", async () => {

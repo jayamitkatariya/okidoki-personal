@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { activeMembership } from "./orgs";
-import { orgForAccount, peopleIn, spaceAccess } from "./spaces";
+import { orgForAccount, peopleIn, spaceAccess, spaceMemberOf } from "./spaces";
 
 // Skills shared inside an organization. A member publishes one of their recorded skills to a
 // space or to everyone; colleagues pull it onto their own Macs and replay it there.
@@ -83,8 +83,12 @@ export const list = query({
       .query("spaceSkills")
       .withIndex("by_org", (q) => q.eq("orgId", link.orgId))
       .collect();
+    // A skill shared with one space stays inside it: its steps are what the recording clicked and typed.
     const out = [];
-    for (const row of rows) out.push(view(row, people, link.userId, admin, spaceNames));
+    for (const row of rows) {
+      if (row.spaceId && !(await spaceMemberOf(ctx, row.spaceId, link.userId))) continue;
+      out.push(view(row, people, link.userId, admin, spaceNames));
+    }
     out.sort((a, b) => Number(Boolean(a.spaceId)) - Number(Boolean(b.spaceId)) || b.updatedAt - a.updatedAt);
     return out;
   },
@@ -188,6 +192,7 @@ export const recordRun = mutation({
     if (!row) return;
     const userId = await getAuthUserId(ctx);
     if (!userId || !(await activeMembership(ctx, row.orgId))) return;
+    if (row.spaceId && !(await spaceMemberOf(ctx, row.spaceId, userId))) return;
     await ctx.db.patch(row._id, { runCount: row.runCount + 1 });
   },
 });

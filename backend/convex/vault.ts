@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { activeMembership } from "./orgs";
-import { orgForAccount, peopleIn, spaceAccess } from "./spaces";
+import { orgForAccount, peopleIn, spaceAccess, spaceMemberOf } from "./spaces";
 
 // The vault: an organization's documents and logins. Everything answers only active members;
 // a file or login scoped to a space answers only that space's members. Passwords arrive and
@@ -13,11 +13,7 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024;
 /** May the caller see things scoped to this space? Org-wide things need only org membership. */
 async function mayRead(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces"> | null, userId: Id<"users">): Promise<boolean> {
   if (!spaceId) return true;
-  const rows = await ctx.db
-    .query("spaceMembers")
-    .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
-    .collect();
-  return rows.some((row) => row.userId === userId);
+  return Boolean(await spaceMemberOf(ctx, spaceId, userId));
 }
 
 async function requireScope(ctx: MutationCtx, accountId: string, spaceId: Id<"spaces"> | null) {
@@ -295,8 +291,10 @@ export const saveFileForAccount = internalMutation({
     }
 
     // A fresh copy of the same document replaces the old one in the same place: forms get revised.
+    // Only one's own copies, though (an admin's, anyone's): a colleague's file isn't overwritten by name.
+    const admin = link.role === "owner" || link.role === "admin";
     const existing = await ctx.db.query("spaceFiles").withIndex("by_org", (q) => q.eq("orgId", link.orgId)).collect();
-    const same = existing.filter((f) => f.spaceId === spaceId && f.name.toLowerCase() === cleanName.toLowerCase());
+    const same = existing.filter((f) => f.spaceId === spaceId && f.name.toLowerCase() === cleanName.toLowerCase() && (admin || f.uploadedBy === link.userId));
     for (const old of same) {
       await ctx.storage.delete(old.storageId);
       await ctx.db.delete(old._id);

@@ -29,17 +29,21 @@ export interface SpaceAccess {
   member: Doc<"spaceMembers"> | null;
 }
 
+/** One user's row in a space, or null. One indexed read, however big the space. */
+export async function spaceMemberOf(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">, userId: Id<"users">): Promise<Doc<"spaceMembers"> | null> {
+  return await ctx.db
+    .query("spaceMembers")
+    .withIndex("by_space_user", (q) => q.eq("spaceId", spaceId).eq("userId", userId))
+    .first();
+}
+
 /** What the signed-in user may do with a space: null when they're not in its organization. */
 export async function spaceAccess(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">): Promise<SpaceAccess | null> {
   const space = await ctx.db.get(spaceId);
   if (!space) return null;
   const membership = await activeMembership(ctx, space.orgId);
   if (!membership) return null;
-  const rows = await ctx.db
-    .query("spaceMembers")
-    .withIndex("by_space", (q) => q.eq("spaceId", spaceId))
-    .collect();
-  return { space, userId: membership.userId, member: rows.find((row) => row.userId === membership.userId) ?? null };
+  return { space, userId: membership.userId, member: await spaceMemberOf(ctx, spaceId, membership.userId) };
 }
 
 export async function requireSpaceMember(ctx: QueryCtx | MutationCtx, spaceId: Id<"spaces">): Promise<SpaceAccess & { member: Doc<"spaceMembers"> }> {
@@ -237,6 +241,11 @@ export const update = mutation({
   args: { spaceId: v.id("spaces"), name: v.optional(v.string()), workerPolicy: v.optional(v.string()), colorHex: v.optional(v.string()) },
   handler: async (ctx, { spaceId, name, workerPolicy, colorHex }) => {
     const access = await requireSpaceMember(ctx, spaceId);
+    // Renaming a space or moving its jobs to another Mac is the space owner's or an admin's call.
+    if (access.member.role !== "owner" && access.space.createdBy !== access.userId) {
+      const orgRole = await activeMembership(ctx, access.space.orgId);
+      if (orgRole?.role !== "owner" && orgRole?.role !== "admin") throw new Error("only the space's owner or an organization admin can change it");
+    }
     const patch: Partial<Doc<"spaces">> = {};
     if (name !== undefined) {
       const cleanName = name.trim().slice(0, 80);
