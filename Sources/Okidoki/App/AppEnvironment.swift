@@ -332,31 +332,12 @@ final class AppEnvironment: ObservableObject {
         shakePulse += 1
         if suspendSummonForTour { return }
         guard store.settings.okidokiEnabled else { return }
-        if driver.stopsOnUserEscape { driver.cancel(reason: "you shook — control is yours"); return }
+        // Pointer movement must never interrupt an active action, recording, or lesson.
+        // Use the session's explicit controls or Escape to stop it.
+        guard !driver.isActive, !watch.isRecording, !replayer.isActive,
+              !ghost.model.visible, !teach.model.isActive, !concept.isActive else { return }
         if simOverlay.isVisible { simOverlay.dismiss(); return }
-        // The pointer is doing real work while a recording runs, so a wiggle must never count as a
-        // shake. A recording is ended only by its own controls: Save / Discard in the notch, the
-        // HUD pill, the Skills page, or a chat command.
-        if watch.isRecording { return }
-        if replayer.isActive { replayer.cancel(reason: "you shook — control is yours"); return }
-        if ghost.model.visible { ghost.cancel(); return }
         if drawActive { draw.dismissAll(); dismissSummon(); return }
-        // A shake means "control is yours" everywhere else, so a live lesson ends the same way.
-        // Questions mid-lesson still work by voice; esc also stops.
-        if teach.model.isActive {
-            teach.stop(completed: false)
-            if summon.model.isVisible || answerControllerVisible { dismissSummon() }
-            toast(title: "lesson stopped", detail: "you shook — control is yours", kind: .info,
-                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-            return
-        }
-        if concept.isActive {
-            concept.dismiss(completed: concept.model.phase == .done)
-            if summon.model.isVisible || answerControllerVisible { dismissSummon() }
-            toast(title: "lesson closed", detail: "you shook — control is yours", kind: .info,
-                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-            return
-        }
         if summon.model.isVisible || answerControllerVisible {
             dismissSummon()
             return

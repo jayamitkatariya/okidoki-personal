@@ -180,8 +180,9 @@ without Screen Recording the replay behaves as before.
 
 Ask for a result (“send mom a message on WhatsApp”, “export this as PDF”) and okidoki
 drives the Mac itself: one screenshot and one action per step, narrated in the pill at
-the bottom. Press **Esc**, click **Stop**, or shake to take control back; escape presses
-made by okidoki itself never stop a run.
+the bottom. Press **Esc** or click **Stop** to take control back. Shaking the pointer is
+ignored during actions, skill replays, and lessons; escape presses made by okidoki itself
+never stop a run.
 
 Each step the model gets the screen before and after its last action (downscaled to
 what the API actually looks at, so clicks land where it points), the frontmost window

@@ -1236,7 +1236,7 @@ final class TeachController {
 
     // MARK: Questions mid-lesson
 
-    /// Shake during a lesson asks a question instead of stopping. The lesson holds until the answer lands.
+    /// Hold the lesson while answering a question.
     func pauseForQuestion() {
         guard model.isActive else { return }
         askingQuestion = true

@@ -473,7 +473,7 @@ export function SkillsPage() {
             </li>
             <li>
               <PixelIcon name="stop" size={13} />
-              <span>Press Save in the notch at the top of your screen, shake your mouse, or come back to this page.</span>
+              <span>Press Save in the notch at the top of your screen or come back to this page.</span>
             </li>
           </ul>
         </div>
@@ -492,7 +492,7 @@ export function SkillsPage() {
         open={Boolean(repeatFor)}
         onClose={() => setRepeatFor(null)}
         title={repeatFor ? `Repeat “${repeatFor.name}”` : "Repeat"}
-        subtitle="Runs the whole skill back to back. Press Esc or shake at any time to stop."
+        subtitle="Runs the whole skill back to back. Press Esc at any time to stop."
         width={460}
       >
         <div className="routine-form">

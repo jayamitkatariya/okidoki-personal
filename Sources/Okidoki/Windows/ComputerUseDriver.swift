@@ -55,9 +55,6 @@ final class ComputerUseDriver {
 
     var isActive: Bool { model.visible }
 
-    /// Whether the user's own Escape or shake should stop the current run.
-    var stopsOnUserEscape: Bool { model.visible && target.stopsOnUserEscape }
-
     func begin(run: AgentRun, target: ComputerTarget? = nil) {
         guard let env else { return }
         guard !model.visible else {

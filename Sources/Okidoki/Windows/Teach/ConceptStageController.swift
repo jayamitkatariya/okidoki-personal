@@ -47,7 +47,7 @@ final class ConceptWebView: WKWebView {
 /// A narrated 2D/3D lesson on a floating stage beside what the learner is looking at. The model
 /// writes a scene and beats; the web runtime (Resources/stage) animates them; this controller
 /// narrates, captions, circles things on the real screen, and turns part clicks into follow-ups.
-/// It plays itself through: the only navigation is clicking a beat dot. Esc or a shake closes it.
+/// It plays itself through: the only navigation is clicking a beat dot. Esc closes it.
 @MainActor
 final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let model = ConceptModel()

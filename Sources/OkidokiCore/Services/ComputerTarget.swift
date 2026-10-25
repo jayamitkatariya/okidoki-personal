@@ -22,7 +22,7 @@ public protocol ComputerTarget: AnyObject {
     var displayName: String { get }
     /// True when this isn't the Mac okidoki runs on: no scripts, no accessibility, only the picture.
     var isRemote: Bool { get }
-    /// Whether the user's own Escape key and shake should stop a run. False when the user keeps
+    /// Whether the user's own Escape key should stop a run. False when the user keeps
     /// using their Mac while the run happens somewhere else.
     var stopsOnUserEscape: Bool { get }
     /// Whether the labelled pointer overlay should follow the real cursor.
