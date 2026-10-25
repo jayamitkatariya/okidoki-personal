@@ -12,7 +12,7 @@
 - **Auth:** Convex Auth (`@convex-dev/auth`, Password provider, `backend/convex/auth.ts`)
 - **AI models:** claude-haiku-5-5 (default), claude-sonnet-5-5 (escalation/teach), claude-haiku-4-5, moss-minilm (memory), sonic-3 (voice)
 - **Started:** 2026-10-24T05:41:45Z
-- **Last updated:** 2026-10-25T12:55:54Z
+- **Last updated:** 2026-10-25T13:07:43Z
 
 ## How we use Convex
 
