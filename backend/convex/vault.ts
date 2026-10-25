@@ -65,10 +65,12 @@ export const files = query({
         uploadedBy: people.get(row.uploadedBy)?.name ?? "Someone",
         canDelete: row.uploadedBy === link.userId || isAdmin(link.role),
         createdAt: row.createdAt,
+        order: row._creationTime,
       });
     }
-    out.sort((a, b) => b.createdAt - a.createdAt);
-    return out;
+    // Newest first. Two files saved in the same millisecond keep the order they were saved in.
+    out.sort((a, b) => b.createdAt - a.createdAt || b.order - a.order);
+    return out.map(({ order: _order, ...file }) => file);
   },
 });
 

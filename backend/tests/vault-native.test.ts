@@ -99,3 +99,18 @@ describe("demo seed, fresh", () => {
     expect(jobs).toEqual([]);
   });
 });
+
+describe("vault order", () => {
+  test("files saved in the same millisecond come back newest first", async () => {
+    const { t, jay } = await team();
+    const orgId = (await jay.as.query(api.orgs.forAccount, { accountId: jay.accountId })).org.id;
+    await t.run(async (ctx) => {
+      const userId = (await ctx.db.query("users").collect())[0]!._id;
+      for (const name of ["first.pdf", "second.pdf", "third.pdf"]) {
+        const storageId = await ctx.storage.store(new Blob(["%PDF-1.7"], { type: "application/pdf" }));
+        await ctx.db.insert("spaceFiles", { orgId, spaceId: null, storageId, name, size: 8, mime: "application/pdf", uploadedBy: userId, createdAt: 1_792_900_000_000 });
+      }
+    });
+    expect((await jay.as.query(api.vault.files, { accountId: jay.accountId })).map((f: any) => f.name)).toEqual(["third.pdf", "second.pdf", "first.pdf"]);
+  });
+});
