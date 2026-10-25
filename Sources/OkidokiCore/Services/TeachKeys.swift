@@ -64,4 +64,43 @@ public enum TeachKeys {
         ]
         return normalize(expected).map { glyphs[$0] ?? $0.uppercased() }
     }
+
+    /// Two quick taps of the left option key, on its own: the learner's "next" that needs no voice
+    /// and no button. Any other key, modifier or click in between starts the count over.
+    public struct DoubleTap {
+        public static let leftOption: UInt16 = 58
+        public var keyCode: UInt16
+        public var window: TimeInterval
+        private var down = false
+        private var lastTapAt: TimeInterval?
+
+        public init(keyCode: UInt16 = DoubleTap.leftOption, window: TimeInterval = 0.4) {
+            self.keyCode = keyCode
+            self.window = window
+        }
+
+        /// Feed every `flagsChanged`. True on the release that completes the second tap.
+        public mutating func flagsChanged(keyCode: UInt16, flags: NSEvent.ModifierFlags, at time: TimeInterval) -> Bool {
+            let others = flags.intersection([.command, .control, .shift])
+            guard keyCode == self.keyCode, others.isEmpty else { reset(); return false }
+            if flags.contains(.option) {
+                down = true
+                return false
+            }
+            guard down else { reset(); return false }
+            down = false
+            if let last = lastTapAt, time - last <= window {
+                lastTapAt = nil
+                return true
+            }
+            lastTapAt = time
+            return false
+        }
+
+        /// Anything else they do breaks the double tap.
+        public mutating func reset() {
+            down = false
+            lastTapAt = nil
+        }
+    }
 }

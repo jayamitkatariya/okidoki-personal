@@ -39,6 +39,12 @@ final class BrainSidecar: ObservableObject {
     private var healthTimer: Timer?
     /// True when a healthy brain answered on our port but we didn't spawn it (adopted leftover).
     private var adopted = false
+    /// Crashes in a row; the relaunch waits longer each time and gives up after the list runs out.
+    private var relaunches = 0
+    private static let relaunchDelays: [Double] = [1, 3, 10, 30, 60]
+    private var readySince: Date?
+    /// Health probes missed in a row by a brain we spawned; a few mean it's hung, not busy.
+    private var healthMisses = 0
 
     init() {
         if let override = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_URL"], let url = URL(string: override) {
@@ -113,8 +119,8 @@ final class BrainSidecar: ObservableObject {
             Task { @MainActor in
                 // A restart may already have spawned a newer brain; only the current one's exit counts.
                 guard let self, !self.intentionalStop, process === self.process else { return }
-                self.status = .failed("brain exited (\(process.terminationStatus))")
                 self.process = nil
+                self.relaunchAfterCrash(reason: "brain exited (\(process.terminationStatus))")
             }
         }
         do {
@@ -144,11 +150,33 @@ final class BrainSidecar: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.start() }
     }
 
+    /// A brain that died on its own comes back by itself, a little slower each time. One that was
+    /// healthy for a while earns a fresh count; five crashes in a row and it stays down, and the
+    /// dashboard says so.
+    private func relaunchAfterCrash(reason: String) {
+        if let since = readySince, Date().timeIntervalSince(since) > 120 { relaunches = 0 }
+        readySince = nil
+        healthMisses = 0
+        guard relaunches < Self.relaunchDelays.count else {
+            status = .failed("\(reason) — gave up restarting")
+            return
+        }
+        let delay = Self.relaunchDelays[relaunches]
+        relaunches += 1
+        status = .failed("\(reason) — restarting in \(Int(delay))s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.process == nil, !self.intentionalStop else { return }
+            self.start()
+        }
+    }
+
     func waitForHealth() async {
         for _ in 0..<25 {
             if await health() {
                 status = .ready
                 adopted = (process == nil)
+                readySince = Date()
+                healthMisses = 0
                 startHealthWatch()
                 return
             }
@@ -157,17 +185,28 @@ final class BrainSidecar: ObservableObject {
         if status == .starting { status = .failed("no answer on :\(port)") }
     }
 
-    /// If we adopted a brain we didn't spawn (a leftover from a force-quit), watch it:
-    /// once it dies (its own watchdog exits when its parent is gone), spawn our own.
+    /// Keeps an eye on the brain once it's up. An adopted one (a leftover from a force-quit) is
+    /// replaced the moment it goes away; our own is restarted when it stops answering for a while —
+    /// a hung process still holds the port, so a crash isn't the only way to lose it.
     private func startHealthWatch() {
         healthTimer?.invalidate()
         let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.status.isReady, self.process == nil else { return }
-                if !(await self.health()) {
+                guard let self, self.status.isReady else { return }
+                if await self.health() {
+                    self.healthMisses = 0
+                    return
+                }
+                if self.process == nil {
                     self.status = .failed("the brain on :\(self.port) went away")
                     self.restart()
+                    return
                 }
+                self.healthMisses += 1
+                guard self.healthMisses >= 3 else { return }
+                self.healthMisses = 0
+                self.status = .failed("the brain stopped answering — restarting")
+                self.restart()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -264,6 +303,18 @@ struct BrainThinkEnvelope: Decodable {
     var decision: BrainDecision
     var usedModel: Bool
     var error: String?
+}
+
+struct BrainErrorBody: Decodable {
+    var error: String
+}
+
+/// What came back from `/think`. Only an unreachable brain is worth asking the model again from
+/// the Mac; a brain that answered with an error or ran out of time already spent the wait.
+enum BrainThinkOutcome {
+    case answered(BrainThinkEnvelope)
+    case failed(String)
+    case unreachable
 }
 
 struct BrainNativeEvent: Encodable {
@@ -414,7 +465,7 @@ final class BrainClient {
     func think(text: String, request: BrainRequest, history: [BrainMessage], memory: [String],
                events: [BrainNativeEvent], settings: AppSettings, account: Account,
                installedTools: [String], frontWindow: String,
-               connectors: BrainConnectorsPayload) async -> BrainThinkEnvelope? {
+               connectors: BrainConnectorsPayload) async -> BrainThinkOutcome {
         // What they circled wins; otherwise the display shot from summon time gives the brain context.
         let circled = request.screenshotPNG
         let screenshot = circled ?? request.screen?.screenshotPNG
@@ -458,10 +509,24 @@ final class BrainClient {
         do {
             urlRequest.httpBody = try JSONEncoder().encode(payload)
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-            return try JSONDecoder().decode(BrainThinkEnvelope.self, from: data)
+            guard let http = response as? HTTPURLResponse else { return .unreachable }
+            guard (200..<300).contains(http.statusCode) else {
+                let body = (try? JSONDecoder().decode(BrainErrorBody.self, from: data))?.error
+                    ?? String(decoding: data.prefix(160), as: UTF8.self)
+                return .failed("the brain answered \(http.statusCode)" + (body.isEmpty ? "" : ": \(body)"))
+            }
+            return .answered(try JSONDecoder().decode(BrainThinkEnvelope.self, from: data))
+        } catch let error as URLError {
+            switch error.code {
+            case .cannotConnectToHost, .networkConnectionLost, .cannotFindHost:
+                return .unreachable
+            case .timedOut:
+                return .failed("the brain took too long")
+            default:
+                return .failed(error.localizedDescription)
+            }
         } catch {
-            return nil
+            return .failed(error.localizedDescription)
         }
     }
 

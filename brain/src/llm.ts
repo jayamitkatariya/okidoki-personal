@@ -264,7 +264,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     `- For risky or destructive work set risk=high and explain plainly.`,
     `- Never target Okidoki's own windows (dashboard, notch, cards, overlays). This is a hard self-guard.`,
     `- Screenshots are never stored; don't suggest keeping them.`,
-    `- Prefer Apple apps and free tools. Never buy, send or delete without approval.`,
+    `- Prefer Apple apps and free tools. Sending a message, buying and deleting are fine to route — the Mac shows an approval card before anything irreversible happens — just never say one of them is done.`,
     `- When they sound stuck, teach on the screen they have rather than lecturing.`,
     `- Teach any Mac app, not a fixed list. The teach_plan is only an outline: 3-8 one-line steps, one action each, naming the real control or key ("press F for the frame tool"). Leave marks empty — the live tutor points on screen. title is "teach: <topic>". answer is one warm line saying the lesson is starting.`,
     `- A pure trivia question with nothing to point at stays an answer. A concept they can try in the current app is a lesson.`,
@@ -371,6 +371,61 @@ function stopped(detail: string, rejected = false): { decision: Decision; usedMo
   };
 }
 
+/** The model said no in its own words. Shown as what it is, never as "model unavailable". */
+function declined(text: string): { decision: Decision; usedModel: true; error: string } {
+  const said = text.trim().slice(0, 400);
+  return {
+    decision: {
+      kind: "answer",
+      title: "i'd rather not",
+      answer: said ? `${said}\n\n_nothing was done._` : "the model declined that one. nothing was done.",
+      speak: "",
+    },
+    usedModel: true,
+    error: "model declined",
+  };
+}
+
+const REFUSAL_WORDS = /\b(can'?t|cannot|won'?t|unable|not able|not allowed|not comfortable|don'?t (feel comfortable|have the ability)|rather not|decline)\b/i;
+
+type ModelBlock = { type: string; text?: string; name?: string; input?: Record<string, unknown>; id?: string };
+type ModelReply = { content?: ModelBlock[]; stop_reason?: string };
+
+const RETRY_AFTER_MS = 2_000;
+const OVERLOADED = new Set([429, 503, 529]);
+
+/**
+ * One call to the model. A rate limit or an overloaded server gets a single second try when the
+ * budget allows, instead of a "model unavailable" card on the first hiccup.
+ */
+async function callModel(body: Record<string, unknown>, apiKey: string, fetchImpl: typeof fetch, timeoutMs: number):
+  Promise<{ ok: true; reply: ModelReply } | { ok: false; status: number; detail: string }> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (response.ok) return { ok: true, reply: (await response.json()) as ModelReply };
+    const detail = (await response.text()).slice(0, 160);
+    if (attempt === 0 && OVERLOADED.has(response.status) && timeoutMs > RETRY_AFTER_MS * 4) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_AFTER_MS));
+      timeoutMs -= RETRY_AFTER_MS;
+      continue;
+    }
+    return { ok: false, status: response.status, detail };
+  }
+}
+
+function proseOf(blocks: ModelBlock[]): string {
+  return blocks.filter((b) => b.type === "text" && b.text).map((b) => b.text!.trim()).filter(Boolean).join(" ");
+}
+
 export async function think(request: ThinkRequest, apiKey: string | undefined, fetchImpl: typeof fetch = fetch): Promise<{ decision: Decision; usedModel: boolean; error?: string }> {
   const started = Date.now();
   if (!request.documentText && !request.screenshotBase64) {
@@ -419,31 +474,49 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
   };
 
   try {
-    const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-      // The Mac waits 90 s for /think. The first call gets 55 s so that a slow one still leaves the
-      // plan review a real window of its own (up to 25 s) instead of the few seconds that were left.
-      signal: AbortSignal.timeout(THINK_FIRST_CALL_MS),
-    });
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 160);
-      return stopped(`model ${response.status}: ${detail}`, response.status === 401);
+    // The Mac waits 90 s for /think. The first call gets 55 s so that a slow one still leaves the
+    // plan review a real window of its own (up to 25 s) instead of the few seconds that were left.
+    const first = await callModel(body, apiKey, fetchImpl, THINK_FIRST_CALL_MS);
+    if (!first.ok) return stopped(`model ${first.status}: ${first.detail}`, first.status === 401);
+    let reply = first.reply;
+    let blocks = reply.content ?? [];
+    let decisionBlock = blocks.find((b) => b.type === "tool_use" && b.input);
+
+    if (!decisionBlock && reply.stop_reason === "refusal") {
+      return declined(proseOf(blocks));
     }
-    const json = (await response.json()) as { content?: { type: string; text?: string; input?: Record<string, unknown> }[] };
-    const blocks = json.content ?? [];
-    for (const block of blocks) {
-      if (block.type === "tool_use" && block.input) {
-        const input = needsPlanReview(String(block.input.kind))
-          ? await reviewPlan(body, block.input, apiKey, fetchImpl, Math.min(THINK_REVIEW_MS, THINK_TOTAL_MS - (Date.now() - started)))
-          : block.input;
-        return { decision: checkConnectorDecision(normalize(input, request.text), request.connectors, catalog), usedModel: true };
+    if (!decisionBlock && blocks.length) {
+      // It answered in words — a refusal reads exactly like this. One nudge back to the tool, then
+      // its words stand as a no if that's what they are; a claim of finished work never gets through.
+      const remaining = THINK_TOTAL_MS - (Date.now() - started) - THINK_REVIEW_MS;
+      if (remaining > 5_000) {
+        const nudged = {
+          ...body,
+          messages: [
+            ...messages,
+            { role: "assistant", content: blocks },
+            { role: "user", content: "Reply through okidoki_respond — it's the only way anything reaches them. Sending, buying and deleting are routed as computer_use and gated by the Mac's approval card, so route them. If you truly won't do this, say so in `answer` with kind answer." },
+          ],
+        };
+        const second = await callModel(nudged, apiKey, fetchImpl, Math.min(25_000, remaining));
+        if (second.ok) {
+          reply = second.reply;
+          blocks = reply.content ?? [];
+          decisionBlock = blocks.find((b) => b.type === "tool_use" && b.input);
+          if (!decisionBlock && reply.stop_reason === "refusal") return declined(proseOf(blocks));
+        }
       }
+      if (!decisionBlock) {
+        const prose = proseOf(blocks);
+        if (REFUSAL_WORDS.test(prose)) return declined(prose);
+      }
+    }
+
+    if (decisionBlock?.input) {
+      const input = needsPlanReview(String(decisionBlock.input.kind))
+        ? await reviewPlan(body, decisionBlock.input, apiKey, fetchImpl, Math.min(THINK_REVIEW_MS, THINK_TOTAL_MS - (Date.now() - started)))
+        : decisionBlock.input;
+      return { decision: checkConnectorDecision(normalize(input, request.text), request.connectors, catalog), usedModel: true };
     }
     return stopped("the model did not return a structured decision; nothing was executed");
   } catch (error) {

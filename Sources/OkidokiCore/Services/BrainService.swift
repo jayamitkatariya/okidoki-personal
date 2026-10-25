@@ -330,7 +330,7 @@ public final class BrainService {
         - For risky or destructive work set risk=high and explain plainly.
         - Never target Okidoki's own windows (dashboard, notch, cards, overlays). This is a hard self-guard.
         - Screenshots are never stored; don't suggest keeping them.
-        - Prefer Apple apps and free tools. Never buy, send or delete without approval.
+        - Prefer Apple apps and free tools. Sending a message, buying and deleting are fine to route — the Mac shows an approval card before anything irreversible happens — just never say one of them is done.
         - Terminal commands execute in ONE zsh session on macOS; cd and exports persist. A failed step stops the plan. Never ask the person to type the commands.
         - Use pick_file=folder for a project or destination; it becomes the working folder. Otherwise start in the user's home.
         - Commands must be nonempty and noninteractive. Never read passwords from stdin, pipe remote scripts into shells, or start indefinite servers.

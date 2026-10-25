@@ -665,16 +665,26 @@ final class AppEnvironment: ObservableObject {
         if teach.isActive { memory.insert("Right now: \(teach.questionContext)", at: 0) }
         else if concept.isActive { memory.insert("Right now: \(concept.questionContext)", at: 0) }
         let installed = ToolCatalog.tools.filter { store.toolInstalled[$0.id] == true }.map(\.id)
-        var result: BrainThinkEnvelope?
+        var decision: BrainDecision?
         if sidecar.status.isReady {
-            result = await BrainClient.shared.think(text: text, request: request, history: history,
-                                                    memory: memory, events: events,
-                                                    settings: store.settings, account: store.activeAccount,
-                                                    installedTools: installed,
-                                                    frontWindow: screenContext?.windowTitle ?? "",
-                                                    connectors: connectorsPayload())
+            switch await BrainClient.shared.think(text: text, request: request, history: history,
+                                                  memory: memory, events: events,
+                                                  settings: store.settings, account: store.activeAccount,
+                                                  installedTools: installed,
+                                                  frontWindow: screenContext?.windowTitle ?? "",
+                                                  connectors: connectorsPayload()) {
+            case .answered(let envelope):
+                decision = envelope.decision
+            case .failed(let why):
+                // The brain is up and already waited on the model once; a second full round trip from
+                // here would only double the silence. Say what happened instead.
+                decision = BrainDecision(kind: .answer, title: "model unavailable",
+                                         answer: "the model didn't answer, so i stopped instead of guessing. \(why). try again in a moment.")
+            case .unreachable:
+                break
+            }
         }
-        if let decision = result?.decision {
+        if let decision {
             await handleDecision(decision, request: request, threadID: thread.id, source: source)
         } else {
             let result = await BrainService(store: store).think(request)

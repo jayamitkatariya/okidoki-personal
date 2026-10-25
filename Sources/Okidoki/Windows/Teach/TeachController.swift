@@ -124,6 +124,8 @@ final class TeachController {
     private var practiceRound = false
     private var lab: TeachLab?
     private var lastPointerUpdate: TimeInterval = 0
+    /// ⌥⌥ — the learner's "next", usable even while the model is looking.
+    private var optionTap = TeachKeys.DoubleTap()
 
     private static let barSize = CGSize(width: TeachBarView.width, height: 56)
 
@@ -422,7 +424,7 @@ final class TeachController {
             return
         }
         model.phase = .waiting
-        model.hint = "i couldn't reach the model — say \"next\" to retry, or esc to stop"
+        model.hint = "i couldn't reach the model — tap ⌥ twice or say \"next\" to retry, esc to stop"
         stage?.setThinking(false)
     }
 
@@ -900,7 +902,7 @@ final class TeachController {
 
     private func installMonitors() {
         removeMonitors()
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown, .scrollWheel, .mouseMoved, .leftMouseDragged]
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown, .flagsChanged, .scrollWheel, .mouseMoved, .leftMouseDragged]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }) {
@@ -911,7 +913,7 @@ final class TeachController {
                 Task { @MainActor in self?.handle(event) }
                 return nil
             }
-            if event.type == .mouseMoved { Task { @MainActor in self?.handle(event) } }
+            if event.type == .mouseMoved || event.type == .flagsChanged { Task { @MainActor in self?.handle(event) } }
             return event
         }) {
             monitors.append(local)
@@ -954,6 +956,13 @@ final class TeachController {
 
     private func handle(_ event: NSEvent) {
         guard model.isActive else { return }
+        if event.type == .flagsChanged {
+            if optionTap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags, at: event.timestamp) {
+                forceNext()
+            }
+            return
+        }
+        if event.type != .mouseMoved, event.type != .leftMouseDragged { optionTap.reset() }
         if event.type == .keyDown, event.keyCode == 53, !expectsEscape {
             if model.phase == .confirm { resolveConfirm(false); return }
             stop(completed: model.phase == .done)
@@ -1242,19 +1251,30 @@ final class TeachController {
 
     // MARK: Voice commands
 
-    /// "next" / "skip": move past the current step without doing it. Also retries after the model went quiet.
+    /// "next" / "skip" / ⌥⌥: move past the current step without doing it. Works while the model is
+    /// still looking too — that look is dropped and a fresh one starts — so nobody waits out a slow call.
     func skipStep() {
-        guard model.isActive else { return }
+        forceNext()
+    }
+
+    func forceNext() {
+        guard model.isActive, !performingForThem else { return }
         switch model.phase {
-        case .looking, .confirm:
+        case .confirm:
+            // "do it for me" is waiting on a yes; a no moves the lesson on by itself.
+            resolveConfirm(false)
             return
         case .done:
             stop(completed: true)
-        case .waiting:
+            return
+        case .looking, .waiting:
             if current != nil { landed = false; setOutcome("skipped — move on") }
-            modelRetries = 0
-            requestStep(after: 0.1, settle: false)
         }
+        whileLooking = []
+        scrollSettle?.cancel()
+        scrollSettle = nil
+        modelRetries = 0
+        requestStep(after: 0.1, settle: false)
     }
 
     /// "do it": borrow their hands for this one step, then keep teaching.

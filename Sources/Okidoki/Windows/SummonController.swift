@@ -80,6 +80,9 @@ final class SummonController {
     private var previousApp: NSRunningApplication?
     private var submitted = false
     private var clickMonitor: Any?
+    /// The capsule never spins forever: past every timeout in the chain, it says so and hands the text back.
+    private var thinkingWatchdog: DispatchWorkItem?
+    private static let thinkingLimit: TimeInterval = 100
     private var cancellables = Set<AnyCancellable>()
 
     init(environment: AppEnvironment, speech: SpeechRecognizer, glow: CursorGlowController) {
@@ -292,11 +295,28 @@ final class SummonController {
         model.error = nil
         env?.notch.noteListening(false)
         removeClickMonitor()
+        armThinkingWatchdog()
         env?.submitSummon(text: text, screenshot: model.screenshotPNG, selection: model.selection,
                           attachmentName: model.attachmentName)
     }
 
+    private func armThinkingWatchdog() {
+        thinkingWatchdog?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.model.phase == .thinking else { return }
+            self.showError("the model didn't answer — try again")
+        }
+        thinkingWatchdog = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.thinkingLimit, execute: work)
+    }
+
+    private func clearThinkingWatchdog() {
+        thinkingWatchdog?.cancel()
+        thinkingWatchdog = nil
+    }
+
     func showError(_ message: String) {
+        clearThinkingWatchdog()
         speech.stop(keepTranscript: true)
         glow.setListening(false)
         env?.notch.noteListening(false)
@@ -332,6 +352,7 @@ final class SummonController {
 
     /// Hide after a request was handed off (a card or another surface takes over).
     func hideInput() {
+        clearThinkingWatchdog()
         guard model.isVisible || overlay?.isShown == true else { return }
         speech.stop(keepTranscript: true)
         glow.hide()
@@ -346,6 +367,7 @@ final class SummonController {
     }
 
     func dismiss() {
+        clearThinkingWatchdog()
         if model.phase == .thinking {
             // The user backed out mid-request: don't pop its answer up afterwards.
             env?.answerController.suppressResultsUntilIdle()

@@ -284,9 +284,11 @@ final class AnswerCardController {
         pending = placeholder
         current = placeholder
         withAnimation(OKMotion.snappy) { state.card = placeholder }
-        // Safety net: never leave a spinner up forever.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in
-            guard let self, self.current === placeholder else { return }
+        // The request's own end clears the spinner (the isBusy sink above). This net is only for a
+        // request that somehow never reports back — a slow one that's still running keeps its spinner,
+        // so the answer doesn't appear out of nowhere after the placeholder vanished.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
+            guard let self, self.current === placeholder, self.env?.isBusy != true else { return }
             self.close(restoreApp: false)
         }
     }

@@ -16,6 +16,35 @@ final class TeachToolkitTests: XCTestCase {
         XCTAssertEqual(TeachKeys.combo(keyCode: 36, characters: "\r", flags: []), "return")
     }
 
+    func testTwoQuickTapsOfLeftOptionMeanNext() {
+        var tap = TeachKeys.DoubleTap()
+        let left = TeachKeys.DoubleTap.leftOption
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 0))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 0.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 0.2))
+        XCTAssertTrue(tap.flagsChanged(keyCode: left, flags: [], at: 0.3), "second release inside the window")
+
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 1.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 2.1), "too slow — a fresh first tap")
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 2.2))
+        XCTAssertTrue(tap.flagsChanged(keyCode: left, flags: [], at: 2.3))
+
+        // Right option, a chord, or a key in between doesn't count.
+        XCTAssertFalse(tap.flagsChanged(keyCode: 61, flags: [.option], at: 3))
+        XCTAssertFalse(tap.flagsChanged(keyCode: 61, flags: [], at: 3.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 4))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 4.1))
+        tap.reset()
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 4.2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 4.3), "a keystroke between the taps broke it")
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option, .command], at: 5))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.command], at: 5.1))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [.option], at: 5.2))
+        XCTAssertFalse(tap.flagsChanged(keyCode: left, flags: [], at: 5.3), "⌘⌥ then ⌥ is not a double tap")
+    }
+
     func testStepsAreWrittenBySonnetUnlessABiggerModelWasChosen() {
         XCTAssertEqual(TeachBrain.stepModel(for: ""), "claude-sonnet-5-5")
         XCTAssertEqual(TeachBrain.stepModel(for: "claude-haiku-5-5"), "claude-sonnet-5-5")
