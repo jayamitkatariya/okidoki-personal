@@ -298,9 +298,11 @@ image, the frontmost app and window, and the app's visible controls **numbered**
 their centers; `click_element` presses that exact control. The instructions and tools
 never change during a run, so they stay cached, and the conversation is append-only
 (thinking blocks go back untouched); old screenshots are cleared on the server
-(context management) rather than edited out. Haiku 5.5 drives with `effort: low`; after
-two failed batches, two that changed nothing, or the same action three times, one turn
-goes to Sonnet 5.5. The previous run in the same conversation is passed along, so
+(context management) rather than edited out. Haiku 5.5 drives every turn with
+`effort: low`, for speed (`defaults write com.jaykatariya.okidoki drivingEscalate -bool true`
+lets a run that's going nowhere hand one turn at a time to Sonnet 5.5, at most three times).
+The approved plan travels with the goal, and a "should I continue?" from the model is
+answered with "keep going" rather than ending the run. The previous run in the same conversation is passed along, so
 "again" and "continue" know what came before. Models that can't take the toolset use the
 single-action protocol (v1, `brain/src/computer.ts`), which recorded skills also use.
 

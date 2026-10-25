@@ -367,6 +367,8 @@ final class ComputerUseDriver {
         var stillBatches = 0
         var escalations = 0
         var escalate = false
+        // Off unless asked for: the chosen model (Haiku 5.5 by default, for speed) drives every turn.
+        let maxEscalations = UserDefaults.standard.bool(forKey: "drivingEscalate") ? 3 : 0
         var permissionErrors = 0
         var questionHolds = 0
         var startedSteps = false
@@ -598,7 +600,7 @@ final class ComputerUseDriver {
                 }
                 if repeats == 3 {
                     notes.append("That exact action has now run 3 times with the same result and nothing changed. Do something different: another control, a script, a keyboard shortcut — or finish with success false and the reason.")
-                    escalate = escalations < 3
+                    escalate = escalations < maxEscalations
                 }
                 if actionCount >= maxActions {
                     recordCall()
@@ -651,7 +653,7 @@ final class ComputerUseDriver {
             // A stronger model for one turn when it's going nowhere.
             failedBatches = batchFailed ? failedBatches + 1 : 0
             stillBatches = batchChanged ? 0 : stillBatches + 1
-            if escalations < 3, failedBatches >= 2 || stillBatches >= 2 || escalate {
+            if escalations < maxEscalations, failedBatches >= 2 || stillBatches >= 2 || escalate {
                 escalate = true
                 escalations += 1
                 failedBatches = 0
