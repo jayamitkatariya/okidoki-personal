@@ -23,6 +23,9 @@ export function requiredApps(steps: unknown): string[] {
   return [...apps].sort((a, b) => a.localeCompare(b));
 }
 
+/** Filled in by each Mac itself (its workbench address, today's date), so never asked for. */
+const BUILT_IN_PARAMETERS = new Set(["portal", "today", "today_iso"]);
+
 /** Typed values a recording carries become blanks a colleague fills in. Secrets never get this far. */
 export function parameterNames(steps: unknown): string[] {
   if (!Array.isArray(steps)) return [];
@@ -33,7 +36,7 @@ export function parameterNames(steps: unknown): string[] {
       const match = input.input.match(/\{\{\s*([^}]+?)\s*\}\}/g);
       for (const token of match ?? []) {
         const name = token.replace(/[{}]/g, "").trim();
-        if (name && !names.includes(name)) names.push(name);
+        if (name && !names.includes(name) && !BUILT_IN_PARAMETERS.has(name.toLowerCase())) names.push(name);
       }
     }
   }

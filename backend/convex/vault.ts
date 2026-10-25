@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { activeMembership } from "./orgs";
 import { orgForAccount, peopleIn, spaceAccess } from "./spaces";
@@ -238,5 +238,73 @@ export const touchCredential = mutation({
     const me = await activeMembership(ctx, row.orgId);
     if (!me || !(await mayRead(ctx, row.spaceId, me.userId))) return;
     await ctx.db.patch(row._id, { lastUsedAt: Date.now(), lastUsedBy: me.userId });
+  },
+});
+
+// ---- The Mac adding a document itself (a form it found on the web), over the sync secret ----
+// The account's active membership stands in for the signed-in user: the Mac proves the account is
+// linked by holding the deployment's secret, the same way its worker takes jobs.
+
+async function memberFor(ctx: MutationCtx, accountId: string): Promise<Doc<"memberships"> | null> {
+  const link = await ctx.db
+    .query("memberships")
+    .withIndex("by_account", (q) => q.eq("accountClientId", accountId))
+    .first();
+  return link && link.status === "active" ? link : null;
+}
+
+const loose = (name: string) => name.toLowerCase().replace(/^#/, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+export const uploadUrlForAccount = internalMutation({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    if (!(await memberFor(ctx, accountId))) return { ok: false as const, reason: "link this account to an organization first" };
+    return { ok: true as const, url: await ctx.storage.generateUploadUrl() };
+  },
+});
+
+export const saveFileForAccount = internalMutation({
+  args: { accountId: v.string(), space: v.string(), storageId: v.id("_storage"), name: v.string(), mime: v.string() },
+  handler: async (ctx, { accountId, space, storageId, name, mime }) => {
+    const fail = async (reason: string) => {
+      await ctx.storage.delete(storageId);
+      return { ok: false as const, reason };
+    };
+    const link = await memberFor(ctx, accountId);
+    if (!link) return await fail("link this account to an organization first");
+    const cleanName = name.trim().slice(0, 200);
+    if (!cleanName) return await fail("the file needs a name");
+    const stored = await ctx.db.system.get(storageId);
+    if (!stored) return { ok: false as const, reason: "the upload didn't arrive" };
+    if (stored.size > MAX_FILE_BYTES) return await fail("files up to 50 MB only");
+
+    // A space named loosely ("compliance", "#Compliance"); nothing named means the whole organization.
+    let spaceId: Id<"spaces"> | null = null;
+    let spaceName = "";
+    if (space.trim()) {
+      const wanted = loose(space);
+      const spaces = await ctx.db.query("spaces").withIndex("by_org", (q) => q.eq("orgId", link.orgId)).collect();
+      const found = spaces.find((s) => loose(s.name) === wanted) ?? spaces.find((s) => loose(s.name).includes(wanted) || wanted.includes(loose(s.name)));
+      if (!found) return await fail(`there's no space called “${space.trim()}”`);
+      const members = await ctx.db.query("spaceMembers").withIndex("by_space", (q) => q.eq("spaceId", found._id)).collect();
+      if (!members.some((m) => m.userId === link.userId)) return await fail(`join #${found.name} first`);
+      spaceId = found._id;
+      spaceName = found.name;
+    }
+
+    // A fresh copy of the same document replaces the old one in the same place: forms get revised.
+    const existing = await ctx.db.query("spaceFiles").withIndex("by_org", (q) => q.eq("orgId", link.orgId)).collect();
+    const same = existing.filter((f) => f.spaceId === spaceId && f.name.toLowerCase() === cleanName.toLowerCase());
+    for (const old of same) {
+      await ctx.storage.delete(old.storageId);
+      await ctx.db.delete(old._id);
+    }
+    const now = Date.now();
+    const id = await ctx.db.insert("spaceFiles", { orgId: link.orgId, spaceId, storageId, name: cleanName, size: stored.size, mime: mime.slice(0, 120) || "application/octet-stream", uploadedBy: link.userId, createdAt: now });
+    if (spaceId) {
+      await ctx.db.insert("spaceMessages", { spaceId, authorId: link.userId, author: "agent", kind: "file", text: cleanName, runId: null, fileId: id, createdAt: now });
+      await ctx.db.patch(spaceId, { lastMessageAt: now, lastMessage: `📎 ${cleanName}` });
+    }
+    return { ok: true as const, id, spaceName, replaced: same.length > 0, size: stored.size, url: await ctx.storage.getUrl(storageId) };
   },
 });

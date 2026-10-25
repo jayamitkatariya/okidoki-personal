@@ -28,7 +28,9 @@ public enum SkillReplayGeometry {
     /// ceiling: the check itself waits for the control to be there.
     public static func pause(for step: SkillStep) -> TimeInterval {
         let ceiling = isCheckable(step) || step.frameRect != nil ? 1.2 : 2.5
-        return min(max(step.delay ?? 0.6, 0.45), ceiling)
+        // Keys land where the focus already is; only clicks need the app to have settled first.
+        let floor = step.action == "type" || step.action == "key" ? 0.2 : 0.45
+        return min(max(step.delay ?? 0.6, floor), ceiling)
     }
 
     /// How long a replay keeps looking for a control that isn't there yet before asking for help.

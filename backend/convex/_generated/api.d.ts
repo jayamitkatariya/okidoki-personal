@@ -15,6 +15,7 @@ import type * as dashboard from "../dashboard.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as orgs from "../orgs.js";
+import type * as seedDemo from "../seedDemo.js";
 import type * as share from "../share.js";
 import type * as sharedSkills from "../sharedSkills.js";
 import type * as spaces from "../spaces.js";
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   jobs: typeof jobs;
   orgs: typeof orgs;
+  seedDemo: typeof seedDemo;
   share: typeof share;
   sharedSkills: typeof sharedSkills;
   spaces: typeof spaces;

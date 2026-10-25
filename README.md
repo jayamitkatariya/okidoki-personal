@@ -69,6 +69,31 @@ Checks: `cd backend && npm test` (organizations, spaces, chat, jobs and the work
 skills, vault — against an in-memory Convex with mocked logins), `cd web && bun test`, and
 `swift test --filter 'SpaceWorkerTests|NearbyTests'`.
 
+### Skills against records, the vault from the Mac
+
+- **`{{placeholders}}` fill in on replay.** A skill's typed text can name fields (`{{importer}}`,
+  `{{hts}}`). `records.json` in `~/Library/Application Support/Okidoki` holds rows to replay against
+  (`{"records": [{"id": "MTS-4471", "title": "…", "skill": "file ACE entry", "values": {…}}]}`),
+  so “file the entry for MTS-4471”, “file entries for MTS-4472 and MTS-4473”, “file all pending
+  entries” or “replay file ACE entry with hts=8517.13.0000” need no model: one pass per record,
+  every placeholder checked before anything is touched. `{{portal}}` and `{{today}}` come from the
+  Mac. A run's steps and the space's chat show each record's result.
+- **The vault takes files from the Mac.** “add the CBP 3461 to the compliance vault” fetches the
+  agency's current PDF (known forms in `FormCatalog`, anything else found by a web search in the
+  brain, a pasted link as is), checks it really is a PDF, and files it org-wide or into a space over
+  `/api/vault/upload-url` and `/api/vault/save` (sync secret, the account's membership). A newer copy
+  replaces the old one; a space gets a file line in its chat.
+- **The Entry Workbench** (`brain/src/portal.ts`, `http://127.0.0.1:4319/ace/entry`) is a CBP Form
+  7501 entry summary a brokerage files through: real port, carrier, country and HTS reference data,
+  FY2027 MPF/HMF, transmissions to ACE's certification environment kept in `ace-entries.json`. A
+  replay that types `{{portal}}` must get an entry number back for each record, or it says it failed.
+- **Demo: Meridian Trade Services**, a U.S. customs broker. `bun scripts/demo-meridian/seed.ts
+  --fresh` seeds the shipments, the skill, the organization (colleagues, spaces, chat, the skill
+  shared org-wide) and the vault (official CBP/CBSA forms plus each shipment's paperwork); it backs
+  up `state.json` and quits okidoki first. Needs `backend/convex/seedDemo.ts` deployed.
+  `scripts/demo-meridian/rehearse.sh "<line>"` runs one demo line against an app started with
+  `OKIDOKI_DEV_HOOKS=1` and prints each step's timing.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
