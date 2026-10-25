@@ -812,7 +812,7 @@ final class AppEnvironment: ObservableObject {
             if decision.lessonKind == "concept" {
                 concept.begin(topic: topic, requestText: request.text, appBundleID: request.bundleID,
                               screenshotPNG: request.screenshotPNG, runID: run.id, threadID: threadID)
-                toast(title: "drawing · \(topic)", detail: "a model is coming up beside your screen · esc closes it",
+                toast(title: "drawing · \(topic)", detail: "a model is coming up beside your screen · ⌥⌥ moves on · esc closes it",
                       kind: .info, undoLabel: "stop", onUndo: { [weak self] in self?.concept.dismiss(completed: false) },
                       editLabel: nil, onEdit: nil, runID: run.id)
             } else {

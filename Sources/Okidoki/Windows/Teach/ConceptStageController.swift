@@ -65,6 +65,7 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
     private var pendingLoad: String?
     private var generation = 0
     private var escMonitors: [Any] = []
+    private var optionTap = TeachKeys.DoubleTap()
     private var spaceObservers: [NSObjectProtocol] = []
     private var beatDoneContinuation: CheckedContinuation<Void, Never>?
     private var saidSoFar: [String] = []
@@ -673,16 +674,30 @@ final class ConceptStageController: NSObject, WKScriptMessageHandler, WKNavigati
         pointPanel?.orderFrontRegardless()
     }
 
+    /// Esc closes the stage; two quick taps of the left option key move on a beat, same as the in-app lesson.
     private func installKeys() {
         for monitor in escMonitors { NSEvent.removeMonitor(monitor) }
         escMonitors = []
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            if event.keyCode == 53 { Task { @MainActor in self?.dismiss(completed: self?.model.phase == .done) }; return nil }
+        optionTap.reset()
+        let mask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .scrollWheel]
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            if event.type == .keyDown, event.keyCode == 53 { Task { @MainActor in self?.handleKey(event) }; return nil }
+            Task { @MainActor in self?.handleKey(event) }
             return event
         }) { escMonitors.append(local) }
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            if event.keyCode == 53 { Task { @MainActor in self?.dismiss(completed: self?.model.phase == .done) } }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            Task { @MainActor in self?.handleKey(event) }
         }) { escMonitors.append(global) }
+    }
+
+    private func handleKey(_ event: NSEvent) {
+        guard isActive else { return }
+        if event.type == .flagsChanged {
+            if optionTap.flagsChanged(keyCode: event.keyCode, flags: event.modifierFlags, at: event.timestamp) { next() }
+            return
+        }
+        optionTap.reset()
+        if event.type == .keyDown, event.keyCode == 53 { dismiss(completed: model.phase == .done) }
     }
 
     /// The stage lives in `Resources/stage` inside the app; in a dev build, next to the sources.
