@@ -2464,6 +2464,11 @@ final class AppEnvironment: ObservableObject {
         // Records that came back with a receipt ("MTS-4471 → entry … accepted") say more than a count.
         let receipts = (store.run(runID)?.output ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         let line = !receipts.isEmpty ? receipts.joined(separator: "; ") : passes > 1 ? "replayed \(passes) times" : "replayed once"
+        // Several records: one reply that lists them all, which is also what a space sees last.
+        if receipts.count > 1, let threadID = store.run(runID)?.threadID {
+            store.appendMessage(threadID: threadID, role: .assistant,
+                                text: "done · \(receipts.count) records:\n" + receipts.joined(separator: "\n"), runID: runID)
+        }
         store.finishRun(runID, status: .done, summary: line)
         toast(title: "done", detail: "\(line) — control is yours", kind: .success,
               undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: runID)
