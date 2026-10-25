@@ -146,6 +146,8 @@ public final class WatchRecorder: ObservableObject {
     var typingIdle: TimeInterval = 2.5
     /// Idle gap that ends a scroll gesture.
     var scrollIdle: TimeInterval = 0.8
+    /// Tests turn this off so real clicks, keys and app switches on the machine never land in their steps.
+    var watchesSystem = true
 
     public init() {}
 
@@ -171,6 +173,7 @@ public final class WatchRecorder: ObservableObject {
         lastAppAt = .distantPast
         // Watching the display from the start means the first click's picture is already pre-click.
         if frameProvider != nil, let frameSession { Task { await frameSession(true) } }
+        guard watchesSystem else { return }
 
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             let point = Self.quartzPoint(event)

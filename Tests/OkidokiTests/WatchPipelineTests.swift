@@ -14,6 +14,7 @@ final class WatchPipelineTests: XCTestCase {
     override func setUp() {
         super.setUp()
         recorder = WatchRecorder()
+        recorder.watchesSystem = false
         front = "Finder"
         labels = [:]
         recorder.frameProvider = nil

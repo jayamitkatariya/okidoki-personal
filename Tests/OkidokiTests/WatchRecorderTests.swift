@@ -88,6 +88,7 @@ final class WatchRecorderTests: XCTestCase {
     @MainActor
     func testStartStopWithoutEventsFinishesEmpty() {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         var finished: [WatchedStep]?
         recorder.onFinish = { finished = $0 }
         recorder.start(name: "demo")
@@ -106,6 +107,7 @@ final class WatchRecorderTests: XCTestCase {
     @MainActor
     func testCancelDoesNotFinish() {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         var fired = false
         recorder.onFinish = { _ in fired = true }
         recorder.start()
