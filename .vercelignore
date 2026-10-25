@@ -1,0 +1,11 @@
+.build
+.build-*
+build
+node_modules
+brain
+backend
+Resources
+Sources
+Tests
+scripts
+*.app
