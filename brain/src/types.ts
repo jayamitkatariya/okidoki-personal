@@ -284,12 +284,14 @@ export interface ThinkRequest {
   accountId?: string;
 }
 
-/** What the Mac sends to keep the memory index current: its own items, as stored. */
+/** What the Mac sends to keep the memory index current: the parts of its items the index uses.
+ * Older Macs also send run output and routines; both are ignored. */
 export interface MemorySyncRequest {
   projectId: string;
   projectKey: string;
   cacheDir?: string;
-  memories?: { id: string; text: string; section?: string; updatedAt?: string }[];
+  /** No accountID (older Macs): the note is shared by every account. */
+  memories?: { id: string; accountID?: string; text: string; section?: string; updatedAt?: string }[];
   threads?: { id: string; accountID?: string; title?: string; messages?: { id: string; role?: string; text?: string; createdAt?: string }[] }[];
   runs?: { id: string; accountID?: string; kind?: string; title?: string; prompt?: string; summary?: string; output?: string; status?: string; createdAt?: string }[];
   skills?: { id: string; accountID?: string; name?: string; summary?: string; steps?: { text?: string }[]; createdAt?: string }[];
@@ -297,11 +299,16 @@ export interface MemorySyncRequest {
 }
 
 export interface RecalledItem {
+  /** memory · message · run · skill */
   type: string;
   text: string;
   title: string;
   date: string;
   score: number;
+  /** Notes: aboutYou or rightNow. */
+  section?: string;
+  /** Runs: how the task ended. */
+  status?: string;
 }
 
 /** Mirrors CodingAgentID in Sources/OkidokiCore/Models/Models.swift. */

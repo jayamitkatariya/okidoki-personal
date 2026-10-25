@@ -385,7 +385,7 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
       ? Promise.race([mcpCatalog(request.connectors.mcpServers, 30_000),
                       new Promise<McpCatalogEntry[]>((resolve) => setTimeout(() => resolve([]), 4_000))])
       : Promise.resolve([]),
-    recall(request.text, request.accountId, { threadId: request.threadID }),
+    recall(request.text, request.accountId, { threadId: request.threadID, exclude: request.memory }),
     recallTools(request.text),
   ]);
   const content: unknown[] = [];

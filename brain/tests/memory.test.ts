@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { anthropicKey, mossCredentials } from "../src/keys";
-import { RECALL_MIN_SCORE, recallPrompt, selectRecalled, toDocs, toolIndexDocs } from "../src/memory";
+import { RECALL_MIN_SCORE, RIGHT_NOW_DAYS, recallFilter, recallPrompt, selectRecalled, toDocs, toolIndexDocs } from "../src/memory";
 import { tools } from "../src/catalog";
 import { clipboardFor, historyMessages, isDurableFact, normalize, stripMacSuffix, toolSuggestions } from "../src/llm";
 
@@ -27,33 +27,66 @@ test("anthropic and moss credentials prefer the request, then the environment", 
   }
 });
 
-test("moss short-term memory keeps right-now notes and the newest turns", () => {
+test("the index holds every note, the newest turns, recent tasks and skills, each with its account", () => {
+  const now = new Date("2026-10-24T12:00:00.000Z");
   const messages = Array.from({ length: 60 }, (_, index) => ({
     id: `m${index}`,
     role: "user",
     text: `turn ${index} is long enough`,
     createdAt: `2026-10-24T00:${String(index).padStart(2, "0")}:00.000Z`,
   }));
-  const docs = toDocs({
-    projectId: "p",
-    projectKey: "k",
-    memories: [
-      { id: "about", text: "I study at Purdue", section: "aboutYou", updatedAt: "2026-10-01" },
-      { id: "now", text: "shipping the notch this week", section: "rightNow", updatedAt: "2026-10-24" },
-    ],
-    threads: [{ id: "t1", accountID: "acct", title: "today", messages }],
-    runs: [{ id: "r1", accountID: "acct", title: "old run", prompt: "do the thing", summary: "done" }],
-    skills: [{ id: "s1", accountID: "acct", name: "export", summary: "exports a file" }],
-  });
+  const docs = toDocs(
+    {
+      projectId: "p",
+      projectKey: "k",
+      memories: [
+        { id: "about", accountID: "acct", text: "I study at Purdue", section: "aboutYou", updatedAt: "2026-01-01" },
+        { id: "now", accountID: "acct", text: "shipping the notch this week", section: "rightNow", updatedAt: "2026-10-24" },
+        { id: "legacy", text: "an older Mac's note", section: "aboutYou", updatedAt: "2026-10-01" },
+      ],
+      threads: [{ id: "t1", accountID: "acct", title: "today", messages }],
+      runs: [{ id: "r1", accountID: "acct", kind: "terminal", status: "done", title: "compress video", prompt: "compress the launch video for discord", summary: "24 MB", createdAt: "2026-10-23T10:00:00Z" }],
+      skills: [{ id: "s1", accountID: "work", name: "expense report", summary: "files receipts in Concur", steps: [{ text: "open Concur" }, { text: "attach receipts" }], createdAt: "2026-09-01" }],
+    },
+    now,
+  );
   const ids = docs.map((doc) => doc.id);
-  expect(ids).toContain("memory:now");
-  expect(ids).not.toContain("memory:about");
-  expect(ids).not.toContain("run:r1");
-  expect(ids).not.toContain("skill:s1");
+  expect(ids).toEqual(expect.arrayContaining(["memory:about", "memory:now", "memory:legacy", "run:r1", "skill:s1"]));
   expect(ids.filter((id) => id.startsWith("message:")).length).toBe(48);
   expect(ids).toContain("message:m59");
   expect(ids).not.toContain("message:m0");
-  expect(docs.find((doc) => doc.id === "message:m59")?.metadata.account).toBe("acct");
+  const byId = new Map(docs.map((doc) => [doc.id, doc]));
+  expect(byId.get("message:m59")?.metadata.account).toBe("acct");
+  expect(byId.get("memory:about")?.metadata).toMatchObject({ type: "memory", account: "acct", section: "aboutYou" });
+  expect(byId.get("memory:legacy")?.metadata.account).toBe("");
+  expect(byId.get("run:r1")?.text).toBe("compress video: compress the launch video for discord → 24 MB");
+  expect(byId.get("run:r1")?.metadata).toMatchObject({ type: "run", account: "acct", status: "done", date: "2026-10-23" });
+  expect(byId.get("skill:s1")?.text).toBe("expense report: files receipts in Concur. Steps: open Concur; attach receipts");
+  expect(byId.get("skill:s1")?.metadata).toMatchObject({ type: "skill", account: "work", title: "expense report" });
+});
+
+test("stale right-now notes, plain answers, unapproved plans and old tasks stay out of the index", () => {
+  const now = new Date("2026-10-24T12:00:00.000Z");
+  const docs = toDocs(
+    {
+      projectId: "p",
+      projectKey: "k",
+      memories: [
+        { id: "stale", accountID: "acct", text: "packing for the Chicago trip", section: "rightNow", updatedAt: "2026-09-01T00:00:00Z" },
+        { id: "fresh", accountID: "acct", text: "studying for the econ midterm", section: "rightNow", updatedAt: "2026-10-20T00:00:00Z" },
+        { id: "blank", accountID: "acct", text: "   ", section: "aboutYou" },
+      ],
+      runs: [
+        { id: "answer", accountID: "acct", kind: "answer", status: "done", title: "what's the capital of peru", createdAt: "2026-10-24T00:00:00Z" },
+        { id: "preview", accountID: "acct", kind: "terminal", status: "previewing", title: "install node", createdAt: "2026-10-24T00:00:00Z" },
+        { id: "old", accountID: "acct", kind: "terminal", status: "done", title: "clean up my mac", createdAt: "2026-06-01T00:00:00Z" },
+        { id: "kept", accountID: "acct", kind: "computer_use", status: "failed", title: "send mom a message", prompt: "send mom a message on whatsapp", createdAt: "2026-10-22T00:00:00Z" },
+      ],
+    },
+    now,
+  );
+  expect(docs.map((doc) => doc.id).sort()).toEqual(["memory:fresh", "run:kept"]);
+  expect(RIGHT_NOW_DAYS).toBe(14);
 });
 
 test("short-term memory skips the Mac's own status lines and turns older than two weeks", () => {
@@ -98,10 +131,35 @@ test("recall keeps only relevant hits from this account, never the current threa
   expect(picked.map((item) => item.text)).toEqual(["blue puma shoes", "shipping the notch this week"]);
   expect(RECALL_MIN_SCORE).toBeGreaterThan(0.2);
   const prompt = recallPrompt(picked);
-  expect(prompt).toContain("not this one");
+  expect(prompt).toContain("not this conversation");
   expect(prompt).toContain("[earlier · dia · 2026-10-21] blue puma shoes");
-  expect(prompt).toContain("[note · 2026-10-24] shipping the notch this week");
+  expect(prompt).toContain("[note · right now · 2026-10-24] shipping the notch this week");
   expect(recallPrompt([])).toBe("");
+});
+
+test("recall leaves out notes the prompt already lists, and labels tasks and skills", () => {
+  const hits = [
+    { id: "memory:a", text: "I study at Purdue", metadata: { type: "memory", account: "acct", section: "aboutYou", date: "2026-10-01" }, score: 0.9 },
+    { id: "run:r1", text: "compress video: compress the launch video → 24 MB", metadata: { type: "run", account: "acct", title: "compress video", status: "done", date: "2026-10-23" }, score: 0.7 },
+    { id: "skill:s1", text: "expense report: files receipts in Concur", metadata: { type: "skill", account: "acct", title: "expense report", date: "2026-09-01" }, score: 0.6 },
+    { id: "skill:s2", text: "someone else's skill", metadata: { type: "skill", account: "work", title: "other", date: "2026-09-01" }, score: 0.95 },
+  ];
+  const picked = selectRecalled(hits, "do that thing again", "acct", { exclude: ["about you: I study at Purdue"] });
+  expect(picked.map((item) => item.type)).toEqual(["run", "skill"]);
+  const prompt = recallPrompt(picked);
+  expect(prompt).toContain("[task you asked for · done · 2026-10-23] compress video");
+  expect(prompt).toContain("[saved skill · expense report · 2026-09-01] expense report");
+  expect(prompt).toContain("replayed by its name");
+});
+
+test("recall asks the index for this account's items and shared notes, never tools", () => {
+  expect(recallFilter("acct")).toEqual({
+    $and: [
+      { field: "type", condition: { $ne: "tool" } },
+      { field: "account", condition: { $in: ["acct", ""] } },
+    ],
+  });
+  expect(recallFilter(undefined)).toEqual({ field: "type", condition: { $ne: "tool" } });
 });
 
 test("the clipboard reaches the model only when the request names it, never as an echo of the chat", () => {
