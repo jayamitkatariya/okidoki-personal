@@ -415,8 +415,18 @@ public final class OkidokiStore: ObservableObject {
             run.endedAt = Date()
             run.summary = summary
             if let freedBytes { run.freedBytes = freedBytes }
+            // On failure, steps that finished stay done: the first unfinished one failed, later ones never ran.
+            var failedOne = false
             for index in run.steps.indices {
-                run.steps[index].status = status == .done ? .done : (status == .failed ? .failed : run.steps[index].status)
+                switch status {
+                case .done:
+                    run.steps[index].status = .done
+                case .failed where run.steps[index].status != .done:
+                    run.steps[index].status = failedOne ? .cancelled : .failed
+                    failedOne = true
+                default:
+                    break
+                }
                 if run.steps[index].startedAt == nil { run.steps[index].startedAt = run.startedAt }
                 if run.steps[index].endedAt == nil { run.steps[index].endedAt = Date() }
             }

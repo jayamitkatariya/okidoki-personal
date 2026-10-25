@@ -123,6 +123,23 @@ test("a batch's results go back in order; skipped members get the exact halt tex
   expect(out.actions[0]).toMatchObject({ type: "done", summary: "sent" });
 });
 
+test("a computer action sent without toolset_name gets a result without one, and still runs", async () => {
+  const api = fakeAPI([
+    reply([
+      { type: "tool_use", id: "z", name: "zoom", input: { region: [0, 0, 400, 300] } },
+      { type: "tool_use", id: "k", name: "key", toolset_name: "computer", input: { text: "Return" } },
+    ]),
+    reply([{ type: "tool_use", id: "f", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  const first = await driveStep(request(), "sk", api.impl);
+  expect(first.actions.map((a) => a.type)).toEqual(["zoom", "key"]);
+  await driveStep(request({ step: 1, results: [{ id: "z", result: "zoomed", imageBase64: "em9vbQ==", mediaType: "image/png" }, { id: "k", result: "", skipped: true }] }), "sk", api.impl);
+  const results = api.sent[1].body.messages[2].content;
+  expect(results[0].toolset_name).toBeUndefined();
+  expect(results[1].toolset_name).toBe("computer");
+  expect(results[1].content[0].text).toBe(HALT_TEXT);
+});
+
 test("the scripting dictionary is sent when the frontmost app changes, not every turn", async () => {
   const withDict = { ...obs, scripting: "make new note" };
   const api = fakeAPI([
@@ -296,6 +313,58 @@ test("a stream that drops after an action keeps the finished part instead of ask
   expect(seen).toEqual(["t1"]);
   expect(out.actions.map((a) => a.id)).toEqual(["t1"]);
   expect(sessionFor("run-1")?.pending.map((u) => u.id)).toEqual(["t1"]);
+});
+
+test("the approved plan reaches the model, and it is told to keep going rather than ask", async () => {
+  const api = fakeAPI([reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }])]);
+  const plan = "Add a 9V battery, a resistor and an LED from the Basic components panel, then wire them in a closed series loop.";
+  await driveStep(request({ goal: "make a basic circuit for me", plan }), "sk", api.impl);
+  const system = api.sent[0].body.system[0].text as string;
+  expect(system).toContain(`The plan the user approved: ${plan}`);
+  expect(system).toContain("Never stop to ask whether to continue");
+  expect(system).toContain("A question back to the user is not a reason to stop");
+
+  resetSessions();
+  const same = fakeAPI([reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }])]);
+  await driveStep(request({ goal: "open notes", plan: "Open Notes" }), "sk", same.impl);
+  expect(same.sent[0].body.system[0].text).not.toContain("The plan the user approved");
+});
+
+test("thinking off forces the tool call only on Haiku; an escalated Sonnet turn asks normally", async () => {
+  const api = fakeAPI([
+    reply([{ type: "tool_use", id: "a", name: "key", toolset_name: "computer", input: { text: "Return" } }]),
+    reply([{ type: "tool_use", id: "b", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  await driveStep(request({ effort: "none" }), "sk", api.impl);
+  await driveStep(request({ step: 1, effort: "none", escalate: true, results: [{ id: "a", result: "ok" }] }), "sk", api.impl);
+  expect(api.sent[0].body.tool_choice).toEqual({ type: "any" });
+  expect(api.sent[0].body.output_config).toBeUndefined();
+  expect(api.sent[1].body.model).toBe("claude-sonnet-5-5");
+  expect(api.sent[1].body.tool_choice).toEqual({ type: "auto" });
+  expect(api.sent[1].body.output_config).toEqual({ effort: "low" });
+});
+
+test("a field the model doesn't take is dropped and remembered instead of ending the run", async () => {
+  const rejected = '{"type":"error","error":{"type":"invalid_request_error","message":"tool_choice: type \\"tool\\" and \\"any\\" are not supported for this model."}}';
+  const api = fakeAPI([
+    new Response(rejected, { status: 400 }),
+    reply([{ type: "tool_use", id: "a", name: "key", toolset_name: "computer", input: { text: "Return" } }]),
+    reply([{ type: "tool_use", id: "b", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  const out = await driveStep(request({ effort: "none" }), "sk", api.impl);
+  expect(out.actions[0].type).toBe("key");
+  expect(api.sent.map((s) => s.body.tool_choice)).toEqual([{ type: "any" }, { type: "auto" }]);
+  await driveStep(request({ step: 1, effort: "none", results: [{ id: "a", result: "ok" }] }), "sk", api.impl);
+  expect(api.sent[2].body.tool_choice).toEqual({ type: "auto" });
+
+  resetSessions();
+  const effort = fakeAPI([
+    new Response('{"error":{"message":"output_config.effort: Extra inputs are not permitted"}}', { status: 400 }),
+    reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  await driveStep(request({ settings: { claudeModel: "claude-opus-4-8" } }), "sk", effort.impl);
+  expect(effort.sent[0].body.output_config).toEqual({ effort: "low" });
+  expect(effort.sent[1].body.output_config).toBeUndefined();
 });
 
 test("the private Mac gets the toolset without scripts or numbered controls", async () => {

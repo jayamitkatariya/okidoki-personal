@@ -45,6 +45,8 @@ final class ComputerUseDriver {
     private var escGlobal: Any?
     private var blindVision = 0
     private var recorder: DriveRecorder?
+    /// okidoki's own windows stepped aside for the run.
+    private var hiddenWindows: [NSWindow] = []
     private var target: ComputerTarget = LocalComputer()
     private let cursor = DriveCursorController()
     private let glow = EdgeGlowController()
@@ -112,7 +114,10 @@ final class ComputerUseDriver {
         panel.orderFrontRegardless()
         self.panel = panel
 
-        if target.stopsOnUserEscape { installMonitors() }
+        if target.stopsOnUserEscape {
+            installMonitors()
+            clearOwnWindows()
+        }
         if target.showsPointerOverlay {
             cursor.show(on: screen, label: "okidoki · looking")
             glow.show(on: screen)
@@ -362,7 +367,11 @@ final class ComputerUseDriver {
         var stillBatches = 0
         var escalations = 0
         var escalate = false
+        // Off unless asked for: the chosen model (Haiku 5.5 by default, for speed) drives every turn.
+        let maxEscalations = UserDefaults.standard.bool(forKey: "drivingEscalate") ? 3 : 0
         var permissionErrors = 0
+        var questionHolds = 0
+        var startedSteps = false
         var lastFrame: String?
         let maxCalls = 40
         let maxActions = 120
@@ -426,6 +435,10 @@ final class ComputerUseDriver {
                 "settings": ["claudeModel": env.store.settings.claudeModel],
             ]
             if let previous { body["previous"] = previous }
+            if let plan = run.preview?.summary.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty,
+               plan.lowercased() != run.prompt.lowercased() {
+                body["plan"] = plan
+            }
 
             // Think and act. Streaming runs each action as soon as the model finishes writing it.
             if !env.sidecar.status.isReady {
@@ -469,6 +482,12 @@ final class ComputerUseDriver {
                 if act.type == "done" || act.type == "fail" {
                     if halted || batchFailed {
                         results.append(["id": id, "result": "Not finished: an earlier action in this turn failed — check the new screenshot first.", "isError": true])
+                        return true
+                    }
+                    // Asking whether to go on isn't a failure: the user asked for the whole task and approved the plan.
+                    if act.type == "fail", questionHolds < 2, DrivePolicy.asksToContinue(act.reason ?? act.summary ?? "") {
+                        questionHolds += 1
+                        results.append(["id": id, "result": "Don't ask — the user already asked for the whole task and approved the plan. Keep going until it's finished. Only finish with success false if something truly blocks you (a sign-in, a payment, a permission prompt, a missing app) or several different approaches have failed.", "isError": true])
                         return true
                     }
                     // Success is only claimed from a screen the model has seen: not right after acting blind.
@@ -542,11 +561,16 @@ final class ComputerUseDriver {
                    let label = executor.context.elements[n]?.control.label { entry["target"] = label }
                 history.append(entry)
                 setStepResult(outcome.text)
+                // The plan's steps are coarse (get going · do it · hand back): the first one is done once
+                // something worked, the middle one runs until the end, and finishing settles the rest.
+                let firstWorked = !startedSteps && !outcome.isError
+                if firstWorked { startedSteps = true }
                 env.store.updateRun(run.id) { run in
                     run.output += outcome.text + "\n"
-                    let index = min(max(0, actionCount - 1), max(0, run.steps.count - 1))
-                    if run.steps.indices.contains(index) { run.steps[index].status = .done }
-                    if run.steps.indices.contains(index + 1) { run.steps[index + 1].status = .running }
+                    if firstWorked, run.steps.count > 1 {
+                        run.steps[0].status = .done
+                        run.steps[1].status = .running
+                    }
                 }
                 recorder?.record(DriveTelemetry.Action(call: call, type: act.type, performMs: outcome.performMs,
                                                        settleMs: outcome.settleMs, changed: outcome.change?.changed,
@@ -576,7 +600,7 @@ final class ComputerUseDriver {
                 }
                 if repeats == 3 {
                     notes.append("That exact action has now run 3 times with the same result and nothing changed. Do something different: another control, a script, a keyboard shortcut — or finish with success false and the reason.")
-                    escalate = escalations < 3
+                    escalate = escalations < maxEscalations
                 }
                 if actionCount >= maxActions {
                     recordCall()
@@ -629,7 +653,7 @@ final class ComputerUseDriver {
             // A stronger model for one turn when it's going nowhere.
             failedBatches = batchFailed ? failedBatches + 1 : 0
             stillBatches = batchChanged ? 0 : stillBatches + 1
-            if escalations < 3, failedBatches >= 2 || stillBatches >= 2 || escalate {
+            if escalations < maxEscalations, failedBatches >= 2 || stillBatches >= 2 || escalate {
                 escalate = true
                 escalations += 1
                 failedBatches = 0
@@ -878,7 +902,44 @@ final class ComputerUseDriver {
         runID = nil
     }
 
+    /// okidoki's own windows are left out of every screenshot, so one on top (the dashboard the request was
+    /// typed into, say) would take clicks aimed at what the model sees, and keys while okidoki is active.
+    /// They step aside for the run, the app underneath gets the focus, and they come back afterwards.
+    private func clearOwnWindows() {
+        let own = NSApp.windows.filter { $0.isVisible && !($0 is NSPanel) && $0.level == .normal }
+        guard !own.isEmpty else { return }
+        hiddenWindows = own
+        own.forEach { $0.orderOut(nil) }
+        guard NSRunningApplication.current.isActive, let pid = Self.appUnderneath(),
+              let app = NSRunningApplication(processIdentifier: pid) else { return }
+        app.activate()
+        AXSearch.raise(pid: pid)
+    }
+
+    private func restoreOwnWindows() {
+        let windows = hiddenWindows
+        hiddenWindows = []
+        windows.forEach { $0.orderFront(nil) }
+    }
+
+    /// The app whose window is frontmost once okidoki's are out of the way.
+    nonisolated static func appUnderneath() -> pid_t? {
+        let me = ProcessInfo.processInfo.processIdentifier
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        for info in list {
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != me,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: Double],
+                  (bounds["Width"] ?? 0) > 200, (bounds["Height"] ?? 0) > 150 else { continue }
+            return pid
+        }
+        return nil
+    }
+
     private func cleanupPanels() {
+        restoreOwnWindows()
         model.visible = false
         panel?.orderOut(nil)
         panel = nil
