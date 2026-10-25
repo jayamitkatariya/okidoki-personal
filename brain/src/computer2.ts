@@ -142,10 +142,12 @@ export function systemPromptV2(request: DriveRequest): string {
     `- After every batch the Mac waits until the screen settles and pages finish loading, then sends a fresh screenshot with the results. Don't call screenshot or wait just to look or to let something load.`,
     `- Check the results and the new screenshot before going on. A result that is an error or says nothing changed means that action did not work: try another way (another control, a shortcut, a script) instead of repeating it.`,
     `- type writes into whatever has keyboard focus, so click the field first. To replace text: click the field, super+a, then type. Long text is pasted for you.`,
+    `- If a pop-up, banner or overlay (cookie notice, sign-up or donation prompt, tooltip) covers what the task needs, close it with its close button or Escape — never accept, subscribe, sign in or pay to get rid of it.`,
     `- Coordinates are pixels in the latest screenshot, origin top-left. The screenshot is the whole display at one pixel per point.`,
     ``,
     `Finishing`,
-    `- Call finish with success true only when the newest screenshot or result shows the whole task is done; summary says what was achieved and where.`,
+    `- Leave the result on screen for the user: bring the app forward and open or select what you made or changed so its content is readable (the note itself, not just its title in a list; the document; the page; the sent message), even when a script did the work.`,
+    `- Call finish with success true on its own, in a turn after you have seen a screenshot that shows the whole task done. A finish sent in the same turn as other actions is held back until you have looked. summary says what was achieved and where.`,
     `- Call finish with success false after several different approaches have failed, saying what blocked you.`,
     ``,
     `Rules`,
@@ -177,7 +179,7 @@ function remoteSystemPromptV2(request: DriveRequest): string {
     `- Safari, Notes, Reminders, Calendar, Mail, TextEdit, Finder and Terminal are always installed. If an app is missing, use the web version or finish with success false.`,
     ``,
     `Finishing`,
-    `- Call finish with success true only when the newest screenshot shows the whole task is done; the summary says where the result is, because the user didn't see the screen.`,
+    `- Call finish with success true on its own, in a turn after you have seen a screenshot that shows the whole task done; the summary says where the result is, because the user didn't see the screen.`,
     `- Call finish with success false after several different approaches have failed.`,
     ``,
     `Rules`,
@@ -462,7 +464,12 @@ function failure(reason: string, error?: string): DriveResponse {
   return { actions: [{ id: "", tool: "finish", member: false, type: "fail", reason }], error: error ?? reason };
 }
 
+/**
+ * effort "low" | "medium" | "high" lets the model think (adaptive thinking, the 5.5 default) that much.
+ * "none" forces a tool call, which on the 5.5 models skips thinking entirely: fastest, least deliberate.
+ */
 export function requestBody(session: Session, messages: Message[], model: string, effort: string) {
+  const forced = effort === "none";
   return {
     model,
     max_tokens: 4096,
@@ -471,7 +478,7 @@ export function requestBody(session: Session, messages: Message[], model: string
     messages,
     // Automatic caching moves the breakpoint to the newest block, so each turn reads the last one's prefix.
     cache_control: { type: "ephemeral" },
-    output_config: { effort },
+    ...(forced ? {} : { output_config: { effort } }),
     context_management: {
       edits: [{
         type: "clear_tool_uses_20250919",
@@ -480,7 +487,7 @@ export function requestBody(session: Session, messages: Message[], model: string
         clear_at_least: { type: "input_tokens", value: 12_000 },
       }],
     },
-    tool_choice: { type: "auto" },
+    tool_choice: forced ? { type: "any" } : { type: "auto" },
   };
 }
 

@@ -439,8 +439,27 @@ final class ComputerUseDriver {
             var screenMoved = false
             var batchChanged = false
             var batchFailed = false
+            var actedThisBatch = false
             var ended = false
             var handled = 0
+
+            let brainClock = Stopwatch()
+            let escalated = escalate
+            escalate = false
+            var envelope: BrainClient.BrainDriveEnvelope?
+            var requestBytes = 0
+            var firstActionMs: Int?
+            var callRecorded = false
+            /// The model request's timings, once: after the turn, or just before a finish ends the run.
+            func recordCall() {
+                guard !callRecorded else { return }
+                callRecorded = true
+                recorder?.record(DriveTelemetry.Call(index: call, model: envelope?.meta?.model ?? modelName, captureMs: captureMs,
+                                                     contextMs: contextMs, brainMs: brainClock.ms, modelMs: envelope?.meta?.modelMs,
+                                                     firstActionMs: firstActionMs ?? envelope?.meta?.firstActionMs, requestBytes: requestBytes,
+                                                     actions: handled + (envelope?.actions?.count ?? 0), stopReason: envelope?.meta?.stopReason,
+                                                     usage: envelope?.meta?.usage, escalated: escalated))
+            }
 
             /// Runs one action of the batch. False once the run is over.
             func handle(_ act: ComputerAction) async -> Bool {
@@ -452,9 +471,16 @@ final class ComputerUseDriver {
                         results.append(["id": id, "result": "Not finished: an earlier action in this turn failed — check the new screenshot first.", "isError": true])
                         return true
                     }
+                    // Success is only claimed from a screen the model has seen: not right after acting blind.
+                    if act.type == "done", actedThisBatch {
+                        results.append(["id": id, "result": "Not finished yet: look at the new screenshot first. If it shows the whole task is done (with the result visible), call finish again on its own.", "isError": true])
+                        return true
+                    }
                     if act.type == "done" {
+                        recordCall()
                         finish(success: true, summary: act.summary ?? act.say ?? "done")
                     } else {
+                        recordCall()
                         finish(success: false, summary: act.reason ?? act.summary ?? "i couldn't finish")
                     }
                     ended = true
@@ -474,6 +500,7 @@ final class ComputerUseDriver {
 
                 // Show it.
                 actionCount += 1
+                if !["screenshot", "zoom", "cursor_position", "wait"].contains(act.type) { actedThisBatch = true }
                 let say = await executor.narrate(act)
                 model.stepText = say
                 model.stepIndex = actionCount - 1
@@ -530,6 +557,7 @@ final class ComputerUseDriver {
                 if outcome.isError { halted = true; batchFailed = true }
                 if Self.isPermissionProblem(outcome.text) { permissionErrors += 1 }
                 if permissionErrors >= 2 {
+                    recordCall()
                     finish(success: false, summary: Self.permissionSummary(outcome.text))
                     ended = true
                     return false
@@ -541,6 +569,7 @@ final class ComputerUseDriver {
                 if recent.count > 8 { recent.removeFirst() }
                 let repeats = recent.filter { $0 == signature }.count
                 if repeats >= 5 {
+                    recordCall()
                     finish(success: false, summary: "i kept trying the same thing and it never changed anything, so i stopped.")
                     ended = true
                     return false
@@ -550,6 +579,7 @@ final class ComputerUseDriver {
                     escalate = escalations < 3
                 }
                 if actionCount >= maxActions {
+                    recordCall()
                     finish(success: false, summary: "this was taking too many steps — stopping here so you stay in charge.")
                     ended = true
                     return false
@@ -557,12 +587,6 @@ final class ComputerUseDriver {
                 return true
             }
 
-            let brainClock = Stopwatch()
-            let escalated = escalate
-            escalate = false
-            var envelope: BrainClient.BrainDriveEnvelope?
-            var requestBytes = 0
-            var firstActionMs: Int?
             let streaming = UserDefaults.standard.object(forKey: "drivingStream") as? Bool ?? true
             for attempt in 0..<2 where !ended && handled == 0 && envelope == nil && env.sidecar.status.isReady {
                 if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
@@ -581,11 +605,7 @@ final class ComputerUseDriver {
                 }
             }
             let rest = envelope?.actions ?? []
-            recorder?.record(DriveTelemetry.Call(index: call, model: envelope?.meta?.model ?? modelName, captureMs: captureMs,
-                                                 contextMs: contextMs, brainMs: brainClock.ms, modelMs: envelope?.meta?.modelMs,
-                                                 firstActionMs: firstActionMs ?? envelope?.meta?.firstActionMs, requestBytes: requestBytes,
-                                                 actions: handled + rest.count, stopReason: envelope?.meta?.stopReason,
-                                                 usage: envelope?.meta?.usage, escalated: escalated))
+            recordCall()
             if ended { return }
             guard session == self.session, !cancelled, env.store.run(run.id)?.status == .running else { return }
             if envelope?.fallback == "v1" {

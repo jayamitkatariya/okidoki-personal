@@ -124,6 +124,22 @@ def verify(scenario, goal, nonce, telemetry):
             if want.lower() not in text.lower():
                 return False, f"{path.name} doesn't contain '{want}' (has: {text.strip()[:80]!r})"
         return True, f"found {path.name}"
+    if kind == "obsidian":
+        # The note may land in whichever vault Obsidian opens: look in every registered one.
+        name = v["name"].replace("{nonce}", nonce)
+        config = Path.home() / "Library/Application Support/obsidian/obsidian.json"
+        vaults = []
+        try:
+            vaults = [x.get("path") for x in json.loads(config.read_text()).get("vaults", {}).values() if x.get("path")]
+        except Exception:
+            pass
+        for vault in vaults:
+            hits = list(Path(vault).rglob(name))
+            if hits:
+                for hit in hits:
+                    hit.unlink(missing_ok=True)
+                return True, f"found {name} in {Path(vault).name}"
+        return False, f"no {name} in {', '.join(Path(x).name for x in vaults) or 'any vault'}"
     if kind == "volume":
         out = sh("osascript -e 'output volume of (get volume settings)'").stdout.strip()
         try:
@@ -332,14 +348,47 @@ def compare(current, baseline):
         print(f"    {sid:20} {before:>14} → {s['passes']}/{s['runs']} · {s['medianSec']}s")
 
 
+def rejudge(paths):
+    """Re-checks saved reports with the current criteria, from the screens captured at the time,
+    so runs made under different criteria can be compared fairly. File and volume checks keep their result."""
+    import re
+    scenarios = {s["id"]: s for s in json.loads((ROOT / "scripts/cu-scenarios.json").read_text())["scenarios"]}
+    for path in paths:
+        report = json.loads(Path(path).read_text())
+        for res in report["results"]:
+            scenario = scenarios.get(res["scenario"])
+            if not scenario or scenario["verify"]["type"] != "judge" or not res.get("runID"):
+                continue
+            pattern = re.escape(scenario["goal"]).replace(re.escape("{nonce}"), r"(\d+)")
+            match = re.fullmatch(pattern, res["goal"])
+            nonce = match.group(1) if match and match.groups() else ""
+            telemetry = TELEMETRY / f"{res['runID']}.json"
+            data = json.loads(telemetry.read_text()) if telemetry.exists() else None
+            if not data or not data.get("finalFrame"):
+                continue
+            ok, reason = verify(scenario, res["goal"], nonce, data)
+            res["pass"], res["check"] = bool(ok), reason
+        report["summary"] = aggregate(report["results"])
+        out = Path(path).with_name(Path(path).stem + "-rejudged.json")
+        out.write_text(json.dumps(report, indent=2))
+        s = report["summary"]
+        print(f"{report['label']}: passed {s['passes']}/{s['runs']} ({s['passRate'] * 100:.0f}%) · median {s['medianSec']}s per task · "
+              f"{s['medianSecPerStep']}s per step · {s['medianCalls']} calls  → {out.name}")
+        for sid, sc in s["scenarios"].items():
+            print(f"    {sid:20} {sc['passes']}/{sc['runs']} · {sc['medianSec']}s")
+
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--rejudge":
+        rejudge(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", default="run")
     parser.add_argument("--reps", type=int, default=1)
     parser.add_argument("--only", default="")
     parser.add_argument("--skip", default="")
     parser.add_argument("--protocol", choices=["v1", "v2"], help="writes the drivingProtocol default first")
-    parser.add_argument("--effort", choices=["low", "medium", "high"], help="writes the drivingEffort default first")
+    parser.add_argument("--effort", choices=["none", "low", "medium", "high"], help="writes the drivingEffort default first")
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--save-baseline", action="store_true")
     parser.add_argument("--compare", default="")

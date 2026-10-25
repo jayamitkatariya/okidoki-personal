@@ -414,7 +414,7 @@ export interface DriveRequest {
   remote?: boolean;
   /** Use the stronger model for this one turn. */
   escalate?: boolean;
-  effort?: "low" | "medium" | "high";
+  effort?: "none" | "low" | "medium" | "high";
   settings?: { claudeModel?: string };
 }
 

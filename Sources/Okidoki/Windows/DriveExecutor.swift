@@ -22,10 +22,13 @@ final class DriveExecutor {
     private var box = ScreenBox(x: 0, y: 0, width: 1, height: 1)
     private var imageWidth = 1.0
     private var imageHeight = 1.0
+    /// The last action's screen settled before its time limit, so a following wait has nothing to wait for.
+    private var lastStable = false
 
     init(target: ComputerTarget) { self.target = target }
 
     func observe(shot: ComputerUseService.Screenshot?, context: ComputerContext, fallback: ScreenBox) {
+        lastStable = false
         self.shot = shot
         self.context = context
         box = shot?.box ?? fallback
@@ -174,6 +177,15 @@ final class DriveExecutor {
             return await zoom(act, clock: clock)
         case "wait":
             let seconds = min(max(act.seconds ?? 1, 0.2), 10)
+            if lastStable {
+                lastStable = false
+                return ok("the screen had already stopped changing, so no wait was needed", clock.ms)
+            }
+            if target.settles, let screen = target.screen() {
+                // Waiting is for things to finish moving: stop as soon as the screen is still.
+                let still = await ScreenSampler.settle(screen: screen, before: nil, minMs: 150, maxMs: Int(seconds * 1000), stableSamples: 2)
+                return ok(String(format: "waited %.1fs until the screen was still", Double(still.elapsedMs) / 1000), clock.ms)
+            }
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return ok(String(format: "waited %.1fs", seconds), clock.ms)
         case "unknown":
@@ -183,6 +195,7 @@ final class DriveExecutor {
             break
         }
 
+        lastStable = false
         let screen = target.screen()
         let checks = target.settles && screen != nil
         let before = checks ? await ScreenSampler.sample(screen: screen!) : nil
@@ -243,6 +256,7 @@ final class DriveExecutor {
             }
         }
 
+        lastStable = settle.stable
         var isError = false
         switch act.type {
         case _ where Self.clickish.contains(act.type):

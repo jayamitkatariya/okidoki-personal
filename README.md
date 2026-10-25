@@ -179,20 +179,45 @@ without Screen Recording the replay behaves as before.
 ## Computer use
 
 Ask for a result (“send mom a message on WhatsApp”, “export this as PDF”) and okidoki
-drives the Mac itself: one screenshot and one action per step, narrated in the pill at
-the bottom. Press **Esc** or click **Stop** to take control back. Shaking the pointer is
-ignored during actions, skill replays, and lessons; escape presses made by okidoki itself
-never stop a run.
+drives the Mac itself, narrated in the pill at the bottom. Press **Esc** or click **Stop**
+to take control back. Shaking the pointer is ignored during actions, skill replays, and
+lessons; escape presses made by okidoki itself never stop a run.
 
-Each step the model gets the screen before and after its last action (downscaled to
-what the API actually looks at, so clicks land where it points), the frontmost window
-title, and the app's visible controls with their centers — rows scrolled out of view are
-left out. It can **zoom** into a region at full resolution before clicking small
-things. Clicks on a named control snap to that control's real center, including in
-Electron apps (Slack, Discord, VS Code, Notion, WhatsApp, Chrome), whose accessibility
-trees are switched on first. Clicks can hold cmd/shift/opt, keys can repeat, and
-double/triple clicks work. Scripts (AppleScript, JXA, zsh) run for anything scriptable;
-permission failures come back as plain guidance so the model falls back to clicking.
+**How a run works (protocol v2).** Driving uses Anthropic's computer use toolset
+(`computer_toolset_20260801`) plus okidoki's own tools — `run_script`, `open_app`,
+`open_url`, `click_element` and `finish` — as one conversation per run (`brain/src/computer2.ts`).
+The model sends a *batch* of actions per turn (click the field, type, press Return); the
+Mac runs them in order and streams them as they're written, so the first action starts
+while the model is still writing the rest. After every action the Mac waits for the
+screen to **settle** — small screen samples compared tile by tile, plus the page's load
+state in browsers — instead of sleeping a fixed time, and **checks it worked**: a click
+that changed nothing, typing that didn't reach the focused field, or an accessibility
+press that did nothing (retried once as a real click) comes back as an error, and the
+rest of the batch is skipped with the API's halt text. Pixel clicks are skipped too once
+an earlier action changed the screen a lot. A `finish` sent in the same turn as other
+actions is held back until the model has seen the result, so "done" is only claimed from
+a screen it looked at. Narration ("clicking “Send”") is made on the Mac from the control
+under the pointer.
+
+Each turn the model gets the screen at one pixel per point (the 5.x models read up to
+2576 px / 4784 visual tokens, so a laptop display isn't shrunk at all), text before the
+image, the frontmost app and window, and the app's visible controls **numbered** with
+their centers; `click_element` presses that exact control. The instructions and tools
+never change during a run, so they stay cached, and the conversation is append-only
+(thinking blocks go back untouched); old screenshots are cleared on the server
+(context management) rather than edited out. Haiku 5.5 drives with `effort: low`; after
+two failed batches, two that changed nothing, or the same action three times, one turn
+goes to Sonnet 5.5. The previous run in the same conversation is passed along, so
+"again" and "continue" know what came before. Models that can't take the toolset use the
+single-action protocol (v1, `brain/src/computer.ts`), which recorded skills also use.
+
+Scripts (AppleScript, JXA, zsh) run for anything scriptable. Before a script runs,
+okidoki asks macOS (without prompting) whether it may control each app the script talks
+to; a prompt that's about to appear is announced in the pill. `open_app` checks the app
+really came forward with a window — through accessibility when macOS refuses a
+background app's activation request — and reopens it when every window is closed.
+Electron apps (Slack, Discord, VS Code, Notion, WhatsApp, Chrome) have their
+accessibility trees switched on first.
 Typing uses the live keyboard layout, so shortcuts work on non-US layouts; text over
 240 characters is pasted and the clipboard is restored afterwards; nothing is typed
 while a password field has the keyboard. Apps are found in the usual folders, their
@@ -209,8 +234,24 @@ keeps the whole timeline: every screenshot, aim mark, script, zoom crop and resu
 a Stop button. Scriptable apps also hand the model an abridged AppleScript dictionary so
 scripts use the app's real commands.
 
-Needs Accessibility and Screen Recording. Checks: `swift test --filter ComputerUseTests`
-and `bun test brain/tests`.
+Needs Accessibility and Screen Recording. Checks: `swift test --filter 'ComputerUseTests|DrivingV2Tests'`
+and `bun test brain/tests`; `cd brain && bun scripts/smoke-v2.ts <screenshot.jpg>` runs a few
+live v2 turns (nothing is executed) and fails if a streamed turn isn't accepted back.
+
+**Telemetry and the scenario harness.** Every run writes its timings — capture, controls,
+model, first action, each action and its settle, tokens and cache use — to
+`~/Library/Application Support/Okidoki/telemetry/<run id>.json`. `scripts/cu-eval.py`
+drives the scenarios in `scripts/cu-scenarios.json` against an app launched with
+`OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh`, checks each result independently (files on
+disk, the volume, or a separate model judging the screen okidoki captured after the run),
+and writes a report with pass rate and timings: `--reps`, `--only`, `--protocol v1|v2`,
+`--effort none|low|medium`, `--stream on|off`, `--image jpeg|png`, `--compare <report>`,
+and `--rejudge <reports…>` to re-score old reports with the current criteria. Unattended
+runs set `drivingAvoidPrompts`, so scripts to apps okidoki may not control yet are refused
+with guidance instead of leaving a permission prompt nobody answers. The harness stops if
+another build replaces the app mid-run. The same defaults (`drivingProtocol`,
+`drivingEffort`, `drivingStream`, `drivingImageFormat`) can be set with `defaults write
+com.jaykatariya.okidoki …`; unset, okidoki uses v2, low effort, streaming and JPEG.
 
 **Run the installed copy, started by launchd.** Two macOS rules decide whether clicks and keys
 work at all:
@@ -256,9 +297,10 @@ refused with guidance. The brain gets `remote: true` and a prompt that knows all
 A run that picks the private Mac while it isn't set up fails with a pointer to Settings
 rather than silently driving your own Mac. Checks: `swift test --filter PrivateMacSpecTests`.
 
-Model requests use `tool_choice: auto` with an explicit tool instruction: the 5.5
-models reject forced tool calls. Everything runs on Haiku 5.5 by default, and a
-model named in the saved settings is used as is, so both paths share one request format.
+Model requests use `tool_choice: auto` with an explicit tool instruction: a forced tool
+call on the 5.5 models skips thinking, which drives faster but noticeably less accurately
+(driving keeps it as `drivingEffort none` for measurement only). Everything runs on Haiku
+5.5 by default, and a model named in the saved settings is used as is.
 
 For a live API smoke check, run `cd brain && bun run smoke:api`. It tests answers
 and computer-use planning with Haiku, Sonnet, and Opus 5.5 using the key saved

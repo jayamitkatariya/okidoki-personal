@@ -1084,6 +1084,23 @@ public enum AXSearch {
         return Array((interactive + text).prefix(limit))
     }
 
+    /// Brings an app to the front through accessibility and raises its main window. Works when a
+    /// plain activation request from a background app is refused.
+    public nonisolated static func raise(pid: pid_t) {
+        guard AXIsProcessTrusted() else { return }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            var raw: CFTypeRef?
+            if AXUIElementCopyAttributeValue(app, attribute as CFString, &raw) == .success, let raw,
+               CFGetTypeID(raw) == AXUIElementGetTypeID() {
+                AXUIElementPerformAction(raw as! AXUIElement, kAXRaiseAction as CFString)
+                return
+            }
+        }
+    }
+
     /// Where an element is now, for checking a remembered control hasn't moved before pressing it.
     public nonisolated static func currentFrame(of element: AXUIElement) -> CGRect? {
         let raw = batch(element, [kAXPositionAttribute, kAXSizeAttribute])
@@ -1901,17 +1918,24 @@ public final class ComputerUseService {
     /// Brings a running app forward and makes sure a window shows: an app with every window closed
     /// or minimized gets a reopen (what clicking its Dock icon does).
     private func surface(_ running: NSRunningApplication, timeout: Double) async {
+        let pid = running.processIdentifier
         running.unhide()
         running.activate()
-        await waitForFrontmost(bundleID: running.bundleIdentifier, name: running.localizedName, timeout: timeout)
-        if Self.hasVisibleWindow(pid: running.processIdentifier) { return }
+        await waitForFrontmost(bundleID: running.bundleIdentifier, name: running.localizedName, timeout: min(timeout, 0.8))
+        if frontmost()?.pid != pid {
+            // macOS can refuse activation asked for by a background app; accessibility can still raise it.
+            await Task.detached(priority: .userInitiated) { AXSearch.raise(pid: pid) }.value
+            await waitForFrontmost(bundleID: running.bundleIdentifier, name: running.localizedName, timeout: 0.8)
+        }
+        if frontmost()?.pid == pid, Self.hasVisibleWindow(pid: pid) { return }
+        // Every window closed or minimized, or still behind: reopen it the way the Dock icon does.
         if let url = running.bundleURL {
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
             _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: config)
         }
         let deadline = Date().addingTimeInterval(1.5)
-        while Date() < deadline, !Self.hasVisibleWindow(pid: running.processIdentifier) {
+        while Date() < deadline, frontmost()?.pid != pid || !Self.hasVisibleWindow(pid: pid) {
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
     }
@@ -1946,6 +1970,10 @@ public final class ComputerUseService {
             }
             let bundle = resolved.bundleID.isEmpty ? nil : resolved.bundleID
             await waitForFrontmost(bundleID: bundle, name: display, timeout: 8)
+            if let bundle, frontmost()?.bundleID != bundle,
+               let launched = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundle }) {
+                await surface(launched, timeout: 1)
+            }
             return "opened \(display)"
         }
         let open = Process()
@@ -1973,6 +2001,10 @@ public final class ComputerUseService {
             _ = try? await NSWorkspace.shared.openApplication(at: resolved.url, configuration: config)
             let bundle = resolved.bundleID.isEmpty ? nil : resolved.bundleID
             await waitForFrontmost(bundleID: bundle, name: display, timeout: 6)
+            if let bundle, frontmost()?.bundleID != bundle,
+               let launched = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundle }) {
+                await surface(launched, timeout: 1)
+            }
             return "opened \(display)"
         }
         return "couldn't find \(cleaned)"

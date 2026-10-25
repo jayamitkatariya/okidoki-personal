@@ -66,10 +66,14 @@ public struct ScreenChange: Sendable, Equatable {
     public var peak: Double
     /// Share of tiles that changed.
     public var fraction: Double
+    /// How many tiles changed.
+    public var tiles: Int
 
-    public init(peak: Double, fraction: Double) { self.peak = peak; self.fraction = fraction }
+    public init(peak: Double, fraction: Double, tiles: Int = 0) { self.peak = peak; self.fraction = fraction; self.tiles = tiles }
 
     public var changed: Bool { peak >= ScreenSampler.changedPeak }
+    /// Still enough to stop waiting: a blinking caret or a tiny spinner touches a tile or two at most.
+    public var settled: Bool { tiles <= 2 }
     /// Enough of the screen changed that earlier pixel targets can't be trusted (a new window, page, menu or dialog).
     public var large: Bool { fraction >= ScreenSampler.largeFraction }
 }
@@ -122,7 +126,7 @@ public enum ScreenSampler {
     }
 
     public nonisolated static func compare(_ a: ScreenSample, _ b: ScreenSample) -> ScreenChange {
-        guard a.width == b.width, a.height == b.height, a.width > 0, a.height > 0 else { return ScreenChange(peak: 255, fraction: 1) }
+        guard a.width == b.width, a.height == b.height, a.width > 0, a.height > 0 else { return ScreenChange(peak: 255, fraction: 1, tiles: Int.max) }
         let columns = max(1, a.width / tile)
         let rows = max(1, a.height / tile)
         var peak = 0.0
@@ -144,7 +148,7 @@ public enum ScreenSampler {
                 if mean >= changedPeak { changed += 1 }
             }
         }
-        return ScreenChange(peak: peak, fraction: Double(changed) / Double(columns * rows))
+        return ScreenChange(peak: peak, fraction: Double(changed) / Double(columns * rows), tiles: changed)
     }
 
     /// Waits for the screen to stop changing after an action: at least `minMs`, at most `maxMs`,
@@ -162,7 +166,7 @@ public enum ScreenSampler {
         if minMs > 0 { try? await Task.sleep(nanoseconds: UInt64(minMs) * 1_000_000) }
         while elapsed() < maxMs {
             guard let current = await sample(screen: screen) else { break }
-            if let last { still = compare(last, current).changed ? 0 : still + 1 }
+            if let last { still = compare(last, current).settled ? still + 1 : 0 }
             last = current
             let loaded = webArea.map { WebPage.isLoaded($0) } ?? true
             if still >= stableSamples, loaded { stable = true; break }
