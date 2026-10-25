@@ -2,6 +2,8 @@ import { groundTeach, think } from "./llm";
 import { execute, pause, resume, stop, stopAll, validateExecution } from "./executor";
 import { tools, findTools } from "./catalog";
 import { computerAct } from "./computer";
+import { driveStep } from "./computer2";
+import type { DriveRequest } from "./types";
 import { refineTeach, teachStep } from "./teach";
 import { conceptFollowUp, conceptLesson } from "./concept";
 import { checkToken } from "./apify";
@@ -240,10 +242,68 @@ export async function handleRequest(request: Request): Promise<Response> {
         }
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
         const result = await computerAct(payload, key);
-        return json({ action: result.action, usedModel: result.usedModel, error: result.error });
+        return json({ action: result.action, usedModel: result.usedModel, error: result.error, meta: result.meta });
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
       }
+    }
+
+    // Driving protocol v2: the computer use toolset, batches, one conversation per run.
+    if (url.pathname === "/computer/v2" && request.method === "POST") {
+      try {
+        const payload = await body<DriveRequest>(request);
+        if (!payload.goal || !payload.runID || !payload.observation) {
+          return json({ error: "goal, runID and observation required" }, 400);
+        }
+        const key = anthropicKey(request.headers.get("x-anthropic-key"));
+        return json(await driveStep(payload, key));
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    // The same turn, streamed as newline-delimited JSON: one {type:"action"} line per action the moment
+    // the model finishes writing it, then {type:"end"} with the timings and anything not yet sent.
+    if (url.pathname === "/computer/v2/stream" && request.method === "POST") {
+      let payload: DriveRequest;
+      try {
+        payload = await body<DriveRequest>(request);
+      } catch {
+        return json({ error: "bad request" }, 400);
+      }
+      if (!payload.goal || !payload.runID || !payload.observation) {
+        return json({ error: "goal, runID and observation required" }, 400);
+      }
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let closed = false;
+          const send = (line: Record<string, unknown>) => {
+            if (closed) return;
+            try {
+              controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+            } catch {
+              closed = true;
+            }
+          };
+          const sent = new Set<string>();
+          try {
+            const out = await driveStep(payload, key, fetch, 55_000, (action) => {
+              if (action.id) sent.add(action.id);
+              send({ type: "action", action });
+            });
+            const rest = out.actions.filter((action) => !action.id || !sent.has(action.id));
+            send({ type: "end", actions: rest, meta: out.meta, error: out.error, fallback: out.fallback });
+          } catch (error) {
+            send({ type: "end", actions: [], error: error instanceof Error ? error.message : "model unavailable" });
+          } finally {
+            closed = true;
+            try { controller.close(); } catch {}
+          }
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache", ...corsHeaders } });
     }
 
     if (url.pathname === "/execute" && request.method === "POST") {

@@ -531,12 +531,7 @@ final class BrainClient {
 
     // MARK: - Computer use
 
-    struct BrainComputerEnvelope: Decodable {
-        var action: ComputerAction?
-        var usedModel: Bool?
-        var error: String?
-    }
-
+    /// One action for a recorded skill's rescue. The driving loop uses `computerTurn` (BrainDriving.swift).
     func computer(goal: String, step: Int, appName: String, windowTitle: String = "",
                   screen box: OkidokiCore.ScreenBox,
                   imageWidth: Double, imageHeight: Double, history: [[String: Any]],
@@ -548,53 +543,11 @@ final class BrainClient {
                   canClick: Bool = true, canSee: Bool = true,
                   remote: Bool = false,
                   model: String) async -> ComputerAction? {
-        var body: [String: Any] = [
-            "goal": goal,
-            "step": step,
-            "app": appName,
-            "windowTitle": windowTitle,
-            "screen": ["x": box.x, "y": box.y, "width": box.width, "height": box.height],
-            "imageWidth": imageWidth,
-            "imageHeight": imageHeight,
-            "history": history,
-            "controls": controls,
-            "scripting": scripting,
-            "canClick": canClick,
-            "canSee": canSee,
-            "remote": remote,
-            "settings": ["claudeModel": model],
-        ]
-        if let screenshotPNG {
-            body["screenshotBase64"] = screenshotPNG.base64EncodedString()
-        }
-        if let previousPNG {
-            body["previousScreenshotBase64"] = previousPNG.base64EncodedString()
-        }
-        if let referencePNG {
-            body["referenceBase64"] = referencePNG.base64EncodedString()
-        }
-        if let zoom {
-            body["zoomBase64"] = zoom.png.base64EncodedString()
-            body["zoom"] = ["x": zoom.rect.minX, "y": zoom.rect.minY, "width": zoom.rect.width, "height": zoom.rect.height,
-                            "imageWidth": zoom.width, "imageHeight": zoom.height]
-        }
-        var request = URLRequest(url: baseURL.appendingPathComponent("computer"))
-        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
-        request.httpMethod = "POST"
-        request.timeoutInterval = 90
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = KeyStore.get("anthropic"), !key.isEmpty {
-            request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
-        }
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-            let envelope = try JSONDecoder().decode(BrainComputerEnvelope.self, from: data)
-            return envelope.action
-        } catch {
-            return nil
-        }
+        await computerTurn(goal: goal, step: step, appName: appName, windowTitle: windowTitle, screen: box,
+                           imageWidth: imageWidth, imageHeight: imageHeight, history: history, controls: controls,
+                           scripting: scripting, screenshotPNG: screenshotPNG, previousPNG: previousPNG,
+                           referencePNG: referencePNG, zoom: zoom, canClick: canClick, canSee: canSee,
+                           remote: remote, model: model).action
     }
 
     struct TeachStepEnvelope: Decodable {

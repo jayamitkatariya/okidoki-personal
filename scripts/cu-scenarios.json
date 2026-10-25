@@ -1,0 +1,80 @@
+{
+  "_comment": "Computer-use scenarios for scripts/cu-eval.py. {nonce} is replaced per run. verify.type: judge (a separate model looks at the screen okidoki captured after the run), file (path exists and contains text), volume (system output volume within a range). kill: apps quit after the run when they weren't running before it.",
+  "scenarios": [
+    {
+      "id": "notes-create",
+      "goal": "create a new note in the Notes app that says: okidoki test note {nonce}",
+      "verify": {"type": "judge", "criteria": "The Notes app is visible with a note whose text includes 'okidoki test note {nonce}'."},
+      "kill": ["Notes"]
+    },
+    {
+      "id": "safari-private",
+      "goal": "open safari in a private window and go to apple.com",
+      "verify": {"type": "judge", "criteria": "A Safari Private Browsing window (it shows a 'Private' indicator or the dark private address field) is frontmost and displays the apple.com website."},
+      "kill": ["Safari"]
+    },
+    {
+      "id": "calculator",
+      "goal": "open calculator and work out 123 times 45",
+      "verify": {"type": "judge", "criteria": "The macOS Calculator app is visible and its display shows the result 5535."},
+      "kill": ["Calculator"]
+    },
+    {
+      "id": "textedit-save",
+      "goal": "open textedit, make a new document, type hello from okidoki {nonce}, then save it to the desktop as okidoki-test.txt",
+      "setup": ["rm -f \"$HOME/Desktop/okidoki-test.txt\" \"$HOME/Desktop/okidoki-test.txt.rtf\" \"$HOME/Desktop/okidoki-test.rtf\""],
+      "verify": {"type": "file", "path": "~/Desktop/okidoki-test.txt", "contains": "hello from okidoki {nonce}"},
+      "cleanup": ["find \"$HOME/Desktop\" -maxdepth 1 -name 'okidoki-test*' -newer \"$TMPDIR/okidoki-eval-start\" -delete", "rm -f \"$HOME/Desktop/okidoki-test.txt\""],
+      "kill": ["TextEdit"]
+    },
+    {
+      "id": "finder-downloads",
+      "goal": "open the downloads folder in finder",
+      "verify": {"type": "judge", "criteria": "A Finder window showing the Downloads folder (its title or sidebar selection says Downloads) is frontmost."}
+    },
+    {
+      "id": "volume-30",
+      "goal": "set the system volume to 30 percent",
+      "setup": ["osascript -e 'output volume of (get volume settings)' > \"$TMPDIR/okidoki-eval-volume\"", "osascript -e 'set volume output volume 60'"],
+      "verify": {"type": "volume", "min": 26, "max": 34},
+      "cleanup": ["osascript -e \"set volume output volume $(cat \"$TMPDIR/okidoki-eval-volume\" 2>/dev/null || echo 50)\""]
+    },
+    {
+      "id": "whatsapp-self",
+      "goal": "open whatsapp, open the chat where i message myself (it is labelled You), and send it the message: okidoki test {nonce}",
+      "verify": {"type": "judge", "criteria": "WhatsApp is visible with the chat labelled 'You' (message yourself) open, and the message 'okidoki test {nonce}' appears as a sent message in that chat."}
+    },
+    {
+      "id": "wikipedia-scroll",
+      "goal": "open wikipedia.org in safari and scroll to the bottom of the page",
+      "verify": {"type": "judge", "criteria": "Safari shows the wikipedia.org portal page scrolled to the very bottom (the page footer, e.g. licence/terms/privacy links, is visible)."},
+      "kill": ["Safari"]
+    },
+    {
+      "id": "reminders-add",
+      "goal": "open reminders and add a reminder called okidoki test {nonce}",
+      "verify": {"type": "judge", "criteria": "The Reminders app is visible and a reminder titled 'okidoki test {nonce}' is in the list."},
+      "kill": ["Reminders"]
+    },
+    {
+      "id": "chrome-wikipedia",
+      "goal": "open google chrome, go to wikipedia.org and search for the eiffel tower",
+      "verify": {"type": "judge", "criteria": "Google Chrome is frontmost and shows the Wikipedia article about the Eiffel Tower (or Wikipedia search results for Eiffel Tower with the article as the top result)."},
+      "kill": ["Google Chrome"]
+    },
+    {
+      "id": "obsidian-note",
+      "goal": "open obsidian and create a new note titled okidoki test {nonce}",
+      "verify": {"type": "file", "path": "~/Desktop/Magic Folder/Obsidian Vault/okidoki test {nonce}.md"},
+      "cleanup": ["rm -f \"$HOME/Desktop/Magic Folder/Obsidian Vault/okidoki test {nonce}.md\"", "find \"$HOME/Desktop/Magic Folder/Obsidian Vault\" -maxdepth 1 -name 'Untitled*.md' -newer \"$TMPDIR/okidoki-eval-start\" -delete"],
+      "kill": ["Obsidian"]
+    },
+    {
+      "id": "settings-appearance",
+      "mode": "ask",
+      "goal": "open the appearance pane in system settings",
+      "verify": {"type": "judge", "criteria": "System Settings is open and showing the Appearance pane."},
+      "kill": ["System Settings"]
+    }
+  ]
+}

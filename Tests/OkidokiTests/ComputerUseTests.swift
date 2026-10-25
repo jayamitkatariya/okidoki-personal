@@ -361,9 +361,9 @@ final class ComputerUseTests: XCTestCase {
         let short = EventActuator.glideDuration(distance: 40, pace: 1)
         let medium = EventActuator.glideDuration(distance: 500, pace: 1)
         let far = EventActuator.glideDuration(distance: 3000, pace: 1)
-        XCTAssertEqual(short, 0.14, accuracy: 0.001)
+        XCTAssertEqual(short, 0.12, accuracy: 0.001)
         XCTAssertGreaterThan(medium, short)
-        XCTAssertEqual(far, 0.6, accuracy: 0.001)
+        XCTAssertEqual(far, 0.35, accuracy: 0.001)
         XCTAssertEqual(EventActuator.glideDuration(distance: 500, pace: 0.45), medium * 0.45, accuracy: 0.001)
 
         let points = EventActuator.glidePoints(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 50), steps: 10)

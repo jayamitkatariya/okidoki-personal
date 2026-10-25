@@ -79,7 +79,8 @@ final class LiveFrameSchemeHandler: NSObject, WKURLSchemeHandler {
                 task.didFailWithError(URLError(.fileDoesNotExist))
                 return
             }
-            let response = URLResponse(url: url, mimeType: "image/png", expectedContentLength: data.count, textEncodingName: nil)
+            let jpeg = data.count > 2 && data[data.startIndex] == 0xFF && data[data.startIndex + 1] == 0xD8
+            let response = URLResponse(url: url, mimeType: jpeg ? "image/jpeg" : "image/png", expectedContentLength: data.count, textEncodingName: nil)
             task.didReceive(response)
             task.didReceive(data)
             task.didFinish()

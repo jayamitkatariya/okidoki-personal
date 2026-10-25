@@ -224,18 +224,21 @@ function remoteSystemPrompt(
   ].join("\n");
 }
 
-function image(base64: string) {
-  return { type: "image", source: { type: "base64", media_type: "image/png", data: base64 } };
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+export function image(base64: string, mediaType?: string) {
+  const media_type = mediaType && IMAGE_TYPES.has(mediaType) ? mediaType : "image/png";
+  return { type: "image", source: { type: "base64", media_type, data: base64 } };
 }
 
 /** Message content: labelled images first, then the instructions. */
 export function messageContent(request: ComputerRequest): unknown[] {
   const content: unknown[] = [];
   if (request.screenshotBase64 && request.previousScreenshotBase64) {
-    content.push({ type: "text", text: "Screen BEFORE your last action:" }, image(request.previousScreenshotBase64));
-    content.push({ type: "text", text: "Screen NOW:" }, image(request.screenshotBase64));
+    content.push({ type: "text", text: "Screen BEFORE your last action:" }, image(request.previousScreenshotBase64, request.previousMediaType));
+    content.push({ type: "text", text: "Screen NOW:" }, image(request.screenshotBase64, request.screenshotMediaType));
   } else if (request.screenshotBase64) {
-    content.push(image(request.screenshotBase64));
+    content.push(image(request.screenshotBase64, request.screenshotMediaType));
   }
   if (request.zoomBase64 && request.zoom) {
     content.push({ type: "text", text: "Zoomed crop you asked for:" }, image(request.zoomBase64));
@@ -288,13 +291,30 @@ function pickAction(blocks: ModelBlock[]): { action?: ComputerAct; text: string 
   return { action: actionFromText(text), text };
 }
 
-const RETRY_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+export const RETRY_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+
+/** Token counts from a Messages response, in the shape the Mac records. */
+export type ModelUsage = { input: number; cacheRead: number; cacheWrite: number; output: number };
+
+export function readUsage(raw: unknown): ModelUsage | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const u = raw as Record<string, unknown>;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    input: n(u.input_tokens),
+    cacheRead: n(u.cache_read_input_tokens),
+    cacheWrite: n(u.cache_creation_input_tokens),
+    output: n(u.output_tokens),
+  };
+}
+
+export type ComputerMeta = { model: string; modelMs: number; usage?: ModelUsage; stopReason?: string };
 
 export async function computerAct(
   request: ComputerRequest,
   apiKey: string | undefined,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ action: ComputerAct; usedModel: boolean; error?: string }> {
+): Promise<{ action: ComputerAct; usedModel: boolean; error?: string; meta?: ComputerMeta }> {
   if (!apiKey) {
     return {
       action: needModel("the model isn't available right now, so i can't drive an app yet."),
@@ -314,6 +334,7 @@ export async function computerAct(
   });
 
   let lastError = "model unavailable";
+  const started = Date.now();
   // One correction turn is allowed when the model answers in prose instead of an action.
   let corrected = false;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -338,9 +359,10 @@ export async function computerAct(
         if (RETRY_STATUSES.has(response.status)) continue;
         return { action: needModel(`the model didn't answer, so i stopped. ${lastError}`), usedModel: false, error: lastError };
       }
-      const json = (await response.json()) as { content?: ModelBlock[] };
+      const json = (await response.json()) as { content?: ModelBlock[]; usage?: unknown; stop_reason?: string };
       const picked = pickAction(json.content ?? []);
-      if (picked.action) return { action: picked.action, usedModel: true };
+      const meta: ComputerMeta = { model, modelMs: Date.now() - started, usage: readUsage(json.usage), stopReason: json.stop_reason };
+      if (picked.action) return { action: picked.action, usedModel: true, meta };
       if (picked.text.trim() && !corrected) {
         corrected = true;
         messages.push({ role: "assistant", content: picked.text });

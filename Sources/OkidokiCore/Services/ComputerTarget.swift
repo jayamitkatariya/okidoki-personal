@@ -9,9 +9,15 @@ public struct ComputerContext {
     public var controls: [[String: Any]]
     /// Abridged AppleScript dictionary of the frontmost app, or empty.
     public var scripting: String
+    /// The elements behind the numbered controls, for `click_element`.
+    public var elements: [Int: AXSearch.Entry]
+    public var bundleID: String
+    public var pid: pid_t
 
-    public init(appName: String = "", windowTitle: String = "", controls: [[String: Any]] = [], scripting: String = "") {
+    public init(appName: String = "", windowTitle: String = "", controls: [[String: Any]] = [], scripting: String = "",
+                elements: [Int: AXSearch.Entry] = [:], bundleID: String = "", pid: pid_t = 0) {
         self.appName = appName; self.windowTitle = windowTitle; self.controls = controls; self.scripting = scripting
+        self.elements = elements; self.bundleID = bundleID; self.pid = pid
     }
 }
 
@@ -34,6 +40,18 @@ public protocol ComputerTarget: AnyObject {
     func capture() async -> ComputerUseService.Screenshot?
     func context(box: ScreenBox, imageWidth: Double, imageHeight: Double) async -> ComputerContext
     func perform(_ action: ComputerAction, screen box: ScreenBox, imageWidth: Double, imageHeight: Double) async throws -> String
+    /// The capture the driving loop sends to the model, sized for it.
+    func captureForDriving(limits: ComputerUseService.ImageLimits, jpeg: Bool) async -> ComputerUseService.Screenshot?
+    /// Whether the screen can be sampled cheaply to wait for it to settle and to check actions.
+    var settles: Bool { get }
+}
+
+public extension ComputerTarget {
+    func captureForDriving(limits: ComputerUseService.ImageLimits, jpeg: Bool) async -> ComputerUseService.Screenshot? {
+        await capture()
+    }
+
+    var settles: Bool { false }
 }
 
 /// The Mac okidoki is running on.
@@ -55,13 +73,21 @@ public final class LocalComputer: ComputerTarget {
         await service.capture(screen: service.screenForAction())
     }
 
+    public func captureForDriving(limits: ComputerUseService.ImageLimits, jpeg: Bool) async -> ComputerUseService.Screenshot? {
+        await service.captureForDriving(screen: service.screenForAction(), limits: limits, jpeg: jpeg)
+    }
+
+    public var settles: Bool { true }
+
     public func context(box: ScreenBox, imageWidth: Double, imageHeight: Double) async -> ComputerContext {
         let front = service.frontmost()
         async let title = service.frontWindowTitle()
-        async let controls = service.visibleControls(box: box, imageWidth: imageWidth, imageHeight: imageHeight)
+        async let snapshot = service.visibleSnapshot(box: box, imageWidth: imageWidth, imageHeight: imageHeight)
         async let scripting = service.scriptingHints()
+        let found = await snapshot
         return ComputerContext(appName: front?.name ?? "", windowTitle: await title,
-                               controls: await controls, scripting: await scripting)
+                               controls: found.controls, scripting: await scripting, elements: found.elements,
+                               bundleID: front?.bundleID ?? "", pid: front?.pid ?? 0)
     }
 
     public func perform(_ action: ComputerAction, screen box: ScreenBox, imageWidth: Double, imageHeight: Double) async throws -> String {
