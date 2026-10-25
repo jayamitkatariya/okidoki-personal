@@ -86,3 +86,16 @@ describe("demo seed", () => {
     expect(await jay.as.query(api.vault.files, { accountId: jay.accountId })).toEqual([]);
   });
 });
+
+describe("demo seed, fresh", () => {
+  test("clears the demo spaces' chat and jobs, then tells the story again", async () => {
+    const { t, jay } = await team();
+    await t.mutation(api.seedDemo.meridian, { accountId: jay.accountId });
+    const { jobId } = await t.mutation(api.seedDemo.say, { accountId: jay.accountId, space: "Entries", text: "@okidoki file the entry for MTS-4471" });
+    expect(jobId).toBeTruthy();
+    const again = await t.mutation(api.seedDemo.meridian, { accountId: jay.accountId, fresh: true });
+    expect(again.posted).toBe(6);
+    const jobs = await t.run(async (ctx) => ctx.db.query("spaceRuns").collect());
+    expect(jobs).toEqual([]);
+  });
+});

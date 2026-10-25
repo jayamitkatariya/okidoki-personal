@@ -2,8 +2,8 @@
 // Sets up the Meridian Trade Services demo: a U.S. customs brokerage filing CBP 7501 entry summaries.
 //
 //   bun scripts/demo-meridian/seed.ts            everything below
-//   bun scripts/demo-meridian/seed.ts --fresh    also clears the workbench's transmitted entries and
-//                                                takes CBP 3461 out of the vault, so the demo can add it live
+//   bun scripts/demo-meridian/seed.ts --fresh    also clears the workbench's transmitted entries, the demo
+//                                                spaces' chat and jobs, and what the demo adds to the vault
 //   --remote-only / --local-only                 just the organization and vault, or just this Mac
 //
 // 1. records.json (the shipments) into ~/Library/Application Support/Okidoki
@@ -72,7 +72,8 @@ const OFFICIAL = [
   ["CBP Form 28 (Request for Information).pdf", "https://www.cbp.gov/sites/default/files/2025-05/cbp_form_28.pdf"],
   ["CBSA CI1 (Canada Customs Invoice).pdf", "https://www.cbsa-asfc.gc.ca/publications/forms-formulaires/ci1.pdf"],
 ] as const;
-const LIVE_DEMO_FORM = "CBP Form 3461 (Entry-Immediate Delivery).pdf";
+// Added live during the demo (and its rehearsals); --fresh takes them out again.
+const LIVE_DEMO_FILES = ["CBP Form 3461 (Entry-Immediate Delivery).pdf", "USMCA Fact Sheet- Origin Certification.pdf"];
 
 function step(title: string) {
   console.log(`\n▸ ${title}`);
@@ -151,7 +152,7 @@ async function seedThisMac(skill: ReturnType<typeof aceEntrySkill>, statePath: s
 
 async function seedOrganization(skill: ReturnType<typeof aceEntrySkill>, accountId: string) {
   step("the organization: Meridian Trade Services");
-  const args = JSON.stringify({ accountId, skill, ...(fresh ? { forget: [LIVE_DEMO_FORM] } : {}) });
+  const args = JSON.stringify({ accountId, skill, ...(fresh ? { forget: LIVE_DEMO_FILES, fresh: true } : {}) });
   const run = spawnSync("npx", ["convex", "run", "seedDemo:meridian", args], { cwd: join(ROOT, "backend"), encoding: "utf8" });
   if (run.status !== 0) throw new Error(`convex run failed (is seedDemo deployed? cd backend && npx convex dev --once)\n${run.stderr}`);
   console.log("  " + run.stdout.trim().split("\n").join("\n  "));
@@ -171,6 +172,8 @@ async function seedOrganization(skill: ReturnType<typeof aceEntrySkill>, account
   for (const doc of JSON.parse(made.stdout) as { space: string; path: string }[]) {
     await vaultUpload(accountId, basename(doc.path), new Uint8Array(readFileSync(doc.path)), doc.space);
   }
+  const settled = spawnSync("npx", ["convex", "run", "seedDemo:settleFiles", JSON.stringify({ accountId })], { cwd: join(ROOT, "backend"), encoding: "utf8" });
+  if (settled.status !== 0) throw new Error(`convex run seedDemo:settleFiles failed\n${settled.stderr}`);
 }
 
 if (import.meta.main) {

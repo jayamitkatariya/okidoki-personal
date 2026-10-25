@@ -42,8 +42,10 @@ export const meridian = internalMutation({
     skill: v.optional(v.object({ id: v.string(), name: v.string(), summary: v.string(), steps: v.any() })),
     // Vault documents to take out (by name), so the demo can add them live again.
     forget: v.optional(v.array(v.string())),
+    // Clear the demo spaces' chat and jobs first, so a rehearsal's leftovers don't show.
+    fresh: v.optional(v.boolean()),
   },
-  handler: async (ctx, { accountId, orgName, skill, forget }) => {
+  handler: async (ctx, { accountId, orgName, skill, forget, fresh }) => {
     const link = await ctx.db.query("memberships").withIndex("by_account", (q) => q.eq("accountClientId", accountId)).first();
     if (!link || link.status !== "active") throw new Error("that work account isn't linked to an organization");
     const orgId = link.orgId;
@@ -78,6 +80,14 @@ export const meridian = internalMutation({
         if (!members.some((m) => m.userId === userId)) {
           await ctx.db.insert("spaceMembers", { spaceId, userId, role: who === "me" ? "owner" : "member", lastReadAt: now - 3_600_000 * 4, joinedAt: now - 86_400_000 * 30 });
         }
+      }
+    }
+
+    if (fresh) {
+      for (const spaceId of spaces.values()) {
+        for (const message of await ctx.db.query("spaceMessages").withIndex("by_space_time", (q) => q.eq("spaceId", spaceId)).collect()) await ctx.db.delete(message._id);
+        for (const job of await ctx.db.query("spaceRuns").withIndex("by_space", (q) => q.eq("spaceId", spaceId)).collect()) await ctx.db.delete(job._id);
+        await ctx.db.patch(spaceId, { lastMessage: "", lastMessageAt: now - 86_400_000 });
       }
     }
 
@@ -139,5 +149,30 @@ export const say = internalMutation({
     await ctx.db.patch(found._id, { lastMessageAt: now, lastMessage: cleaned.slice(0, 120) });
     const jobId = mentionsAgent(cleaned) ? await createJob(ctx, found, link.userId, cleaned) : null;
     return { jobId };
+  },
+});
+
+// The paperwork arrives before the conversation about it: file lines the seed's uploads posted are
+// moved to just before the first seeded message, keeping their order.
+export const settleFiles = internalMutation({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    const link = await ctx.db.query("memberships").withIndex("by_account", (q) => q.eq("accountClientId", accountId)).first();
+    if (!link || link.status !== "active") throw new Error("that work account isn't linked to an organization");
+    const now = Date.now();
+    const start = now - (Math.max(...CHAT.map((line) => line[2])) + 30) * 60_000;
+    let moved = 0;
+    for (const space of await ctx.db.query("spaces").withIndex("by_org", (q) => q.eq("orgId", link.orgId)).collect()) {
+      if (!SPACES.some((s) => s.name === space.name)) continue;
+      const messages = await ctx.db.query("spaceMessages").withIndex("by_space_time", (q) => q.eq("spaceId", space._id)).collect();
+      const files = messages.filter((m) => m.kind === "file");
+      for (const [i, file] of files.entries()) {
+        await ctx.db.patch(file._id, { createdAt: start + i * 1000 });
+        moved += 1;
+      }
+      const latest = (await ctx.db.query("spaceMessages").withIndex("by_space_time", (q) => q.eq("spaceId", space._id)).order("desc").first());
+      if (latest) await ctx.db.patch(space._id, { lastMessageAt: latest.createdAt, lastMessage: latest.kind === "file" ? `📎 ${latest.text}` : latest.text.slice(0, 140) });
+    }
+    return { moved };
   },
 });
