@@ -11,6 +11,8 @@ import { closeAll, forget, reconcile, validateMcpServer } from "./mcp";
 import { mcpCatalog, runConnector, stopConnector, stopAllConnectors, validateConnectorRun } from "./connectors";
 import { closeMemory, memoryStatus, syncMemory, warmMemory } from "./memory";
 import { anthropicKey, apifyToken, mossCredentials } from "./keys";
+import { portalRoute } from "./portal";
+import { findDocument } from "./finder";
 import { CODING_AGENTS, type ComputerRequest, type ConceptFollowRequest, type ConceptRequest, type ConnectorRunRequest, type ExecuteRequest, type McpServerConfig, type MemorySyncRequest, type TeachRefineRequest, type TeachStepRequest, type ThinkRequest } from "./types";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4319);
@@ -35,6 +37,9 @@ function installedTools(): string[] {
 
 export async function handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // The entry workbench is a page for this Mac's browser, so it can't carry the sidecar token.
+    const portal = await portalRoute(request, url);
+    if (portal) return portal;
     if (request.headers.has("origin") || request.headers.get("authorization") !== `Bearer ${token}`) {
       return json({ error: "unauthorized" }, 401);
     }
@@ -71,6 +76,16 @@ export async function handleRequest(request: Request): Promise<Response> {
         return json(result);
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    if (url.pathname === "/find/document" && request.method === "POST") {
+      try {
+        const payload = await body<{ query?: unknown; model?: unknown }>(request);
+        const key = anthropicKey(request.headers.get("x-anthropic-key"));
+        return json(await findDocument(typeof payload.query === "string" ? payload.query : "", key));
+      } catch (error) {
+        return json({ ok: false, error: error instanceof Error ? error.message : "bad request" }, 400);
       }
     }
 

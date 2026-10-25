@@ -1,0 +1,64 @@
+{
+  "records": [
+    {
+      "id": "MTS-4471",
+      "title": "Lakeshore Electronics · 240 notebook computers from Taiwan · Newark",
+      "skill": "file ACE entry",
+      "values": {
+        "ref": "MTS-4471",
+        "port": "4601",
+        "mode": "11",
+        "import_date": "10/22/2026",
+        "ior_number": "16-4827193-00",
+        "mid": "TWQUACOM211TAO",
+        "carrier": "MAEU",
+        "bill_of_lading": "MAEU264817736",
+        "origin": "TW",
+        "hts": "8471.30.0100",
+        "quantity": "240",
+        "value": "146880",
+        "spi": ""
+      }
+    },
+    {
+      "id": "MTS-4472",
+      "title": "Lakeshore Electronics · 1,800 Li-ion battery packs from Malaysia · Newark",
+      "skill": "file ACE entry",
+      "values": {
+        "ref": "MTS-4472",
+        "port": "4601",
+        "mode": "11",
+        "import_date": "10/23/2026",
+        "ior_number": "16-4827193-00",
+        "mid": "MYPENENE18BAY",
+        "carrier": "ONEY",
+        "bill_of_lading": "ONEYPENB4472018",
+        "origin": "MY",
+        "hts": "8507.60.0090",
+        "quantity": "1800",
+        "value": "69300",
+        "spi": ""
+      }
+    },
+    {
+      "id": "MTS-4473",
+      "title": "Harborview Home Goods · 6,600 container sets from Canada (USMCA) · Buffalo",
+      "skill": "file ACE entry",
+      "values": {
+        "ref": "MTS-4473",
+        "port": "0901",
+        "mode": "30",
+        "import_date": "10/24/2026",
+        "ior_number": "22-3190457-00",
+        "mid": "XONORPOL450TOR",
+        "carrier": "NFLT",
+        "bill_of_lading": "NFLT0098821",
+        "origin": "CA",
+        "hts": "3924.10.4000",
+        "quantity": "6600",
+        "value": "41250",
+        "spi": "S"
+      }
+    }
+  ]
+}

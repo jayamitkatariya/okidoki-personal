@@ -3,6 +3,7 @@ import { httpAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { byteSize, SYNCED_TABLES, trimSnapshot } from "./sync";
 import { auth } from "./auth";
+import type { Id } from "./_generated/dataModel";
 
 // Groups items into mutation-sized batches: at most 50 items or ~4 MB of arguments each.
 function batches(items: any[]): any[][] {
@@ -316,6 +317,45 @@ http.route({
   path: "/health",
   method: "GET",
   handler: httpAction(async () => json({ ok: true, service: "okidoki-convex", syncConfigured: Boolean(process.env.OKIDOKI_SYNC_SECRET) })),
+});
+
+// ---- The Mac adding a document to the vault (a form it found on the web). Same secret as sync. ----
+
+for (const path of ["/api/vault/upload-url", "/api/vault/save"]) {
+  http.route({ path, method: "OPTIONS", handler: httpAction(async () => options()) });
+}
+
+http.route({
+  path: "/api/vault/upload-url",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<{ accountId?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    if (!isId(parsed.body.accountId)) return json({ error: "accountId required" }, 400);
+    return json(await ctx.runMutation(internal.vault.uploadUrlForAccount, { accountId: parsed.body.accountId }));
+  }),
+});
+
+http.route({
+  path: "/api/vault/save",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!authorized(request)) return json({ error: "unauthorized" }, 401);
+    const parsed = await readJson<{ accountId?: unknown; storageId?: unknown; name?: unknown; mime?: unknown; space?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
+    if (!isId(body.accountId)) return json({ error: "accountId required" }, 400);
+    if (!isId(body.storageId)) return json({ error: "storageId required" }, 400);
+    if (typeof body.name !== "string" || !body.name.trim()) return json({ error: "name required" }, 400);
+    return json(await ctx.runMutation(internal.vault.saveFileForAccount, {
+      accountId: body.accountId,
+      storageId: body.storageId as Id<"_storage">,
+      name: body.name,
+      mime: typeof body.mime === "string" ? body.mime : "application/pdf",
+      space: typeof body.space === "string" ? body.space.slice(0, 80) : "",
+    }));
+  }),
 });
 
 export default http;

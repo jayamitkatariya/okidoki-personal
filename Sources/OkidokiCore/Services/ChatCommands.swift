@@ -21,6 +21,15 @@ public enum ChatCommand: Equatable, Sendable {
     case stopReplay
     case deleteSkill(skillID: String)
     case renameSkill(skillID: String, name: String)
+
+    /// "file the entry for MTS-4471": one pass per record, `{{placeholders}}` filled from it; `values`
+    /// are key=value overrides typed with the request (and all there is when no record is named).
+    case replayRecords(skillID: String, recordIDs: [String], values: [String: String])
+    /// A record id in the usual shape that isn't in the records file.
+    case unknownRecord(query: String)
+    /// "add the CBP 3461 to the vault": fetch the document (a known form, a link, or a web search)
+    /// and file it in the organization's vault, or a space's when `space` names one.
+    case addToVault(query: String, url: String?, space: String)
 }
 
 public enum ChatCommands {
@@ -30,8 +39,12 @@ public enum ChatCommands {
         public var replaying: Bool
         /// Whether a skill has been replayed this session, so a bare "again" has something to mean.
         public var hasReplayed: Bool
-        public init(skills: [Skill], recording: Bool = false, replaying: Bool = false, hasReplayed: Bool = false) {
+        /// Rows skills can be replayed against (records.json): shipments, invoices, customers.
+        public var records: [SkillRecord]
+        public init(skills: [Skill], recording: Bool = false, replaying: Bool = false, hasReplayed: Bool = false,
+                    records: [SkillRecord] = []) {
             self.skills = skills; self.recording = recording; self.replaying = replaying; self.hasReplayed = hasReplayed
+            self.records = records
         }
     }
 
@@ -44,12 +57,14 @@ public enum ChatCommands {
             return .stopReplay
         }
         if let command = startRecordingCommand(t) { return command }
+        if let command = vaultCommand(t, raw: text) { return command }
         if Self.listPhrases.contains(t) || t.hasPrefix("list my skills") || t.hasPrefix("list skills")
             || t.hasPrefix("what skills") || t.hasPrefix("which skills") || t.hasPrefix("show my skills") || t.hasPrefix("show me my skills") {
             return .listSkills
         }
         if let command = renameCommand(t, skills: context.skills) { return command }
         if let command = deleteCommand(t, skills: context.skills) { return command }
+        if let command = recordCommand(t, raw: text, skills: context.skills, records: context.records) { return command }
         return replayCommand(t, skills: context.skills, hasReplayed: context.hasReplayed)
     }
 

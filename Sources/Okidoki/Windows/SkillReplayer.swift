@@ -21,7 +21,9 @@ final class SkillReplayer {
 
     init(environment: AppEnvironment) { self.env = environment }
 
-    func begin(skill: Skill, runID: String, times: Int) {
+    /// `values` holds one set of `{{placeholder}}` values per pass (a record each); when it's empty,
+    /// every pass gets only the built-ins (today's date, the portal address).
+    func begin(skill: Skill, runID: String, times: Int, values: [[String: String]] = []) {
         guard !isActive else { env?.failReplay(runID: runID, reason: "a replay is already running — let it finish or stop it first"); return }
         guard AccessibilityActions.canPost else {
             env?.failReplay(runID: runID, reason: "allow accessibility access in System Settings, then try again")
@@ -30,6 +32,21 @@ final class SkillReplayer {
         guard !skill.steps.isEmpty else {
             env?.failReplay(runID: runID, reason: "this skill has no steps")
             return
+        }
+        let builtins = ParameterFill.builtins(portal: env.map { "http://127.0.0.1:\($0.sidecar.port)" } ?? "")
+        let passValues = values.isEmpty ? [builtins] : values.map { builtins.merging($0) { _, given in given } }
+        // Every pass must have what the skill types before anything is touched: stopping halfway
+        // through a form leaves it worse than not starting.
+        let needed = ParameterFill.names(in: skill.steps)
+        if !needed.isEmpty {
+            for given in passValues {
+                let missing = ParameterFill.fill(needed.map { "{{\($0)}}" }.joined(separator: " "), values: given).missing
+                guard missing.isEmpty else {
+                    let which = given["ref"].map { " for \($0)" } ?? ""
+                    env?.failReplay(runID: runID, reason: "“\(skill.name)” needs \(missing.joined(separator: ", "))\(which) — name a record (“\(skill.name) for MTS-4471”) or add \(missing[0])=… to the request")
+                    return
+                }
+            }
         }
         isActive = true
         self.runID = runID
@@ -41,25 +58,39 @@ final class SkillReplayer {
         installMonitors()
         env?.speaker.speak("replaying \(skill.name).", voiceID: env?.store.settings.voiceID ?? "sarah",
                            speed: env?.store.settings.voiceSpeed ?? 1)
-        let passes = max(1, times)
+        let passes = values.isEmpty ? max(1, times) : values.count
         let steps = skill.steps
+        // Skills that file into the brain's Entry Workbench get a receipt back for every record.
+        let expectsReceipt = steps.contains { $0.input?.contains("{{portal}}") == true }
         task = Task { [weak self] in
             guard let self else { return }
             var failed: String?
             outer: for pass in 1...passes {
+                let given = passValues[(pass - 1) % passValues.count]
+                let ref = values.isEmpty ? nil : given["ref"]
+                let passStarted = Date()
                 for (index, step) in steps.enumerated() {
                     if Task.isCancelled { break outer }
-                    self.markStep(index, status: .running, pass: pass, of: passes, total: steps.count, text: step.text)
+                    let text = (ref.map { "\($0) · " } ?? "") + ParameterFill.fill(step.text, values: given).text
+                    self.markStep(index, status: .running, pass: pass, of: passes, total: steps.count, text: text)
                     let wait = SkillReplayGeometry.pause(for: step)
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     if Task.isCancelled { break outer }
-                    if let problem = await self.perform(step, index: index, of: steps) {
-                        failed = problem
-                        self.markStep(index, status: .failed, pass: pass, of: passes, total: steps.count, text: step.text)
+                    if let problem = await self.perform(step, index: index, of: steps, values: given) {
+                        failed = ref.map { "\($0): \(problem)" } ?? problem
+                        self.markStep(index, status: .failed, pass: pass, of: passes, total: steps.count, text: text)
                         break outer
                     }
                     if Task.isCancelled { break outer }
-                    self.markStep(index, status: .done, pass: pass, of: passes, total: steps.count, text: step.text)
+                    self.markStep(index, status: .done, pass: pass, of: passes, total: steps.count, text: text)
+                }
+                if let ref {
+                    self.model.label = "\(ref) · checking what came back"
+                    if let problem = await self.env?.replayPassFinished(runID: runID, ref: ref, pass: pass, of: passes,
+                                                                        startedAt: passStarted, expectsReceipt: expectsReceipt) {
+                        failed = problem
+                        break outer
+                    }
                 }
                 if pass < passes {
                     self.model.label = "pass \(pass) of \(passes) done — going again"
@@ -92,7 +123,7 @@ final class SkillReplayer {
     }
 
     /// Returns a reason when the step couldn't be done.
-    private func perform(_ step: SkillStep, index: Int, of steps: [SkillStep]) async -> String? {
+    private func perform(_ step: SkillStep, index: Int, of steps: [SkillStep], values: [String: String]) async -> String? {
         let action = step.action ?? "click"
         let hasApp = SkillReplayGeometry.isRealApp(step.app)
         let around = Neighbours(previous: index > 0 ? steps[index - 1] : nil,
@@ -109,11 +140,25 @@ final class SkillReplayer {
         if hasApp, !SkillReplayGeometry.sameApp(NSWorkspace.shared.frontmostApplication?.localizedName ?? "", step.app) {
             _ = await activate(step.app)
             try? await Task.sleep(nanoseconds: 250_000_000)
+            // Keys go to whatever is in front. If that still isn't the step's app, typing now would
+            // land in someone else's window (a terminal, a chat), so stop instead.
+            if action == "type" || action == "key",
+               !SkillReplayGeometry.sameApp(NSWorkspace.shared.frontmostApplication?.localizedName ?? "", step.app) {
+                return "couldn't bring \(step.app) to the front, so nothing was typed"
+            }
         }
         switch action {
         case "type":
-            guard let text = step.input, !text.isEmpty else { return nil }
-            return await offMain { AccessibilityActions.type(text) } ? nil : "couldn't type"
+            guard let raw = step.input, !raw.isEmpty else { return nil }
+            let filled = ParameterFill.fill(raw, values: values)
+            guard filled.missing.isEmpty else { return "no value for \(filled.missing.joined(separator: ", "))" }
+            let text = filled.text
+            guard !text.isEmpty else { return nil }
+            // Real keys from the live layout, the way computer use types: some fields (Safari's
+            // address bar) ignore characters that arrive without a key behind them.
+            guard EventActuator.canPost else { return "couldn't type" }
+            await EventActuator.typeText(text)
+            return nil
         case "key":
             guard let combo = step.input, !combo.isEmpty else { return nil }
             let isEsc = combo.hasSuffix("escape")

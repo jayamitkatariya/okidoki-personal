@@ -357,6 +357,13 @@ public final class OkidokiStore: ObservableObject {
             skills[index].steps = cleaned
             return skills[index]
         }
+        // The Mac that published it already has the original (with its pictures): use that, not a copy.
+        if let own = skills.first(where: { skill in
+            skill.accountID == currentAccountID && !skill.source.hasPrefix("shared:") && skill.name == name
+                && skill.steps.map(\.text) == cleaned.map(\.text) && skill.steps.map(\.input) == cleaned.map(\.input)
+        }) {
+            return own
+        }
         return createSkill(name: name, summary: summary.isEmpty ? "shared by a colleague · v\(version)" : summary, steps: cleaned, source: source)
     }
 

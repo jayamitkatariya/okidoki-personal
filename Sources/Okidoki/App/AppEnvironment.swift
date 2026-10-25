@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import OkidokiCore
 
 enum DashboardSection: String, CaseIterable, Identifiable {
-    case home, runs, history, memory, skills, toolbox, keys, settings, live
+    case home, runs, history, memory, skills, toolbox, keys, settings, live, vault, spaces
     var id: String { rawValue }
 }
 
@@ -70,6 +70,8 @@ final class AppEnvironment: ObservableObject {
     private var watchRunID: String?
     /// How many passes a queued skill replay should make, by run id.
     private var pendingReplays: [String: Int] = [:]
+    /// `{{placeholder}}` values for each pass of a queued replay (one record per pass), by run id.
+    var pendingReplayValues: [String: [[String: String]]] = [:]
     /// What "again" means in the chat.
     private var lastReplayedSkillID: String?
     private var pendingStarts: [String: DispatchWorkItem] = [:]
@@ -555,7 +557,8 @@ final class AppEnvironment: ObservableObject {
            let command = ChatCommands.parse(text, context: ChatCommands.Context(skills: store.activeSkills,
                                                                                 recording: watch.isRecording,
                                                                                 replaying: replayer.isActive,
-                                                                                hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil)) {
+                                                                                hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil,
+                                                                                records: SkillRecords.load())) {
             handleChatCommand(command, text: text, appName: appName, threadID: threadID, source: source)
             return
         }
@@ -746,7 +749,7 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    private func present(_ card: AnswerCardModel, source: String) {
+    func present(_ card: AnswerCardModel, source: String) {
         // Routines and space jobs report elsewhere; a card at the cursor would interrupt whoever's at this Mac.
         guard source != "routine", source != "space" else { return }
         if card.onClose == nil {
@@ -1140,7 +1143,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     /// Borrow and computer-use runs start on their own, unless the app or target is on always ask.
-    private func startOrAsk(_ run: AgentRun, decision: BrainDecision, threadID: String, source: String) {
+    func startOrAsk(_ run: AgentRun, decision: BrainDecision, threadID: String, source: String) {
         summon.hideInput()
         let items = (run.preview?.apps ?? []) + [run.pickedPath ?? "", run.prompt]
         guard let asked = SafetyPolicy.mustAsk(items, settings: store.settings) else {
@@ -1304,6 +1307,7 @@ final class AppEnvironment: ObservableObject {
         pendingStarts[id] = nil
         pausedStarts.remove(id)
         pendingReplays[id] = nil
+        pendingReplayValues[id] = nil
         pendingConnectorCalls[id] = nil
         pendingToolInstalls[id] = nil
         store.cancelRun(id)
@@ -1405,7 +1409,8 @@ final class AppEnvironment: ObservableObject {
                     failReplay(runID: run.id, reason: "that skill was deleted before the replay started")
                     return
                 }
-                replayer.begin(skill: skill, runID: run.id, times: times)
+                replayer.begin(skill: skill, runID: run.id, times: times,
+                               values: pendingReplayValues.removeValue(forKey: run.id) ?? [])
                 return
             }
             let target = run.pickedPath ?? run.prompt
@@ -1973,6 +1978,7 @@ final class AppEnvironment: ObservableObject {
         pendingStarts[id] = nil
         pausedStarts.remove(id)
         pendingReplays[id] = nil
+        pendingReplayValues[id] = nil
         pendingConnectorCalls[id] = nil
         pendingToolInstalls[id] = nil
         ShellRunner.shared.cancel(id: id)
@@ -2103,19 +2109,28 @@ final class AppEnvironment: ObservableObject {
               }, runID: run.id)
     }
 
-    private func makeReplayRun(_ skill: Skill, times: Int, threadID: String?) -> AgentRun {
-        let passes = max(1, min(times, 10_000))
-        let steps = skill.steps
+    /// `values`: one set of `{{placeholder}}` values per pass, each usually a record with a `ref`.
+    func makeReplayRun(_ skill: Skill, times: Int, threadID: String?, values: [[String: String]] = []) -> AgentRun {
+        let passes = values.isEmpty ? max(1, min(times, 10_000)) : values.count
+        let refs = values.compactMap { $0["ref"] }
+        // The steps read with the first record's values, so the preview says what will be typed.
+        let steps = skill.steps.map { step -> SkillStep in
+            var shown = step
+            shown.text = ParameterFill.fill(step.text, values: values.first ?? [:]).text
+            return shown
+        }
         let apps = steps.map(\.app).reduce(into: [String]()) { if !$1.isEmpty, !$0.contains($1) { $0.append($1) } }
-        let count = passes == 1 ? "once" : "\(passes) times"
+        let count = !refs.isEmpty ? "for \(refs.joined(separator: ", "))" : passes == 1 ? "once" : "\(passes) times"
         let preview = ActionPreview(summary: "replay “\(skill.name)” \(count) — \(steps.count) steps under a ghost cursor. press esc to stop.",
-                                    risk: passes > 1 ? .high : .medium,
+                                    risk: passes > 1 && refs.isEmpty ? .high : .medium,
                                     steps: steps.map { PreviewStep($0.text) },
                                     commands: [], apps: apps.isEmpty ? ["app"] : apps, files: [])
-        let run = store.createRun(kind: .borrow, title: "replay · \(skill.name)\(passes > 1 ? " ×\(passes)" : "")", prompt: skill.name,
+        let suffix = !refs.isEmpty ? " · \(refs.joined(separator: ", "))" : passes > 1 ? " ×\(passes)" : ""
+        let run = store.createRun(kind: .borrow, title: "replay · \(skill.name)\(suffix)", prompt: skill.name,
                                   threadID: threadID, preview: preview, steps: steps.map { RunStep(title: $0.text) },
                                   status: .waiting, builtin: "skill", pickedPath: skill.id)
         pendingReplays[run.id] = passes
+        if !values.isEmpty { pendingReplayValues[run.id] = values }
         lastReplayedSkillID = skill.id
         return run
     }
@@ -2238,12 +2253,28 @@ final class AppEnvironment: ObservableObject {
             toast(title: "renamed", detail: "“\(skill.name)” is now “\(name)”", kind: .success,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
             store.appendMessage(threadID: thread.id, role: .assistant, text: "renamed “\(skill.name)” to “\(name)”.")
+
+        case .replayRecords(let id, let recordIDs, let values):
+            guard let skill = store.skill(id) else { return reply("hm", "that skill isn't here anymore.") }
+            let records = SkillRecords.load()
+            let picked = recordIDs.compactMap { rid in records.first { $0.id == rid } }
+            let passes = picked.isEmpty ? [values] : picked.map { $0.fillValues.merging(values) { _, typed in typed } }
+            startReplayFromChat(skill, times: 1, threadID: thread.id, source: source, values: passes)
+
+        case .addToVault(let query, let url, let space):
+            addToVault(query: query, url: url, space: space, request: text, threadID: thread.id, source: source)
+
+        case .unknownRecord(let query):
+            let records = SkillRecords.load()
+            reply("no \(query)", "there's no record \(query). these are the ones i have:\n\n"
+                  + records.prefix(8).map { "· \($0.id) — \($0.title)" }.joined(separator: "\n"),
+                  say: "I don't have \(query).")
         }
     }
 
     /// A replay asked for in the chat starts straight away, like any other job asked for there:
     /// the same approval rules apply (always-ask apps still ask), nothing extra.
-    private func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String) {
+    func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String, values: [[String: String]] = []) {
         if replayer.isActive { replayer.cancel(reason: "replaying \(skill.name) instead") }
         if watch.isRecording {
             toast(title: "still recording", detail: "save or discard the recording first", kind: .warning,
@@ -2251,8 +2282,9 @@ final class AppEnvironment: ObservableObject {
             return
         }
         let passes = max(1, min(times, 10_000))
-        let run = makeReplayRun(skill, times: passes, threadID: threadID)
-        let count = passes == 1 ? "once" : "\(passes) times"
+        let run = makeReplayRun(skill, times: passes, threadID: threadID, values: values)
+        let refs = values.compactMap { $0["ref"] }
+        let count = !refs.isEmpty ? "for \(refs.joined(separator: ", "))" : passes == 1 ? "once" : "\(passes) times"
         store.appendMessage(threadID: threadID, role: .assistant,
                             text: "replaying “\(skill.name)” \(count) — \(skill.steps.count) steps. esc stops me.", runID: run.id)
         let decision = BrainDecision(kind: .borrow, title: "replay · \(skill.name)", answer: "", risk: run.preview?.risk ?? .medium)
@@ -2261,7 +2293,9 @@ final class AppEnvironment: ObservableObject {
 
     func finishReplay(runID: String, passes: Int) {
         if let run = store.run(runID), let id = run.pickedPath { store.incrementSkillRun(id, by: passes) }
-        let line = passes > 1 ? "replayed \(passes) times" : "replayed once"
+        // Records that came back with a receipt ("MTS-4471 → entry … accepted") say more than a count.
+        let receipts = (store.run(runID)?.output ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let line = !receipts.isEmpty ? receipts.joined(separator: "; ") : passes > 1 ? "replayed \(passes) times" : "replayed once"
         store.finishRun(runID, status: .done, summary: line)
         toast(title: "done", detail: "\(line) — control is yours", kind: .success,
               undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: runID)
@@ -2271,6 +2305,7 @@ final class AppEnvironment: ObservableObject {
 
     func failReplay(runID: String, reason: String) {
         pendingReplays[runID] = nil
+        pendingReplayValues[runID] = nil
         store.finishRun(runID, status: .failed, summary: reason)
         toast(title: "couldn't finish the replay", detail: reason, kind: .warning,
               undoLabel: nil, onUndo: nil, editLabel: "details", onEdit: { [weak self] in

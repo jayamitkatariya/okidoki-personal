@@ -167,6 +167,8 @@ export default defineSchema({
     plan: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    // What a new member's Mac says the first time it links: an admin's note on where to start.
+    welcome: v.optional(v.string()),
   }).index("by_domain", ["domain"]),
 
   // One row per login per organization. `accountClientId` is the Mac work account this membership is linked to.
@@ -244,6 +246,7 @@ export default defineSchema({
   })
     .index("by_space", ["spaceId", "createdAt"])
     .index("by_org_status", ["orgId", "status"])
+    .index("by_status", ["status", "updatedAt"])
     .index("by_worker", ["workerAccountId", "status"]),
 
   // One row per Mac work account that accepts jobs. `lastSeenAt` is its heartbeat.
@@ -254,6 +257,8 @@ export default defineSchema({
     device: v.string(),
     kind: v.string(), // thisMac · privateMac
     enabled: v.boolean(),
+    // off · paused (the Mac is on a personal account right now) · ready. Missing on rows from older builds.
+    state: v.optional(v.string()),
     lastSeenAt: v.number(),
   })
     .index("by_account", ["accountClientId"])

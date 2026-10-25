@@ -97,9 +97,27 @@ public enum SkillTargetResolver {
         if let app = runningApp(named: name) {
             app.activate()
             _ = await waitForWindow(pid: app.processIdentifier, timeout: 1.5)
-            return true
+            if await becameFrontmost(app.processIdentifier, within: 0.4) { return true }
+            // Since macOS 14 an app that isn't itself active (okidoki answering from a space, a
+            // routine, a hook) can only ask politely, and the ask is often ignored. Launch Services
+            // still brings a running app forward for anyone.
+            _ = await openWithLaunchServices(name)
+            return await becameFrontmost(app.processIdentifier, within: 2)
         }
-        let launched = await Task.detached { () -> Bool in
+        guard await openWithLaunchServices(name) else { return false }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let app = runningApp(named: name) {
+                app.activate()
+                return await waitForWindow(pid: app.processIdentifier, timeout: deadline.timeIntervalSinceNow)
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return false
+    }
+
+    private static func openWithLaunchServices(_ name: String) async -> Bool {
+        await Task.detached { () -> Bool in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
             process.arguments = ["-a", name]
@@ -111,16 +129,16 @@ public enum SkillTargetResolver {
                 return false
             }
         }.value
-        guard launched else { return false }
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if let app = runningApp(named: name) {
-                app.activate()
-                return await waitForWindow(pid: app.processIdentifier, timeout: deadline.timeIntervalSinceNow)
-            }
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
-        return false
+    }
+
+    /// Whether the app is in front now or gets there within `seconds`.
+    public static func becameFrontmost(_ pid: pid_t, within seconds: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        } while Date() < deadline
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     }
 
     /// True once the app reports at least one window through accessibility.
@@ -205,28 +223,51 @@ public enum SkillTargetResolver {
     public static func find(label: String, in pid: pid_t, near: CGPoint?, budget: TimeInterval = 0.7) -> CGPoint? {
         let app = appElement(pid)
         let deadline = Date().addingTimeInterval(budget)
-        var queue: [AXUIElement] = [app]
-        queue.reserveCapacity(512)
-        var head = 0
         var visited = 0
-        var best: (point: CGPoint, distance: Double)?
-        while head < queue.count && visited < 3000 {
-            if visited & 31 == 0, Date() > deadline { break }
-            let element = queue[head]
-            head += 1
-            visited += 1
-            if AccessibilityLabel.of(element).caseInsensitiveCompare(label) == .orderedSame, let center = center(of: element) {
-                let distance = near.map { hypot(center.x - $0.x, center.y - $0.y) } ?? 0
-                if best == nil || distance < best!.distance { best = (center, distance) }
-                if near == nil { break }
+        // The window in front first: it's where the replay is working, and an app with many windows
+        // (a browser) would otherwise spend the whole budget on the ones behind it.
+        var focusedRef: CFTypeRef?
+        let focused = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedRef) == .success
+            ? focusedRef.flatMap { AXSearch.axElement($0) } : nil
+        func walk(from root: AXUIElement, skipping skip: AXUIElement?) -> (point: CGPoint, element: AXUIElement)? {
+            var queue: [AXUIElement] = [root]
+            queue.reserveCapacity(512)
+            var head = 0
+            var best: (point: CGPoint, distance: Double, element: AXUIElement)?
+            while head < queue.count && visited < 3000 {
+                if visited & 31 == 0, Date() > deadline { break }
+                let element = queue[head]
+                head += 1
+                visited += 1
+                if AccessibilityLabel.of(element).caseInsensitiveCompare(label) == .orderedSame, let center = center(of: element) {
+                    let distance = near.map { hypot(center.x - $0.x, center.y - $0.y) } ?? 0
+                    if best == nil || distance < best!.distance { best = (center, distance, element) }
+                    if near == nil { break }
+                }
+                var childrenRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                   let children = childrenRef as? [AXUIElement] {
+                    queue.append(contentsOf: children.prefix(120).filter { child in skip.map { !CFEqual(child, $0) } ?? true })
+                }
             }
-            var childrenRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-               let children = childrenRef as? [AXUIElement] {
-                queue.append(contentsOf: children.prefix(120))
-            }
+            return best.map { ($0.point, $0.element) }
         }
-        return best?.point
+        guard let found = focused.flatMap({ walk(from: $0, skipping: nil) }) ?? walk(from: app, skipping: focused) else { return nil }
+        return visiblePoint(of: found.element) ?? found.point
+    }
+
+    /// A control below the fold of a long page has a frame, just not one on screen: clicking its
+    /// centre would hit whatever is there instead. Ask the app to scroll it into view first.
+    private static func visiblePoint(of element: AXUIElement) -> CGPoint? {
+        guard let center = center(of: element) else { return nil }
+        var windowRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &windowRef) == .success,
+              let windowRef, let window = AXSearch.axElement(windowRef), let bounds = frame(of: window) else { return center }
+        let inside = bounds.insetBy(dx: 4, dy: 4)
+        guard !inside.contains(center) else { return center }
+        guard AXUIElementPerformAction(element, "AXScrollToVisible" as CFString) == .success else { return center }
+        usleep(250_000)
+        return self.center(of: element) ?? center
     }
 
     public static func frame(of element: AXUIElement) -> CGRect? {
