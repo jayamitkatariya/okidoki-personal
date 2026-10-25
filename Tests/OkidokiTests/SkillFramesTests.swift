@@ -67,6 +67,7 @@ final class SkillFramesTests: XCTestCase {
 
     func testAClickSavesAPictureAndTheStepPointsAtIt() async {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         recorder.frameSession = nil
         recorder.frontAppProvider = { "WhatsApp" }
         recorder.targetProvider = { _ in WatchedTarget(label: "Dad", owner: "WhatsApp", role: "AXCell", windowTitle: "WhatsApp") }
@@ -94,6 +95,7 @@ final class SkillFramesTests: XCTestCase {
 
     func testEveryClickGetsItsOwnPictureAndADoubleClickKeepsTheFirst() async {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         recorder.frameSession = nil
         recorder.frontAppProvider = { "Finder" }
         recorder.targetProvider = { _ in WatchedTarget(label: "Documents") }
@@ -117,6 +119,7 @@ final class SkillFramesTests: XCTestCase {
 
     func testWithoutScreenRecordingStepsSimplyHaveNoPicture() {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         recorder.frameSession = nil
         recorder.frontAppProvider = { "Finder" }
         recorder.targetProvider = { _ in WatchedTarget(label: "Documents") }
@@ -140,6 +143,7 @@ final class SkillFramesTests: XCTestCase {
         SkillFrames.directory = directory
         defer { SkillFrames.directory = previous; try? FileManager.default.removeItem(at: directory) }
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         recorder.frameSession = nil
         recorder.frontAppProvider = { "Finder" }
         recorder.targetProvider = { _ in WatchedTarget(label: "Documents") }

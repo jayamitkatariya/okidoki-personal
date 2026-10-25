@@ -55,6 +55,7 @@ final class SkillReplayTargetTests: XCTestCase {
 
     func testDockClickIsRememberedAsTheDocksEvenWhenAnotherAppIsInFront() {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         recorder.frameProvider = nil
         recorder.frameSession = nil
         recorder.frontAppProvider = { "Finder" }
@@ -77,6 +78,7 @@ final class SkillReplayTargetTests: XCTestCase {
 
     func testInAppClickRemembersRoleAndWindowButNotARedundantOwner() {
         let recorder = WatchRecorder()
+        recorder.watchesSystem = false
         recorder.frameProvider = nil
         recorder.frameSession = nil
         recorder.frontAppProvider = { "WhatsApp" }
