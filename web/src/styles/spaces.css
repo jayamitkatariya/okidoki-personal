@@ -515,3 +515,96 @@
 .space-file .is-gone {
   color: var(--muted);
 }
+
+/* ---- Tabs, files, runs ---- */
+
+.space-head-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+.space-head-link:hover {
+  text-decoration: underline;
+}
+.space-messages.is-hidden,
+.space-composer.is-hidden {
+  display: none;
+}
+.space-messages {
+  position: relative;
+}
+.space-messages.is-over {
+  background: var(--accent-soft);
+}
+.space-drop {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--r-md);
+  background: var(--card);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 550;
+  pointer-events: none;
+}
+.space-earlier {
+  display: flex;
+  justify-content: center;
+}
+.space-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.space-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.space-pane-head .form-hint {
+  flex: 1;
+  margin: 0;
+}
+.space-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+}
+.space-runs .job-card {
+  width: 100%;
+}
+.space-file.is-ghost {
+  color: var(--muted);
+}
+.job-stuck {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.job-stuck svg {
+  color: var(--accent-ink);
+}
+.job-stuck span {
+  flex: 1;
+  min-width: 160px;
+}

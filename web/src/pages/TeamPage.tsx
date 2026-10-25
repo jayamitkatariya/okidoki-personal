@@ -4,6 +4,7 @@ import { copyText, cx, futureTime, relativeTime } from "../lib";
 import type { Page } from "../nav";
 import type { Account } from "../types";
 import type { JoinCode, OrgMember, OrgRole, OrgView, Rollout } from "../enterprise";
+import { useEnsureWorker } from "../worker";
 import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const ROLE_LABEL: Record<OrgRole, string> = { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" };
@@ -102,6 +103,7 @@ export function TeamPage({ go }: { go: (page: Page) => void }) {
 // A work account that isn't linked yet: create, join with a code, or pick an organization this login is already in.
 function LinkAccount() {
   const { account, enterprise, notify, state } = useDashboard();
+  const ensureWorker = useEnsureWorker();
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
   const [code, setCode] = useState("");
@@ -143,7 +145,10 @@ function LinkAccount() {
                     <em>via {invite.device}</em>
                   </span>
                   <span className="pref-control">
-                    <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => run(`nearby-${invite.code}`, () => enterprise.actions.join(invite.code).then((result) => notify("Joined", result.name)))}>
+                    <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => run(`nearby-${invite.code}`, () => enterprise.actions.join(invite.code).then((result) => {
+                          notify("Joined", result.name);
+                          ensureWorker();
+                        }))}>
                       {busy === `nearby-${invite.code}` ? "Joining…" : "Join"}
                     </Button>
                   </span>
@@ -171,7 +176,10 @@ function LinkAccount() {
                     </em>
                   </span>
                   <span className="pref-control">
-                    <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => run(`link-${org.id}`, () => enterprise.actions.link(org.id).then(() => notify("Linked", `${account.name} is now part of ${org.name}`)))}>
+                    <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => run(`link-${org.id}`, () => enterprise.actions.link(org.id).then(() => {
+                          notify("Linked", `${account.name} is now part of ${org.name}`);
+                          ensureWorker();
+                        }))}>
                       {busy === `link-${org.id}` ? "Linking…" : "Link"}
                     </Button>
                   </span>
@@ -188,7 +196,10 @@ function LinkAccount() {
               <h2>Ask to join {domainOrg.name}</h2>
               <p>Your email domain matches. An admin there approves the request.</p>
             </header>
-            <Button variant="primary" disabled={busy !== null} onClick={() => run("domain", () => enterprise.actions.requestByDomain().then((result) => notify(result.status === "active" ? "Joined" : "Request sent", result.name)))}>
+            <Button variant="primary" disabled={busy !== null} onClick={() => run("domain", () => enterprise.actions.requestByDomain().then((result) => {
+                  notify(result.status === "active" ? "Joined" : "Request sent", result.name);
+                  if (result.status === "active") ensureWorker();
+                }))}>
               {busy === "domain" ? "Sending…" : "Ask to join"}
             </Button>
           </section>
@@ -221,8 +232,14 @@ function LinkAccount() {
             <p>Someone in the organization shares a six-character code.</p>
           </header>
           <div className="form-stack">
-            <TextField value={code} onChange={(value) => setCode(value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="ABC123" className="team-code-field" onEnter={() => code.length === 6 && run("join", () => enterprise.actions.join(code).then((result) => notify("Joined", result.name)))} />
-            <Button variant="primary" disabled={code.length !== 6 || busy !== null} onClick={() => run("join", () => enterprise.actions.join(code).then((result) => notify("Joined", result.name)))}>
+            <TextField value={code} onChange={(value) => setCode(value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="ABC123" className="team-code-field" onEnter={() => code.length === 6 && run("join", () => enterprise.actions.join(code).then((result) => {
+                      notify("Joined", result.name);
+                      ensureWorker();
+                    }))} />
+            <Button variant="primary" disabled={code.length !== 6 || busy !== null} onClick={() => run("join", () => enterprise.actions.join(code).then((result) => {
+                      notify("Joined", result.name);
+                      ensureWorker();
+                    }))}>
               {busy === "join" ? "Joining…" : "Join"}
             </Button>
           </div>
@@ -239,7 +256,10 @@ function LinkAccount() {
             <TextField value={name} onChange={setName} placeholder="Acme Inc." />
             <label className="form-label">Email domain (optional)</label>
             <TextField value={domain} onChange={setDomain} placeholder="acme.com" />
-            <Button variant="primary" disabled={!name.trim() || busy !== null} onClick={() => run("create", () => enterprise.actions.create(name, domain).then(() => notify("Organization created", name.trim())))}>
+            <Button variant="primary" disabled={!name.trim() || busy !== null} onClick={() => run("create", () => enterprise.actions.create(name, domain).then(() => {
+                  notify("Organization created", name.trim());
+                  ensureWorker();
+                }))}>
               {busy === "create" ? "Creating…" : "Create"}
             </Button>
           </div>

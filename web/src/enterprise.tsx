@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { anyApi } from "convex/server";
 
 // The enterprise side: organizations a sync login belongs to, and the one the current work
@@ -143,9 +143,14 @@ export interface WorkerInfo {
   device: string;
   kind: "thisMac" | "privateMac";
   online: boolean;
+  /** off · paused (its person is on a personal account) · ready. Missing on older deployments. */
+  state?: "off" | "paused" | "ready";
   isYou: boolean;
   lastSeenAt: number;
 }
+
+/** A page of chat is this long; a full page means there may be more before it. */
+export const CHAT_PAGE = 200;
 
 export interface SharedSkill {
   id: string;
@@ -244,6 +249,8 @@ export interface EnterpriseActions {
   deleteSpace: (spaceId: string) => Promise<void>;
   markRead: (spaceId: string) => Promise<void>;
   send: (spaceId: string, text: string) => Promise<void>;
+  /** Fetches the page of chat before the oldest loaded line of the open space. */
+  loadEarlier: () => Promise<void>;
   create: (name: string, domain: string) => Promise<void>;
   rename: (orgId: string, name: string, domain: string) => Promise<void>;
   join: (code: string) => Promise<{ name: string }>;
@@ -269,8 +276,11 @@ export interface EnterpriseState {
   domainOrg: OrgSummary | null;
   /** Spaces in the linked organization, joined ones first. */
   spaces: Space[];
-  /** The open space's chat, oldest first. Empty until a space is selected. */
+  /** The open space's chat, oldest first, including any earlier pages that were loaded. Empty until a space is selected. */
   messages: SpaceMessage[];
+  /** Whether the chat may have lines before the oldest one loaded. */
+  hasEarlier: boolean;
+  loadingEarlier: boolean;
   /** The open space's jobs for the agent, newest first. */
   jobs: Job[];
   /** Macs in the organization that take jobs, and whether they're online right now. */
@@ -296,6 +306,8 @@ export const ENTERPRISE_OFF: EnterpriseState = {
   domainOrg: null,
   spaces: [],
   messages: [],
+  hasEarlier: false,
+  loadingEarlier: false,
   jobs: [],
   workers: [],
   sharedSkills: [],
@@ -323,6 +335,7 @@ export const ENTERPRISE_OFF: EnterpriseState = {
     deleteSpace: unavailable,
     markRead: unavailable,
     send: unavailable,
+    loadEarlier: unavailable,
     create: unavailable,
     rename: unavailable,
     join: unavailable,
@@ -346,7 +359,36 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
   const domainOrg = useQuery(anyApi.orgs.byMyDomain, isAuthenticated ? {} : "skip") as OrgSummary | null | undefined;
   const linked = Boolean(view);
   const spaces = useQuery(anyApi.spaces.list, isAuthenticated && accountId && linked ? { accountId } : "skip") as Space[] | undefined;
-  const messages = useQuery(anyApi.chat.messages, isAuthenticated && linked && spaceId ? { spaceId } : "skip") as SpaceMessage[] | undefined;
+  const live = useQuery(anyApi.chat.messages, isAuthenticated && linked && spaceId ? { spaceId } : "skip") as SpaceMessage[] | undefined;
+
+  // Earlier pages are fetched once and kept per space; the live query only ever holds the newest page.
+  const convex = useConvex();
+  const [earlier, setEarlier] = useState<{ spaceId: string; pages: SpaceMessage[][]; exhausted: boolean }>({ spaceId: "", pages: [], exhausted: false });
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const oldest = earlier.spaceId === spaceId && earlier.pages.length ? earlier.pages[earlier.pages.length - 1][0] : live?.[0];
+  const hasEarlier = Boolean(spaceId && live && live.length >= CHAT_PAGE && !(earlier.spaceId === spaceId && earlier.exhausted));
+  const loadEarlier = useCallback(async () => {
+    if (!spaceId || !oldest || loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      const page = (await convex.query(anyApi.chat.messages, { spaceId, before: oldest.createdAt })) as SpaceMessage[];
+      setEarlier((current) => {
+        const pages = current.spaceId === spaceId ? current.pages : [];
+        return { spaceId, pages: [...pages, page], exhausted: page.length < CHAT_PAGE };
+      });
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [convex, spaceId, oldest, loadingEarlier]);
+  const messages = useMemo(() => {
+    if (!live) return undefined;
+    if (earlier.spaceId !== spaceId || !earlier.pages.length) return live;
+    const seen = new Set<string>();
+    const out: SpaceMessage[] = [];
+    for (const page of [...earlier.pages].reverse()) for (const message of page) if (!seen.has(message.id)) { seen.add(message.id); out.push(message); }
+    for (const message of live) if (!seen.has(message.id)) { seen.add(message.id); out.push(message); }
+    return out;
+  }, [live, earlier, spaceId]);
   const jobs = useQuery(anyApi.jobs.forSpace, isAuthenticated && linked && spaceId ? { spaceId } : "skip") as Job[] | undefined;
   const workers = useQuery(anyApi.jobs.workersFor, isAuthenticated && accountId && linked ? { accountId } : "skip") as WorkerInfo[] | undefined;
 
@@ -438,6 +480,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
         }),
       markRead: (spaceId) => wrap(async () => void (await markRead({ spaceId }))),
       send: (spaceId, text) => wrap(async () => void (await send({ spaceId, text }))),
+      loadEarlier: () => wrap(loadEarlier),
       create: (name, domain) => wrap(async () => void (await create({ name, domain, accountId: account() }))),
       rename: (orgId, name, domain) => wrap(async () => void (await rename({ orgId, name, domain }))),
       join: (code) => wrap(() => join({ code, accountId: account() }) as Promise<{ name: string }>),
@@ -452,7 +495,7 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
       createCode: (orgId, days, maxUses) => wrap(() => createCode({ orgId, days, maxUses }) as Promise<{ code: string }>),
       revokeCode: (codeId) => wrap(async () => void (await revokeCode({ codeId }))),
     };
-  }, [setWelcome, uploadUrl, saveFile, deleteFile, shareFile, saveCredential, deleteCredential, touchCredential, publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
+  }, [loadEarlier, setWelcome, uploadUrl, saveFile, deleteFile, shareFile, saveCredential, deleteCredential, touchCredential, publishSkill, unpublishSkill, rollbackSkill, recordSkillRun, decide, cancelJob, createSpace, joinSpace, leaveSpace, updateSpace, deleteSpace, markRead, send, create, rename, join, link, unlink, requestByDomain, approve, decline, setRole, remove, leave, createCode, revokeCode]);
 
   const status: EnterpriseStatus = isLoading
     ? "loading"
@@ -463,8 +506,8 @@ export function EnterpriseBridge({ accountId, spaceId, onChange }: { accountId: 
         : "ready";
 
   useEffect(() => {
-    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], files: files ?? [], credentials: credentials ?? [], rollout: rollout ?? null, actions });
-  }, [status, view, memberships, domainOrg, spaces, messages, jobs, workers, sharedSkills, files, credentials, rollout, actions, onChange]);
+    onChange({ status, view: view ?? null, memberships: memberships ?? [], domainOrg: domainOrg ?? null, spaces: spaces ?? [], messages: messages ?? [], hasEarlier, loadingEarlier, jobs: jobs ?? [], workers: workers ?? [], sharedSkills: sharedSkills ?? [], files: files ?? [], credentials: credentials ?? [], rollout: rollout ?? null, actions });
+  }, [status, view, memberships, domainOrg, spaces, messages, hasEarlier, loadingEarlier, jobs, workers, sharedSkills, files, credentials, rollout, actions, onChange]);
 
   return null;
 }

@@ -111,6 +111,7 @@ describe("agent jobs and the worker", () => {
     await sam.as.mutation(api.orgs.join, { code, accountId: sam.accountId });
     const { spaceId } = await jay.as.mutation(api.spaces.create, { accountId: jay.accountId, name: "Ops" });
     await sam.as.mutation(api.spaces.join, { spaceId });
+    await tick();
     const post = (path: string, body: unknown) => t.fetch(path, { method: "POST", headers, body: JSON.stringify(body) }).then((r) => r.json());
     return { t, jay, sam, spaceId, post };
   }
@@ -423,6 +424,7 @@ describe("vault", () => {
     const { t, jay, sam, pat, spaceId } = await org();
     const storageId = await t.run(async (ctx) => ctx.storage.store(new Blob(["q3 numbers"], { type: "text/plain" })));
     await jay.as.mutation(api.vault.saveFile, { accountId: jay.accountId, spaceId, storageId, name: "Q3.csv", size: 10, mime: "text/csv" });
+    await tick();
     const wide = await t.run(async (ctx) => ctx.storage.store(new Blob(["handbook"], { type: "text/plain" })));
     await sam.as.mutation(api.vault.saveFile, { accountId: sam.accountId, spaceId: null, storageId: wide, name: "Handbook.pdf", size: 8, mime: "application/pdf" });
 

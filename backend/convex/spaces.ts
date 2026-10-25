@@ -198,7 +198,7 @@ export async function addMember(ctx: MutationCtx, space: Doc<"spaces">, userId: 
       text: "With two of you here, mention @okidoki to give it work.",
       runId: null,
       fileId: null,
-      createdAt: now + 1,
+      createdAt: now,
     });
   }
 }

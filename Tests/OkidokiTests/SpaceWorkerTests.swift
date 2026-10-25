@@ -79,4 +79,56 @@ final class SpaceWorkerTests: XCTestCase {
         XCTAssertEqual(worker.status, "off")
         XCTAssertNil(worker.lastPollAt)
     }
+
+    @MainActor
+    func testWorkerKeepsItsWorkAccountWhilePersonalIsInFront() async {
+        let store = freshStore()
+        let personal = Account(name: "Me", email: "", kind: .personal)
+        let work = Account(name: "Acme", email: "jay@acme.com", kind: .work)
+        store.accounts = [personal, work]
+        store.settings.syncEnabled = true
+        store.settings.convexSiteURL = "https://example.convex.site"
+        store.settings.workerEnabled = true
+        let worker = SpaceWorkerService()
+        worker.runJob = { _, _ in }
+        worker.start(store: store)
+        worker.stop()
+
+        // nothing remembered and Personal in front: off
+        store.currentAccountID = personal.id
+        XCTAssertNil(worker.workerAccountID)
+
+        // the work account in front is the worker's account, and is remembered
+        store.currentAccountID = work.id
+        XCTAssertEqual(worker.workerAccountID, work.id)
+        await worker.tick()
+        XCTAssertEqual(store.settings.workerAccountID, work.id)
+
+        // back on Personal the worker stays with the work account, paused rather than gone
+        store.currentAccountID = personal.id
+        XCTAssertEqual(worker.workerAccountID, work.id)
+        await worker.tick()
+        XCTAssertEqual(worker.state, .paused)
+
+        // a remembered account that no longer exists is forgotten
+        store.accounts = [personal]
+        XCTAssertNil(worker.workerAccountID)
+        await worker.tick()
+        XCTAssertEqual(worker.state, .off)
+    }
+
+    func testAHeldJobSurvivesInSettingsSoARelaunchCanPickItUp() throws {
+        let held = WorkerHeldJob(jobID: "job-1", spaceID: "space-1", spaceName: "Ops", prompt: "zip it", threadID: "thread-1", runID: nil)
+        var settings = AppSettings()
+        settings.workerHeldJob = held
+        settings.workerAccountID = "acct-work"
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+        XCTAssertEqual(decoded.workerHeldJob, held)
+        XCTAssertEqual(decoded.workerAccountID, "acct-work")
+        // older state files have neither
+        let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertNil(legacy.workerHeldJob)
+        XCTAssertEqual(legacy.workerAccountID, "")
+    }
 }

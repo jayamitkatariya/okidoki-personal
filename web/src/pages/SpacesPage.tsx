@@ -3,8 +3,13 @@ import { useDashboard } from "../store";
 import { clockLabel, cx, dayLabel, duration, formatBytes, relativeTime } from "../lib";
 import type { Page } from "../nav";
 import type { Account, RunStatus } from "../types";
-import type { Job, JobStatus, Space, SpaceMember, SpaceMessage, WorkerPolicy } from "../enterprise";
+import type { Job, JobStatus, Space, SpaceMember, SpaceMessage, VaultFile, WorkerPolicy } from "../enterprise";
+import { useEnsureWorker, workerHint } from "../worker";
+import { VaultFileRow } from "./VaultPage";
+import { SharedSkillTile } from "./SkillsPage";
 import { Avatar, Button, Chip, ConfirmModal, Empty, IconButton, isComposing, Markdown, Modal, PageTitle, PixelIcon, RiskBadge, Segmented, StatusBadge, TextField, type ConfirmRequest } from "../components/ui";
+
+type SpaceTab = "chat" | "files" | "skills" | "runs";
 
 const WORKER_LABEL: Record<WorkerPolicy, string> = { thisMac: "This Mac", privateMac: "Private Mac", hostedVM: "Hosted VM" };
 const WORKER_HINT: Record<WorkerPolicy, string> = {
@@ -79,6 +84,7 @@ export function SpacesPage({ go }: { go: (page: Page) => void }) {
 function SpacesLayout({ go }: { go: (page: Page) => void }) {
   const { enterprise, spaceId, selectSpace, notify } = useDashboard();
   const { spaces, messages, jobs } = enterprise;
+  const ensureWorker = useEnsureWorker();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -120,6 +126,7 @@ function SpacesLayout({ go }: { go: (page: Page) => void }) {
       selectSpace(result.spaceId);
       setCreating(false);
       setNewName("");
+      ensureWorker();
     }, ["Space created", newName.trim()]);
 
   return (
@@ -211,17 +218,54 @@ function SpacesLayout({ go }: { go: (page: Page) => void }) {
 }
 
 function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: SpaceMessage[]; jobs: Job[]; go: (page: Page) => void }) {
-  const { enterprise, selectSpace, notify, state } = useDashboard();
+  const { enterprise, selectSpace, notify, state, native, account } = useDashboard();
   const jobById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
-  const online = enterprise.workers.filter((worker) => worker.online && space.members.some((member) => member.userId === worker.userId));
-  const workersLine = online.length ? `${online.length} ${online.length === 1 ? "Mac" : "Macs"} ready` : "no worker online";
+  const inSpace = enterprise.workers.filter((worker) => worker.online && space.members.some((member) => member.userId === worker.userId));
+  const ready = inSpace.filter((worker) => (worker.state ?? "ready") === "ready");
+  const paused = inSpace.length - ready.length;
+  const workersLine = ready.length ? `${ready.length} ${ready.length === 1 ? "Mac" : "Macs"} ready${paused ? `, ${paused} paused` : ""}` : paused ? `${paused} ${paused === 1 ? "Mac" : "Macs"} paused` : "no worker online";
+  const solo = space.members.length === 1;
+  const ensureWorker = useEnsureWorker();
+  const [tab, setTab] = useState<SpaceTab>("chat");
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [attaching, setAttaching] = useState<string[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Attachments go to the space's vault folder, then into the chat as a file line.
+  const attach = async (list: FileList | File[]) => {
+    const picked = Array.from(list);
+    if (!picked.length) return;
+    setAttaching((current) => [...current, ...picked.map((file) => file.name)]);
+    for (const file of picked) {
+      try {
+        const saved = await enterprise.actions.uploadFile(space.id, file);
+        await enterprise.actions.shareFile(saved.id, space.id);
+        stickToBottom.current = true;
+      } catch (error) {
+        notify("Couldn't attach", `${file.name}: ${error instanceof Error ? error.message : String(error)}`, "warning");
+      } finally {
+        setAttaching((current) => {
+          const index = current.indexOf(file.name);
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)];
+        });
+      }
+    }
+  };
+
+  // The composer grows with what's typed, up to a few lines, like the ask box on Home.
+  useEffect(() => {
+    const node = composerRef.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, 160)}px`;
+  }, [draft]);
 
   // Reading the chat marks it read; new messages that arrive while it's open do too.
   const latest = messages[messages.length - 1]?.id ?? "";
@@ -238,8 +282,24 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
   useEffect(() => {
     stickToBottom.current = true;
     setDraft("");
+    setTab("chat");
     composerRef.current?.focus();
   }, [space.id]);
+
+  // Loading an earlier page prepends lines; keep what's on screen where it is.
+  const loadEarlier = async () => {
+    const node = scrollRef.current;
+    const before = node ? node.scrollHeight - node.scrollTop : 0;
+    stickToBottom.current = false;
+    try {
+      await enterprise.actions.loadEarlier();
+      requestAnimationFrame(() => {
+        if (node) node.scrollTop = node.scrollHeight - before;
+      });
+    } catch (error) {
+      notify("Couldn't load earlier messages", error instanceof Error ? error.message : String(error), "warning");
+    }
+  };
 
   const onScroll = () => {
     const node = scrollRef.current;
@@ -265,6 +325,11 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
 
   const grouped = useMemo(() => groupMessages(messages), [messages]);
   const worker = (space.workerPolicy || "thisMac") as WorkerPolicy;
+  const mine = enterprise.workers.find((item) => item.isYou);
+  const hint = workerHint({ native, enabled: state.settings.workerEnabled === true, state: native ? state.worker?.state ?? mine?.state : mine?.state, readyElsewhere: ready.filter((item) => !item.isYou).length, workAccountName: account.name });
+  const spaceFiles = enterprise.files.filter((file) => file.spaceId === space.id);
+  const spaceSkills = enterprise.sharedSkills.filter((skill) => skill.spaceId === space.id);
+  const lastMember = space.members.length === 1 && space.members[0].isYou;
 
   return (
     <>
@@ -273,9 +338,27 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
         <div className="space-head-copy">
           <h2>{space.name}</h2>
           <p>
-            {space.members.length} {space.members.length === 1 ? "member" : "members"} · {WORKER_LABEL[worker]} · {workersLine}
+            {space.members.length} {space.members.length === 1 ? "member" : "members"} · {WORKER_LABEL[worker]} ·{" "}
+            {ready.length || !hint.action ? (
+              workersLine
+            ) : (
+              <button className="space-head-link" onClick={() => (hint.action === "enable" ? ensureWorker() : go("settings"))}>
+                {workersLine} · {hint.action === "enable" ? "let this Mac take jobs" : "switch account"}
+              </button>
+            )}
           </p>
         </div>
+        <Segmented
+          compact
+          options={[
+            { value: "chat", label: "Chat" },
+            { value: "files", label: spaceFiles.length ? `Files · ${spaceFiles.length}` : "Files" },
+            { value: "skills", label: spaceSkills.length ? `Skills · ${spaceSkills.length}` : "Skills" },
+            { value: "runs", label: jobs.length ? `Runs · ${jobs.length}` : "Runs" },
+          ]}
+          value={tab}
+          onChange={(value) => setTab(value as SpaceTab)}
+        />
         <div className="space-head-people" aria-label="Members">
           {space.members.slice(0, 6).map((member) => (
             <span key={member.userId} title={member.name} className="space-head-person">
@@ -288,7 +371,61 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
         <IconButton icon="gear" label="Space settings" onClick={() => setSettingsOpen(true)} />
       </header>
 
-      <div className="space-messages" ref={scrollRef} onScroll={onScroll}>
+      {tab === "files" ? (
+        <SpaceFiles files={spaceFiles} onPick={() => fileRef.current?.click()} setConfirm={setConfirm} />
+      ) : tab === "skills" ? (
+        <div className="space-pane">
+          {spaceSkills.length ? (
+            <div className="skills-grid">
+              {spaceSkills.map((skill) => (
+                <SharedSkillTile key={skill.id} skill={skill} replaying={Boolean(state.watching?.replaying)} setConfirm={setConfirm} />
+              ))}
+            </div>
+          ) : (
+            <Empty icon="spark" title="No skills shared here yet">
+              Share one from the Skills page with the share button on its card, picking {space.name} as the target. Anyone in the space can then replay it on their Mac.
+            </Empty>
+          )}
+        </div>
+      ) : tab === "runs" ? (
+        <div className="space-pane">
+          {jobs.length ? (
+            <div className="space-runs">
+              {jobs.map((job) => (
+                <JobCard key={job.id} job={job} go={go} />
+              ))}
+            </div>
+          ) : (
+            <Empty icon="bolt" title="Nothing run here yet">
+              {solo ? "Type what you need in the chat and this Mac does it." : "Mention @okidoki in the chat to hand it work."}
+            </Empty>
+          )}
+        </div>
+      ) : null}
+
+      <div
+        className={cx("space-messages", tab !== "chat" && "is-hidden", dragging && "is-over")}
+        ref={scrollRef}
+        onScroll={onScroll}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          void attach(event.dataTransfer.files);
+        }}
+      >
+        {enterprise.hasEarlier ? (
+          <div className="space-earlier">
+            <Button size="sm" variant="ghost" disabled={enterprise.loadingEarlier} onClick={() => void loadEarlier()}>
+              {enterprise.loadingEarlier ? "Loading…" : "Load earlier messages"}
+            </Button>
+          </div>
+        ) : null}
         {grouped.map((group) =>
           group.kind === "day" ? (
             <div className="space-day" key={group.key}>
@@ -341,18 +478,39 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
         )}
         {!messages.length ? (
           <div className="space-system">
-            <span>Say hello. Mention @okidoki to give the agent work.</span>
+            <span>{solo ? "It's just you here, so whatever you type goes straight to okidoki." : "Say hello. Mention @okidoki to give the agent work."}</span>
+          </div>
+        ) : null}
+        {attaching.length ? (
+          <div className="space-group is-you">
+            <span className="space-agent-mark">
+              <PixelIcon name="spinner" size={15} />
+            </span>
+            <div className="space-group-body">
+              <div className="space-bubble space-file is-ghost">
+                <PixelIcon name="clip" size={15} />
+                <span>Attaching {attaching.join(", ")}…</span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {dragging ? (
+          <div className="space-drop">
+            <PixelIcon name="clip" size={18} />
+            <span>Drop to share in {space.name}</span>
           </div>
         ) : null}
       </div>
 
-      <footer className="space-composer">
+      <footer className={cx("space-composer", tab !== "chat" && "is-hidden")}>
+        <input ref={fileRef} type="file" multiple hidden onChange={(event) => void attach(event.target.files ?? [])} />
+        <IconButton icon="clip" label="Attach a file" onClick={() => fileRef.current?.click()} />
         <textarea
           ref={composerRef}
           className="textarea space-composer-input"
           rows={1}
           value={draft}
-          placeholder={`Message ${space.name} — @okidoki to hand it work`}
+          placeholder={solo ? `Tell okidoki what to do — it's just you in ${space.name}` : `Message ${space.name} — @okidoki to hand it work`}
           aria-label="Message"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -373,15 +531,27 @@ function SpaceChat({ space, messages, jobs, go }: { space: Space; messages: Spac
         onClose={() => setSettingsOpen(false)}
         privateMacReady={Boolean(state.privateMac?.supported)}
         onLeave={() =>
-          setConfirm({
-            title: `Leave ${space.name}?`,
-            detail: "You stop seeing its chat and files. You can join again from the list.",
-            action: "Leave",
-            onConfirm: () => {
-              setSettingsOpen(false);
-              void enterprise.actions.leaveSpace(space.id).then(() => selectSpace(null)).catch((error: Error) => notify("That didn't work", error.message, "warning"));
-            },
-          })
+          setConfirm(
+            lastMember
+              ? {
+                  title: `You're the only one in ${space.name}`,
+                  detail: "Leaving would strand its chat and files with nobody to see them. Delete the space instead? This can't be undone.",
+                  action: "Delete space",
+                  onConfirm: () => {
+                    setSettingsOpen(false);
+                    void enterprise.actions.deleteSpace(space.id).then(() => selectSpace(null)).catch((error: Error) => notify("That didn't work", error.message, "warning"));
+                  },
+                }
+              : {
+                  title: `Leave ${space.name}?`,
+                  detail: "You stop seeing its chat and files. You can join again from the list.",
+                  action: "Leave",
+                  onConfirm: () => {
+                    setSettingsOpen(false);
+                    void enterprise.actions.leaveSpace(space.id).then(() => selectSpace(null)).catch((error: Error) => notify("That didn't work", error.message, "warning"));
+                  },
+                },
+          )
         }
         onDelete={() =>
           setConfirm({
@@ -411,7 +581,8 @@ const JOB_TO_RUN: Record<JobStatus, RunStatus> = {
 };
 
 function JobCard({ job, go }: { job: Job | undefined; go: (page: Page) => void }) {
-  const { enterprise, notify, state, native } = useDashboard();
+  const { enterprise, notify, state, native, account } = useDashboard();
+  const ensureWorker = useEnsureWorker();
   const [busy, setBusy] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
   if (!job) {
@@ -440,6 +611,9 @@ function JobCard({ job, go }: { job: Job | undefined; go: (page: Page) => void }
       : `${job.workerName ? `on ${job.workerName}'s Mac` : "on a worker"}${job.workerDevice ? ` · ${job.workerDevice}` : ""}`;
   const took = job.startedAt ? duration(iso(job.startedAt), job.endedAt ? iso(job.endedAt) : null) : null;
   const doneSteps = job.steps.filter((step) => step.status === "done").length;
+  const mine = enterprise.workers.find((worker) => worker.isYou);
+  const readyElsewhere = enterprise.workers.filter((worker) => worker.online && !worker.isYou && (worker.state ?? "ready") === "ready").length;
+  const hint = job.status === "queued" ? workerHint({ native, enabled: state.settings.workerEnabled === true, state: native ? state.worker?.state ?? mine?.state : mine?.state, readyElsewhere, workAccountName: account.name }) : null;
 
   return (
     <div className={cx("space-bubble job-card", `is-${job.status}`)}>
@@ -451,6 +625,21 @@ function JobCard({ job, go }: { job: Job | undefined; go: (page: Page) => void }
       <p className="job-meta">
         Asked by {job.requestedBy} · {where}
       </p>
+      {hint?.text ? (
+        <div className="job-stuck">
+          <PixelIcon name="clock" size={13} />
+          <span>{hint.text}</span>
+          {hint.action === "enable" ? (
+            <Button size="sm" variant="primary" onClick={() => ensureWorker()}>
+              Let this Mac take it
+            </Button>
+          ) : hint.action === "switch" ? (
+            <Button size="sm" variant="secondary" onClick={() => go("settings")}>
+              Open Settings
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {job.summary && job.status !== "waiting" ? <p className="job-summary">{job.summary}</p> : null}
 
       {job.status === "waiting" && job.preview ? (
@@ -602,6 +791,30 @@ function SpaceSettings({ open, space, onClose, privateMacReady, onLeave, onDelet
         </Button>
       </footer>
     </Modal>
+  );
+}
+
+function SpaceFiles({ files, onPick, setConfirm }: { files: VaultFile[]; onPick: () => void; setConfirm: (request: ConfirmRequest) => void }) {
+  return (
+    <div className="space-pane">
+      <div className="space-pane-head">
+        <p className="form-hint">Files shared in this space live in the Vault under its folder. Attaching one in the chat puts it here too.</p>
+        <Button size="sm" variant="secondary" icon="clip" onClick={onPick}>
+          Add a file
+        </Button>
+      </div>
+      {files.length ? (
+        <div className="pref-group">
+          {files.map((file) => (
+            <VaultFileRow key={file.id} file={file} setConfirm={setConfirm} />
+          ))}
+        </div>
+      ) : (
+        <Empty icon="folder" title="No files here yet">
+          Drop a file onto the chat or use the paperclip to share one with the space.
+        </Empty>
+      )}
+    </div>
   );
 }
 
