@@ -18,7 +18,6 @@ export async function reviewPlan(
     method: "POST",
     headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({ ...originalBody,
-      model: typeof originalBody.model === "string" && originalBody.model.includes("haiku") ? "claude-sonnet-5-5" : originalBody.model,
       system: originalBody.system + "\n\n" + PLAN_REVIEW_PROMPT,
       messages: [...originalBody.messages,
         { role: "assistant", content: `Proposed decision (not executed):\n${JSON.stringify(proposed)}` },

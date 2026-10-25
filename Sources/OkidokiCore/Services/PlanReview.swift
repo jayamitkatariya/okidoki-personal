@@ -15,7 +15,6 @@ public enum PlanReview {
 
     public static func body(original: [String: Any], proposed: [String: Any]) throws -> [String: Any] {
         var body = original
-        if let model = original["model"] as? String, model.contains("haiku") { body["model"] = "claude-sonnet-5-5" }
         body["system"] = (original["system"] as? String ?? "") + "\n\n" + instruction
         let proposedData = try JSONSerialization.data(withJSONObject: proposed, options: [.sortedKeys])
         var messages = original["messages"] as? [[String: Any]] ?? []

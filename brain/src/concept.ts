@@ -332,7 +332,7 @@ export async function conceptLesson(
   progress: ConceptProgress = {},
 ): Promise<{ lesson: ConceptLesson | null; usedModel: boolean; error?: string; warnings?: string[] }> {
   if (!apiKey) return { lesson: null, usedModel: false, error: "anthropic key required" };
-  const model = request.model || "claude-sonnet-4-5";
+  const model = request.model || "claude-haiku-5-5";
   const content: unknown[] = [];
   if (request.screenshotBase64) {
     content.push({ type: "image", source: { type: "base64", media_type: "image/png", data: request.screenshotBase64 } });
@@ -406,7 +406,7 @@ export async function conceptFollowUp(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ follow: ConceptFollowUp | null; usedModel: boolean; error?: string }> {
   if (!apiKey) return { follow: null, usedModel: false, error: "anthropic key required" };
-  const model = request.model || "claude-sonnet-4-5";
+  const model = request.model || "claude-haiku-5-5";
   const system = [
     `You are Okidoki's tutor, mid-lesson on "${request.topic}" with a 3D/2D model on the stage. The learner asked a question${request.partName ? ` about the part “${request.partName}” (id ${request.partId})` : ""}.`,
     `Answer in one or two spoken sentences, then add 1-3 beats that show the answer on the existing model: highlight or pulse the part, move the camera to it, xray the rest, or add a small new part (a label, an arrow) if that helps. Reference existing part ids exactly.`,

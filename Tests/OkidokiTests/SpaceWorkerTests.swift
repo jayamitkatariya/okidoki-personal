@@ -2,6 +2,13 @@ import XCTest
 @testable import OkidokiCore
 
 final class SpaceWorkerTests: XCTestCase {
+    /// A store of its own, so the real state on this Mac (or another test's) never leaks in.
+    @MainActor
+    private func freshStore() -> OkidokiStore {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("okidoki-tests-\(UUID().uuidString)").appendingPathComponent("state.json")
+        return OkidokiStore(seedDemo: false, stateURL: url)
+    }
+
     private func run(status: RunStatus, title: String = "Compress video", summary: String = "", output: String = "") -> AgentRun {
         AgentRun(accountID: "acct", kind: .terminal, title: title, prompt: "compress it", status: status, output: output, summary: summary)
     }
@@ -31,7 +38,7 @@ final class SpaceWorkerTests: XCTestCase {
 
     @MainActor
     func testImportingASharedSkillReplacesTheSameOneAndDropsScreenPictures() {
-        let store = OkidokiStore(seedDemo: false)
+        let store = freshStore()
         let steps: [[String: Any]] = [
             ["id": "s1", "text": "Open Numbers", "app": "Numbers", "action": "click", "label": "Numbers", "frameX": 1, "frameY": 2, "frameW": 3, "frameH": 4],
             ["id": "s2", "text": "Save", "app": "Numbers", "action": "key", "input": "cmd+s"],
@@ -54,7 +61,9 @@ final class SpaceWorkerTests: XCTestCase {
 
     @MainActor
     func testWorkerStaysOffWithoutSyncOrAWorkAccount() async {
-        let store = OkidokiStore(seedDemo: false)
+        let store = freshStore()
+        store.accounts = [Account(name: "Test", email: "", kind: .personal)]
+        store.currentAccountID = store.accounts[0].id
         let worker = SpaceWorkerService()
         worker.runJob = { _, _ in }
         await worker.tick()

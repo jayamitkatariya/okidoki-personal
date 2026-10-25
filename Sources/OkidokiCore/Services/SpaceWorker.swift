@@ -178,16 +178,18 @@ public final class SpaceWorkerService: ObservableObject {
         for item in held where item["id"] as? String == current.job.id {
             let decision = item["decision"] as? String ?? ""
             guard !decision.isEmpty, decision != current.appliedDecision else { continue }
-            current.appliedDecision = decision
-            tracked = current
             if decision == "decline" {
+                current.appliedDecision = decision
+                tracked = current
                 if let runID = current.runID { cancelRun?(runID) }
                 await finish(status: "cancelled", say: nil)
                 return
             }
-            if decision == "approve", let runID = current.runID, store?.run(runID)?.status == .waiting {
-                approveRun?(runID)
-            }
+            // An approval needs the run to exist here; until it does, try again next tick.
+            guard decision == "approve", let runID = current.runID, let run = store?.run(runID) else { continue }
+            if run.status == .waiting { approveRun?(runID) }
+            current.appliedDecision = decision
+            tracked = current
         }
     }
 
@@ -230,6 +232,8 @@ public final class SpaceWorkerService: ObservableObject {
             body["say"] = Self.closingLine(run: run, answer: lastAssistantLine(threadID: current.threadID))
         } else if status == "waiting", current.lastStatus != "waiting" {
             body["say"] = "Needs an okay before it goes ahead: \(run.preview?.summary ?? run.title)"
+            // A fresh wait is a fresh question: the chat's earlier answer mustn't count for it.
+            current.appliedDecision = ""
         }
         let signature = "\(status)|\(run.title)|\(run.summary)|\(run.output.count)|\(run.steps.map { "\($0.title):\($0.status.rawValue)" }.joined(separator: ","))|\(run.preview?.summary ?? "")"
         guard signature != current.lastReport else { return }

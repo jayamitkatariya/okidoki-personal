@@ -98,7 +98,7 @@ Broader requests and custom plans go through the model.
 Fixed recipes handle a single simple job. Requests with additional actions, destinations,
 parameters or constraints go to the planner so those details are preserved. Model-generated
 action plans get a separate review against the complete original request and context before
-execution; a failed review stops the plan. The review uses Sonnet when routing uses Haiku.
+execution; a failed review stops the plan. The review uses the same model as routing (Haiku 5.5).
 Opening a tool or completing setup cannot substitute for the requested result, and prose
 claiming success without a structured decision cannot trigger an action.
 
@@ -197,8 +197,8 @@ Typing uses the live keyboard layout, so shortcuts work on non-US layouts; text 
 while a password field has the keyboard. Apps are found in the usual folders, their
 subfolders, by bundle id, or through Spotlight. On more than one display, the one with
 the frontmost window is used. A step repeated three times with no effect gets a nudge;
-five times stops the run. Transient model errors are retried; driving uses Sonnet unless
-the saved settings name another non-Haiku model.
+five times stops the run. Transient model errors are retried; driving uses Haiku 5.5 unless
+the saved settings name another model.
 
 While it drives, the pointer glides to each target (Settings › Appearance › Driving pace),
 a green ring and label follow it, clicks ripple, and key presses show beside it. The pill
@@ -255,9 +255,9 @@ refused with guidance. The brain gets `remote: true` and a prompt that knows all
 A run that picks the private Mac while it isn't set up fails with a pointer to Settings
 rather than silently driving your own Mac. Checks: `swift test --filter PrivateMacSpecTests`.
 
-Model requests use `tool_choice: auto` with an explicit tool instruction: Sonnet
-and Opus 5.5 reject forced tool calls. Routing can use Haiku while computer use
-switches to Sonnet, so both paths must support the same request format.
+Model requests use `tool_choice: auto` with an explicit tool instruction: the 5.5
+models reject forced tool calls. Everything runs on Haiku 5.5 by default, and a
+model named in the saved settings is used as is, so both paths share one request format.
 
 For a live API smoke check, run `cd brain && bun run smoke:api`. It tests answers
 and computer-use planning with Haiku, Sonnet, and Opus 5.5 using the key saved

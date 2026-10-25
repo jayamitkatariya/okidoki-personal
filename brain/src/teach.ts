@@ -320,7 +320,7 @@ export async function teachStep(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ step: TeachStep | null; usedModel: boolean; error?: string }> {
   if (!apiKey) return { step: null, usedModel: false, error: "anthropic key required" };
-  const model = request.model || "claude-sonnet-4-5";
+  const model = request.model || "claude-haiku-5-5";
   const content: unknown[] = [];
   if (request.screenshotBase64) {
     content.push({

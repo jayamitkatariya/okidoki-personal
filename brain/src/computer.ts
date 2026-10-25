@@ -45,13 +45,12 @@ const actTool = {
   },
 };
 
-const DRIVING_MODEL = "claude-sonnet-5-5";
+const DRIVING_MODEL = "claude-haiku-5-5";
 
-/** Driving needs precise vision. A small routing model is swapped for Sonnet; anything the user chose explicitly is kept. */
+/** Driving uses Haiku 5.5 like everything else; anything the user chose explicitly is kept. */
 export function drivingModel(configured: string | undefined): string {
   const name = (configured ?? "").trim();
-  if (!name || /haiku/i.test(name)) return DRIVING_MODEL;
-  return name;
+  return name || DRIVING_MODEL;
 }
 
 function describe(entry: ComputerRequest["history"][number]): string {
@@ -310,7 +309,7 @@ export async function computerAct(
     max_tokens: 1400,
     messages,
     tools: [actTool],
-    // Driving switches Haiku to Sonnet 5.5, which only supports auto/none.
+    // auto/none is what every 5.5 model accepts; the prompt selects the single tool.
     tool_choice: { type: "auto" },
   });
 

@@ -64,10 +64,10 @@ test("on the private Mac the prompt drops scripts and accessibility and keeps th
 
 import { computerAct, drivingModel, messageContent } from "../src/computer";
 
-test("driving swaps a small routing model for sonnet but keeps an explicit choice", () => {
-  expect(drivingModel(undefined)).toBe("claude-sonnet-5-5");
-  expect(drivingModel("")).toBe("claude-sonnet-5-5");
-  expect(drivingModel("claude-haiku-5-5")).toBe("claude-sonnet-5-5");
+test("driving stays on haiku and keeps an explicit choice", () => {
+  expect(drivingModel(undefined)).toBe("claude-haiku-5-5");
+  expect(drivingModel("")).toBe("claude-haiku-5-5");
+  expect(drivingModel("claude-haiku-5-5")).toBe("claude-haiku-5-5");
   expect(drivingModel("claude-opus-5-5")).toBe("claude-opus-5-5");
   expect(drivingModel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
 });
@@ -127,7 +127,7 @@ test("transient model errors are retried, a bad key is not", async () => {
   await computerAct(explicit, "sk-test", spy);
   expect(sentModel).toBe("claude-opus-5-5");
   await computerAct(base, "sk-test", spy);
-  expect(sentModel).toBe("claude-sonnet-5-5");
+  expect(sentModel).toBe("claude-haiku-5-5");
 });
 
 import { actionFromText } from "../src/computer";
