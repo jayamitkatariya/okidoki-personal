@@ -1,23 +1,18 @@
 import Foundation
 
-/// Service credentials for the app itself.
+/// Keys you bring yourself, from outside the app's own key file.
 ///
-/// Values come from the launch environment, then from a `service.env` file: the one the
-/// build copies into the app bundle from the gitignored repo `.env`, or one in Application
-/// Support. Nothing secret is compiled in; only the public Convex endpoints have defaults.
+/// Nothing is compiled in or bundled. Settings › Keys is the usual place for a key (it lands in
+/// `keys.json`); this covers the other ways to hand one over: the launch environment, a file named by
+/// `OKIDOKI_ENV_FILE`, or a `service.env` you put in the support folder yourself.
 public enum ServiceSecrets {
-    public static let convexCloudURLDefault = "https://wonderful-rook-611.convex.cloud"
-    public static let convexSiteURLDefault = "https://wonderful-rook-611.convex.site"
-
     public static var anthropic: String { resolved("ANTHROPIC_API_KEY") }
     public static var cartesia: String { resolved("CARTESIA_API_KEY") }
     public static var mossProjectID: String { resolved("MOSS_PROJECT_ID") }
     public static var mossProjectKey: String { resolved("MOSS_PROJECT_KEY") }
     public static var apify: String { resolved("APIFY_API_KEY") }
-    public static var convexCloudURL: String { resolved("CONVEX_URL", fallback: convexCloudURLDefault) }
-    public static var convexSiteURL: String { resolved("CONVEX_SITE_URL", fallback: convexSiteURLDefault) }
 
-    /// Key file ids the app used to ask for. MCP secrets stay user-supplied.
+    /// Key file ids, as found outside the key file. MCP secrets stay in the key file.
     public static func builtin(_ key: String) -> String? {
         switch key {
         case "anthropic": return anthropic
@@ -36,17 +31,14 @@ public enum ServiceSecrets {
             "MOSS_PROJECT_ID": mossProjectID,
             "MOSS_PROJECT_KEY": mossProjectKey,
             "APIFY_API_KEY": apify,
-            "CONVEX_URL": convexCloudURL,
-            "CONVEX_SITE_URL": convexSiteURL,
         ]
     }
 
-    private static func resolved(_ name: String, fallback: String = "") -> String {
+    private static func resolved(_ name: String) -> String {
         if let env = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !env.isEmpty {
             return env
         }
-        if let file = fileValues[name], !file.isEmpty { return file }
-        return fallback
+        return fileValues[name] ?? ""
     }
 
     private static let fileValues: [String: String] = loadFiles()
@@ -57,23 +49,11 @@ public enum ServiceSecrets {
         if let override = ProcessInfo.processInfo.environment["OKIDOKI_ENV_FILE"], !override.isEmpty {
             urls.append(URL(fileURLWithPath: override))
         }
-        if let bundled = Bundle.main.url(forResource: "service", withExtension: "env") {
-            urls.append(bundled)
-        }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Okidoki/service.env")
-        if let support { urls.append(support) }
-        #if DEBUG
-        // Development only: a release build must not take credentials from a file any process can drop on the Desktop.
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        urls.append(home.appendingPathComponent("Desktop/okidoki/.env"))
-        urls.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".env"))
-        #endif
+        urls.append(AppPaths.support("service.env"))
         for url in urls {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            // Earlier files win, so an explicit override beats the repo file.
-            let parsed = parse(text)
-            for (key, value) in parsed where merged[key] == nil {
+            // Earlier files win, so an explicit override beats the support folder's file.
+            for (key, value) in parse(text) where merged[key] == nil {
                 merged[key] = value
             }
         }

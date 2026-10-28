@@ -1,7 +1,7 @@
-// Credentials in the vault are encrypted here, in the panel, with a passphrase the organization
-// shares out of band (like a join code). The deployment stores ciphertext and never sees the
-// passphrase. AES-GCM with a key derived by PBKDF2; the organization id is the salt, so the
-// same passphrase gives different keys in different organizations.
+// Logins in the vault are encrypted here, in the panel, with your vault passphrase. The Mac stores
+// ciphertext only and never sees the passphrase (unless you ask it to remember it). AES-GCM with a
+// key derived by PBKDF2; the vault's random salt keys it, so the same passphrase seals differently
+// in another vault.
 
 export const VAULT_KEY_VERSION = 1;
 const ITERATIONS = 200_000;
@@ -24,10 +24,10 @@ function fromBase64(text: string): Uint8Array {
   return out;
 }
 
-export async function deriveVaultKey(passphrase: string, orgId: string): Promise<CryptoKey> {
+export async function deriveVaultKey(passphrase: string, vaultId: string): Promise<CryptoKey> {
   const material = await crypto.subtle.importKey("raw", bytes(passphrase.normalize("NFKC")), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: bytes(`okidoki-vault:${orgId}`), iterations: ITERATIONS, hash: "SHA-256" },
+    { name: "PBKDF2", salt: bytes(`okidoki-vault:${vaultId}`), iterations: ITERATIONS, hash: "SHA-256" },
     material,
     { name: "AES-GCM", length: 256 },
     false,
@@ -54,20 +54,20 @@ export async function decryptSecret(key: CryptoKey, ciphertext: string, iv: stri
 const PASSPHRASE_KEY = "okidoki.vault";
 
 /** The passphrase remembered on this machine for an organization, if any. */
-export function rememberedPassphrase(orgId: string): string {
+export function rememberedPassphrase(vaultId: string): string {
   try {
     const all = JSON.parse(window.localStorage.getItem(PASSPHRASE_KEY) ?? "{}") as Record<string, string>;
-    return all[orgId] ?? "";
+    return all[vaultId] ?? "";
   } catch {
     return "";
   }
 }
 
-export function rememberPassphrase(orgId: string, passphrase: string | null) {
+export function rememberPassphrase(vaultId: string, passphrase: string | null) {
   try {
     const all = JSON.parse(window.localStorage.getItem(PASSPHRASE_KEY) ?? "{}") as Record<string, string>;
-    if (passphrase) all[orgId] = passphrase;
-    else delete all[orgId];
+    if (passphrase) all[vaultId] = passphrase;
+    else delete all[vaultId];
     window.localStorage.setItem(PASSPHRASE_KEY, JSON.stringify(all));
   } catch {}
 }

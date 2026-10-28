@@ -26,12 +26,21 @@ public enum DateParsing {
         formatter.timeZone = .current
         for options: ISO8601DateFormatter.Options in [[.withInternetDateTime],
                                                       [.withInternetDateTime, .withFractionalSeconds],
-                                                      [.withFullDate, .withTime, .withColonSeparatorInTime],
-                                                      [.withFullDate]] {
+                                                      [.withFullDate, .withTime, .withColonSeparatorInTime]] {
             formatter.formatOptions = options
             if let date = formatter.date(from: trimmed) { return date }
         }
-        return nil
+        // Local times without seconds or a zone ("2026-11-02T09:00", "2026-11-02 09:00"). These must be
+        // tried before the date-only form, which would otherwise read them as midnight.
+        let local = DateFormatter()
+        local.locale = Locale(identifier: "en_US_POSIX")
+        local.timeZone = .current
+        for format in ["yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"] {
+            local.dateFormat = format
+            if let date = local.date(from: trimmed) { return date }
+        }
+        formatter.formatOptions = [.withFullDate]
+        return trimmed.count == 10 ? formatter.date(from: trimmed) : nil
     }
 }
 

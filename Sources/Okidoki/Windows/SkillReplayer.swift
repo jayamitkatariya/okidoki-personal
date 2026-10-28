@@ -15,14 +15,15 @@ final class SkillReplayer {
     private var globalEsc: Any?
     private var task: Task<Void, Never>?
     /// True while we are posting an esc ourselves, so the cancel monitor ignores it.
-    private var postingEsc = false
+    /// Whether the step in hand needed the brain; a step that didn't ends a run of rescues.
+    private var rescuedThisStep = false
     private(set) var runID: String?
     private(set) var isActive = false
 
     init(environment: AppEnvironment) { self.env = environment }
 
     /// `values` holds one set of `{{placeholder}}` values per pass (a record each); when it's empty,
-    /// every pass gets only the built-ins (today's date, the portal address).
+    /// every pass gets only the built-ins (today's date).
     func begin(skill: Skill, runID: String, times: Int, values: [[String: String]] = []) {
         guard !isActive else { env?.failReplay(runID: runID, reason: "a replay is already running — let it finish or stop it first"); return }
         guard AccessibilityActions.canPost else {
@@ -33,7 +34,7 @@ final class SkillReplayer {
             env?.failReplay(runID: runID, reason: "this skill has no steps")
             return
         }
-        let builtins = ParameterFill.builtins(portal: env.map { "http://127.0.0.1:\($0.sidecar.port)" } ?? "")
+        let builtins = ParameterFill.builtins()
         let passValues = values.isEmpty ? [builtins] : values.map { builtins.merging($0) { _, given in given } }
         // Every pass must have what the skill types before anything is touched: stopping halfway
         // through a form leaves it worse than not starting.
@@ -43,7 +44,7 @@ final class SkillReplayer {
                 let missing = ParameterFill.fill(needed.map { "{{\($0)}}" }.joined(separator: " "), values: given).missing
                 guard missing.isEmpty else {
                     let which = given["ref"].map { " for \($0)" } ?? ""
-                    env?.failReplay(runID: runID, reason: "“\(skill.name)” needs \(missing.joined(separator: ", "))\(which) — name a record (“\(skill.name) for MTS-4471”) or add \(missing[0])=… to the request")
+                    env?.failReplay(runID: runID, reason: "“\(skill.name)” needs \(missing.joined(separator: ", "))\(which) — name a record (“\(skill.name) for <record id>”) or add \(missing[0])=… to the request")
                     return
                 }
             }
@@ -60,15 +61,12 @@ final class SkillReplayer {
                            speed: env?.store.settings.voiceSpeed ?? 1)
         let passes = values.isEmpty ? max(1, times) : values.count
         let steps = skill.steps
-        // Skills that file into the brain's Entry Workbench get a receipt back for every record.
-        let expectsReceipt = steps.contains { $0.input?.contains("{{portal}}") == true }
         task = Task { [weak self] in
             guard let self else { return }
             var failed: String?
             outer: for pass in 1...passes {
                 let given = passValues[(pass - 1) % passValues.count]
                 let ref = values.isEmpty ? nil : given["ref"]
-                let passStarted = Date()
                 for (index, step) in steps.enumerated() {
                     if Task.isCancelled { break outer }
                     let text = (ref.map { "\($0) · " } ?? "") + ParameterFill.fill(step.text, values: given).text
@@ -76,6 +74,7 @@ final class SkillReplayer {
                     let wait = SkillReplayGeometry.pause(for: step)
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     if Task.isCancelled { break outer }
+                    self.rescuedThisStep = false
                     if let problem = await self.perform(step, index: index, of: steps, values: given) {
                         failed = ref.map { "\($0): \(problem)" } ?? problem
                         self.markStep(index, status: .failed, pass: pass, of: passes, total: steps.count, text: text)
@@ -83,14 +82,12 @@ final class SkillReplayer {
                     }
                     if Task.isCancelled { break outer }
                     self.markStep(index, status: .done, pass: pass, of: passes, total: steps.count, text: text)
+                    // "In a row" means consecutive: any step that went through on its own (a type, a key,
+                    // a scroll, not only a click) resets the count.
+                    if !self.rescuedThisStep { self.rescuesInARow = 0 }
                 }
                 if let ref {
-                    self.model.label = "\(ref) · checking what came back"
-                    if let problem = await self.env?.replayPassFinished(runID: runID, ref: ref, pass: pass, of: passes,
-                                                                        startedAt: passStarted, expectsReceipt: expectsReceipt) {
-                        failed = problem
-                        break outer
-                    }
+                    self.env?.replayPassFinished(runID: runID, ref: ref, pass: pass, of: passes)
                 }
                 if pass < passes {
                     self.model.label = "pass \(pass) of \(passes) done — going again"
@@ -157,17 +154,24 @@ final class SkillReplayer {
             // Real keys from the live layout, the way computer use types: some fields (Safari's
             // address bar) ignore characters that arrive without a key behind them.
             guard EventActuator.canPost else { return "couldn't type" }
+            // Typing right after clicking a field: give a slow page the moment it needs to put the
+            // field there and focus it, rather than sending the text into nothing.
+            if index > 0, let role = steps[index - 1].role, AXSearch.textInputRoles.contains(role),
+               let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+                for _ in 0..<15 {
+                    if let focused = await Task.detached(operation: { AXSearch.focusedInput(pid: pid) }).value,
+                       AXSearch.textInputRoles.contains(focused.role) { break }
+                    if Task.isCancelled { return nil }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
             await EventActuator.typeText(text)
             return nil
         case "key":
             guard let combo = step.input, !combo.isEmpty else { return nil }
-            let isEsc = combo.hasSuffix("escape")
-            if isEsc { postingEsc = true }
-            let ok = await offMain { AccessibilityActions.press(combo) }
-            if isEsc {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                postingEsc = false
-            }
+            // The skill's own escape goes out stamped synthetic, so the Esc monitor can tell it from the
+            // user's: a real Esc stops the replay even in the instant the skill presses one.
+            let ok = combo.hasSuffix("escape") ? await EventActuator.pressKey(combo) : await offMain { AccessibilityActions.press(combo) }
             return ok ? nil : "couldn't press \(WatchRecorder.prettyCombo(combo))"
         case "scroll":
             // Scrolling somewhere near the right place is fine; it isn't worth waiting for.
@@ -209,7 +213,6 @@ final class SkillReplayer {
                 }
             }
             guard let point = target.point else { return "can't find where to click" }
-            rescuesInARow = 0
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 650_000_000)
             model.clicking = true
@@ -348,6 +351,7 @@ final class SkillReplayer {
             return .failed("lost track — needed help on \(rescueLimit) steps in a row and \(describe(step)) still isn't on screen")
         }
         rescuesInARow += 1
+        rescuedThisStep = true
         let before = model.label
         model.label = "looking closer — \(reason)"
         defer { model.label = before }
@@ -473,13 +477,11 @@ final class SkillReplayer {
     }
 
     private func escPressed() {
-        guard !postingEsc else { return }
         cancel(reason: "okay, stopping")
     }
 
     private func tearDown() {
         isActive = false
-        postingEsc = false
         model.visible = false
         model.clicking = false
         panel?.orderOut(nil)
@@ -503,6 +505,7 @@ final class SkillReplayer {
     }
 
     func cancel(reason: String = "control is yours") {
+        EventActuator.stopTyping()
         guard isActive else { return }
         task?.cancel()
         task = nil

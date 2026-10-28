@@ -155,8 +155,7 @@ final class TeachController {
     }()
 
     private static let traceURL: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("Okidoki/teach.log")
+        AppPaths.support("teach.log")
     }()
 
     private func trace(_ line: @autoclosure () -> String) {
@@ -736,7 +735,17 @@ final class TeachController {
         }
         let keys = step.action == "key" ? TeachKeys.caps(step.key) : []
         let also = alsoRegion(step, shot: shot, screen: screen)
-        let drawings = step.annotations.compactMap { drawing($0, shot: shot, screen: screen) }
+        // This step's own target, in global points: the anchor for drawings that don't place themselves.
+        let anchor: CGRect? = elementRect(step.element) ?? {
+            guard let x = step.x, let y = step.y else { return nil }
+            let center = shot.global(x, y)
+            if let w = step.w, let h = step.h, w > 0, h > 0 {
+                return CGRect(x: center.x - w * shot.pointsPerSentPixelX / 2, y: center.y - h * shot.pointsPerSentPixelY / 2,
+                              width: w * shot.pointsPerSentPixelX, height: h * shot.pointsPerSentPixelY)
+            }
+            return CGRect(x: center.x - 12, y: center.y - 12, width: 24, height: 24)
+        }()
+        let drawings = step.annotations.compactMap { drawing($0, shot: shot, screen: screen, anchor: anchor) }
 
         if step.action == "drag" {
             var from: CGPoint? = nil
@@ -842,7 +851,7 @@ final class TeachController {
         return (TeachGeometry.local(rect.insetBy(dx: -4, dy: -4), on: screen), step.alsoLabel)
     }
 
-    private func drawing(_ a: TeachAnnotation, shot: TeachShot, screen: NSScreen) -> TeachDrawing? {
+    private func drawing(_ a: TeachAnnotation, shot: TeachShot, screen: NSScreen, anchor: CGRect?) -> TeachDrawing? {
         var rect: CGRect?
         if let fromElement = elementRect(a.element) {
             rect = fromElement
@@ -851,8 +860,14 @@ final class TeachController {
             if let w = a.w, let h = a.h, w > 0, h > 0 {
                 rect = CGRect(x: center.x - w * shot.pointsPerSentPixelX / 2, y: center.y - h * shot.pointsPerSentPixelY / 2,
                               width: w * shot.pointsPerSentPixelX, height: h * shot.pointsPerSentPixelY)
-            } else {
+            } else if let anchor, anchor.insetBy(dx: -12, dy: -12).contains(center), !["badge", "callout"].contains(a.kind) {
+                // A bracket, underline or spotlight pointed at the step's own control takes its size.
+                rect = anchor
+            } else if ["badge", "callout"].contains(a.kind) {
                 rect = CGRect(x: center.x - 12, y: center.y - 12, width: 24, height: 24)
+            } else {
+                // Shapes need some area to read as what they are; a 24-point box doesn't.
+                rect = CGRect(x: center.x - 60, y: center.y - 18, width: 120, height: 36)
             }
         }
         let to: CGPoint? = {
@@ -864,8 +879,10 @@ final class TeachController {
             return TeachDrawing(kind: "ghost", rect: .zero, to: nil, text: nil, n: nil)
         case "typing":
             guard let text = a.text, !text.isEmpty else { return nil }
-            let anchor = rect ?? current?.scene?.rect ?? CGRect(x: screen.frame.width / 2, y: screen.frame.height / 2, width: 1, height: 1)
-            return TeachDrawing(kind: "typing", rect: rect.map { TeachGeometry.local($0, on: screen) } ?? anchor, to: nil, text: text, n: nil)
+            // Next to this step's own field — never the previous step's, which `current` still holds here.
+            let place = rect ?? anchor
+            let fallback = CGRect(x: screen.frame.width / 2, y: screen.frame.height / 2, width: 1, height: 1)
+            return TeachDrawing(kind: "typing", rect: place.map { TeachGeometry.local($0, on: screen) } ?? fallback, to: nil, text: text, n: nil)
         default:
             guard let rect else { return nil }
             let local = TeachGeometry.local(rect, on: screen)
@@ -979,6 +996,14 @@ final class TeachController {
             Task { @MainActor in
                 guard let self, self.model.isActive, self.model.phase == .waiting,
                       let now = TeachGeometry.frontWindowGlobal(pid: pid) else { return }
+                // A resize reflows the window's contents, so the marks can't just slide: look again.
+                if abs(now.width - origin.width) > 4 || abs(now.height - origin.height) > 4 {
+                    self.stopFollowing()
+                    self.lastShot?.windowRect = now
+                    self.setOutcome("the window was resized")
+                    self.requestStep(after: 0.3, settle: true)
+                    return
+                }
                 let dx = now.minX - origin.minX
                 let dy = now.minY - origin.minY
                 guard abs(dx) > 1 || abs(dy) > 1 else { return }
@@ -1008,7 +1033,7 @@ final class TeachController {
                 return copy
             }
             shown.scene = scene
-            stage?.present(scene, animated: false)
+            stage?.translate(to: scene, dx: dx, dy: dy)
             placeBubble(animated: false)
         }
         shown.hitRect = shown.hitRect?.offsetBy(dx: dx, dy: dy)
@@ -1250,7 +1275,18 @@ final class TeachController {
     /// real scroll dims the marks, and once it stops the ring follows the control by name through
     /// accessibility when it can, so the lesson doesn't stall on a model call for a scroll.
     private func handleScroll(_ event: NSEvent) {
-        guard let step = current, step.scene?.hasTarget == true, model.phase == .waiting else { return }
+        guard let step = current, model.phase == .waiting else { return }
+        // Drawings with no target to follow would stay put over content that scrolled away: look again.
+        if step.scene?.hasTarget != true {
+            guard step.scene?.drawings.isEmpty == false else { return }
+            scrolled += abs(event.scrollingDeltaY) + abs(event.scrollingDeltaX)
+            guard scrolled >= 20 else { return }
+            scrolled = 0
+            stage?.present(nil, animated: true)
+            setOutcome("scrolled; the view moved")
+            requestStep(after: 0.4, settle: true)
+            return
+        }
         scrolled += abs(event.scrollingDeltaY) + abs(event.scrollingDeltaX)
         let moved = scrolled >= 20
         if moved { stage?.setThinking(true) }
@@ -1735,18 +1771,19 @@ enum TeachGeometry {
     static func frontWindowGlobal(pid: pid_t) -> CGRect? {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return nil }
-        var best: CGRect?
-        var bestArea: CGFloat = 0
+        // The list runs front to back: the app's frontmost real window is the one being taught,
+        // even when a bigger one sits behind it. Tooltips and tiny panels don't count.
+        var largest: CGRect?
         for window in info {
             guard let owner = window[kCGWindowOwnerPID as String] as? pid_t, owner == pid,
                   let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
                   let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
             let rect = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0,
                               width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
-            let area = rect.width * rect.height
-            if area > bestArea { best = rect; bestArea = area }
+            if rect.width >= 200, rect.height >= 150 { return rect }
+            if rect.width * rect.height > (largest.map { $0.width * $0.height } ?? 0) { largest = rect }
         }
-        return best
+        return largest
     }
 
     /// The model's pixel guess is close; accessibility and OCR know the real edges. In order: the

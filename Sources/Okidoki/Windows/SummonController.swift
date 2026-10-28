@@ -17,11 +17,46 @@ final class SummonLevelMeter: ObservableObject {
     @Published var level: Double = 0
 }
 
-/// Where a request typed at the cursor can go: this Mac, or the agent in one of the work account's spaces.
-struct SummonScope: Identifiable, Equatable {
-    var id: String
-    var name: String
-    var joined: Bool
+/// What a request typed at the cursor is for. Auto leaves it to the brain.
+enum SummonMode: String, CaseIterable, Identifiable {
+    case auto, act, teach, chat
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .auto: return "Auto"
+        case .act: return "Act"
+        case .teach: return "Teach"
+        case .chat: return "Chat"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .auto: return "sparkle"
+        case .act: return "bolt.fill"
+        case .teach: return "graduationcap.fill"
+        case .chat: return "bubble.left.fill"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .auto: return "Decide for me"
+        case .act: return "Do it on this Mac"
+        case .teach: return "Show me how, on screen"
+        case .chat: return "Just answer"
+        }
+    }
+
+    var placeholder: String {
+        switch self {
+        case .auto: return "Ask anything"
+        case .act: return "What should I do?"
+        case .teach: return "What should I teach you?"
+        case .chat: return "Ask me anything"
+        }
+    }
 }
 
 @MainActor
@@ -29,10 +64,8 @@ final class SummonModel: ObservableObject {
     @Published var phase: SummonPhase = .hidden
     @Published var mode: InputMode = .typing
     @Published var text: String = ""
-    /// Enterprise: the spaces a request can be sent to. Empty on a personal or unlinked account.
-    @Published var scopes: [SummonScope] = []
-    /// "" for this Mac, else a space id. Remembered between summons.
-    @Published var scopeID: String = ""
+    /// Auto, act, teach or chat. Remembered between summons.
+    @Published var summonMode: SummonMode = .auto
     @Published var transcript: String = ""
     @Published var error: String?
     @Published var attachmentName: String = ""
@@ -52,10 +85,9 @@ final class SummonModel: ObservableObject {
     var onCancel: (() -> Void)?
     var onSwitch: ((InputMode) -> Void)?
     var onStopListening: (() -> Void)?
-    var onScope: ((String) -> Void)?
+    var onMode: ((SummonMode) -> Void)?
 
     var isVisible: Bool { phase != .hidden }
-    var scope: SummonScope? { scopes.first { $0.id == scopeID } }
     var hasAttachment: Bool { screenshotPNG != nil || !attachmentName.isEmpty }
 
     func clearAttachment() {
@@ -93,10 +125,10 @@ final class SummonController {
         model.onCancel = { [weak self] in self?.env?.dismissSummon() }
         model.onSwitch = { [weak self] mode in self?.switchInput(to: mode) }
         model.onStopListening = { [weak self] in self?.speech.finish() }
-        model.onScope = { [weak self] id in
+        model.onMode = { [weak self] mode in
             guard let self else { return }
-            self.model.scopeID = id
-            self.env?.store.settings.askScope = id
+            self.model.summonMode = mode
+            self.env?.store.settings.summonMode = mode.rawValue
             self.model.focusTick += 1
         }
 
@@ -146,7 +178,7 @@ final class SummonController {
         guard let env else { return }
         if model.isVisible { dismiss(); return }
         submitted = false
-        refreshScopes()
+        refreshMode()
         if NSWorkspace.shared.frontmostApplication?.bundleIdentifier != Bundle.main.bundleIdentifier {
             previousApp = NSWorkspace.shared.frontmostApplication
         } else {
@@ -265,16 +297,11 @@ final class SummonController {
         }
     }
 
-    /// The spaces a request can go to right now. A remembered scope that's gone falls back to this Mac.
-    private func refreshScopes() {
+    /// The mode picked last time.
+    private func refreshMode() {
         guard let env else { return }
-        let work = env.store.activeAccount.kind == .work && env.enterprise.linked
-        let scopes = work ? env.enterprise.spaces.map { SummonScope(id: $0.id, name: $0.name, joined: $0.joined) } : []
-        if model.scopes != scopes { model.scopes = scopes }
-        let remembered = env.store.settings.askScope
-        let valid = scopes.contains { $0.id == remembered } ? remembered : ""
-        if model.scopeID != valid { model.scopeID = valid }
-        if valid.isEmpty, !remembered.isEmpty { env.store.settings.askScope = "" }
+        let remembered = SummonMode(rawValue: env.store.settings.summonMode) ?? .auto
+        if model.summonMode != remembered { model.summonMode = remembered }
     }
 
     // MARK: - Submit
@@ -471,15 +498,15 @@ struct InputCapsuleView: View {
                 .fill(palette.divider)
                 .frame(width: 1, height: 16)
 
-            if !model.scopes.isEmpty, model.phase != .thinking {
-                SummonScopeChip(model: model, palette: palette)
+            if model.phase != .thinking {
+                SummonModeChip(model: model, palette: palette)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
 
             switch model.phase {
             case .typing, .hidden:
                 OverlayTextField(text: $model.text,
-                                 placeholder: model.hasAttachment ? "About this" : (model.scope.map { "Ask #\($0.name)" } ?? "Ask anything"),
+                                 placeholder: model.hasAttachment ? "About this" : model.summonMode.placeholder,
                                  fontSize: 15,
                                  focusTick: model.focusTick,
                                  onSubmit: { model.onSubmit?(model.text, model.screenshotPNG, model.selection) },
@@ -608,39 +635,29 @@ struct InputCapsuleView: View {
     }
 }
 
-/// Me / #space: where the request goes. A menu, so one click changes it and the choice sticks.
-private struct SummonScopeChip: View {
+/// Auto / Act / Teach / Chat: what the request is for. A menu, so one click changes it and the choice sticks.
+private struct SummonModeChip: View {
     @ObservedObject var model: SummonModel
     var palette: OverlayPalette
     @State private var hovering = false
 
-    private var label: String { model.scope.map { "#\($0.name)" } ?? "Me" }
-    private var active: Bool { model.scope != nil }
+    private var mode: SummonMode { model.summonMode }
+    private var active: Bool { mode != .auto }
 
     var body: some View {
         Menu {
-            Button {
-                model.onScope?("")
-            } label: {
-                Label("This Mac", systemImage: model.scopeID.isEmpty ? "checkmark" : "desktopcomputer")
-            }
-            Divider()
-            ForEach(model.scopes) { scope in
+            ForEach(SummonMode.allCases) { option in
                 Button {
-                    model.onScope?(scope.id)
+                    model.onMode?(option)
                 } label: {
-                    if model.scopeID == scope.id {
-                        Label("#\(scope.name)", systemImage: "checkmark")
-                    } else {
-                        Text("#\(scope.name)\(scope.joined ? "" : "  · not joined")")
-                    }
+                    Label("\(option.title) — \(option.blurb)", systemImage: option == mode ? "checkmark" : option.symbol)
                 }
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: active ? "number" : "person.fill")
+                Image(systemName: mode.symbol)
                     .font(.system(size: 9.5, weight: .bold))
-                Text(label)
+                Text(mode.title)
                     .font(.okBody(12, .medium))
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
@@ -660,8 +677,8 @@ private struct SummonScopeChip: View {
         .fixedSize()
         .onHover { hovering = $0 }
         .animation(OKMotion.snappy, value: hovering)
-        .help(active ? "Sent to the agent in this space. Click to change." : "Runs on this Mac. Click to send to a space instead.")
-        .accessibilityLabel("Where this goes: \(label)")
+        .help("\(mode.title): \(mode.blurb.lowercased()). Click to change.")
+        .accessibilityLabel("Mode: \(mode.title)")
     }
 }
 

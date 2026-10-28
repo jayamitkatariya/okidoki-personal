@@ -24,8 +24,8 @@ final class ParameterFillTests: XCTestCase {
     func testOverridesAndBuiltins() {
         XCTAssertEqual(ParameterFill.overrides(in: "replay file ace entry with value=52000, importer=\"Acme Inc\" spi=S"),
                        ["value": "52000", "importer": "Acme Inc", "spi": "S"])
-        let builtins = ParameterFill.builtins(portal: "http://127.0.0.1:4319", now: Date(timeIntervalSince1970: 1_792_900_000))
-        XCTAssertEqual(builtins["portal"], "http://127.0.0.1:4319")
+        let builtins = ParameterFill.builtins(now: Date(timeIntervalSince1970: 1_792_900_000))
+        XCTAssertNil(builtins["portal"])
         XCTAssertNotNil(builtins["today"]?.range(of: #"^\d{2}/\d{2}/\d{4}$"#, options: .regularExpression))
     }
 
@@ -85,31 +85,21 @@ final class RecordCommandTests: XCTestCase {
 final class VaultCommandTests: XCTestCase {
     private func parse(_ text: String) -> ChatCommand? { ChatCommands.parse(text, context: .init(skills: [])) }
 
-    func testAddingAKnownFormOrAnythingElse() {
-        XCTAssertEqual(parse("add the CBP 3461 to the vault"), .addToVault(query: "cbp 3461", url: nil, space: ""))
-        XCTAssertEqual(parse("find the USMCA certification of origin and put it in the compliance vault"),
-                       .addToVault(query: "usmca certification of origin", url: nil, space: "compliance"))
-        XCTAssertEqual(parse("grab form 7512 from cbp and add it to the vault for #compliance"),
-                       .addToVault(query: "form 7512", url: nil, space: "compliance"))
-        XCTAssertEqual(parse("can you download the latest CBP Form 28 into our vault?"), .addToVault(query: "cbp form 28", url: nil, space: ""))
-        XCTAssertEqual(parse("save https://www.cbp.gov/sites/default/files/2024-05/cbp_form_19.pdf to the vault"),
-                       .addToVault(query: "", url: "https://www.cbp.gov/sites/default/files/2024-05/cbp_form_19.pdf", space: ""))
+    func testAddingADocumentByNameOrLink() {
+        XCTAssertEqual(parse("add the W-9 form to the vault"), .addToVault(query: "w-9 form", url: nil, folder: ""))
+        XCTAssertEqual(parse("find the irs form 1040 and put it in the taxes vault"),
+                       .addToVault(query: "irs form 1040", url: nil, folder: "taxes"))
+        XCTAssertEqual(parse("grab the lease template and add it to the vault for #home"),
+                       .addToVault(query: "lease template", url: nil, folder: "home"))
+        XCTAssertEqual(parse("can you download the latest form 8843 into our vault?"), .addToVault(query: "form 8843", url: nil, folder: ""))
+        XCTAssertEqual(parse("save https://example.com/files/form-19.pdf to the vault"),
+                       .addToVault(query: "", url: "https://example.com/files/form-19.pdf", folder: ""))
     }
 
     func testLookingInTheVaultIsNotAdding() {
-        XCTAssertNil(parse("find the commercial invoice for MTS-4471 in the vault"))
+        XCTAssertNil(parse("find the commercial invoice for INV-4471 in the vault"))
         XCTAssertNil(parse("what's in the vault"))
         XCTAssertNil(parse("open the vault"))
-    }
-
-    func testCatalogMatchesTheLongestName() {
-        XCTAssertEqual(FormCatalog.match("cbp 3461")?.id, "cbp-3461")
-        XCTAssertEqual(FormCatalog.match("cbp form 28")?.id, "cbp-28")
-        XCTAssertEqual(FormCatalog.match("entry summary")?.id, "cbp-7501")
-        XCTAssertEqual(FormCatalog.match("canada customs invoice")?.id, "cbsa-ci1")
-        XCTAssertNil(FormCatalog.match("usmca certification of origin"))
-        XCTAssertNil(FormCatalog.match("28 boxes"))
-        XCTAssertEqual(FormCatalog.match("cbp 3461")?.fileName, "CBP Form 3461 (Entry-Immediate Delivery).pdf")
     }
 }
 

@@ -204,7 +204,9 @@ public final class WatchRecorder: ObservableObject {
 
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel], handler: { [weak self] event in
             let point = Self.quartzPoint(event)
-            let shown = event.scrollingDeltaY
+            // A mouse wheel reports lines, a trackpad points. Replay posts points, so lines are
+            // turned into roughly what macOS scrolls for one (about ten points).
+            let shown = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * Self.pointsPerLine
             let device = event.isDirectionInvertedFromDevice ? -shown : shown
             Task { @MainActor in self?.scrolled(at: point, shown: shown, device: device) }
         }) {
@@ -370,7 +372,10 @@ public final class WatchRecorder: ObservableObject {
     func keyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags, chars: String, plain: String, repeated: Bool) {
         guard isRecording else { return }
         let app = frontApp
-        let modified = flags.contains(.command) || flags.contains(.control) || flags.contains(.option)
+        // Option on its own types characters (é, ü, ©, —): that's text, not a shortcut.
+        let optionText = flags.contains(.option) && !flags.contains(.command) && !flags.contains(.control)
+            && !chars.isEmpty && chars != plain && chars.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
+        let modified = flags.contains(.command) || flags.contains(.control) || (flags.contains(.option) && !optionText)
         let special = Self.specialKeyName(keyCode)
 
         if modified || special != nil {
@@ -470,6 +475,9 @@ public final class WatchRecorder: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// What one line of a mouse wheel scrolls, in points.
+    nonisolated static let pointsPerLine: CGFloat = 10
 
     nonisolated private static func quartzPoint(_ event: NSEvent) -> CGPoint {
         if let location = event.cgEvent?.location { return location }
@@ -594,9 +602,14 @@ public enum AccessibilityLabel {
         let description = attribute(kAXDescriptionAttribute)
         let role = attribute(kAXRoleAttribute)
         let value = attribute(kAXValueAttribute)
-        // Text fields carry their whole contents in AXValue; that's not a stable handle.
-        let textual = role == "AXTextField" || role == "AXTextArea" || role == "AXComboBox" || role == "AXStaticText"
-        let candidates = textual ? [title, description] : [title, description, value]
+        // Text fields carry their whole contents in AXValue, and checkboxes, switches, pop-ups and sliders
+        // carry their state ("0", "1", the current choice). Neither is a stable handle: a checkbox recorded
+        // as "0" would later match any other unticked box. Only a plain word from a button-like control counts.
+        let stateful: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXStaticText", "AXCheckBox", "AXRadioButton",
+                                     "AXPopUpButton", "AXMenuButton", "AXSlider", "AXIncrementor", "AXSwitch", "AXToggle",
+                                     "AXDisclosureTriangle", "AXValueIndicator", "AXProgressIndicator", "AXLevelIndicator"]
+        let numeric = Double(value.trimmingCharacters(in: .whitespaces)) != nil
+        let candidates = stateful.contains(role) || numeric ? [title, description] : [title, description, value]
         let best = candidates.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
         return String(best.trimmingCharacters(in: .whitespacesAndNewlines).prefix(70))
     }

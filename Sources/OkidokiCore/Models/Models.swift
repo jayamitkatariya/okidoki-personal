@@ -73,6 +73,11 @@ public enum DrawingStyle: String, Codable, CaseIterable, Identifiable, Sendable 
 }
 
 public struct AppSettings: Codable, Equatable, Sendable {
+    public static let summonModes = ["auto", "act", "teach", "chat"]
+    public static var defaultVaultFolder: String {
+        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/Okidoki Vault", isDirectory: true).path
+    }
+
     public var okidokiEnabled: Bool = true
     public var defaultInput: InputMode = .typing
     public var voiceID: String = "sarah"
@@ -111,10 +116,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var automationGranted: Bool = false
     public var inputMonitoringGranted: Bool = false
 
-    public var convexSiteURL: String = ""
-    public var syncEnabled: Bool = false
-    public var lastSyncAt: Date? = nil
-
     public var onboardingComplete: Bool = false
     public var tourComplete: Bool = false
     public var showedWelcome: Bool = false
@@ -125,24 +126,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var autoConnectAgents: Bool = true
     public var lastWorkingDirectory: String = ""
     /// How visibly the pointer moves while okidoki drives: "calm" glides, "fast" is quicker.
-    public var drivePace: String = "calm"
+    public var drivePace: String = "fast"
     /// Where computer-use runs happen: "mac" is this Mac, "vm" is okidoki's private Mac (a macOS VM).
     public var computerTarget: String = "mac"
-    /// Enterprise: this Mac takes jobs the agent is given in the work account's spaces.
-    public var workerEnabled: Bool = false
-    /// The work account the worker last ran as, so it keeps its place in the organization
-    /// (and finishes the job it holds) while the person is looking at Personal.
-    public var workerAccountID: String = ""
-    /// The job this Mac holds, so a relaunch picks it back up instead of leaving it hanging.
-    public var workerHeldJob: WorkerHeldJob? = nil
-    /// Organizations whose welcome note has already been shown here, by id.
-    public var welcomedOrgIDs: [String] = []
-    /// Where a request typed at the cursor goes by default: "" for this Mac, else a space id.
-    public var askScope: String = ""
-    /// A join code picked up before the sync login existed (onboarding, a nearby Mac, managed
-    /// configuration). The Team page uses it the moment the login is there, then clears it.
-    public var pendingJoinCode: String = ""
-    public var pendingJoinOrgName: String = ""
+    /// What a request typed at the cursor is for: "auto" lets the brain decide, "act" does it,
+    /// "teach" shows how on screen, "chat" just answers.
+    public var summonMode: String = "auto"
+    /// The vault: a folder of documents okidoki can file into and search. On the Desktop unless moved.
+    public var vaultFolder: String = AppSettings.defaultVaultFolder
 
     /// Voice during lessons, remembered separately from the app-wide voice switch.
     public var teachVoice: Bool = true
@@ -162,10 +153,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case cursorGlowHex, glowEnabled, shakeSensitivity, drawingStyle, drawingColorHex
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
         case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
-        case convexSiteURL, syncEnabled, lastSyncAt, onboardingComplete, tourComplete, showedWelcome
+        case onboardingComplete, tourComplete, showedWelcome
         case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace, computerTarget
-        case teachVoice, autoConnectAgents, screenContext, workerEnabled, workerAccountID, workerHeldJob
-        case welcomedOrgIDs, askScope, pendingJoinCode, pendingJoinOrgName
+        case teachVoice, autoConnectAgents, screenContext, summonMode, vaultFolder
     }
 
     public init(from decoder: Decoder) throws {
@@ -206,9 +196,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         appleNotes = bool(.appleNotes, false)
         automationGranted = bool(.automationGranted, false)
         inputMonitoringGranted = bool(.inputMonitoringGranted, false)
-        convexSiteURL = string(.convexSiteURL, "")
-        syncEnabled = bool(.syncEnabled, false)
-        lastSyncAt = (try? c.decodeIfPresent(Date.self, forKey: .lastSyncAt)).flatMap { $0 }
         onboardingComplete = bool(.onboardingComplete, false)
         tourComplete = bool(.tourComplete, false)
         showedWelcome = bool(.showedWelcome, false)
@@ -217,36 +204,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         autoConnectAgents = bool(.autoConnectAgents, true)
         lastWorkingDirectory = string(.lastWorkingDirectory, "")
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
-        drivePace = string(.drivePace, "calm")
+        drivePace = string(.drivePace, "fast")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
-        workerEnabled = bool(.workerEnabled, false)
-        workerAccountID = string(.workerAccountID, "")
-        workerHeldJob = (try? c.decodeIfPresent(WorkerHeldJob.self, forKey: .workerHeldJob)).flatMap { $0 }
-        welcomedOrgIDs = (try? c.decodeIfPresent([String].self, forKey: .welcomedOrgIDs)).flatMap { $0 } ?? []
-        askScope = string(.askScope, "")
-        pendingJoinCode = string(.pendingJoinCode, "")
-        pendingJoinOrgName = string(.pendingJoinOrgName, "")
+        let mode = string(.summonMode, "auto")
+        summonMode = Self.summonModes.contains(mode) ? mode : "auto"
+        vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
         teachVoice = bool(.teachVoice, true)
         screenContext = bool(.screenContext, true)
-    }
-}
-
-/// What the space worker remembers across a relaunch about the job it was running.
-public struct WorkerHeldJob: Codable, Equatable, Sendable {
-    public var jobID: String
-    public var spaceID: String
-    public var spaceName: String
-    public var prompt: String
-    public var threadID: String
-    public var runID: String?
-
-    public init(jobID: String, spaceID: String, spaceName: String, prompt: String, threadID: String, runID: String?) {
-        self.jobID = jobID
-        self.spaceID = spaceID
-        self.spaceName = spaceName
-        self.prompt = prompt
-        self.threadID = threadID
-        self.runID = runID
     }
 }
 
@@ -1063,7 +1027,8 @@ public struct TeachLiveStep: Codable, Equatable, Sendable {
         alsoLabel = (try? c.decodeIfPresent(String.self, forKey: .alsoLabel))?.lowercased()
         risky = (try? c.decodeIfPresent(Bool.self, forKey: .risky)) ?? false
         waiting = (try? c.decodeIfPresent(Bool.self, forKey: .waiting)) ?? false
-        annotations = (try? c.decodeIfPresent([TeachAnnotation].self, forKey: .annotations)) ?? []
+        // At most one extra drawing, whichever path wrote the step (the brain trims to one as well).
+        annotations = Array(((try? c.decodeIfPresent([TeachAnnotation].self, forKey: .annotations)) ?? []).prefix(1))
         next = try? c.decodeIfPresent(TeachNextGuess.self, forKey: .next)
         milestones = try? c.decodeIfPresent([String].self, forKey: .milestones)
         milestone = try? c.decodeIfPresent(Int.self, forKey: .milestone)
@@ -1245,6 +1210,8 @@ public struct BrainRequest: Sendable {
     public var clipboardText: String
     /// The window, browser tab and display as they were at summon time.
     public var screen: ScreenContext?
+    /// "act", "teach" or "chat" from the cursor card; "auto" leaves it to the brain.
+    public var mode: String = "auto"
 
     public init(text: String, appName: String = "", bundleID: String = "",
                 threadID: String? = nil, screenshotPNG: Data? = nil,
@@ -1482,12 +1449,13 @@ public struct AppState: Codable, Sendable {
     public var skills: [Skill]
     public var routines: [Routine]
     public var connectors: [Connector]
-    /// Items deleted on this Mac (id → when), so a pull can't bring one back before the delete
-    /// reaches Convex. Kept for a while after, then dropped.
+    public var notes: [Note]
+    public var reminders: [Reminder]
+    /// Items deleted on this Mac (id → when). Kept for a while, then dropped.
     public var deletions: [String: Date]
-    /// Per account, the Convex sync version this Mac last merged.
+    /// Left from older builds that synced; read so their state files still load.
     public var syncCursors: [String: Int]
-    /// Synced items this build couldn't read, kept as they came.
+    /// Items this build couldn't read, kept as they came so nothing is lost.
     public var unreadable: [UnreadableItem]
     /// Items in the saved file that couldn't be read (a newer build's data, say). Not saved.
     public private(set) var droppedItems = 0
@@ -1495,17 +1463,18 @@ public struct AppState: Codable, Sendable {
     public init(version: Int = AppState.currentVersion, accounts: [Account] = [], currentAccountID: String = "",
                 settings: AppSettings = AppSettings(), threads: [ChatThread] = [],
                 memories: [MemoryItem] = [], runs: [AgentRun] = [], skills: [Skill] = [],
-                routines: [Routine] = [], connectors: [Connector] = [],
+                routines: [Routine] = [], connectors: [Connector] = [], notes: [Note] = [], reminders: [Reminder] = [],
                 deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = []) {
         self.version = version; self.accounts = accounts; self.currentAccountID = currentAccountID
         self.settings = settings; self.threads = threads; self.memories = memories; self.runs = runs
         self.skills = skills; self.routines = routines; self.connectors = connectors
+        self.notes = notes; self.reminders = reminders
         self.deletions = deletions; self.syncCursors = syncCursors; self.unreadable = unreadable
     }
 
     enum CodingKeys: String, CodingKey {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
-        case deletions, syncCursors, unreadable
+        case notes, reminders, deletions, syncCursors, unreadable
     }
 
     /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
@@ -1536,6 +1505,8 @@ public struct AppState: Codable, Sendable {
         skills = Self.items(Skill.self, c, .skills, dropped: &dropped) ?? []
         routines = Self.items(Routine.self, c, .routines, dropped: &dropped) ?? []
         connectors = Self.items(Connector.self, c, .connectors, dropped: &dropped) ?? ToolCatalog.defaultConnectors
+        notes = Self.items(Note.self, c, .notes, dropped: &dropped) ?? []
+        reminders = Self.items(Reminder.self, c, .reminders, dropped: &dropped) ?? []
         deletions = (try? c.decodeIfPresent([String: Date].self, forKey: .deletions)).flatMap { $0 } ?? [:]
         syncCursors = (try? c.decodeIfPresent([String: Int].self, forKey: .syncCursors)).flatMap { $0 } ?? [:]
         unreadable = Self.items(UnreadableItem.self, c, .unreadable, dropped: &dropped) ?? []

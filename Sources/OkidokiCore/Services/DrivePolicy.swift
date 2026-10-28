@@ -38,4 +38,11 @@ public enum DrivePolicy {
                         "not installed", "isn't installed", "no account", "locked", "touch id", "not allowed"]
         return blockers.contains { text.contains($0) }
     }
+
+    /// A finish sent in the same turn as actions counts when every action worked and the screen
+    /// changed without being replaced wholesale: what the model planned visibly happened, on the
+    /// screen it was looking at. A new page or window means it must look first.
+    public static func finishLanded(failed: Bool, changed: Bool, movedALot: Bool) -> Bool {
+        !failed && changed && !movedALot
+    }
 }

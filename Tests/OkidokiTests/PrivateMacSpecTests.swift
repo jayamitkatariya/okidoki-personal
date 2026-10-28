@@ -35,7 +35,7 @@ final class PrivateMacSpecTests: XCTestCase {
 
     func testFilesLiveTogetherUnderApplicationSupport() {
         let folder = PrivateMacSpec.directory
-        XCTAssertTrue(folder.path.hasSuffix("/Okidoki/PrivateMac"))
+        XCTAssertEqual(folder.path, AppPaths.support("PrivateMac", isDirectory: true).path)
         for url in [PrivateMacSpec.restoreImageURL, PrivateMacSpec.diskImageURL, PrivateMacSpec.auxiliaryStorageURL,
                     PrivateMacSpec.hardwareModelURL, PrivateMacSpec.machineIdentifierURL, PrivateMacSpec.installedMarkerURL] {
             XCTAssertEqual(url.deletingLastPathComponent().path, folder.path)

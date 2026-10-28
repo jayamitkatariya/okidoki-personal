@@ -49,9 +49,9 @@ final class BrainSidecar: ObservableObject {
     init() {
         if let override = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_URL"], let url = URL(string: override) {
             self.baseURL = url
-            self.port = url.port ?? 4319
+            self.port = url.port ?? 4329
         } else {
-            let port = Int(ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_PORT"] ?? "4319") ?? 4319
+            let port = Int(ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_PORT"] ?? "4329") ?? 4329
             self.port = port
             self.baseURL = URL(string: "http://127.0.0.1:\(port)")!
         }
@@ -97,6 +97,7 @@ final class BrainSidecar: ObservableObject {
         env["NODE_ENV"] = "production"
         env["PATH"] = ShellRunner.shared.pathEnvironment + ":" + (env["PATH"] ?? "")
         env["OKIDOKI_BRAIN_TOKEN"] = BrainConnection.token
+        env["OKIDOKI_SUPPORT_DIR"] = AppPaths.support.path
         if let askpass = AskPass.path { env["OKIDOKI_ASKPASS"] = askpass }
         for (name, value) in ServiceSecrets.brainEnvironment where !value.isEmpty {
             env[name] = value
@@ -285,8 +286,7 @@ final class BrainSidecar: ObservableObject {
     }
 
     private func openLog() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Okidoki", isDirectory: true)
+        let support = AppPaths.support
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let url = support.appendingPathComponent("brain.log")
         if !FileManager.default.fileExists(atPath: url.path) {
@@ -421,6 +421,8 @@ struct BrainThinkPayload: Encodable {
     var connectors: BrainConnectorsPayload
     /// The current account, so the brain's recall stays within it (plus shared memories).
     var accountId: String
+    /// act · teach · chat from the cursor card; left out for auto.
+    var mode: String?
 }
 
 /// What the brain's Moss memory index is built from: the Mac's own items, as stored.
@@ -456,7 +458,7 @@ final class BrainClient {
         if let override = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_URL"], let url = URL(string: override) {
             return url
         }
-        let port = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_PORT"] ?? "4319"
+        let port = ProcessInfo.processInfo.environment["OKIDOKI_BRAIN_PORT"] ?? "4329"
         return URL(string: "http://127.0.0.1:\(port)")!
     }
 
@@ -496,7 +498,8 @@ final class BrainClient {
                                               pageURL: page?.pageURL.isEmpty == false ? page?.pageURL : nil,
                                               screenshotIsDisplay: circled == nil && screenshot != nil),
             connectors: connectors,
-            accountId: account.id
+            accountId: account.id,
+            mode: request.mode == "auto" ? nil : request.mode
         )
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("think"))
         urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")

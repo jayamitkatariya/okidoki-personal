@@ -503,8 +503,11 @@ final class ComputerUseDriver {
                         results.append(["id": id, "result": "Don't ask — the user already asked for the whole task and approved the plan. Keep going until it's finished. Only finish with success false if something truly blocks you (a sign-in, a payment, a permission prompt, a missing app) or several different approaches have failed.", "isError": true])
                         return true
                     }
-                    // Success is only claimed from a screen the model has seen: not right after acting blind.
-                    if act.type == "done", actedThisBatch {
+                    // Success is only claimed from a screen the model has seen, except when the batch it
+                    // planned all worked and visibly landed without replacing the screen (typed and sent,
+                    // toggled, filled in). That skips a whole model turn, the usual last 2–3 s of a run.
+                    let trustFinish = UserDefaults.standard.object(forKey: "drivingTrustFinish") as? Bool ?? true
+                    if act.type == "done", actedThisBatch, !(trustFinish && DrivePolicy.finishLanded(failed: batchFailed, changed: batchChanged, movedALot: screenMoved)) {
                         results.append(["id": id, "result": "Not finished yet: look at the new screenshot first. If it shows the whole task is done (with the result visible), call finish again on its own.", "isError": true])
                         return true
                     }
@@ -917,6 +920,7 @@ final class ComputerUseDriver {
     }
 
     func cancel(reason: String = "control is yours") {
+        EventActuator.stopTyping()
         guard model.visible || runID != nil else { return }
         cancelled = true
         session += 1

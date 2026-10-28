@@ -1,0 +1,17 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Brain
+        run: cd brain && bun install && bun run typecheck && bun test tests
+      - name: Control panel
+        run: cd web && bun install && bunx tsc --noEmit -p . && bun test tests && bun run build
+      - name: Swift (logic only; the full suite drives real apps)
+        env:
+          OKIDOKI_SUPPORT_DIR: ${{ runner.temp }}/okidoki
+          OKIDOKI_KEYS_FILE: ${{ runner.temp }}/okidoki/keys.json
+        run: swift test --filter 'ChatCommandsTests|SkillRecordsTests|VaultCommandTests|LocalVaultTests|SkillBundleTests|NoteCommandTests|WatchPipelineTests|WatchRecorderTests|DrivePolicyTests|KeyStoreTests|LessonRoutingTests|PlanReviewTests|ShakeGestureTests|ImageFitTests'

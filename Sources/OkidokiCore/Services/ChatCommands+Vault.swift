@@ -1,10 +1,10 @@
 import Foundation
 
-/// "add the CBP 3461 to the vault", "find the USMCA certification of origin and put it in the
-/// compliance vault", "save https://…/form.pdf to the vault". Getting a document *into* the vault;
+/// "add the W-9 to the vault", "find the lease template and put it in the taxes vault",
+/// "save https://…/form.pdf to the vault". Getting a document *into* the vault folder;
 /// "find X in the vault" is a lookup and goes to the brain like any question.
 extension ChatCommands {
-    private static let vaultSpaceWords: Set<String> = ["the", "our", "my", "org", "orgs", "company", "companys", "team", "teams", "shared",
+    private static let vaultFolderWords: Set<String> = ["the", "our", "my", "org", "orgs", "company", "companys", "team", "teams", "shared",
                                                        "organization", "organizations", "main", "firm", "firms", "office", "doc", "document"]
 
     static func vaultCommand(_ t: String, raw: String) -> ChatCommand? {
@@ -14,7 +14,7 @@ extension ChatCommands {
         // Into the vault, not out of it.
         let adds = body.range(of: "\\b(add|put|save|upload|store|drop|stick|throw|file|download|fetch|grab|pull|get|bring)\\b.*\\b(to|into|in|onto)\\b.*\\bvault\\b",
                               options: .regularExpression) != nil
-            || body.range(of: "^vault (it|this|that|the|a|an|cbp|cbsa|form)\\b", options: .regularExpression) != nil
+            || body.range(of: "^vault (it|this|that|the|a|an|form)\\b", options: .regularExpression) != nil
         guard adds else { return nil }
         if body.range(of: "^(find|get|show|open|look|search|where)\\b.*\\b(in|from) (the |our |my )?([a-z0-9#_-]+ )?vault\\b", options: .regularExpression) != nil,
            body.range(of: "\\b(add|put|save|upload|store|drop|stick|throw|download|fetch)\\b", options: .regularExpression) == nil {
@@ -23,18 +23,18 @@ extension ChatCommands {
 
         let url = raw.range(of: #"https?://[^\s"'<>”]+"#, options: .regularExpression).map { String(raw[$0]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;)")) }
 
-        // Where: "the compliance vault", "#compliance vault", "the vault for #compliance", "the vault in compliance".
+        // Which subfolder: "the taxes vault", "#taxes vault", "the vault for #taxes", "the vault in taxes".
         var space = ""
         if let name = capture("\\b(?:to|into|in|onto) (?:the |our |my )?#?([a-z0-9][a-z0-9_-]*(?: [a-z0-9][a-z0-9_-]*)?) vault\\b", in: body) {
-            space = name.split(separator: " ").map(String.init).filter { !vaultSpaceWords.contains($0) }.joined(separator: " ")
+            space = name.split(separator: " ").map(String.init).filter { !vaultFolderWords.contains($0) }.joined(separator: " ")
         }
-        if space.isEmpty, let name = capture("\\bvault (?:for|in|under|of) (?:the )?#?([a-z0-9][a-z0-9_-]*)", in: body), !vaultSpaceWords.contains(name) {
+        if space.isEmpty, let name = capture("\\bvault (?:for|in|under|of) (?:the )?#?([a-z0-9][a-z0-9_-]*)", in: body), !vaultFolderWords.contains(name) {
             space = name
         }
         if space.isEmpty, let name = capture("#([a-z0-9][a-z0-9_-]*)", in: body) {
             space = name
         }
-        space = space.replacingOccurrences(of: "( space| team)$", with: "", options: .regularExpression)
+        space = space.replacingOccurrences(of: "( folder)$", with: "", options: .regularExpression)
 
         // What: everything that isn't the verb, the destination or the filler.
         var what = body
@@ -46,13 +46,13 @@ extension ChatCommands {
             .replacingOccurrences(of: "#[a-z0-9_-]+", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\\b(and |then )?(add|put|save|upload|store|drop|stick|throw|file|download|fetch|grab|pull|get|bring|find|search for|search|look up|look for|go get) (it|them|that|this|those|a copy|copies)?\\b", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "^(find|get|grab|fetch|download|pull|search for|search|look up|look for|go get|add|put|save|upload|store|drop|stick|throw|file|bring)\\b", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "\\b(from|on|off) (the )?(web|internet|online|cbp|cbp gov|cbsa|their site|the site|its site)\\b|\\bonline\\b", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\b(from|on|off) (the )?(web|internet|online|their site|the site|its site)\\b|\\bonline\\b", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\\b(the|a|an|our|my|latest|current|newest|official|copy of|a copy of|pdf of|pdf)\\b", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\\b(and|then|for us|for me|please)\\b", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         if what.isEmpty, url == nil { return nil }
-        return .addToVault(query: what, url: url, space: space)
+        return .addToVault(query: what, url: url, folder: space)
     }
 
     /// The first capture group of the first match.

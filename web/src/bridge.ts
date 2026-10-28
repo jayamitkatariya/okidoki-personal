@@ -66,10 +66,6 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.keyProviders = state.keyProviders?.map((item) => (item.id === provider ? { ...item, set: set || item.builtin } : item));
       break;
     }
-    case "syncNow": {
-      if (state.services) state.services = { ...state.services, convex: { ...state.services.convex, status: "synced just now", lastSyncAt: new Date().toISOString() } };
-      break;
-    }
     case "saveMcpServer": {
       const server = payload.server as McpServer;
       const exists = state.settings.mcpServers.some((item) => item.id === server.id);

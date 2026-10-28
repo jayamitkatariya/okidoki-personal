@@ -68,9 +68,6 @@ export interface Settings {
   appleNotes: boolean;
   automationGranted: boolean;
   inputMonitoringGranted: boolean;
-  convexSiteURL: string;
-  syncEnabled: boolean;
-  lastSyncAt?: string | null;
   onboardingComplete: boolean;
   tourComplete: boolean;
   showedWelcome: boolean;
@@ -83,27 +80,10 @@ export interface Settings {
   drivePace: "calm" | "fast";
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
-  /** Enterprise: this Mac takes jobs the agent is given in the work account's spaces. Missing on older builds. */
-  workerEnabled?: boolean;
-  /** A join code waiting for the sync login (onboarding, a nearby Mac, managed configuration). Missing on older builds. */
-  pendingJoinCode?: string;
-  pendingJoinOrgName?: string;
-  /** Where a request typed at the cursor goes by default: "" for this Mac, else a space id. */
-  askScope?: string;
-}
-
-/** Enterprise: this Mac as a worker for its spaces. Missing on Convex snapshots and in the demo. */
-export interface WorkerState {
-  status: string;
-  /** off · paused · ready, as told to the organization on the last poll. Missing on older builds. */
-  state?: "off" | "paused" | "ready";
-  /** The work account the worker runs as, which may not be the one in front. */
-  accountID?: string | null;
-  activeJob?: string | null;
-  activeSpace?: string | null;
-  lastPollAt?: string | null;
-  jobsDone: number;
-  device: string;
+  /** What a request typed at the cursor is for. Missing on older builds. */
+  summonMode?: "auto" | "act" | "teach" | "chat";
+  /** The vault folder on disk. Missing on older builds. */
+  vaultFolder?: string;
 }
 
 export type PrivateMacPhase = "unsupported" | "notSetUp" | "downloading" | "installing" | "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -142,23 +122,9 @@ export interface McpStatus {
   tools: { name: string; description: string }[];
 }
 
-/** The brain, Convex sync, the Moss index and MCP as the Mac sees them right now. */
+/** The brain, the Moss index and MCP as the Mac sees them right now. */
 export interface ServicesState {
   brain: { status: string; ready: boolean; version?: string | null; port: number };
-  convex: {
-    enabled: boolean;
-    configured: boolean;
-    /** This Mac holds a device token from a sync login. */
-    paired: boolean;
-    /** The login it's paired as (an email), or "". */
-    pairedAs: string;
-    /** The login's user id, so the panel can tell whether it's paired as the person signed in here. */
-    pairedUser: string;
-    siteURL: string;
-    /** Native's own words: "synced just now", "sync secret rejected", "local only"… */
-    status: string;
-    lastSyncAt?: string | null;
-  };
   memory: {
     configured: boolean;
     ready: boolean;
@@ -384,9 +350,9 @@ export interface LiveState {
 }
 
 export interface NativeState {
-  /** Missing on Convex snapshots, which don't carry live recorder state. */
+  /** Missing in the demo. */
   watching?: Watching;
-  /** The current or last driving run. Missing on Convex snapshots and when nothing has been driven. */
+  /** The current or last driving run. Missing when nothing has been driven. */
   live?: LiveState | null;
   accounts: Account[];
   currentAccountID: string;
@@ -394,14 +360,14 @@ export interface NativeState {
   runs: Run[];
   threads: Thread[];
   memories: Memory[];
-  /** Missing on Convex snapshots and older builds. */
+  /** Missing on older builds. */
   memorySources?: MemorySource[];
   skills: Skill[];
   routines: Routine[];
   connectors: Connector[];
   tools: Tool[];
   installedAgents: string[];
-  /** Missing on Convex snapshots and older builds; only the Mac can read its own login files. */
+  /** Missing on older builds; only the Mac can read its own login files. */
   agents?: AgentStatus[];
   keys: Record<string, boolean>;
   permissions: Record<string, string>;
@@ -411,81 +377,88 @@ export interface NativeState {
   dashboardOpen: boolean;
   sidecar: string;
   version: string;
-  /** This Mac's name. Missing on Convex snapshots and older builds. */
+  /** This Mac's name. Missing on older builds. */
   hostName?: string;
   savings: number;
-  convexConfigured: boolean;
-  /** Missing on Convex snapshots and older builds. */
+  /** Missing on older builds. */
   services?: ServicesState | null;
-  /** Missing on Convex snapshots: only the Mac knows what's in its key file. */
+  /** Only the Mac knows what's in its key file. */
   keyProviders?: KeyProvider[];
   mcpStatus?: Record<string, McpStatus>;
   mcpSecretNames?: Record<string, string[]>;
-  /** Missing on Convex snapshots and in the demo, where there is no VM to report on. */
+  /** Missing in the demo, where there is no VM to report on. */
   privateMac?: PrivateMacState | null;
-  worker?: WorkerState | null;
-  nearby?: NearbyState | null;
-  /** Enterprise: the organization as the Mac last heard it. Missing on Convex snapshots and older builds. */
-  enterprise?: NativeEnterpriseState | null;
+  /** The vault folder and sealed logins. Missing in the browser preview. */
+  vault?: VaultState | null;
+  /** Missing on older builds. */
+  notes?: Note[];
+  reminders?: Reminder[];
 }
 
-/** A colleague's run waiting on an okay in one of my spaces, as the Mac reports it. */
-export interface NativeApproval {
+/** A note on the Notes page. Markdown body. */
+export interface Note {
   id: string;
-  spaceId: string;
-  spaceName: string;
-  prompt: string;
+  accountID: string;
   title: string;
-  requestedBy: string;
-  workerName: string;
-  workerIsYou: boolean;
-  summary: string;
-  risk: "low" | "medium" | "high";
+  body: string;
+  tags: string[];
+  pinned: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
-export interface NativeSpace {
+export type ReminderRepeat = "never" | "daily" | "weekdays" | "weekly" | "monthly";
+
+/** A reminder okidoki fires itself; one with a skill replays it when it's due. */
+export interface Reminder {
+  id: string;
+  accountID: string;
+  title: string;
+  dueAt?: string | null;
+  repeats: ReminderRepeat;
+  done: boolean;
+  doneAt?: string | null;
+  skillID?: string | null;
+  firedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A document in the vault folder. `id` is its path inside the folder. */
+export interface VaultFile {
   id: string;
   name: string;
-  colorHex: string;
-  joined: boolean;
-  unread: number;
-  lastMessage: string;
-  lastMessageAt: string;
+  /** Subfolder, relative to the vault folder; "" for the top level. */
+  folder: string;
+  size: number;
+  modifiedAt: string;
+  mime: string;
 }
 
-/**
- * Enterprise, from the Mac rather than from Convex directly: every approval across my spaces
- * (the Convex query only covers the open one), unread counts, and whether the account is linked.
- * It keeps flowing while the panel is closed, so Home is whole the moment it opens.
- */
-export interface NativeEnterpriseState {
-  linked: boolean;
-  orgId?: string | null;
-  orgName?: string | null;
-  role?: string | null;
-  pendingJoins: number;
-  approvals: NativeApproval[];
-  spaces: NativeSpace[];
-  unread: number;
-  sharedSkills: number;
-  updatedAt?: string | null;
-  lastError?: string | null;
+/** A login in the vault: the password is a sealed box only the vault passphrase opens. */
+export interface VaultLogin {
+  id: string;
+  site: string;
+  username: string;
+  ciphertext: string;
+  iv: string;
+  keyVersion: number;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string | null;
 }
 
-/** Enterprise: an organization inviting over this network. */
-export interface NearbyInvite {
-  orgId: string;
-  orgName: string;
-  code: string;
-  device: string;
-}
-
-export interface NearbyState {
-  invites: NearbyInvite[];
-  advertising?: NearbyInvite | null;
-  browsing: boolean;
-  error?: string | null;
+export interface VaultState {
+  folder: string;
+  available: boolean;
+  truncated: boolean;
+  files: VaultFile[];
+  folders: string[];
+  logins: VaultLogin[];
+  salt: string;
+  /** Set when "remember on this Mac" is on. */
+  rememberedPassphrase: string;
 }
 
 export interface Toast {

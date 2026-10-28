@@ -109,3 +109,44 @@
 .vault-unlock {
   max-width: 520px;
 }
+
+/* The unlock card, shaped like the other setting cards. */
+.team-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  background: var(--card);
+  border: 1px solid var(--tile-line);
+  border-radius: var(--r-xl);
+}
+
+.team-card > header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  align-items: center;
+}
+
+.team-card > header svg {
+  color: var(--accent-ink);
+}
+
+.team-card > header h2 {
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.team-card > header p {
+  grid-column: 2;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.team-card .pref-group {
+  margin: 0;
+}
+

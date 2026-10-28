@@ -6,13 +6,11 @@ import "./styles/runs.css";
 import "./styles/live.css";
 import "./styles/history.css";
 import "./styles/memory.css";
+import "./styles/notes.css";
 import "./styles/skills.css";
 import "./styles/toolbox.css";
 import "./styles/settings.css";
-import "./styles/team.css";
-import "./styles/spaces.css";
 import "./styles/vault.css";
-import "./styles/share.css";
 import "./styles/dashboard.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

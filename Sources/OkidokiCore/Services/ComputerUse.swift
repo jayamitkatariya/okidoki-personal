@@ -300,6 +300,14 @@ enum KeyLayout {
 
 // MARK: - Event actuator
 
+/// A counter that's safe to read and bump from any thread.
+final class ManagedAtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+}
+
 @MainActor
 public enum EventActuator {
     public static var canPost: Bool { AXIsProcessTrusted() || CGPreflightPostEventAccess() }
@@ -575,8 +583,15 @@ public enum EventActuator {
         }.value
     }
 
-    /// Above this length the text is pasted through the clipboard instead of typed key by key.
-    public static let pasteThreshold = 240
+    /// Above this length the text is pasted through the clipboard instead of typed key by key
+    /// (about 11 ms a character); shorter text is typed so it reads naturally and works everywhere.
+    public static let pasteThreshold = 60
+
+    /// Bumped by `stopTyping()`; text being typed stops at the next character once it changes.
+    private nonisolated static let typingGeneration = ManagedAtomicCounter()
+
+    /// Esc, Stop, a cancelled replay: whatever is mid-typing stops now rather than finishing the word.
+    public nonisolated static func stopTyping() { typingGeneration.increment() }
 
     /// One typing step: a real key with its unicode attached, or a batch of characters
     /// the layout can't produce (emoji, other scripts) sent as a unicode-only event.
@@ -592,9 +607,11 @@ public enum EventActuator {
             return
         }
         let steps = typeSteps(text, layout: KeyLayout.currentMap())
+        let generation = typingGeneration.value
         await Task.detached(priority: .userInitiated) {
             let source = makeSource()
             for step in steps {
+                guard typingGeneration.value == generation else { return }
                 switch step {
                 case .key(let code, let flags, var unicode):
                     let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true)
@@ -663,7 +680,8 @@ public enum EventActuator {
         pasteboard.setString(text, forType: .string)
         await sleep(80)
         await pressKey("cmd+v")
-        await sleep(400)
+        // Long enough for the app to read the clipboard before it's put back.
+        await sleep(200)
         pasteboard.clearContents()
         if !saved.isEmpty { pasteboard.writeObjects(saved) }
     }
@@ -1694,7 +1712,8 @@ public final class ComputerUseService {
                 let size = Self.sendSize(pixelWidth: Double(image.width), pixelHeight: Double(image.height),
                                          pointWidth: Double(pointW), pointHeight: Double(pointH), limits: limits)
                 guard let scaled = Self.resized(image, to: size) else { return nil }
-                let data = jpeg ? Self.jpegData(scaled, quality: 0.85) : Self.pngData(scaled)
+                // 0.6 reads the same to the model at well under half the bytes of 0.85.
+                let data = jpeg ? Self.jpegData(scaled, quality: 0.6) : Self.pngData(scaled)
                 return data.map { ($0, Double(scaled.width), Double(scaled.height)) }
             }.value
             guard let encoded else { return nil }

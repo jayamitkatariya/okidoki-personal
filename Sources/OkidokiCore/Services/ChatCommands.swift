@@ -22,46 +22,19 @@ public enum ChatCommand: Equatable, Sendable {
     case deleteSkill(skillID: String)
     case renameSkill(skillID: String, name: String)
 
-    // Enterprise — only when the work account is linked and spaces are known.
-
-    /// "ask #sales to …" / "#sales: …" / "… for #sales": hand the agent in a space the request.
-    case askSpace(spaceID: String, text: String)
-    /// A space was named with "#" but nothing matches.
-    case unknownSpace(query: String, text: String)
-    /// "what's waiting on me": local runs and colleagues' approvals, with Do it right there.
+    /// "what's waiting on me": runs waiting for an okay, with Do it right there.
     case whatsWaiting
-    case listSpaces
-    /// "open #sales", "show the sales chat".
-    case openSpace(spaceID: String)
-    /// "share <skill> with my team" (organization-wide, `spaceID` nil) or "… with #sales".
-    case shareSkill(skillID: String, spaceID: String?)
-    /// A replay that names a colleague's published skill not yet on this Mac: pull it, then replay.
-    case replayShared(sharedID: String, times: Int)
+    /// "note: buy milk on the way home", "jot down …": straight onto the Notes page.
+    case addNote(text: String)
 
-    /// "file the entry for MTS-4471": one pass per record, `{{placeholders}}` filled from it; `values`
+    /// "file the entry for INV-4471": one pass per record, `{{placeholders}}` filled from it; `values`
     /// are key=value overrides typed with the request (and all there is when no record is named).
     case replayRecords(skillID: String, recordIDs: [String], values: [String: String])
     /// A record id in the usual shape that isn't in the records file.
     case unknownRecord(query: String)
-    /// "add the CBP 3461 to the vault": fetch the document (a known form, a link, or a web search)
-    /// and file it in the organization's vault, or a space's when `space` names one.
-    case addToVault(query: String, url: String?, space: String)
-}
-
-/// A space, as much of it as the chat needs to route a request.
-public struct ChatSpaceRef: Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var joined: Bool
-    public init(id: String, name: String, joined: Bool) { self.id = id; self.name = name; self.joined = joined }
-}
-
-/// A colleague's shared skill that isn't on this Mac yet.
-public struct ChatSharedSkillRef: Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var publishedBy: String
-    public init(id: String, name: String, publishedBy: String) { self.id = id; self.name = name; self.publishedBy = publishedBy }
+    /// "add the W-9 to the vault": fetch the document (a link, or a web search) and file it in the
+    /// vault folder, or in one of its subfolders when `folder` names one.
+    case addToVault(query: String, url: String?, folder: String)
 }
 
 public enum ChatCommands {
@@ -71,16 +44,12 @@ public enum ChatCommands {
         public var replaying: Bool
         /// Whether a skill has been replayed this session, so a bare "again" has something to mean.
         public var hasReplayed: Bool
-        /// Enterprise: the work account's spaces (empty on a personal account or an unlinked one).
-        public var spaces: [ChatSpaceRef]
-        /// Enterprise: colleagues' shared skills that aren't on this Mac yet.
-        public var sharedSkills: [ChatSharedSkillRef]
         /// Rows skills can be replayed against (records.json): shipments, invoices, customers.
         public var records: [SkillRecord]
         public init(skills: [Skill], recording: Bool = false, replaying: Bool = false, hasReplayed: Bool = false,
-                    spaces: [ChatSpaceRef] = [], sharedSkills: [ChatSharedSkillRef] = [], records: [SkillRecord] = []) {
+                    records: [SkillRecord] = []) {
             self.skills = skills; self.recording = recording; self.replaying = replaying; self.hasReplayed = hasReplayed
-            self.spaces = spaces; self.sharedSkills = sharedSkills; self.records = records
+            self.records = records
         }
     }
 
@@ -93,25 +62,36 @@ public enum ChatCommands {
             return .stopReplay
         }
         if let command = startRecordingCommand(t) { return command }
+        if let note = noteText(text) { return .addNote(text: note) }
         if let command = vaultCommand(t, raw: text) { return command }
         if Self.listPhrases.contains(t) || t.hasPrefix("list my skills") || t.hasPrefix("list skills")
             || t.hasPrefix("what skills") || t.hasPrefix("which skills") || t.hasPrefix("show my skills") || t.hasPrefix("show me my skills") {
             return .listSkills
         }
         if waitingPhrases.contains(t) { return .whatsWaiting }
-        if !context.spaces.isEmpty {
-            if spacesPhrases.contains(t) { return .listSpaces }
-            if let command = shareCommand(t, skills: context.skills, spaces: context.spaces) { return command }
-            if let command = openSpaceCommand(t, spaces: context.spaces) { return command }
-            if let command = askSpaceCommand(t, raw: text, spaces: context.spaces) { return command }
-        }
         if let command = renameCommand(t, skills: context.skills) { return command }
         if let command = deleteCommand(t, skills: context.skills) { return command }
         if let command = recordCommand(t, raw: text, skills: context.skills, records: context.records) { return command }
-        return replayCommand(t, skills: context.skills, shared: context.sharedSkills, hasReplayed: context.hasReplayed)
+        return replayCommand(t, skills: context.skills, hasReplayed: context.hasReplayed)
     }
 
-    // MARK: - Enterprise
+    // MARK: - Notes
+
+    /// The text after "note:", "note to self:", "jot down", "take a note:", as typed.
+    static func noteText(_ raw: String) -> String? {
+        let pattern = #"^\s*(?:okidoki,?\s+)?(?:note to self|note|jot down|jot|take a note|make a note)\s*[:\-–—]\s*(.+)$|^\s*(?:jot down|take a note|make a note)\s+(?:that\s+)?(.+)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+              let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)) else { return nil }
+        for group in 1...2 {
+            if let range = Range(match.range(at: group), in: raw) {
+                let text = raw[range].trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.isEmpty ? nil : text
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Waiting
 
     private static let waitingPhrases: Set<String> = [
         "what's waiting on me", "whats waiting on me", "what's waiting", "whats waiting", "anything waiting", "anything waiting on me",
@@ -119,115 +99,6 @@ public enum ChatCommands {
         "what's pending", "whats pending", "what do i need to approve", "anything to approve", "anything for me", "what needs you",
         "what's on my plate", "whats on my plate", "what needs an okay", "waiting on me",
     ]
-    private static let spacesPhrases: Set<String> = [
-        "spaces", "my spaces", "list spaces", "list my spaces", "show spaces", "show my spaces", "which spaces", "what spaces",
-        "which spaces am i in", "what spaces are there", "my team", "team", "open team", "my team's spaces", "show my team",
-    ]
-    /// Ways of saying "everyone in the organization" when sharing a skill.
-    private static let everyoneWords: Set<String> = ["team", "my team", "the team", "everyone", "everybody", "org", "the org", "organization",
-                                                     "the organization", "my organization", "company", "the company", "my company", "all", "whole team", "the whole team"]
-
-    /// "#sales", "sales", "the sales space" against known spaces. Explicit "#" accepts a looser match.
-    static func bestSpace(_ query: String, in spaces: [ChatSpaceRef], explicit: Bool) -> ChatSpaceRef? {
-        let q = query
-            .replacingOccurrences(of: "^#", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "^(the |my |our )+", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "( space| channel| group| chat)$", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return nil }
-        let ranked = spaces.map { ($0, score(q, against: $0.name)) }.sorted { $0.1 > $1.1 || ($0.1 == $1.1 && $0.0.joined && !$1.0.joined) }
-        guard let top = ranked.first, top.1 >= (explicit ? 0.6 : 0.9) else { return nil }
-        return top.0
-    }
-
-    /// Which leading words name a space: the cut with the best score wins, a shorter cut on a tie,
-    /// so "#sales compress the video" takes "sales" and "#design review rename" takes "design review".
-    private static func spaceCut(_ words: [String], spaces: [ChatSpaceRef], explicit: Bool, maxCut: Int = 4) -> (cut: Int, space: ChatSpaceRef)? {
-        var best: (cut: Int, space: ChatSpaceRef, score: Double)?
-        for cut in 1...max(1, min(words.count - 1, maxCut)) {
-            let name = words.prefix(cut).joined(separator: " ")
-                .replacingOccurrences(of: "( space| channel| chat)$", with: "", options: .regularExpression)
-            guard let space = bestSpace(name, in: spaces, explicit: explicit) else { continue }
-            let value = score(normalize(name), against: space.name)
-            if best == nil || value > best!.score { best = (cut, space, value) }
-        }
-        return best.map { ($0.cut, $0.space) }
-    }
-
-    private static func askSpaceCommand(_ t: String, raw: String, spaces: [ChatSpaceRef]) -> ChatCommand? {
-        // "#sales compress the video" / "#sales: …"
-        if t.hasPrefix("#"), t.contains(" ") {
-            let words = String(t.dropFirst()).split(separator: " ").map(String.init)
-            guard words.count >= 2 else { return nil }
-            if let found = spaceCut(words, spaces: spaces, explicit: true) {
-                let rest = requestAfter(words.dropFirst(found.cut).joined(separator: " "))
-                guard !rest.isEmpty else { return nil }
-                return .askSpace(spaceID: found.space.id, text: tail(rest, raw: raw))
-            }
-            return .unknownSpace(query: words[0], text: requestAfter(words.dropFirst().joined(separator: " ")))
-        }
-        // "ask #sales to …", "tell sales …", "send to #sales: …", "in #sales …", "have #ops …"
-        if let match = t.range(of: "^(ask|tell|send to|send|post in|post to|in|for|have|get|let) (the |my |our )?#?[a-z0-9].* .+$", options: .regularExpression) {
-            let explicit = t.contains("#")
-            let stripped = String(t[match]).replacingOccurrences(of: "^(ask|tell|send to|send|post in|post to|in|for|have|get|let) (the |my |our )?#?", with: "", options: .regularExpression)
-            let words = stripped.split(separator: " ").map(String.init)
-            guard words.count >= 2 else { return nil }
-            if let found = spaceCut(words, spaces: spaces, explicit: explicit, maxCut: 3) {
-                let rest = requestAfter(words.dropFirst(found.cut).joined(separator: " "))
-                guard !rest.isEmpty else { return nil }
-                return .askSpace(spaceID: found.space.id, text: tail(rest, raw: raw))
-            }
-            if explicit { return .unknownSpace(query: words[0], text: requestAfter(words.dropFirst().joined(separator: " "))) }
-            return nil
-        }
-        // "compress the video for #sales" / "… in #ops"
-        if let hash = t.range(of: " (for|in|to|with) #", options: .regularExpression), t.hasSuffix(String(t[hash.upperBound...])) {
-            let request = String(t[..<hash.lowerBound])
-            let name = String(t[hash.upperBound...])
-            guard !request.isEmpty, !name.isEmpty, !name.contains(" ") || spaces.contains(where: { normalize($0.name) == name }) else { return nil }
-            if let space = bestSpace(name, in: spaces, explicit: true) { return .askSpace(spaceID: space.id, text: tail(request, raw: raw)) }
-            return .unknownSpace(query: name, text: request)
-        }
-        return nil
-    }
-
-    /// The words after the space's name, minus the glue ("to", "that", a colon) that joined them.
-    private static func requestAfter(_ text: String) -> String {
-        text.replacingOccurrences(of: "^(space |channel |chat )?(to |that |please )?", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-    }
-
-    /// The request as typed, when it can be found in the raw text; the normalized form otherwise.
-    private static func tail(_ normalized: String, raw: String) -> String {
-        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let range = cleaned.range(of: normalized, options: [.caseInsensitive]) { return String(cleaned[range]) }
-        return normalized
-    }
-
-    private static func openSpaceCommand(_ t: String, spaces: [ChatSpaceRef]) -> ChatCommand? {
-        guard let match = t.range(of: "^(open|show|go to|show me|take me to) (the |my )?#?(.+?)( space| chat| channel)?$", options: .regularExpression) else { return nil }
-        let explicit = t.contains("#") || t.hasSuffix(" space") || t.hasSuffix(" chat") || t.hasSuffix(" channel")
-        let name = String(t[match])
-            .replacingOccurrences(of: "^(open|show|go to|show me|take me to) (the |my )?#?", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "( space| chat| channel)$", with: "", options: .regularExpression)
-        guard let space = bestSpace(name, in: spaces, explicit: explicit) else { return nil }
-        return .openSpace(spaceID: space.id)
-    }
-
-    private static func shareCommand(_ t: String, skills: [Skill], spaces: [ChatSpaceRef]) -> ChatCommand? {
-        guard let match = t.range(of: "^(share|publish) (the |my )?(skill )?(.+?)( skill)? (with|to) (.+)$", options: .regularExpression) else { return nil }
-        let body = String(t[match]).replacingOccurrences(of: "^(share|publish) (the |my )?(skill )?", with: "", options: .regularExpression)
-        guard let split = body.range(of: " (with|to) ", options: .regularExpression) else { return nil }
-        let query = String(body[..<split.lowerBound]).replacingOccurrences(of: " skill$", with: "", options: .regularExpression)
-        let target = String(body[split.upperBound...]).trimmingCharacters(in: .whitespaces)
-        guard let best = bestMatch(query, in: skills), best.score >= 0.6 else { return nil }
-        if everyoneWords.contains(target) { return .shareSkill(skillID: best.skill.id, spaceID: nil) }
-        guard let space = bestSpace(target, in: spaces, explicit: target.hasPrefix("#") || target.hasSuffix(" space")) else {
-            return .unknownSpace(query: target, text: "share \(best.skill.name)")
-        }
-        return .shareSkill(skillID: best.skill.id, spaceID: space.id)
-    }
-
     // MARK: - Recording
 
     private static let stopWords: Set<String> = ["stop", "stop it", "cancel", "esc", "escape", "halt", "enough", "stop now"]
@@ -314,7 +185,7 @@ public enum ChatCommands {
     /// Ways that only mean a replay once one has happened; otherwise "again" is just conversation.
     private static let againPhrases: Set<String> = ["again", "do it again", "run it again", "play it again", "one more time", "once more", "same again", "do that again", "run that again", "go again"]
 
-    private static func replayCommand(_ t: String, skills: [Skill], shared: [ChatSharedSkillRef] = [], hasReplayed: Bool) -> ChatCommand? {
+    private static func replayCommand(_ t: String, skills: [Skill], hasReplayed: Bool) -> ChatCommand? {
         let (body, times) = splitTimes(t)
         if replayLastPhrases.contains(body) || (hasReplayed && againPhrases.contains(body)) {
             return .replayLast(times: times)
@@ -339,19 +210,9 @@ public enum ChatCommands {
             .replacingOccurrences(of: "( skill| again| now| please| for me)+$", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         if strict, query.isEmpty { return .replayLast(times: times) }
-        guard !query.isEmpty, !skills.isEmpty || !shared.isEmpty else { return strict ? .noSuchSkill(query: query) : nil }
+        guard !query.isEmpty, !skills.isEmpty else { return strict ? .noSuchSkill(query: query) : nil }
 
         let ranked = skills.map { ($0, score(query, against: $0.name)) }.sorted { $0.1 > $1.1 }
-        // A colleague's shared skill answers the same words. A local skill wins a tie: it's the
-        // one they recorded themselves, and it has pictures.
-        let sharedRanked = shared.map { ($0, score(query, against: $0.name)) }.sorted { $0.1 > $1.1 }
-        if let best = sharedRanked.first, best.1 > (ranked.first?.1 ?? 0) {
-            let accepted: Bool
-            if strict { accepted = best.1 >= 0.5 }
-            else if verbed { accepted = literal(query, names: best.0.name) }
-            else { accepted = normalize(best.0.name) == query }
-            if accepted { return .replayShared(sharedID: best.0.id, times: times) }
-        }
         guard let top = ranked.first else { return strict ? .noSuchSkill(query: query) : nil }
         // "replay x" accepts a fuzzy hit; "run x" / "do x" must name the skill literally so everyday
         // requests ("do my taxes") still reach the brain; a bare name must be the whole skill name.

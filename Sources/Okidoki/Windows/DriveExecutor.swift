@@ -16,6 +16,17 @@ struct ActionOutcome {
 /// action did something, so a miss is reported as a miss instead of the model finding out a turn later.
 @MainActor
 final class DriveExecutor {
+    /// The control under a point, from the last lookup when it was for the same point.
+    private func describe(at point: CGPoint) async -> (role: String, label: String)? {
+        if let described, described.point == point {
+            self.described = nil
+            return described.hit
+        }
+        let hit = await Task.detached(priority: .userInitiated) { AXSearch.describe(at: point) }.value
+        described = (point, hit)
+        return hit
+    }
+
     private let target: ComputerTarget
     private(set) var shot: ComputerUseService.Screenshot?
     private(set) var context = ComputerContext()
@@ -24,6 +35,9 @@ final class DriveExecutor {
     private var imageHeight = 1.0
     /// The last action's screen settled before its time limit, so a following wait has nothing to wait for.
     private var lastStable = false
+    /// What narration found under a pixel click, reused when the click runs a moment later so the
+    /// accessibility lookup (up to 300 ms) happens once per click, not twice.
+    private var described: (point: CGPoint, hit: (role: String, label: String)?)?
 
     init(target: ComputerTarget) { self.target = target }
 
@@ -86,7 +100,7 @@ final class DriveExecutor {
             let verb = ["double_click": "double-clicking", "triple_click": "triple-clicking", "right_click": "right-clicking",
                         "middle_click": "middle-clicking"][act.type] ?? "clicking"
             if let point = quartzPoint(x: act.x, y: act.y),
-               let hit = await Task.detached(priority: .userInitiated, operation: { AXSearch.describe(at: point) }).value,
+               let hit = await describe(at: point),
                !hit.label.isEmpty {
                 return "\(verb) “\(clip(hit.label, 28))”"
             }
@@ -126,10 +140,10 @@ final class DriveExecutor {
         case "type": return Profile(minMs: 40, maxMs: 800, stable: 1, load: false)
         case "key":
             let submit = ["return", "enter", "keypadenter"].contains((act.key ?? "").lowercased())
-            return Profile(minMs: submit ? 120 : 60, maxMs: submit ? 4000 : 1200, stable: submit ? 2 : 1, load: submit && browser)
+            return Profile(minMs: submit ? 120 : 60, maxMs: submit ? 3000 : 1200, stable: submit ? 2 : 1, load: submit && browser)
         case "scroll": return Profile(minMs: 120, maxMs: 1000, stable: 1, load: false)
         case "drag", "move", "mouse_down", "mouse_up", "hold_key": return Profile(minMs: 60, maxMs: 800, stable: 1, load: false)
-        case "open_url": return Profile(minMs: 250, maxMs: 6000, stable: 2, load: true)
+        case "open_url": return Profile(minMs: 250, maxMs: 4500, stable: 2, load: true)
         case "open_app", "activate": return Profile(minMs: 150, maxMs: 2500, stable: 2, load: false)
         case "script", "shell", "applescript", "jxa": return Profile(minMs: 100, maxMs: 2000, stable: 1, load: false)
         default: return nil
@@ -217,7 +231,7 @@ final class DriveExecutor {
                 text = await EventActuator.holdKey(key, seconds: act.seconds ?? 1) ? "held \(key)" : "unknown key \(key)"
             default:
                 if Self.pixelClicks.contains(act.type), let point = quartzPoint(x: act.x, y: act.y) {
-                    hit = await Task.detached(priority: .userInitiated) { AXSearch.describe(at: point) }.value
+                    hit = await describe(at: point)
                 }
                 text = try await target.perform(act, screen: box, imageWidth: imageWidth, imageHeight: imageHeight)
             }
@@ -250,7 +264,7 @@ final class DriveExecutor {
         if Self.clickish.contains(act.type), settle.large, browser, let pid = front?.pid {
             let page = await Task.detached(priority: .userInitiated) { WebPage.webArea(pid: pid).map(UncheckedElement.init) }.value?.element
             if page != nil {
-                let more = await ScreenSampler.settle(screen: screen, before: before, minMs: 0, maxMs: 4000, stableSamples: 2, webArea: page)
+                let more = await ScreenSampler.settle(screen: screen, before: before, minMs: 0, maxMs: 2500, stableSamples: 2, webArea: page)
                 settleMs += more.elapsedMs
                 if let change = more.change { settle.change = change }
             }
@@ -358,10 +372,13 @@ final class DriveExecutor {
         guard let held = EventActuator.modifierKeys(act.modifiers) else { return ("unknown modifiers \(act.modifiers ?? "")", nil) }
         if button == "left", count == 1, held.isEmpty {
             // Show the pointer going there while the press happens; the press doesn't wait for it.
-            Task { await EventActuator.move(to: center) }
+            let glide = Task { await EventActuator.move(to: center) }
             if await Task.detached(priority: .userInitiated, operation: { AXSearch.perform(kAXPressAction, on: element.element) }).value {
                 return ("pressed “\(label)”", entry)
             }
+            // The press didn't take, so a real click follows: let the glide land first, or two
+            // pointer moves would interleave and the click could go astray.
+            await glide.value
         }
         if button == "right", held.isEmpty,
            await Task.detached(priority: .userInitiated, operation: { AXSearch.perform(kAXShowMenuAction, on: element.element) }).value {

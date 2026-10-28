@@ -90,9 +90,7 @@ public enum DriveTelemetryStore {
     public static let keep = 200
 
     public static var directory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Okidoki/telemetry", isDirectory: true)
+        AppPaths.support("telemetry", isDirectory: true)
     }
 
     public static func url(for runID: String, in directory: URL = directory) -> URL {

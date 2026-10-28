@@ -38,9 +38,7 @@ public enum PrivateMacSpec {
 
     /// The folder every VM file lives in: restore image, disk, auxiliary storage, identity.
     public static var directory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Okidoki", isDirectory: true).appendingPathComponent(folderName, isDirectory: true)
+        AppPaths.support(folderName, isDirectory: true)
     }
 
     public static var restoreImageURL: URL { directory.appendingPathComponent("RestoreImage.ipsw") }

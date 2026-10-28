@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { AccountKind, AgentStatus, CodingAgentID, KeyProvider, PrivateMacPhase, PrivateMacState, ServicesState, Toast, WorkerState } from "../types";
+import type { AccountKind, AgentStatus, CodingAgentID, KeyProvider, PrivateMacPhase, PrivateMacState, ServicesState, Toast } from "../types";
 import { SETTINGS_JUMP_EVENT, type Page } from "../nav";
-import { SyncLogin } from "../components/CloudAuth";
 import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
@@ -39,15 +38,12 @@ const SECTIONS = [
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
   { id: "account", label: "Account", icon: "user" },
-  { id: "organization", label: "Organization", icon: "building" },
-  { id: "worker", label: "Worker", icon: "bolt" },
   { id: "keys", label: "Keys", icon: "key" },
-  { id: "sync-login", label: "Sync", icon: "link" },
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
 
 export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
-  const { state, settings, account, enterprise, updateSettings, invoke, notify, convexConnected, native } = useDashboard();
+  const { state, settings, account, updateSettings, invoke, notify, native } = useDashboard();
   const [instructions, setInstructions] = useState(settings.customInstructions);
   const [name, setName] = useState(account.name);
   const [email, setEmail] = useState(account.email);
@@ -121,11 +117,11 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
 
   return (
     <div className="settings-page">
-      <PageTitle title="Settings" subtitle="Everything stays on this Mac unless you turn on sync." />
+      <PageTitle title="Settings" subtitle="Everything stays on this Mac." />
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.filter((section) => (native || !["keys", "sync-login"].includes(section.id)) && (account.kind === "work" || !["organization", "worker"].includes(section.id))).map((section) => (
+          {SECTIONS.filter((section) => native || section.id !== "keys").map((section) => (
             <button key={section.id} className={cx("settings-nav-item", active === section.id && "is-active")} onClick={() => jump(section.id)}>
               <PixelIcon name={section.icon} size={15} />
               {section.label}
@@ -385,7 +381,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                     { value: "calm", label: "Calm" },
                     { value: "fast", label: "Fast" },
                   ]}
-                  value={settings.drivePace ?? "calm"}
+                  value={settings.drivePace ?? "fast"}
                   onChange={(value) => updateSettings({ drivePace: value as typeof settings.drivePace })}
                   compact
                 />
@@ -499,56 +495,9 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </div>
           </SettingsSection>
 
-          {/* Organization: the enterprise side of a work account. Personal accounts never see it. */}
-          {account.kind === "work" ? (
-            <SettingsSection id="organization" title="Organization" description="A work account can link to your company. Spaces, shared skills and the vault then follow it.">
-              <div className="pref-group">
-                {enterprise.status === "ready" && enterprise.view ? (
-                  <PrefRow title={enterprise.view.org.name} detail={`${account.name} is linked as ${enterprise.view.role} · ${enterprise.view.org.memberCount} ${enterprise.view.org.memberCount === 1 ? "person" : "people"}`}>
-                    <Button size="sm" variant="secondary" icon="people" onClick={() => go?.("team")}>
-                      Open Team
-                    </Button>
-                  </PrefRow>
-                ) : enterprise.status === "ready" ? (
-                  <PrefRow title="Not linked" detail="Create an organization, join with a code, or ask to join by email domain.">
-                    <Button size="sm" variant="primary" icon="people" onClick={() => go?.("team")}>
-                      Link account
-                    </Button>
-                  </PrefRow>
-                ) : enterprise.status === "loading" ? (
-                  <PrefRow title="Connecting…" detail="Checking your organization on your deployment.">
-                    {null}
-                  </PrefRow>
-                ) : (
-                  <PrefRow title="Needs your sync login" detail="Organizations live on Convex, so turn on sync and sign in below first.">
-                    {null}
-                  </PrefRow>
-                )}
-              </div>
-            </SettingsSection>
-          ) : null}
-
-          {account.kind === "work" ? (
-            <SettingsSection id="worker" title="Worker" description="When a space hands okidoki work, a member's Mac does it. Let this one take jobs, and it runs them like any request — asking in the chat before anything risky.">
-              <div className="pref-group">
-                <PrefRow title="Accept jobs from my spaces" detail={workerDetail(state.worker, settings.workerEnabled === true, native)}>
-                  <Switch checked={settings.workerEnabled === true} onChange={(value) => updateSettings({ workerEnabled: value })} />
-                </PrefRow>
-                <PrefRow title="Runs jobs on" detail={settings.computerTarget === "vm" ? "Your private Mac, in a window. Spaces set to Private Mac pick this Mac." : "This Mac. Spaces set to Private Mac skip it until one is set up below."}>
-                  <Button size="sm" variant="secondary" onClick={() => jump("private-mac")}>
-                    {settings.computerTarget === "vm" ? "Private Mac" : "This Mac"}
-                  </Button>
-                </PrefRow>
-                <PrefRow title="Hosted VM" detail="A Mac in the cloud that works for the whole space. Coming soon.">
-                  <span className="pref-status">Soon</span>
-                </PrefRow>
-              </div>
-            </SettingsSection>
-          ) : null}
-
-          {/* Keys and sync: only inside the Mac app, which holds the key file and does the pushing. */}
+          {/* Keys: only inside the Mac app, which holds the key file. */}
           {native ? (
-            <SettingsSection id="keys" title="Keys" description="The build ships its own service credentials. Anything it doesn't ship can be added here; it goes in a private file on this Mac, never the Keychain or the cloud.">
+            <SettingsSection id="keys" title="Keys" description="Bring your own keys. Each goes in a private file on this Mac, readable only by you, and is sent only to the service it belongs to.">
               <div className="pref-group">
                 {(state.keyProviders ?? []).map((provider) => (
                   <KeyRow key={provider.id} provider={provider} invoke={invoke} notify={notify} />
@@ -559,56 +508,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                   </PrefRow>
                 ) : null}
               </div>
-            </SettingsSection>
-          ) : null}
-
-          {native ? (
-            <SettingsSection id="sync-login" title="Sync" description="Threads, memory, runs, skills and routines go to your own Convex deployment, so a second Mac and the web panel see the same thing. Off means everything stays here.">
-              <div className="pref-group">
-                <PrefRow title="Sync to Convex" detail={syncDetail(state.services, settings.syncEnabled)}>
-                  <Switch checked={settings.syncEnabled} onChange={(value) => updateSettings({ syncEnabled: value })} label="Sync to Convex" />
-                </PrefRow>
-                {settings.syncEnabled ? (
-                  <PrefRow title="Status" detail={state.services?.convex.siteURL || "No deployment URL"}>
-                    <span className={cx("pref-value", syncHealthy(state.services) && "is-on")}>
-                      <i />
-                      {state.services?.convex.status ?? (state.convexConfigured ? "configured" : "local only")}
-                    </span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon="refresh"
-                      disabled={!state.services?.convex.paired}
-                      onClick={() => {
-                        invoke("syncNow");
-                        notify("Syncing", "Pushing this Mac's state to Convex", "info");
-                      }}
-                    >
-                      Sync now
-                    </Button>
-                  </PrefRow>
-                ) : null}
-                {settings.syncEnabled && state.services ? (
-                  <PrefRow
-                    title="This Mac"
-                    detail={
-                      state.services.convex.paired
-                        ? `Paired as ${state.services.convex.pairedAs || "your login"}. Only accounts that login owns sync from here; signing out unpairs it.`
-                        : "Not paired yet. Sign in below and this Mac gets its own key to your deployment; nothing is shared between Macs."
-                    }
-                  >
-                    <span className={cx("pref-value", state.services.convex.paired && "is-on")}>
-                      <i />
-                      {state.services.convex.paired ? "paired" : "not paired"}
-                    </span>
-                  </PrefRow>
-                ) : null}
-              </div>
-              {settings.syncEnabled ? (
-                <div className="pref-group">
-                  <SyncLogin />
-                </div>
-              ) : null}
             </SettingsSection>
           ) : null}
 
@@ -644,18 +543,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                 <span className={cx("pref-value", (state.services?.brain.ready ?? state.sidecar === "ready") && "is-on")}>
                   <i />
                   {state.services?.brain.status ?? state.sidecar}
-                </span>
-              </PrefRow>
-              <PrefRow title="Convex" detail={state.services?.convex.lastSyncAt ? `Last push ${relativeTime(state.services.convex.lastSyncAt)}` : settings.lastSyncAt ? `Last push ${relativeTime(settings.lastSyncAt)}` : undefined}>
-                <span className={cx("pref-value", syncHealthy(state.services) && "is-on")}>
-                  <i />
-                  {state.services?.convex.status ?? (state.convexConfigured ? "configured" : "local only")}
-                </span>
-              </PrefRow>
-              <PrefRow title="Convex live" detail="This page's own connection, for live updates from your deployment">
-                <span className={cx("pref-value", convexConnected && "is-on")}>
-                  <i />
-                  {convexConnected ? "Connected" : "No"}
                 </span>
               </PrefRow>
               <PrefRow title="Memory index" detail={memoryDetail(state.services)}>
@@ -720,19 +607,6 @@ function SettingsSection({ id, title, description, children }: { id: string; tit
   );
 }
 
-function syncHealthy(services: ServicesState | null | undefined): boolean {
-  const status = services?.convex.status ?? "";
-  return services?.convex.enabled === true && /^synced/.test(status);
-}
-
-function syncDetail(services: ServicesState | null | undefined, enabled: boolean): string {
-  if (!enabled) return "Off. Everything stays on this Mac.";
-  if (!services) return "On.";
-  if (!services.convex.siteURL) return "On, but there's no deployment URL. Set CONVEX_SITE_URL in the build's .env.";
-  if (!services.convex.paired) return "On, but this Mac isn't paired with a login yet, so nothing can be pushed.";
-  return "On. Pushed a few seconds after anything changes.";
-}
-
 function memoryLabel(services: ServicesState | null | undefined): string {
   if (!services) return "unknown";
   if (!services.memory.configured) return "off";
@@ -777,21 +651,8 @@ function KeyRow({ provider, invoke, notify }: { provider: KeyProvider; invoke: (
     setDraft("");
     setEditing(false);
   };
-  const status = provider.set ? (provider.builtin ? "shipped with this build" : "set") : provider.optional ? "optional" : "missing";
-  if (provider.builtin) {
-    // The build's key wins over a saved one, so offering to replace it would be a lie.
-    return (
-      <div className="pref-row">
-        <span className="pref-copy">
-          <strong>{provider.name}</strong>
-          <em>{provider.blurb}</em>
-        </span>
-        <span className="pref-control">
-          <span className="pref-status is-on">{status}</span>
-        </span>
-      </div>
-    );
-  }
+  // A key from the environment (or your own service.env) works until one saved here replaces it.
+  const status = provider.set ? (provider.builtin ? "from environment" : "set") : provider.optional ? "optional" : "missing";
   return (
     <div className={cx("pref-row", editing && "is-stack")}>
       <span className="pref-copy">
@@ -835,16 +696,6 @@ function KeyRow({ provider, invoke, notify }: { provider: KeyProvider; invoke: (
       )}
     </div>
   );
-}
-
-function workerDetail(worker: WorkerState | null | undefined, enabled: boolean, native: boolean): string {
-  if (!native) return "Switch this on in okidoki on the Mac that should do the work.";
-  if (!enabled) return "Off. Jobs from your spaces wait for another Mac.";
-  if (!worker) return "Starting…";
-  if (worker.activeJob) return `Working on “${worker.activeJob}”${worker.activeSpace ? ` for ${worker.activeSpace}` : ""}`;
-  if (worker.status === "idle") return `Ready as ${worker.device}${worker.lastPollAt ? ` · checked ${relativeTime(worker.lastPollAt)}` : ""}${worker.jobsDone ? ` · ${worker.jobsDone} done` : ""}`;
-  if (worker.status === "off") return "Needs sync on and this work account linked to an organization.";
-  return worker.status;
 }
 
 function formatBytes(bytes: number): string {

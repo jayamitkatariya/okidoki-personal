@@ -28,10 +28,8 @@ struct NotchRunItem: Identifiable, Equatable {
     var summary: String
     var risk: RiskLevel
     var commands: [String]
-    /// The space this run is a job for, when this Mac is working as a colleague's worker.
-    var forSpace: String?
 
-    init(_ run: AgentRun, forSpace: String? = nil) {
+    init(_ run: AgentRun) {
         id = run.id
         title = run.title
         kind = run.kind
@@ -42,7 +40,6 @@ struct NotchRunItem: Identifiable, Equatable {
         summary = run.preview?.summary ?? ""
         risk = run.preview?.risk ?? .low
         commands = run.preview?.commands ?? []
-        self.forSpace = forSpace
     }
 }
 
@@ -51,43 +48,6 @@ struct NotchRecording: Equatable {
     var name: String
     var startedAt: Date
     var steps: Int
-}
-
-/// A colleague's run waiting for an okay in one of my spaces. Rendered like a local approval,
-/// answered through the deployment instead of the local run.
-struct NotchSpaceApproval: Identifiable, Equatable {
-    var id: String
-    var spaceId: String
-    var spaceName: String
-    var title: String
-    var summary: String
-    var requestedBy: String
-    var workerName: String
-    var workerIsYou: Bool
-    var risk: RiskLevel
-    var commands: [String]
-
-    init(_ approval: EnterpriseSummary.Approval) {
-        id = approval.id
-        spaceId = approval.spaceId
-        spaceName = approval.spaceName
-        title = approval.title.isEmpty ? approval.prompt : approval.title
-        summary = approval.summary
-        requestedBy = approval.requestedBy
-        workerName = approval.workerName
-        workerIsYou = approval.workerIsYou
-        risk = approval.risk
-        commands = approval.commands
-    }
-}
-
-/// A space with something new in it.
-struct NotchSpaceUnread: Identifiable, Equatable {
-    var id: String
-    var name: String
-    var colorHex: String
-    var unread: Int
-    var lastMessage: String
 }
 
 /// Geometry of the screen the notch lives on. Recomputed whenever displays change.
@@ -145,11 +105,6 @@ final class NotchModel: ObservableObject {
     @Published var waiting: [NotchRunItem] = []
     @Published var live: [NotchRunItem] = []
     @Published var recording: NotchRecording?
-    /// Enterprise: colleagues' runs waiting on an okay, and spaces with unread chat.
-    @Published var approvals: [NotchSpaceApproval] = []
-    @Published var unread: [NotchSpaceUnread] = []
-    /// Whether a work account is linked to an organization, so the island offers Team.
-    @Published var hasTeam = false
     @Published var metrics: NotchMetrics
 
     var undoActions: [String: () -> Void] = [:]
@@ -233,11 +188,10 @@ final class NotchModel: ObservableObject {
 
     // MARK: Derived layout
 
-    /// Everything that wants an answer: local runs first, then colleagues' runs.
-    var needsYou: Int { waiting.count + approvals.count }
-    /// Unread chat shows while the island is open or hovered; it never pops the island up on its own.
-    var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !approvals.isEmpty || !live.isEmpty || recording != nil || listening || caption != nil }
-    var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !approvals.isEmpty || !live.isEmpty || recording != nil || caption != nil }
+    /// Everything that wants an answer.
+    var needsYou: Int { waiting.count }
+    var hasContent: Bool { !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || recording != nil || listening || caption != nil }
+    var hasBody: Bool { expanded || !toasts.isEmpty || !waiting.isEmpty || !live.isEmpty || recording != nil || caption != nil }
 
     /// Closed with something to show: wide enough for one card.
     var compactWidth: CGFloat { metrics.clampWidth(360 + metrics.shoulder * 2) }
@@ -255,9 +209,7 @@ final class NotchModel: ObservableObject {
         [expanded ? "x" : "c", listening ? "l" : "", quiet ? "q" : "", caption == nil ? "" : "s", recording == nil ? "" : "r"]
             + toasts.map(\.id)
             + waiting.map(\.id)
-            + approvals.map(\.id)
             + live.map { $0.id + $0.status.rawValue }
-            + (expanded ? unread.map { $0.id + "\($0.unread)" } : [])
     }
 }
 
@@ -468,12 +420,6 @@ final class NotchController {
         env.watch.objectWillChange
             .sink { [weak self] _ in self?.scheduleRefresh() }
             .store(in: &cancellables)
-        env.enterprise.objectWillChange
-            .sink { [weak self] _ in self?.scheduleRefresh() }
-            .store(in: &cancellables)
-        env.worker.objectWillChange
-            .sink { [weak self] _ in self?.scheduleRefresh() }
-            .store(in: &cancellables)
         env.store.$settings
             .receive(on: RunLoop.main)
             .sink { [weak self] settings in
@@ -543,28 +489,12 @@ final class NotchController {
     /// The `.watch` run is left out: a recording gets its own row with Save / Discard
     /// instead of a Pause / Stop pair that can't control the recorder.
     private func syncRuns() {
-        // A run in the worker's thread is a colleague's job: the row says which space it's for.
-        let workerThread = env.worker.activeThreadID
-        let workerSpace = env.worker.activeJob?.spaceName
-        func item(_ run: AgentRun) -> NotchRunItem {
-            NotchRunItem(run, forSpace: workerThread != nil && run.threadID == workerThread ? workerSpace : nil)
-        }
-        let waiting = env.store.waitingRuns.map(item)
+        let waiting = env.store.waitingRuns.map(NotchRunItem.init)
         let live = env.store.liveRuns
             .filter { ($0.status == .running || $0.status == .paused) && $0.kind != .watch }
-            .map(item)
+            .map(NotchRunItem.init)
         if model.waiting != waiting { model.waiting = waiting }
         if model.live != live { model.live = live }
-        // Colleagues' runs waiting in my spaces — except one this Mac itself is running, which is
-        // already a local waiting card with the same Do it / Not now.
-        let approvals = env.enterprise.approvals.filter { !$0.workerIsYou }.map(NotchSpaceApproval.init)
-        if model.approvals != approvals { model.approvals = approvals }
-        let unread = env.enterprise.unreadSpaces.prefix(4).map {
-            NotchSpaceUnread(id: $0.id, name: $0.name, colorHex: $0.colorHex, unread: $0.unread, lastMessage: $0.lastMessage)
-        }
-        if model.unread != Array(unread) { model.unread = Array(unread) }
-        let hasTeam = env.enterprise.linked && env.store.activeAccount.kind == .work
-        if model.hasTeam != hasTeam { model.hasTeam = hasTeam }
         let recording: NotchRecording? = env.watch.isRecording
             ? NotchRecording(name: env.watch.pendingName, startedAt: env.watch.startedAt ?? Date(), steps: env.watch.steps.count)
             : nil

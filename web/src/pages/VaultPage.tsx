@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { copyText, cx, formatBytes, relativeTime } from "../lib";
 import type { Page } from "../nav";
-import type { VaultCredential, VaultFile } from "../enterprise";
+import type { VaultFile, VaultLogin, VaultState } from "../types";
 import { decryptSecret, deriveVaultKey, encryptSecret, rememberPassphrase, rememberedPassphrase, VAULT_KEY_VERSION } from "../vaultCrypto";
-import { Button, Chip, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
+import { Button, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 type Tab = "documents" | "credentials";
 
-function iso(ms: number): string {
-  return new Date(ms).toISOString();
-}
+/** Files the panel hands the Mac in one message; bigger ones are better dropped into the folder in Finder. */
+const MAX_UPLOAD = 200 * 1024 * 1024;
 
 function fileIcon(mime: string, name: string): string {
   if (mime.startsWith("image/")) return "eye";
@@ -20,88 +19,105 @@ function fileIcon(mime: string, name: string): string {
   return "sticker";
 }
 
-export function VaultPage({ go }: { go: (page: Page) => void }) {
-  const { cloud, enterprise } = useDashboard();
+/** "~/Desktop/Okidoki Vault" rather than the full path. */
+function shortPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
+    reader.onerror = () => reject(reader.error ?? new Error("couldn't read the file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+const EMPTY_VAULT: VaultState = { folder: "", available: false, truncated: false, files: [], folders: [], logins: [], salt: "", rememberedPassphrase: "" };
+
+export function VaultPage(_: { go: (page: Page) => void }) {
+  const { state, invoke } = useDashboard();
+  const vault = state.vault ?? EMPTY_VAULT;
   const [tab, setTab] = useState<Tab>("documents");
-
-  const gate = (icon: string, title: string, body: string, action: React.ReactNode) => (
-    <div className="vault-page">
-      <PageTitle title="Vault" subtitle="Confidential documents and logins, kept with your organization." />
-      <Empty icon={icon} title={title} action={action}>
-        {body}
-      </Empty>
-    </div>
-  );
-
-  if (cloud.status === "off") {
-    return gate("link", "Turn on sync to use the vault", "The vault lives on Convex so colleagues share the same documents and logins. Turn on sync in Settings and sign in.", <Button variant="primary" size="sm" onClick={() => go("settings")}>Open Settings</Button>);
-  }
-  if (enterprise.status === "signedOut") {
-    return gate("user", "Sign in to your sync login", "The vault follows your organization, which follows your sync login.", <Button variant="primary" size="sm" onClick={() => go("settings")}>Sign in</Button>);
-  }
-  if (enterprise.status !== "ready") return gate("spinner", "Connecting…", "Checking your organization on your deployment.", null);
-  if (!enterprise.view) {
-    return gate("building", "Link this account to your company", "The vault belongs to an organization. Create one, join with a code, or ask to join by email domain on the Team page.", <Button variant="primary" size="sm" icon="people" onClick={() => go("team")}>Open Team</Button>);
-  }
 
   return (
     <div className="vault-page">
       <PageTitle
         title="Vault"
-        subtitle={`${enterprise.view.org.name}'s documents and logins. Scoped to a space, only its members see them.`}
+        subtitle={vault.folder ? `Documents in ${shortPath(vault.folder)}, and logins sealed on this Mac.` : "Documents in a folder on this Mac, and logins sealed on this Mac."}
         trailing={
           <Segmented
             options={[
-              { value: "documents", label: `Documents${enterprise.files.length ? ` · ${enterprise.files.length}` : ""}` },
-              { value: "credentials", label: `Logins${enterprise.credentials.length ? ` · ${enterprise.credentials.length}` : ""}` },
+              { value: "documents", label: `Documents${vault.files.length ? ` · ${vault.files.length}` : ""}` },
+              { value: "credentials", label: `Logins${vault.logins.length ? ` · ${vault.logins.length}` : ""}` },
             ]}
             value={tab}
             onChange={setTab}
           />
         }
       />
-      {tab === "documents" ? <Documents /> : <Credentials key={enterprise.view?.org.id ?? ""} />}
+      {tab === "documents" ? <Documents vault={vault} invoke={invoke} /> : <Credentials key={vault.salt} vault={vault} />}
     </div>
   );
 }
 
 // ---- Documents ----
 
-function Documents() {
-  const { enterprise, notify } = useDashboard();
-  const joined = enterprise.spaces.filter((space) => space.joined);
+function Documents({ vault, invoke }: { vault: VaultState; invoke: (type: string, payload?: Record<string, unknown>) => void }) {
+  const { notify, native } = useDashboard();
   const [scope, setScope] = useState<string>("all");
-  const [uploadTo, setUploadTo] = useState<string>("org");
+  const [uploadTo, setUploadTo] = useState<string>("");
   const [uploading, setUploading] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  const [shareFor, setShareFor] = useState<VaultFile | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const files = enterprise.files.filter((file) => (scope === "all" ? true : scope === "org" ? !file.spaceId : file.spaceId === scope));
+  // A folder that went away (renamed in Finder) shouldn't leave the filter on nothing.
+  useEffect(() => {
+    if (scope !== "all" && scope !== "" && !vault.folders.includes(scope)) setScope("all");
+  }, [scope, vault.folders]);
+
+  const files = vault.files.filter((file) => (scope === "all" ? true : file.folder === scope));
+  const topFolders = vault.folders.filter((folder) => !folder.includes("/"));
 
   const upload = async (list: FileList | File[]) => {
     const picked = Array.from(list);
     if (!picked.length) return;
-    const spaceId = uploadTo === "org" ? null : uploadTo;
-    setUploading((current) => [...current, ...picked.map((file) => file.name)]);
-    for (const file of picked) {
-      try {
-        await enterprise.actions.uploadFile(spaceId, file);
-        notify("Uploaded", file.name);
-      } catch (error) {
-        notify("Upload failed", `${file.name}: ${error instanceof Error ? error.message : String(error)}`, "warning");
-      } finally {
-        setUploading((current) => {
-          const index = current.indexOf(file.name);
-          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)];
-        });
-      }
+    if (!native) {
+      notify("Do this on your Mac", "The browser preview can't write to the vault folder.", "info");
+      return;
+    }
+    const tooBig = picked.filter((file) => file.size > MAX_UPLOAD);
+    if (tooBig.length) notify("Too big to drop here", `${tooBig[0].name}: put it in the vault folder in Finder instead.`, "warning");
+    const fits = picked.filter((file) => file.size <= MAX_UPLOAD);
+    if (!fits.length) return;
+    setUploading((current) => [...current, ...fits.map((file) => file.name)]);
+    try {
+      const encoded = await Promise.all(fits.map(async (file) => ({ name: file.name, data: await readAsBase64(file) })));
+      invoke("vaultAddFiles", { folder: uploadTo, files: encoded });
+    } catch (error) {
+      notify("Couldn't read that", error instanceof Error ? error.message : String(error), "warning");
+    } finally {
+      setUploading((current) => current.filter((name) => !fits.some((file) => file.name === name)));
     }
   };
 
   return (
     <div className="vault-section">
+      <div className="vault-filter">
+        <span className="vault-unlocked">
+          <PixelIcon name="folder" size={13} /> {vault.folder ? shortPath(vault.folder) : "No folder yet"}
+          {vault.folder && !vault.available ? " · not found" : ""}
+        </span>
+        <span className="spacer" />
+        <Button size="sm" variant="ghost" icon="edit" onClick={() => invoke("vaultChooseFolder")}>
+          Change folder
+        </Button>
+        <Button size="sm" variant="secondary" icon="folder" onClick={() => invoke("vaultOpenFolder")}>
+          Open in Finder
+        </Button>
+      </div>
+
       <div
         className={cx("vault-drop", dragging && "is-over")}
         onDragOver={(event) => {
@@ -131,82 +147,58 @@ function Documents() {
             multiple
             hidden
             onChange={(event) => {
-              const files = Array.from(event.target.files ?? []);
+              const picked = Array.from(event.target.files ?? []);
               event.target.value = "";
-              void upload(files);
+              void upload(picked);
             }}
           />
         </div>
         <label className="vault-drop-target">
           <span>Into</span>
-          <select value={uploadTo} onChange={(event) => setUploadTo(event.target.value)} aria-label="Where the upload goes">
-            <option value="org">Whole organization</option>
-            {joined.map((space) => (
-              <option key={space.id} value={space.id}>
-                {space.name}
+          <select value={uploadTo} onChange={(event) => setUploadTo(event.target.value)} aria-label="Which folder the files go in">
+            <option value="">The vault folder</option>
+            {topFolders.map((folder) => (
+              <option key={folder} value={folder}>
+                {folder}
               </option>
             ))}
           </select>
         </label>
-        {uploading.length ? <em className="vault-uploading">Uploading {uploading.join(", ")}…</em> : null}
+        {uploading.length ? <em className="vault-uploading">Adding {uploading.join(", ")}…</em> : null}
       </div>
 
-      <div className="vault-filter">
-        <Segmented
-          compact
-          options={[{ value: "all", label: "All" }, { value: "org", label: "Org-wide" }, ...joined.map((space) => ({ value: space.id, label: space.name }))]}
-          value={scope}
-          onChange={setScope}
-        />
-      </div>
+      {topFolders.length ? (
+        <div className="vault-filter">
+          <Segmented
+            compact
+            options={[{ value: "all", label: "All" }, { value: "", label: "Top level" }, ...topFolders.map((folder) => ({ value: folder, label: folder }))]}
+            value={scope}
+            onChange={setScope}
+          />
+        </div>
+      ) : null}
 
       {files.length ? (
         <div className="pref-group">
           {files.map((file) => (
-            <VaultFileRow key={file.id} file={file} onShare={() => setShareFor(file)} setConfirm={setConfirm} />
+            <VaultFileRow key={file.id} file={file} invoke={invoke} setConfirm={setConfirm} />
           ))}
         </div>
       ) : (
-        <Empty icon="folder" title={enterprise.files.length ? "Nothing in this view" : "No documents yet"}>
-          {enterprise.files.length ? "Pick another scope above." : "Contracts, exports, briefs — anything the team or the agent needs. Files stay in your organization's own deployment."}
+        <Empty icon="folder" title={vault.files.length ? "Nothing in this folder" : "No documents yet"}>
+          {vault.files.length
+            ? "Pick another folder above."
+            : "Contracts, tax forms, scans — anything okidoki should be able to find and use. They stay in the folder on your Mac; ask “add the W-9 to the vault” and it fetches one for you."}
         </Empty>
       )}
+      {vault.truncated ? <p className="form-hint">Showing the newest {vault.files.length.toLocaleString("en-US")} files. The rest are still in the folder.</p> : null}
 
-      <Modal open={Boolean(shareFor)} onClose={() => setShareFor(null)} title="Share to a space" subtitle={shareFor?.name} width={420}>
-        <div className="share-targets">
-          {joined
-            .filter((space) => !shareFor?.spaceId || space.id === shareFor.spaceId)
-            .map((space) => (
-              <button
-                key={space.id}
-                className="share-target"
-                onClick={() => {
-                  const file = shareFor;
-                  setShareFor(null);
-                  if (!file) return;
-                  void enterprise.actions.shareFile(file.id, space.id).then(() => notify("Shared", `${file.name} → ${space.name}`)).catch((error: Error) => notify("That didn't work", error.message, "warning"));
-                }}
-              >
-                <PixelIcon name="chat" size={15} />
-                <span>
-                  <strong>{space.name}</strong>
-                  <em>
-                    {space.members.length} {space.members.length === 1 ? "member" : "members"}
-                  </em>
-                </span>
-              </button>
-            ))}
-          {!joined.length ? <p className="form-hint">Join a space first.</p> : null}
-        </div>
-      </Modal>
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
 
-/** One document in the vault: download, share to a chat, delete. Used by Vault and by a space's Files tab. */
-export function VaultFileRow({ file, onShare, setConfirm }: { file: VaultFile; onShare?: () => void; setConfirm: (request: ConfirmRequest) => void }) {
-  const { enterprise, notify } = useDashboard();
+function VaultFileRow({ file, invoke, setConfirm }: { file: VaultFile; invoke: (type: string, payload?: Record<string, unknown>) => void; setConfirm: (request: ConfirmRequest) => void }) {
   return (
     <div className="pref-row vault-row">
       <span className="kind-icon">
@@ -215,30 +207,26 @@ export function VaultFileRow({ file, onShare, setConfirm }: { file: VaultFile; o
       <span className="pref-copy">
         <strong>{file.name}</strong>
         <em>
-          {formatBytes(file.size)} · {file.spaceId ? file.spaceName : "whole organization"} · {file.uploadedBy} · {relativeTime(iso(file.createdAt))}
+          {formatBytes(file.size)} · {file.folder || "vault folder"} · {relativeTime(file.modifiedAt)}
         </em>
       </span>
       <span className="pref-control vault-row-tools">
-        {file.url ? (
-          <a className="btn btn-secondary btn-sm" href={file.url} target="_blank" rel="noreferrer" download={file.name}>
-            <PixelIcon name="download" size={13} /> Download
-          </a>
-        ) : null}
-        {onShare ? <IconButton icon="chat" label="Share to a space" onClick={onShare} /> : null}
-        {file.canDelete ? (
-          <IconButton
-            icon="trash"
-            label="Delete file"
-            onClick={() =>
-              setConfirm({
-                title: `Delete ${file.name}?`,
-                detail: "It's removed for everyone. Links already shared in chats stop working.",
-                action: "Delete",
-                onConfirm: () => void enterprise.actions.deleteFile(file.id).then(() => notify("Deleted", file.name, "info")).catch((error: Error) => notify("That didn't work", error.message, "warning")),
-              })
-            }
-          />
-        ) : null}
+        <Button size="sm" variant="secondary" icon="eye" onClick={() => invoke("vaultOpen", { id: file.id })}>
+          Open
+        </Button>
+        <IconButton icon="folder" label="Show in Finder" onClick={() => invoke("vaultReveal", { id: file.id })} />
+        <IconButton
+          icon="trash"
+          label="Move to Trash"
+          onClick={() =>
+            setConfirm({
+              title: `Move ${file.name} to the Trash?`,
+              detail: "It leaves the vault folder. You can put it back from the Trash.",
+              action: "Move to Trash",
+              onConfirm: () => invoke("vaultDelete", { id: file.id }),
+            })
+          }
+        />
       </span>
     </div>
   );
@@ -246,41 +234,46 @@ export function VaultFileRow({ file, onShare, setConfirm }: { file: VaultFile; o
 
 // ---- Credentials ----
 
-function Credentials() {
-  const { enterprise, notify, native, invoke } = useDashboard();
-  const orgId = enterprise.view?.org.id ?? "";
-  const joined = enterprise.spaces.filter((space) => space.joined);
-  const [passphrase, setPassphrase] = useState(() => rememberedPassphrase(orgId));
-  const [remember, setRemember] = useState(() => Boolean(rememberedPassphrase(orgId)));
+function Credentials({ vault }: { vault: VaultState }) {
+  const { notify, native, invoke } = useDashboard();
+  const salt = vault.salt;
+  const [passphrase, setPassphrase] = useState(() => vault.rememberedPassphrase || rememberedPassphrase(salt) || "");
+  const [remember, setRemember] = useState(() => Boolean(vault.rememberedPassphrase || rememberedPassphrase(salt)));
   const [key, setKey] = useState<CryptoKey | null>(null);
   const [draftPass, setDraftPass] = useState("");
   const [revealed, setRevealed] = useState<Record<string, string>>({});
-  const [editing, setEditing] = useState<VaultCredential | null | "new">(null);
+  const [editing, setEditing] = useState<VaultLogin | null | "new">(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    if (!passphrase || !orgId) {
+    if (!passphrase || !salt) {
       setKey(null);
       return;
     }
-    void deriveVaultKey(passphrase, orgId).then((derived) => {
+    void deriveVaultKey(passphrase, salt).then((derived) => {
       if (!cancelled) setKey(derived);
     });
     return () => {
       cancelled = true;
     };
-  }, [passphrase, orgId]);
+  }, [passphrase, salt]);
 
-  const unlock = () => {
+  const unlock = async () => {
     const value = draftPass;
     if (!value) return;
+    // With logins already there, a wrong passphrase is caught here rather than on the first reveal.
+    const first = vault.logins[0];
+    if (first && (await decryptSecret(await deriveVaultKey(value, salt), first.ciphertext, first.iv)) === null) {
+      notify("Wrong passphrase", "That isn't the passphrase these logins were sealed with.", "warning");
+      return;
+    }
     setPassphrase(value);
     setDraftPass("");
     if (remember) {
-      rememberPassphrase(orgId, value);
-      if (native) invoke("saveVaultPassphrase", { orgId, passphrase: value });
+      rememberPassphrase(salt, value);
+      if (native) invoke("saveVaultPassphrase", { passphrase: value });
     }
   };
 
@@ -288,40 +281,40 @@ function Credentials() {
     setPassphrase("");
     setKey(null);
     setRevealed({});
-    rememberPassphrase(orgId, null);
-    if (native) invoke("saveVaultPassphrase", { orgId, passphrase: "" });
+    rememberPassphrase(salt, null);
+    if (native) invoke("saveVaultPassphrase", { passphrase: "" });
   };
 
-  const reveal = async (credential: VaultCredential) => {
+  const reveal = async (login: VaultLogin) => {
     if (!key) return;
-    if (revealed[credential.id]) {
+    if (revealed[login.id]) {
       setRevealed((current) => {
         const next = { ...current };
-        delete next[credential.id];
+        delete next[login.id];
         return next;
       });
       return;
     }
-    const secret = await decryptSecret(key, credential.ciphertext, credential.iv);
+    const secret = await decryptSecret(key, login.ciphertext, login.iv);
     if (secret === null) {
       notify("Wrong passphrase", "This login was sealed with a different vault passphrase.", "warning");
       return;
     }
-    setRevealed((current) => ({ ...current, [credential.id]: secret }));
-    void enterprise.actions.touchCredential(credential.id).catch(() => {});
+    setRevealed((current) => ({ ...current, [login.id]: secret }));
+    invoke("vaultTouchLogin", { id: login.id });
   };
 
-  const copy = async (credential: VaultCredential) => {
+  const copy = async (login: VaultLogin) => {
     if (!key) return;
-    const secret = revealed[credential.id] ?? (await decryptSecret(key, credential.ciphertext, credential.iv));
+    const secret = revealed[login.id] ?? (await decryptSecret(key, login.ciphertext, login.iv));
     if (secret === null) {
       notify("Wrong passphrase", "This login was sealed with a different vault passphrase.", "warning");
       return;
     }
     if (await copyText(secret)) {
-      setCopied(credential.id);
-      window.setTimeout(() => setCopied((value) => (value === credential.id ? null : value)), 1600);
-      void enterprise.actions.touchCredential(credential.id).catch(() => {});
+      setCopied(login.id);
+      window.setTimeout(() => setCopied((value) => (value === login.id ? null : value)), 1600);
+      invoke("vaultTouchLogin", { id: login.id });
     }
   };
 
@@ -331,21 +324,21 @@ function Credentials() {
         <div className="team-card vault-unlock">
           <header>
             <PixelIcon name="lock" size={18} />
-            <h2>{enterprise.credentials.length ? "Unlock the vault" : "Set a vault passphrase"}</h2>
+            <h2>{vault.logins.length ? "Unlock the vault" : "Set a vault passphrase"}</h2>
             <p>
-              {enterprise.credentials.length
-                ? "Logins are sealed with your organization's vault passphrase before they leave this Mac. Ask whoever set it up."
-                : "Pick one and share it with your colleagues out of band. Passwords are encrypted with it here, on your Mac; your deployment only ever stores the sealed box."}
+              {vault.logins.length
+                ? "Logins are sealed with your vault passphrase. Nothing can read them without it, okidoki included."
+                : "Pick one you'll remember. Passwords are sealed with it right here, before they're saved; only the sealed box is kept on this Mac."}
             </p>
           </header>
           <div className="form-stack">
-            <TextField value={draftPass} onChange={setDraftPass} type="password" icon="key" placeholder="Vault passphrase" onEnter={unlock} />
+            <TextField value={draftPass} onChange={setDraftPass} type="password" icon="key" placeholder="Vault passphrase" onEnter={() => void unlock()} />
             <div className="form-inline">
               <span className="form-label">Remember on this Mac</span>
               <Switch checked={remember} onChange={setRemember} />
             </div>
-            <Button variant="primary" disabled={!draftPass} onClick={unlock}>
-              {enterprise.credentials.length ? "Unlock" : "Set passphrase"}
+            <Button variant="primary" disabled={!draftPass} onClick={() => void unlock()}>
+              {vault.logins.length ? "Unlock" : "Set passphrase"}
             </Button>
           </div>
         </div>
@@ -368,73 +361,70 @@ function Credentials() {
         </Button>
       </div>
 
-      {enterprise.credentials.length ? (
+      {vault.logins.length ? (
         <div className="pref-group">
-          {enterprise.credentials.map((credential) => (
-            <div className="pref-row vault-row" key={credential.id}>
+          {vault.logins.map((login) => (
+            <div className="pref-row vault-row" key={login.id}>
               <span className="kind-icon">
                 <PixelIcon name="key" size={15} />
               </span>
               <span className="pref-copy">
-                <strong>
-                  {credential.site}
-                  {credential.spaceId ? <Chip tone="blue">{credential.spaceName}</Chip> : null}
-                </strong>
+                <strong>{login.site}</strong>
                 <em>
-                  {credential.username || "no username"}
-                  {revealed[credential.id] ? (
+                  {login.username || "no username"}
+                  {revealed[login.id] ? (
                     <>
                       {" · "}
-                      <code className="vault-secret">{revealed[credential.id]}</code>
+                      <code className="vault-secret">{revealed[login.id]}</code>
                     </>
                   ) : null}
-                  {credential.lastUsedAt ? ` · used by ${credential.lastUsedBy} ${relativeTime(iso(credential.lastUsedAt))}` : " · never used"}
-                  {credential.note ? ` · ${credential.note}` : ""}
+                  {login.lastUsedAt ? ` · used ${relativeTime(login.lastUsedAt)}` : " · never used"}
+                  {login.note ? ` · ${login.note}` : ""}
                 </em>
               </span>
               <span className="pref-control vault-row-tools">
-                <IconButton icon={revealed[credential.id] ? "x" : "eye"} label={revealed[credential.id] ? "Hide password" : "Show password"} onClick={() => void reveal(credential)} />
-                <Button size="sm" variant="secondary" icon={copied === credential.id ? "check" : "copy"} onClick={() => void copy(credential)}>
-                  {copied === credential.id ? "Copied" : "Copy"}
+                <IconButton icon={revealed[login.id] ? "x" : "eye"} label={revealed[login.id] ? "Hide password" : "Show password"} onClick={() => void reveal(login)} />
+                <Button size="sm" variant="secondary" icon={copied === login.id ? "check" : "copy"} onClick={() => void copy(login)}>
+                  {copied === login.id ? "Copied" : "Copy"}
                 </Button>
-                {credential.canEdit ? <IconButton icon="edit" label="Edit login" onClick={() => setEditing(credential)} /> : null}
-                {credential.canEdit ? (
-                  <IconButton
-                    icon="trash"
-                    label="Delete login"
-                    onClick={() =>
-                      setConfirm({
-                        title: `Delete the ${credential.site} login?`,
-                        detail: "It's removed for everyone in the organization.",
-                        action: "Delete",
-                        onConfirm: () => void enterprise.actions.deleteCredential(credential.id).then(() => notify("Deleted", credential.site, "info")).catch((error: Error) => notify("That didn't work", error.message, "warning")),
-                      })
-                    }
-                  />
-                ) : null}
+                <IconButton icon="edit" label="Edit login" onClick={() => setEditing(login)} />
+                <IconButton
+                  icon="trash"
+                  label="Delete login"
+                  onClick={() =>
+                    setConfirm({
+                      title: `Delete the ${login.site} login?`,
+                      detail: "It's removed from this Mac.",
+                      action: "Delete",
+                      onConfirm: () => {
+                        invoke("vaultDeleteLogin", { id: login.id });
+                        notify("Deleted", login.site, "info");
+                      },
+                    })
+                  }
+                />
               </span>
             </div>
           ))}
         </div>
       ) : (
         <Empty icon="key" title="No logins yet">
-          Add the accounts the team shares — the billing portal, the CRM, the ad console — so the agent can sign in when a job needs it and everyone stops pasting passwords in chat.
+          Add the accounts you use for chores — the billing portal, the bank, the utility site — so a replay can sign in when it needs to and you stop hunting for passwords.
         </Empty>
       )}
 
-      <CredentialModal editing={editing} vaultKey={key} spaces={joined.map((space) => ({ id: space.id, name: space.name }))} onClose={() => setEditing(null)} />
+      <LoginModal editing={editing} vaultKey={key} onClose={() => setEditing(null)} />
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
 
-function CredentialModal({ editing, vaultKey, spaces, onClose }: { editing: VaultCredential | null | "new"; vaultKey: CryptoKey; spaces: { id: string; name: string }[]; onClose: () => void }) {
-  const { enterprise, notify } = useDashboard();
+function LoginModal({ editing, vaultKey, onClose }: { editing: VaultLogin | null | "new"; vaultKey: CryptoKey; onClose: () => void }) {
+  const { invoke, notify } = useDashboard();
   const [site, setSite] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [note, setNote] = useState("");
-  const [scope, setScope] = useState("org");
   const [busy, setBusy] = useState(false);
   const existing = editing && editing !== "new" ? editing : null;
 
@@ -444,10 +434,8 @@ function CredentialModal({ editing, vaultKey, spaces, onClose }: { editing: Vaul
     setUsername(existing?.username ?? "");
     setPassword("");
     setNote(existing?.note ?? "");
-    setScope(existing?.spaceId ?? "org");
   }, [editing, existing]);
 
-  const options = useMemo(() => [{ value: "org", label: "Whole organization" }, ...spaces.map((space) => ({ value: space.id, label: space.name }))], [spaces]);
   const ready = site.trim() && (password || existing) && !busy;
 
   const save = async () => {
@@ -456,15 +444,8 @@ function CredentialModal({ editing, vaultKey, spaces, onClose }: { editing: Vaul
     try {
       // Editing without a new password keeps the sealed box as it is.
       const sealed = password ? await encryptSecret(vaultKey, password) : { ciphertext: existing!.ciphertext, iv: existing!.iv };
-      await enterprise.actions.saveCredential({
-        credentialId: existing?.id,
-        spaceId: scope === "org" ? null : scope,
-        site,
-        username,
-        ciphertext: sealed.ciphertext,
-        iv: sealed.iv,
-        keyVersion: VAULT_KEY_VERSION,
-        note,
+      invoke("vaultSaveLogin", {
+        login: { id: existing?.id ?? "", site: site.trim(), username: username.trim(), ciphertext: sealed.ciphertext, iv: sealed.iv, keyVersion: VAULT_KEY_VERSION, note },
       });
       notify(existing ? "Login updated" : "Login added", site.trim());
       onClose();
@@ -479,17 +460,13 @@ function CredentialModal({ editing, vaultKey, spaces, onClose }: { editing: Vaul
     <Modal open={Boolean(editing)} onClose={onClose} title={existing ? "Edit login" : "Add a login"} subtitle="The password is sealed on this Mac before it's saved." width={460}>
       <div className="form-stack">
         <label className="form-label">Site or tool</label>
-        <TextField value={site} onChange={setSite} placeholder="stripe.com, Salesforce, the ad console…" autoFocus />
+        <TextField value={site} onChange={setSite} placeholder="stripe.com, the bank, the utility portal…" autoFocus />
         <label className="form-label">Username or email</label>
-        <TextField value={username} onChange={setUsername} placeholder="finance@acme.com" />
+        <TextField value={username} onChange={setUsername} placeholder="you@example.com" />
         <label className="form-label">Password</label>
         <TextField value={password} onChange={setPassword} type="password" icon="key" placeholder={existing ? "Leave blank to keep the current one" : "••••••••"} />
-        <div className="form-inline">
-          <span className="form-label">Who can use it</span>
-          <Segmented compact options={options} value={scope} onChange={setScope} />
-        </div>
         <label className="form-label">Note (optional)</label>
-        <TextArea value={note} onChange={setNote} rows={2} placeholder="2FA goes to the shared phone…" />
+        <TextArea value={note} onChange={setNote} rows={2} placeholder="2FA goes to my phone…" />
       </div>
       <footer className="modal-actions">
         <Button variant="ghost" onClick={onClose}>

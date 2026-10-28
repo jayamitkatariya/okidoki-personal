@@ -411,3 +411,22 @@ test("the private Mac gets the toolset without scripts or numbered controls", as
   expect(body.system[0].text).toContain("PRIVATE MAC");
   expect(body.messages[0].content[0].text).not.toContain("Frontmost app");
 });
+
+test("a retried step after a dropped stream gets the committed turn back, not a second model call", async () => {
+  const { driveStep, resetSessions } = await import("../src/computer2");
+  resetSessions();
+  let calls = 0;
+  const fake = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      content: [{ type: "tool_use", id: `t${calls}`, name: "computer", input: { action: "left_click", coordinate: [10, 10] } }],
+      stop_reason: "tool_use",
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const request = { runID: "retry-run", goal: "click", step: 0, observation: { app: "Notes" }, settings: { claudeModel: "claude-haiku-5-5" } } as never;
+  const first = await driveStep(request, "key", fake);
+  const again = await driveStep(request, "key", fake);
+  expect(calls).toBe(1);
+  expect(again.actions).toEqual(first.actions);
+});

@@ -27,10 +27,10 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SUPPORT = Path.home() / "Library/Application Support/Okidoki"
+SUPPORT = Path.home() / "Library/Application Support/Okidoki Personal"
 STATE = SUPPORT / "state.json"
 TELEMETRY = SUPPORT / "telemetry"
-DOMAIN = "com.jaykatariya.okidoki"
+DOMAIN = "dev.okidoki.personal"
 JUDGE_MODEL = "claude-sonnet-5-5"
 TERMINAL = {"done", "failed", "cancelled"}
 
@@ -245,12 +245,12 @@ def summarize_run(telemetry):
 
 
 def okidoki_pid():
-    out = sh("pgrep -x Okidoki").stdout.split()
+    out = sh("pgrep -x OkidokiPersonal").stdout.split()
     return out[0] if out else None
 
 
 def app_fingerprint():
-    binary = Path("/Applications/Okidoki.app/Contents/MacOS/Okidoki")
+    binary = Path("/Applications/Okidoki Personal.app/Contents/MacOS/OkidokiPersonal")
     return binary.stat().st_mtime if binary.exists() else None
 
 
@@ -398,7 +398,7 @@ def main():
                         help="let scripts raise macOS permission prompts (nobody answers them in an unattended run)")
     args = parser.parse_args()
 
-    if sh("pgrep -xq Okidoki").returncode != 0:
+    if sh("pgrep -xq OkidokiPersonal").returncode != 0:
         sys.exit("okidoki isn't running — OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh")
     if args.protocol:
         sh(f"defaults write {DOMAIN} drivingProtocol {args.protocol}")

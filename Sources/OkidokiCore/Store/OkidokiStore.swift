@@ -13,6 +13,8 @@ public final class OkidokiStore: ObservableObject {
     @Published public var skills: [Skill]
     @Published public var routines: [Routine]
     @Published public var connectors: [Connector]
+    @Published public var notes: [Note]
+    @Published public var reminders: [Reminder]
     @Published public var toolInstalled: [String: Bool] = [:]
     @Published public private(set) var lastSavedAt: Date?
     @Published public private(set) var loadError: String?
@@ -21,11 +23,11 @@ public final class OkidokiStore: ObservableObject {
 
     /// This Mac (`DeviceIdentity`). Runs and routines started here carry it.
     public let deviceID: String
-    /// Items deleted here, id → when, until well after the delete has reached Convex.
+    /// Items deleted here, id → when, kept for a while.
     public private(set) var deletions: [String: Date]
-    /// Per account, the Convex sync version this Mac last merged. Saved with the state.
+    /// Left from older builds that synced. Saved back as it was.
     public var syncCursors: [String: Int]
-    /// Items this build can't read, from the saved file or a pull. Pushed back as they are, never deleted.
+    /// Items this build can't read, from the saved file. Saved back as they are, never deleted.
     public private(set) var unreadable: [UnreadableItem]
 
     private var saveWork: DispatchWorkItem?
@@ -44,8 +46,7 @@ public final class OkidokiStore: ObservableObject {
     static let deletionMemory: TimeInterval = 60 * 60 * 24 * 30
 
     public init(seedDemo: Bool = false, stateURL: URL? = nil, deviceID: String? = nil) {
-        let support = stateURL?.deletingLastPathComponent() ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Okidoki", isDirectory: true)
+        let support = stateURL?.deletingLastPathComponent() ?? AppPaths.support
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         // The demo never touches the real state file; it would otherwise be saved over on first launch.
         self.stateURL = stateURL ?? support.appendingPathComponent(seedDemo ? "state-demo.json" : "state.json")
@@ -124,6 +125,8 @@ public final class OkidokiStore: ObservableObject {
         self.skills = state.skills
         self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)
+        self.notes = state.notes.map { note in var note = note; if note.accountID.isEmpty { note.accountID = current }; return note }
+        self.reminders = state.reminders.map { item in var item = item; if item.accountID.isEmpty { item.accountID = current }; return item }
         self.deletions = state.deletions
         self.syncCursors = state.syncCursors
         var unreadable = state.unreadable
@@ -557,7 +560,7 @@ public final class OkidokiStore: ObservableObject {
         routines[index].updatedAt = date
     }
 
-    // MARK: - Sync
+    // MARK: - Deletions and unreadable items
 
     private func rememberDeletion(_ id: String, at date: Date = Date()) {
         deletions[id] = date
@@ -591,39 +594,104 @@ public final class OkidokiStore: ObservableObject {
         return found
     }
 
-    /// Brings in what another Mac changed in an account (see `SyncMerge`). Collections that end up the
-    /// same are left untouched, so a pull with nothing new doesn't trigger a save or another sync.
+    // MARK: - Notes
+
+    public var activeNotes: [Note] {
+        notes.filter { $0.accountID == currentAccountID }
+            .sorted { $0.pinned != $1.pinned ? $0.pinned : $0.updatedAt > $1.updatedAt }
+    }
+
     @discardableResult
-    public func mergePulled(_ changes: PulledChanges) -> MergeSummary {
-        guard !changes.isEmpty else { return MergeSummary() }
-        var summary = MergeSummary()
-        func tombstones(_ table: String) -> [PulledChanges.Deletion] { changes.deletions.filter { $0.table == table } }
+    public func addNote(title: String, body: String = "", tags: [String] = []) -> Note {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let note = Note(accountID: currentAccountID, title: trimmed.isEmpty ? Note.title(from: body) : trimmed, body: body,
+                        tags: Self.cleanTags(tags))
+        notes.insert(note, at: 0)
+        return note
+    }
 
-        let mergedThreads = SyncMerge.merge(local: threads, remote: changes.threads, deletions: tombstones("threads"),
-                                            deletedHere: deletions, editedAt: \.updatedAt,
-                                            combine: SyncMerge.combineThreads, summary: &summary)
-        let mergedMemories = SyncMerge.merge(local: memories, remote: SyncMerge.withoutDuplicateMemories(changes.memories, local: memories),
-                                             deletions: tombstones("memories"), deletedHere: deletions,
-                                             editedAt: \.updatedAt, summary: &summary)
-        let mergedRuns = SyncMerge.merge(local: runs, remote: changes.runs, deletions: tombstones("runs"),
-                                         deletedHere: deletions, editedAt: \.editedAt, summary: &summary)
-        let mergedSkills = SyncMerge.merge(local: skills, remote: changes.skills, deletions: tombstones("skills"),
-                                           deletedHere: deletions, editedAt: \.editedAt, summary: &summary)
-        let mergedRoutines = SyncMerge.merge(local: routines, remote: changes.routines, deletions: tombstones("routines"),
-                                             deletedHere: deletions, editedAt: \.editedAt, summary: &summary)
+    public func updateNote(_ id: String, title: String? = nil, body: String? = nil, tags: [String]? = nil, pinned: Bool? = nil) {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        if let title { notes[index].title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "untitled" : title }
+        if let body { notes[index].body = body }
+        if let tags { notes[index].tags = Self.cleanTags(tags) }
+        if let pinned { notes[index].pinned = pinned }
+        notes[index].updatedAt = Date()
+    }
 
-        // An item that reads fine now (or was deleted elsewhere) no longer needs keeping as it came.
-        let settled = Set(changes.threads.map(\.id) + changes.memories.map(\.id) + changes.runs.map(\.id)
-                          + changes.skills.map(\.id) + changes.routines.map(\.id) + changes.deletions.map(\.id))
-        if unreadable.contains(where: { settled.contains($0.id) }) { unreadable.removeAll { settled.contains($0.id) } }
+    public func deleteNote(_ id: String) {
+        notes.removeAll { $0.id == id }
+        rememberDeletion(id)
+    }
 
-        // Newest first, the way the store keeps them.
-        if mergedThreads != threads { threads = mergedThreads.sorted { $0.updatedAt > $1.updatedAt } }
-        if mergedMemories != memories { memories = mergedMemories.sorted { $0.createdAt > $1.createdAt } }
-        if mergedRuns != runs { runs = mergedRuns.sorted { $0.createdAt > $1.createdAt } }
-        if mergedSkills != skills { skills = mergedSkills.sorted { $0.createdAt > $1.createdAt } }
-        if mergedRoutines != routines { routines = mergedRoutines.sorted { $0.createdAt > $1.createdAt } }
-        return summary
+    static func cleanTags(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        return tags.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ").union(.whitespacesAndNewlines)).lowercased() }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    // MARK: - Reminders
+
+    public var activeReminders: [Reminder] {
+        reminders.filter { $0.accountID == currentAccountID }.sorted { a, b in
+            if a.done != b.done { return !a.done }
+            switch (a.dueAt, b.dueAt) {
+            case let (x?, y?): return x < y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return a.createdAt > b.createdAt
+            }
+        }
+    }
+
+    @discardableResult
+    public func addReminder(title: String, dueAt: Date?, repeats: ReminderRepeat = .never, skillID: String? = nil) -> Reminder {
+        let reminder = Reminder(accountID: currentAccountID, title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                                dueAt: dueAt, repeats: repeats, skillID: skillID)
+        reminders.insert(reminder, at: 0)
+        return reminder
+    }
+
+    public func updateReminder(_ reminder: Reminder) {
+        guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
+        var next = reminder
+        // A new due time means it hasn't fired for that one yet.
+        if next.dueAt != reminders[index].dueAt { next.firedAt = nil }
+        next.updatedAt = Date()
+        reminders[index] = next
+    }
+
+    /// Ticks it off. A repeating one moves on to its next time instead.
+    public func completeReminder(_ id: String, done: Bool = true, now: Date = Date()) {
+        guard let index = reminders.firstIndex(where: { $0.id == id }) else { return }
+        if done, let due = reminders[index].dueAt, let next = reminders[index].repeats.next(after: max(due, now.addingTimeInterval(-60))) {
+            reminders[index].dueAt = next
+            reminders[index].firedAt = nil
+            reminders[index].done = false
+        } else {
+            reminders[index].done = done
+            reminders[index].doneAt = done ? now : nil
+        }
+        reminders[index].updatedAt = now
+    }
+
+    /// It fired: remember that, and line a repeating one up for its next time.
+    public func markReminderFired(_ id: String, at date: Date = Date()) {
+        guard let index = reminders.firstIndex(where: { $0.id == id }) else { return }
+        reminders[index].firedAt = date
+        if let due = reminders[index].dueAt, let next = reminders[index].repeats.next(after: due) {
+            var upcoming = next
+            // Long asleep: skip the times that already passed rather than fire them all at once.
+            while upcoming <= date, let later = reminders[index].repeats.next(after: upcoming) { upcoming = later }
+            reminders[index].dueAt = upcoming
+            reminders[index].firedAt = nil
+        }
+        reminders[index].updatedAt = date
+    }
+
+    public func deleteReminder(_ id: String) {
+        reminders.removeAll { $0.id == id }
+        rememberDeletion(id)
     }
 
     // MARK: - Connectors
@@ -662,13 +730,14 @@ public final class OkidokiStore: ObservableObject {
         let state = AppState(accounts: accounts, currentAccountID: currentAccountID,
                              settings: settings, threads: threads, memories: memories, runs: runs,
                              skills: skills, routines: routines, connectors: connectors,
+                             notes: notes, reminders: reminders,
                              deletions: deletions, syncCursors: syncCursors, unreadable: unreadable)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // Fractional seconds: sync tells two edits apart by these times, so they shouldn't round off on save.
+        // Fractional seconds: two edits a moment apart stay apart, so they shouldn't round off on save.
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(SyncDates.string(from: date))
+            try container.encode(ISODates.string(from: date))
         }
         do {
             let data = try encoder.encode(state)
@@ -682,26 +751,6 @@ public final class OkidokiStore: ObservableObject {
             loadError = "couldn't save: \(error.localizedDescription)"
             isWriting = false
         }
-    }
-
-    /// Records when a sync finished and saves, without that counting as a change that needs syncing.
-    public func noteSynced(at date: Date = Date()) {
-        isWriting = true
-        settings.lastSyncAt = date
-        isWriting = false
-        saveNow()
-    }
-
-    /// One account's share of the state, as it goes to Convex (the one in front unless named).
-    public func stateForSync(accountID: String? = nil) -> AppState {
-        let account = accountID ?? currentAccountID
-        return AppState(accounts: accounts, currentAccountID: account, settings: settings,
-                        threads: threads.filter { $0.accountID == account },
-                        memories: memories.filter { $0.accountID == account },
-                        runs: runs.filter { $0.accountID == account },
-                        skills: skills.filter { $0.accountID == account },
-                        routines: routines.filter { $0.accountID == account },
-                        connectors: connectors)
     }
 
     // MARK: - Demo

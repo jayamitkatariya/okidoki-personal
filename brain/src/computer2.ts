@@ -179,7 +179,7 @@ export function systemPromptV2(request: DriveRequest): string {
     ``,
     `Finishing`,
     `- Leave the result on screen for the user: bring the app forward and open or select what you made or changed so its content is readable (the note itself, not just its title in a list; the document; the page; the sent message), even when a script did the work.`,
-    `- Call finish with success true on its own, in a turn after you have seen a screenshot that shows the whole task done. A finish sent in the same turn as other actions is held back until you have looked. summary says what was achieved and where.`,
+    `- Call finish with success true once a screenshot shows the whole task done. When the last steps are certain from the current screen (type the message and press Return to send it), you may end that batch with finish: the Mac accepts it only if every action worked and the screen changed without a new page or window opening; otherwise it asks you to look first. summary says what was achieved and where.`,
     `- Call finish with success false only when something truly blocks you (a sign-in, a payment, a permission prompt, a missing app) or after several different approaches have failed, saying what blocked you. Never put a question in a finish.`,
     `- Call ask, on its own, when the task can't go on without something only the user knows: several contacts, files or accounts match and none is clearly the one; a detail the task left out (a recipient, a date). One short question; their answer comes back as a new task that continues this one. Never ask whether to continue or which way to do something the task already covers.`,
     ``,
@@ -415,6 +415,10 @@ type Session = {
   used: number;
   /** Optional request fields the API said this run's model doesn't take; left out from then on. */
   unsupported: Set<string>;
+  /** The last step answered and what it answered, so a retry after a dropped stream gets the same
+   * turn back instead of appending the same results a second time. */
+  lastStep?: number;
+  lastResponse?: DriveResponse;
 };
 
 const SESSION_TTL_MS = 20 * 60_000;
@@ -536,9 +540,10 @@ export function requestBody(session: Session, messages: Message[], model: string
     body.context_management = {
       edits: [{
         type: "clear_tool_uses_20250919",
-        trigger: { type: "input_tokens", value: 40_000 },
-        keep: { type: "tool_uses", value: 4 },
-        clear_at_least: { type: "input_tokens", value: 12_000 },
+        // Old screenshots are most of each request; clearing them early keeps every turn small and quick.
+        trigger: { type: "input_tokens", value: 15_000 },
+        keep: { type: "tool_uses", value: 2 },
+        clear_at_least: { type: "input_tokens", value: 5_000 },
       }],
     };
   }
@@ -738,6 +743,12 @@ export async function driveStep(
   }
   session.used = now;
 
+  // The Mac lost the stream after this turn was already committed: hand it back as it was.
+  if (session.lastResponse && session.lastStep === request.step) {
+    for (const action of session.lastResponse.actions) onAction?.(action);
+    return session.lastResponse;
+  }
+
   let firstActionMs: number | undefined;
   const onToolUse: OnToolUse | undefined = onAction
     ? (use) => {
@@ -803,5 +814,8 @@ export async function driveStep(
     const text = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join(" ").trim();
     return { ...failure(text ? `the model stopped without acting: ${text.slice(0, 200)}` : "the model stopped without acting", "no tool call"), meta };
   }
-  return { actions: uses.map(mapToolUse), meta };
+  const response: DriveResponse = { actions: uses.map(mapToolUse), meta };
+  session.lastStep = request.step;
+  session.lastResponse = response;
+  return response;
 }

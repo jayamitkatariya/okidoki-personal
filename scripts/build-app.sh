@@ -3,15 +3,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source scripts/identity.sh
 
 CONFIG="${1:-release}"
 # OKIDOKI_SCRATCH lets a second builder work alongside another swift build on .build.
 SCRATCH="${OKIDOKI_SCRATCH:-.build}"
-echo "▸ Building Okidoki ($CONFIG)…"
+echo "▸ Building $OKIDOKI_APP_NAME ($CONFIG)…"
 swift build -c "$CONFIG" --scratch-path "$SCRATCH"
 
 BIN="$SCRATCH/$CONFIG/Okidoki"
-APP="${OKIDOKI_APP_DIR:-build/Okidoki.app}"
+APP="${OKIDOKI_APP_DIR:-build/$OKIDOKI_APP_NAME.app}"
 
 # --- brain sidecar (TypeScript, Bun) ---
 if command -v bun >/dev/null 2>&1 && [ -f brain/src/server.ts ]; then
@@ -41,27 +42,25 @@ if command -v bun >/dev/null 2>&1 && [ -f web/package.json ]; then
 fi
 
 # Replacing the bundle under a running copy gets it killed for an invalid signature. Quit it first.
-if pgrep -fq "$ROOT/$APP/Contents/MacOS/Okidoki"; then
-  echo "▸ Quitting the running Okidoki…"
-  osascript -e 'tell application id "com.jaykatariya.okidoki" to quit' >/dev/null 2>&1 || true
+if pgrep -fq "$ROOT/$APP/Contents/MacOS/$OKIDOKI_EXEC"; then
+  echo "▸ Quitting the running $OKIDOKI_APP_NAME…"
+  osascript -e "tell application id \"$OKIDOKI_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
   for _ in $(seq 1 20); do
-    pgrep -fq "$ROOT/$APP/Contents/MacOS/Okidoki" || break
+    pgrep -fq "$ROOT/$APP/Contents/MacOS/$OKIDOKI_EXEC" || break
     sleep 0.25
   done
 fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Okidoki"
+cp "$BIN" "$APP/Contents/MacOS/$OKIDOKI_EXEC"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $OKIDOKI_BUNDLE_ID" -c "Set :CFBundleExecutable $OKIDOKI_EXEC" \
+  -c "Set :CFBundleName $OKIDOKI_APP_NAME" "$APP/Contents/Info.plist"
 cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
 cp Resources/BrandMark.png "$APP/Contents/Resources/BrandMark.png"
-# Service credentials live in the gitignored .env; the app reads them from service.env in its bundle.
-# Deploy and build-only keys never belong in a bundle anyone can open.
-if [ -f .env ]; then
-  grep -vE '^\s*(CONVEX_DEPLOY_KEY|OKIDOKI_SYNC_SECRET|OKIDOKI_DEVICE_TOKEN|VITE_[A-Z0-9_]*)\s*=' .env > "$APP/Contents/Resources/service.env"
-  chmod 600 "$APP/Contents/Resources/service.env"
-fi
+# Bring your own key: no credential is ever copied into the bundle. Keys are added in the app
+# (Settings › Keys) and kept in a private file in Application Support.
 if [ -d Resources/brain ]; then
   cp -R Resources/brain "$APP/Contents/Resources/brain"
 fi

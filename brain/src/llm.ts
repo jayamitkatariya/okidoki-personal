@@ -303,8 +303,23 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     docs ? `\nOpen-source tool docs you can rely on:\n${docs}` : "",
     fitting ? `\n${fitting}` : "",
     connectors ? `\nConnected services:\n${connectors}` : "",
+    modeRule(request.mode),
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+/** The mode picked on the cursor card overrides the routing above. */
+export function modeRule(mode: ThinkRequest["mode"]): string {
+  switch (mode) {
+    case "act":
+      return `\nThe person picked Act: they want it done on this Mac, not explained. Choose the route that does the work (quick_action, terminal, computer_use, coding, connector, background). Never teach, and answer only when there is truly nothing to do.`;
+    case "teach":
+      return `\nThe person picked Teach: they want to learn to do it themselves. kind must be teach, with a plan of short steps on their screen. Never do it for them.`;
+    case "chat":
+      return `\nThe person picked Chat: just talk. kind must be answer (or memory when they tell you something to remember). Never act, teach, run commands or touch the screen; if it needs doing, say how and that Act will do it.`;
+    default:
+      return "";
+  }
 }
 
 /** "Browser tab: Circuits · Tinkercad — https://www.tinkercad.com/…", or nothing outside a browser. */

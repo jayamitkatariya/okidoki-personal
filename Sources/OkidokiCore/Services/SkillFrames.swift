@@ -14,9 +14,7 @@ public enum SkillFrames {
     public static let cropSize = CGSize(width: 220, height: 140)
 
     public static var directory: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Okidoki/frames", isDirectory: true)
+        AppPaths.support("frames", isDirectory: true)
     }()
 
     public static func url(for stepID: String) -> URL {

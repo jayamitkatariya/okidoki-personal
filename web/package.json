@@ -1,5 +1,5 @@
 {
-  "name": "okidoki-control-panel",
+  "name": "okidoki-personal-panel",
   "private": true,
   "version": "0.9.1",
   "type": "module",
@@ -10,8 +10,6 @@
     "test": "bun test tests"
   },
   "dependencies": {
-    "@convex-dev/auth": "0.0.96",
-    "convex": "^1.48.0",
     "motion": "^12.23.24",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

@@ -1,8 +1,8 @@
 import Foundation
 
 /// API keys and MCP secrets, saved in a private file in okidoki's folder:
-/// `~/Library/Application Support/Okidoki/keys.json`, readable only by you.
-/// The file never leaves this Mac — it isn't part of the synced state.
+/// `~/Library/Application Support/Okidoki Personal/keys.json`, readable only by you.
+/// The file never leaves this Mac. Bring your own keys: nothing ships with the app.
 public enum KeyStore {
     private static let lock = NSLock()
     private static var cache: [String: String]? // guarded by lock
@@ -11,56 +11,26 @@ public enum KeyStore {
         if let override = ProcessInfo.processInfo.environment["OKIDOKI_KEYS_FILE"], !override.isEmpty {
             return URL(fileURLWithPath: override)
         }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Okidoki", isDirectory: true)
-            .appendingPathComponent("keys.json")
+        return AppPaths.support("keys.json")
     }
 
     public static func set(_ value: String, for key: String) {
         update { $0[key] = value }
     }
 
-    /// A key saved on this Mac wins; the one the build ships is the fallback. That way a shipped
-    /// key that's revoked or rate-limited can be replaced from Settings › Keys without a new build.
+    /// A key saved in Settings wins; one from the environment or your own `service.env` is the fallback.
     public static func get(_ key: String) -> String? {
         if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" { return nil }
         if let stored = stored(key) { return stored }
-        // Tests point at a private file and must not see the app's compiled keys.
+        // Tests point at a private file and must not see keys from the environment.
         if ProcessInfo.processInfo.environment["OKIDOKI_KEYS_FILE"] != nil { return nil }
         if let builtin = ServiceSecrets.builtin(key), !builtin.isEmpty { return builtin }
         return nil
     }
 
-    /// Whether the value in use for a key is the one the build ships (nothing saved over it).
+    /// Whether the value in use for a key comes from the environment or `service.env` (nothing saved over it).
     public static func isBuiltin(_ key: String) -> Bool {
         stored(key) == nil && (ServiceSecrets.builtin(key)?.isEmpty == false)
-    }
-
-    // MARK: Pairing with the sync login
-
-    /// The token this Mac was given when it paired with a sync login, and who that login is.
-    public static let deviceTokenKey = "convexDevice"
-    public static let deviceUserKey = "convexDeviceUser"
-    public static let deviceEmailKey = "convexDeviceEmail"
-
-    public static var deviceToken: String? { stored(deviceTokenKey) }
-    public static var deviceEmail: String? { stored(deviceEmailKey) }
-    public static var deviceUserID: String? { stored(deviceUserKey) }
-
-    public static func pairDevice(token: String, userID: String, email: String) {
-        update { keys in
-            keys[deviceTokenKey] = token
-            keys[deviceUserKey] = userID
-            keys[deviceEmailKey] = email
-        }
-    }
-
-    public static func unpairDevice() {
-        update { keys in
-            keys[deviceTokenKey] = nil
-            keys[deviceUserKey] = nil
-            keys[deviceEmailKey] = nil
-        }
     }
 
     private static func stored(_ key: String) -> String? {
@@ -133,8 +103,8 @@ public enum KeyProviders {
                         blurb: "Required. Reads the screen, teaches, and plans every action.",
                         placeholder: "sk-ant-…", url: "https://console.anthropic.com/settings/keys"),
         KeyProviderSpec(id: "cartesia", name: "Cartesia",
-                        blurb: "Fast, warm voices for spoken answers.",
-                        placeholder: "sk_car_…", url: "https://play.cartesia.ai/console"),
+                        blurb: "Fast, warm voices for spoken answers. Without it, your Mac's own voice speaks.",
+                        placeholder: "sk_car_…", url: "https://play.cartesia.ai/console", optional: true),
         KeyProviderSpec(id: "moss", name: "Moss",
                         blurb: "Semantic search across your threads and memory.",
                         placeholder: "project-id:project-key", url: "https://moss.dev", optional: true),

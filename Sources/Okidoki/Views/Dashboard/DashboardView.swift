@@ -95,11 +95,10 @@ struct DashboardPayload: Encodable {
     var dashboardOpen: Bool
     var sidecar: String
     var version: String
-    /// This Mac's name, for pairing and for the organization to say which Mac did what.
+    /// This Mac's name.
     var hostName: String
     var savings: Double
-    var convexConfigured: Bool
-    /// The brain, Convex sync, the Moss index and MCP, as they are right now. The page shows these
+    /// The brain, the Moss index and MCP, as they are right now. The page shows these
     /// instead of guessing from settings.
     var services: DashboardServicesPayload
     /// Every key the app can hold, with whether one is set and where it came from. Values never leave the Mac.
@@ -111,49 +110,25 @@ struct DashboardPayload: Encodable {
     var live: DashboardLivePayload?
     /// okidoki's private Mac: whether this Mac can run one, and where setup or the VM is right now.
     var privateMac: DashboardPrivateMacPayload
-    /// Enterprise: this Mac as a worker for its spaces.
-    var worker: DashboardWorkerPayload
-    /// Enterprise: organizations inviting over this network, and whether this Mac is inviting.
-    var nearby: DashboardNearbyPayload
-    /// Enterprise: the organization as the Mac last heard it — every approval in my spaces, unread
-    /// counts, shared skills. Home reads this so "what needs you" is whole even with no space open.
-    var enterprise: DashboardEnterprisePayload
+    /// The vault folder's files and the sealed logins.
+    var vault: DashboardVaultPayload
+    var notes: [Note]
+    var reminders: [Reminder]
 }
 
-struct DashboardEnterprisePayload: Encodable {
-    struct Approval: Encodable {
-        var id: String
-        var spaceId: String
-        var spaceName: String
-        var prompt: String
-        var title: String
-        var requestedBy: String
-        var workerName: String
-        var workerIsYou: Bool
-        var summary: String
-        var risk: String
-        var createdAt: Date
-    }
-    struct Space: Encodable {
-        var id: String
-        var name: String
-        var colorHex: String
-        var joined: Bool
-        var unread: Int
-        var lastMessage: String
-        var lastMessageAt: Date
-    }
-    var linked: Bool
-    var orgId: String?
-    var orgName: String?
-    var role: String?
-    var pendingJoins: Int
-    var approvals: [Approval]
-    var spaces: [Space]
-    var unread: Int
-    var sharedSkills: Int
-    var updatedAt: Date?
-    var lastError: String?
+struct DashboardVaultPayload: Encodable {
+    /// The folder on disk, and whether it's there to read.
+    var folder: String
+    var available: Bool
+    /// More files than the panel lists; the rest are still in the folder.
+    var truncated: Bool
+    var files: [VaultFile]
+    var folders: [String]
+    var logins: [VaultLogin]
+    /// Keys the passphrase to this vault, so the same passphrase seals differently elsewhere.
+    var salt: String
+    /// The passphrase, when "remember on this Mac" was on. It never leaves the Mac.
+    var rememberedPassphrase: String
 }
 
 struct DashboardServicesPayload: Encodable {
@@ -162,22 +137,6 @@ struct DashboardServicesPayload: Encodable {
         var ready: Bool
         var version: String?
         var port: Int
-    }
-    struct Convex: Encodable {
-        /// The sync switch in Settings.
-        var enabled: Bool
-        /// A site URL is set and this Mac is paired with a sync login, so a push can be attempted.
-        var configured: Bool
-        /// This Mac holds a device token from a sync login.
-        var paired: Bool
-        /// The login it's paired as, for Settings to say so, and its id, so the panel can tell whether
-        /// the person signed in there is the one this Mac is paired as.
-        var pairedAs: String
-        var pairedUser: String
-        var siteURL: String
-        /// ConvexSyncService's own words: "synced just now", "sync secret rejected", "local only"…
-        var status: String
-        var lastSyncAt: Date?
     }
     struct Memory: Encodable {
         /// A Moss key is set, so the Mac sends its data to the index.
@@ -197,7 +156,6 @@ struct DashboardServicesPayload: Encodable {
         var checkedAt: Date?
     }
     var brain: Brain
-    var convex: Convex
     var memory: Memory
     var mcp: MCP
 }
@@ -209,36 +167,10 @@ struct DashboardKeyProviderPayload: Encodable {
     var placeholder: String
     var url: String
     var optional: Bool
-    /// A key is available, from the key file or the build.
+    /// A key is available, from the key file or the environment.
     var set: Bool
-    /// The build ships this key (service.env); removing a saved one falls back to it.
+    /// The key comes from the environment or your own service.env; removing a saved one falls back to it.
     var builtin: Bool
-}
-
-struct DashboardNearbyPayload: Encodable {
-    struct Invite: Encodable {
-        var orgId: String
-        var orgName: String
-        var code: String
-        var device: String
-    }
-    var invites: [Invite]
-    var advertising: Invite?
-    var browsing: Bool
-    var error: String?
-}
-
-struct DashboardWorkerPayload: Encodable {
-    var status: String
-    /// off · paused · ready, as told to the organization on the last poll.
-    var state: String
-    /// The work account the worker runs as, which may not be the one in front.
-    var accountID: String?
-    var activeJob: String?
-    var activeSpace: String?
-    var lastPollAt: Date?
-    var jobsDone: Int
-    var device: String
 }
 
 struct DashboardPrivateMacPayload: Encodable {
@@ -295,8 +227,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
-        // Sync status lines ("synced just now", "sync secret rejected") for Settings.
-        environment.convex.objectWillChange
+        // The vault page follows the folder.
+        environment.vault.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
@@ -331,13 +263,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             .compactMap { $0 }
             .sink { [weak self] id in
                 self?.focusRun(id)
-            }
-            .store(in: &cancellables)
-        environment.$dashboardSpaceID
-            .receive(on: RunLoop.main)
-            .compactMap { $0 }
-            .sink { [weak self] id in
-                self?.focusSpace(id)
             }
             .store(in: &cancellables)
         // Permissions are granted in System Settings; refresh their labels when the user comes back.
@@ -464,23 +389,16 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         }
     }
 
+    /// Tells the page something it asked for, as a window event it can listen for.
+    private func replyToPage(_ event: String, _ value: String) {
+        let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+        webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('\(event)', { detail: '\(escaped)' }));", completionHandler: nil)
+    }
+
     private func sendNavigation() {
         guard let webView, let env else { return }
         webView.evaluateJavaScript("window.okidokiNavigate && window.okidokiNavigate('\(env.dashboardRoute.rawValue)');", completionHandler: nil)
         if let id = env.dashboardRunID { focusRun(id) }
-        if let id = env.dashboardSpaceID { focusSpace(id) }
-    }
-
-    private func focusSpace(_ id: String) {
-        guard let webView else { return }
-        let escaped = id.replacingOccurrences(of: "'", with: "\\'")
-        webView.evaluateJavaScript("""
-        (function(){
-          window.__okidokiFocusSpace = '\(escaped)';
-          window.okidokiNavigate && window.okidokiNavigate('spaces');
-          window.dispatchEvent(new CustomEvent('okidoki-focus-space', { detail: '\(escaped)' }));
-        })();
-        """, completionHandler: nil)
     }
 
     private func focusRun(_ id: String) {
@@ -530,14 +448,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                          ready: env.sidecar.status.isReady,
                          version: health?["version"] as? String,
                          port: env.sidecar.port),
-            convex: .init(enabled: settings.syncEnabled,
-                          configured: settings.syncEnabled && !settings.convexSiteURL.isEmpty && KeyStore.deviceToken != nil,
-                          paired: KeyStore.deviceToken != nil,
-                          pairedAs: KeyStore.deviceEmail ?? "",
-                          pairedUser: KeyStore.deviceUserID ?? "",
-                          siteURL: settings.convexSiteURL,
-                          status: env.convex.status,
-                          lastSyncAt: settings.lastSyncAt),
             memory: .init(configured: env.hasKey("moss"),
                           ready: env.memoryIndex.ready,
                           documents: env.memoryIndex.documents,
@@ -603,7 +513,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
             hostName: Host.current().localizedName ?? "Mac",
             savings: env.store.savings,
-            convexConfigured: env.store.settings.syncEnabled && !env.store.settings.convexSiteURL.isEmpty,
             services: services(env),
             keyProviders: KeyProviders.all.map { spec in
                 DashboardKeyProviderPayload(id: spec.id, name: spec.name, blurb: spec.blurb, placeholder: spec.placeholder,
@@ -634,40 +543,17 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 memoryGB: Int(env.privateMac.memoryBytes / (1024 * 1024 * 1024)),
                 bytesOnDisk: env.privateMac.isSetUp || env.privateMac.restoreImageDownloaded ? PrivateMacSpec.bytesOnDisk() : 0,
                 downloadGB: Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)),
-            worker: DashboardWorkerPayload(
-                status: env.worker.status,
-                state: env.worker.state.rawValue,
-                accountID: env.worker.workerAccountID,
-                activeJob: env.worker.activeJob?.prompt,
-                activeSpace: env.worker.activeJob?.spaceName,
-                lastPollAt: env.worker.lastPollAt,
-                jobsDone: env.worker.jobsDone,
-                device: Host.current().localizedName ?? "mac"),
-            nearby: DashboardNearbyPayload(
-                invites: env.nearby.invites.map { DashboardNearbyPayload.Invite(orgId: $0.orgID, orgName: $0.orgName, code: $0.code, device: $0.device) },
-                advertising: env.nearby.advertising.map { DashboardNearbyPayload.Invite(orgId: $0.orgID, orgName: $0.orgName, code: $0.code, device: $0.device) },
-                browsing: env.nearby.browsing,
-                error: env.nearby.error),
-            enterprise: DashboardEnterprisePayload(
-                linked: env.enterprise.linked,
-                orgId: env.enterprise.org?.id,
-                orgName: env.enterprise.org?.name,
-                role: env.enterprise.org?.role,
-                pendingJoins: env.enterprise.org?.pendingJoins ?? 0,
-                approvals: env.enterprise.approvals.map {
-                    DashboardEnterprisePayload.Approval(id: $0.id, spaceId: $0.spaceId, spaceName: $0.spaceName, prompt: $0.prompt,
-                                                        title: $0.title, requestedBy: $0.requestedBy, workerName: $0.workerName,
-                                                        workerIsYou: $0.workerIsYou, summary: $0.summary, risk: $0.risk.rawValue,
-                                                        createdAt: $0.createdAt)
-                },
-                spaces: env.enterprise.spaces.map {
-                    DashboardEnterprisePayload.Space(id: $0.id, name: $0.name, colorHex: $0.colorHex, joined: $0.joined,
-                                                     unread: $0.unread, lastMessage: $0.lastMessage, lastMessageAt: $0.lastMessageAt)
-                },
-                unread: env.enterprise.unreadCount,
-                sharedSkills: env.enterprise.sharedSkills.count,
-                updatedAt: env.enterprise.updatedAt,
-                lastError: env.enterprise.lastError)
+            vault: DashboardVaultPayload(
+                folder: env.vault.folderURL.path,
+                available: env.vault.available,
+                truncated: env.vault.truncated,
+                files: env.vault.files,
+                folders: env.vault.folders,
+                logins: env.vault.logins,
+                salt: env.vault.salt,
+                rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? ""),
+            notes: env.store.activeNotes,
+            reminders: env.store.activeReminders
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -722,26 +608,10 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 env.store.updateAccount(account)
                 env.store.saveNow()
             }
-        case "adoptAccounts":
-            // The sync login owns accounts another Mac created: bring them here and pull their data in.
-            let decoder = SyncDates.decoder
-            let adopted = (payload["accounts"] as? [[String: Any]] ?? []).compactMap { raw -> Account? in
-                guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return nil }
-                return try? decoder.decode(Account.self, from: data)
-            }.filter { env.store.adoptAccount($0) }
-            if !adopted.isEmpty {
-                env.store.saveNow()
-                env.refreshSync()
-                env.toast(title: adopted.count == 1 ? "brought over \(adopted[0].name)" : "brought over \(adopted.count) accounts",
-                          detail: "from your other Macs · syncing their threads and memory",
-                          kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-            }
         case "deleteAccount":
             if let id = payload["id"] as? String, env.store.accounts.count > 1 {
                 env.store.deleteAccount(id)
                 env.store.saveNow()
-                // The Mac forgot it; Convex should too.
-                Task { await env.convex.purge(accountID: id, store: env.store) }
             }
         case "previewVoice":
             if let voice = payload["voice"] as? String {
@@ -796,7 +666,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         case "deleteSkill":
             if let id = payload["id"] as? String { env.store.deleteSkill(id); env.store.saveNow() }
         case "importSkill":
-            // A colleague's shared skill, pulled onto this Mac; optionally replayed straight away.
+            // A skill brought in from a file (or an older build's share), added here; optionally replayed straight away.
             if let sharedID = payload["sharedId"] as? String, let name = payload["name"] as? String, let steps = payload["steps"] {
                 if let skill = env.store.importSkill(sharedID: sharedID, name: name, summary: payload["summary"] as? String ?? "",
                                                      stepsJSON: steps, version: payload["version"] as? Int ?? 1) {
@@ -855,14 +725,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                    let settings = try? decoder.decode(AppSettings.self, from: data) {
                     env.store.settings = settings
                     env.store.saveNow()
-                    env.refreshSync()
                 }
             } else if let settingsPayload = payload["settings"] as? [String: Any],
                let data = try? JSONSerialization.data(withJSONObject: settingsPayload),
                let settings = try? decoder.decode(AppSettings.self, from: data) {
                 env.store.settings = settings
                 env.store.saveNow()
-                env.refreshSync()
             }
         case "saveKey":
             if let provider = payload["provider"] as? String, let value = payload["value"] as? String {
@@ -870,37 +738,76 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "deleteKey":
             if let provider = payload["provider"] as? String { env.deleteKey(provider: provider) }
-        case "pairDevice":
-            // The panel, signed in to the sync login, minted a token for this Mac.
-            if let token = payload["token"] as? String, let userID = payload["userId"] as? String {
-                env.pairDevice(token: token, userID: userID, email: payload["email"] as? String ?? "")
+        case "addNote":
+            let note = env.store.addNote(title: payload["title"] as? String ?? "", body: payload["body"] as? String ?? "",
+                                         tags: payload["tags"] as? [String] ?? [])
+            env.store.saveNow()
+            replyToPage("okidokiNoteCreated", note.id)
+        case "updateNote":
+            if let id = payload["id"] as? String {
+                env.store.updateNote(id, title: payload["title"] as? String, body: payload["body"] as? String,
+                                     tags: payload["tags"] as? [String], pinned: payload["pinned"] as? Bool)
+                env.store.saveNow()
             }
-        case "unpairDevice":
-            env.unpairDevice()
-        case "nearbyInvite":
-            if let orgID = payload["orgId"] as? String, let orgName = payload["orgName"] as? String, let code = payload["code"] as? String {
-                env.nearby.advertise(orgID: orgID, orgName: orgName, code: code, device: Host.current().localizedName ?? "a Mac")
+        case "deleteNote":
+            if let id = payload["id"] as? String { env.store.deleteNote(id); env.store.saveNow() }
+        case "addReminder":
+            if let title = payload["title"] as? String, !title.trimmingCharacters(in: .whitespaces).isEmpty {
+                env.store.addReminder(title: title, dueAt: (payload["dueAt"] as? String).flatMap(DateParsing.iso8601),
+                                      repeats: ReminderRepeat(rawValue: payload["repeats"] as? String ?? "") ?? .never,
+                                      skillID: (payload["skillID"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+                env.store.saveNow()
             }
-        case "nearbyStop":
-            env.nearby.stopAdvertising()
-        case "decideSpaceJob":
-            // Home's merged "what needs you" list answers space approvals through the Mac, like the notch.
-            if let jobID = payload["jobId"] as? String {
-                env.decideSpaceJob(jobID, approve: payload["decision"] as? String == "approve")
+        case "updateReminder":
+            if let id = payload["id"] as? String, var reminder = env.store.reminders.first(where: { $0.id == id }) {
+                if let title = payload["title"] as? String { reminder.title = title }
+                if payload.keys.contains("dueAt") { reminder.dueAt = (payload["dueAt"] as? String).flatMap(DateParsing.iso8601) }
+                if let repeats = (payload["repeats"] as? String).flatMap(ReminderRepeat.init(rawValue:)) { reminder.repeats = repeats }
+                if payload.keys.contains("skillID") { reminder.skillID = (payload["skillID"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
+                env.store.updateReminder(reminder)
+                env.store.saveNow()
             }
-        case "spaceRead":
-            if let spaceID = payload["spaceId"] as? String { Task { await env.enterprise.markRead(spaceID: spaceID) } }
-        case "askSpace":
-            if let spaceID = payload["spaceId"] as? String, let text = payload["text"] as? String,
-               let space = env.enterprise.space(id: spaceID) {
-                Task { await env.askSpace(space, text: text) }
+        case "completeReminder":
+            if let id = payload["id"] as? String {
+                env.store.completeReminder(id, done: payload["done"] as? Bool ?? true)
+                env.store.saveNow()
             }
+        case "snoozeReminder":
+            if let id = payload["id"] as? String { env.snoozeReminder(id, minutes: payload["minutes"] as? Int ?? 10) }
+        case "deleteReminder":
+            if let id = payload["id"] as? String { env.store.deleteReminder(id); env.store.saveNow() }
+        case "exportSkill":
+            if let id = payload["id"] as? String { env.exportSkill(id) }
+        case "importSkillFile":
+            env.importSkillFile()
         case "saveVaultPassphrase":
-            // The organization's vault passphrase, kept with the other secrets so jobs here can use shared logins.
-            if let orgID = payload["orgId"] as? String, !orgID.isEmpty {
-                if let passphrase = payload["passphrase"] as? String, !passphrase.isEmpty { KeyStore.set(passphrase, for: "vault:\(orgID)") }
-                else { KeyStore.delete("vault:\(orgID)") }
+            // "Remember on this Mac": kept in the private key file, never in the state file.
+            if let passphrase = payload["passphrase"] as? String, !passphrase.isEmpty { KeyStore.set(passphrase, for: LocalVault.passphraseKey) }
+            else { KeyStore.delete(LocalVault.passphraseKey) }
+            env.keysVersion += 1
+        case "vaultAddFiles":
+            env.vaultAddFiles(payload["files"] as? [[String: Any]] ?? [], folder: payload["folder"] as? String ?? "")
+        case "vaultOpen":
+            if let id = payload["id"] as? String, let url = env.vault.url(for: id) { NSWorkspace.shared.open(url) }
+        case "vaultReveal":
+            if let id = payload["id"] as? String, let url = env.vault.url(for: id) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        case "vaultOpenFolder":
+            NSWorkspace.shared.open(env.vault.folderURL)
+        case "vaultChooseFolder":
+            env.chooseVaultFolder()
+        case "vaultDelete":
+            if let id = payload["id"] as? String {
+                do { try env.vault.delete(id: id) } catch {
+                    env.toast(title: "couldn't delete it", detail: error.localizedDescription, kind: .warning,
+                              undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+                }
             }
+        case "vaultSaveLogin":
+            if let raw = payload["login"] as? [String: Any], let login = VaultLogin(panel: raw) { env.vault.saveLogin(login) }
+        case "vaultDeleteLogin":
+            if let id = payload["id"] as? String { env.vault.deleteLogin(id: id) }
+        case "vaultTouchLogin":
+            if let id = payload["id"] as? String { env.vault.touchLogin(id: id) }
         case "installTool":
             if let id = payload["id"] as? String, let tool = ToolCatalog.tool(id: id) { env.installTool(tool) }
         case "connectApple":
@@ -977,18 +884,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String { env.signIn(accountID: id) }
         case "refreshTools":
             env.refreshInstalled()
-        case "syncNow":
-            env.refreshSync()
-        case "shareRun":
-            if let id = payload["id"] as? String { env.shareRun(id) }
         case "openExternal":
             if let value = payload["url"] as? String, let url = URL(string: value) {
                 NSWorkspace.shared.open(url)
             }
         case "openDataFolder":
-            let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Okidoki")
-            NSWorkspace.shared.open(url)
+            NSWorkspace.shared.open(AppPaths.support)
         case "quit":
             NSApp.terminate(nil)
         default:

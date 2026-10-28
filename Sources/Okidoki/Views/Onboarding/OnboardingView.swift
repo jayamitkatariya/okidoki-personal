@@ -16,7 +16,9 @@ struct OnboardingView: View {
     @State private var didShake = false
     @State private var didCircle = false
     @State private var workspace = "mac"
-    @State private var joinedTeam = false
+    @State private var anthropicKey = ""
+    @State private var keyCheck: String?
+    @State private var checkingKey = false
 
     var body: some View {
         ZStack {
@@ -265,13 +267,26 @@ struct OnboardingView: View {
     private var brainStep: some View {
         VStack(alignment: .leading, spacing: 0) {
             title("How do you want to ask?")
-            subtitle("Voice answers use Cartesia. Typing stays quiet until the next time you speak.")
+            subtitle("Bring your own Anthropic key: it stays in a private file on this Mac. Typing stays quiet until the next time you speak.")
             HStack {
                 fieldLabel("Default")
                 Spacer()
                 OKSegmented(options: InputMode.allCases, label: { $0 == .voice ? "Voice" : "Typing" }, selection: $inputMode)
             }
             .padding(.top, 24)
+            fieldLabel(env.hasKey("anthropic") ? "Anthropic key · set" : "Anthropic key").padding(.top, 22)
+            SecureField(env.hasKey("anthropic") ? "Saved — paste a new one to replace it" : "sk-ant-…", text: $anthropicKey)
+                .textFieldStyle(.plain)
+                .font(.okBody(15))
+                .padding(.horizontal, 14)
+                .frame(height: 46)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
+                .onSubmit { primaryAction() }
+            Text(checkingKey ? "Checking the key…" : keyCheck ?? "Get one at console.anthropic.com. You can add it later in Settings › Keys.")
+                .font(.okBody(12))
+                .foregroundStyle(OKBrand.faint)
+                .padding(.top, 8)
         }
     }
 
@@ -348,10 +363,6 @@ struct OnboardingView: View {
             .padding(.bottom, 22)
             title("You're all set\(name.isEmpty ? "" : ", \(firstName)").")
             subtitle("okidoki lives in your notch. It's there whenever you need it.")
-            if let invitation = env.teamInvitation {
-                teamCard(invitation)
-                    .padding(.top, 20)
-            }
             VStack(spacing: 0) {
                 hintRow(keys: "Shake", detail: "Summon okidoki")
                 divider
@@ -391,6 +402,19 @@ struct OnboardingView: View {
         case .brain:
             store.settings.defaultInput = inputMode
             store.saveNow()
+            let key = anthropicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !key.isEmpty {
+                // Saved and checked straight away, so a typo shows up here and not on the first request.
+                env.saveKey(provider: "anthropic", value: key)
+                anthropicKey = ""
+                checkingKey = true
+                Task {
+                    let check = await AnthropicKeyCheck.run(key: key)
+                    checkingKey = false
+                    keyCheck = check.ok ? "Key works." : "That key didn't work: \(check.detail)"
+                    if !check.ok { go(to: .brain) }
+                }
+            }
         case .about:
             let trimmed = about.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { env.addOnboardingMemories(trimmed) }
@@ -541,32 +565,6 @@ struct OnboardingView: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(done ? 0.95 : 0.7)))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(done ? OKBrand.green.opacity(0.35) : OKBrand.ink.opacity(0.07)))
         .animation(OKMotion.spring, value: done)
-    }
-
-    /// One click into the organization: a code IT pushed, or a colleague's Mac inviting on this network.
-    private func teamCard(_ invitation: (orgName: String, code: String, via: String)) -> some View {
-        HStack(spacing: 12) {
-            iconTile(joinedTeam ? "checkmark" : "person.2.fill", active: joinedTeam)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(joinedTeam ? "Joining \(invitation.orgName)" : "Join \(invitation.orgName)")
-                    .font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
-                Text(joinedTeam ? "Finish here; Team opens to complete it with your sign-in." : "An invitation from \(invitation.via). Spaces, shared skills and the vault come with it.")
-                    .font(.okBody(12)).foregroundStyle(joinedTeam ? OKBrand.greenInk : OKBrand.faint)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            if !joinedTeam {
-                Button("Join") {
-                    joinedTeam = true
-                    env.acceptTeamInvitation(orgName: invitation.orgName, code: invitation.code, openTeam: false)
-                }
-                .buttonStyle(OKButtonStyle(kind: .primary))
-            }
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(joinedTeam ? 0.95 : 0.7)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(joinedTeam ? OKBrand.green.opacity(0.35) : OKBrand.ink.opacity(0.07)))
-        .animation(OKMotion.spring, value: joinedTeam)
     }
 
     private func hintRow(keys: String, detail: String) -> some View {

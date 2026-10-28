@@ -174,13 +174,33 @@ public enum SkillTargetResolver {
         return app
     }
 
-    /// Label and role of whatever the app has at a Quartz point, from one hit-test.
+    /// Label and role of whatever the app has at a Quartz point, from one hit-test. Empty when
+    /// another app's window covers the point: the app's own hit-test would still answer, and the
+    /// click would land on the window in front.
     public static func labelAndRole(in pid: pid_t, at point: CGPoint) -> (label: String, role: String) {
+        guard frontOwner(at: point).map({ $0 == pid }) ?? true else { return ("", "") }
         let app = appElement(pid)
         var element: AXUIElement?
         guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &element) == .success,
               let element else { return ("", "") }
         return (AccessibilityLabel.of(element), AXSearch.stringAttribute(kAXRoleAttribute, of: element))
+    }
+
+    /// Which app's window is in front at a Quartz point, leaving okidoki's own overlays out.
+    /// Nil when nothing is (the desktop) or the window list isn't readable.
+    public static func frontOwner(at point: CGPoint) -> pid_t? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let own = ProcessInfo.processInfo.processIdentifier
+        for window in info {
+            guard let owner = window[kCGWindowOwnerPID as String] as? pid_t, owner != own,
+                  let layer = window[kCGWindowLayer as String] as? Int, layer < 24, // below the menu bar: menus and the bar belong to the app in front
+                  (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
+            let rect = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
+            if rect.contains(point) { return owner }
+        }
+        return nil
     }
 
     /// The app's window that corresponds to the one a step was recorded in: the one with the

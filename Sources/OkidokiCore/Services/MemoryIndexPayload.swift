@@ -63,14 +63,20 @@ public struct MemoryIndexPayload: Equatable, Sendable {
 
     @MainActor
     public init(store: OkidokiStore, now: Date = Date()) {
-        self.init(memories: store.memories, threads: store.threads, runs: store.runs, skills: store.skills, now: now)
+        self.init(memories: store.memories, threads: store.threads, runs: store.runs, skills: store.skills,
+                  notes: store.notes, now: now)
     }
 
-    public init(memories: [MemoryItem], threads: [ChatThread], runs: [AgentRun], skills: [Skill], now: Date = Date()) {
+    public init(memories: [MemoryItem], threads: [ChatThread], runs: [AgentRun], skills: [Skill],
+                notes: [OkidokiCore.Note] = [], now: Date = Date()) {
         let messageCutoff = now.addingTimeInterval(-Self.messageDays * 86_400)
         let runCutoff = now.addingTimeInterval(-Self.runDays * 86_400)
+        // Notes from the Notes page are recalled like memory, title first so a short query finds them.
         self.memories = memories.map {
             Note(id: $0.id, accountID: $0.accountID, section: $0.section.rawValue, text: $0.text, updatedAt: $0.updatedAt)
+        } + notes.map {
+            Note(id: $0.id, accountID: $0.accountID, section: "note",
+                 text: String(($0.title + "\n" + $0.body).prefix(4_000)), updatedAt: $0.updatedAt)
         }
         self.threads = threads.compactMap { thread in
             guard thread.updatedAt >= messageCutoff else { return nil }

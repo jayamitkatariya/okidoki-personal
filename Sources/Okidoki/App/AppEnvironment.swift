@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import OkidokiCore
 
 enum DashboardSection: String, CaseIterable, Identifiable {
-    case home, runs, history, memory, skills, toolbox, keys, settings, live, spaces, team, vault
+    case home, runs, history, memory, notes, reminders, skills, terminal, toolbox, keys, settings, live, vault
     var id: String { rawValue }
 }
 
@@ -17,14 +17,8 @@ final class AppEnvironment: ObservableObject {
     let speaker: VoiceSpeaker
     let watch: WatchRecorder
     let glows: CursorGlowController
-    let convex: ConvexSyncService
-    /// Enterprise: runs the agent's jobs from the work account's spaces on this Mac.
-    let worker = SpaceWorkerService()
-    /// Enterprise: colleagues on the same network, and this Mac's open invitation to them.
-    let nearby = NearbyService()
-    /// Enterprise: the organization as seen from this Mac — approvals, spaces, shared skills — and the
-    /// actions the notch and the cursor card take on it. Fed by the worker's poll.
-    let enterprise = EnterpriseService()
+    /// The vault folder and its sealed logins.
+    let vault: LocalVault
 
     private(set) var summon: SummonController!
     private(set) var draw: DrawingController!
@@ -51,8 +45,6 @@ final class AppEnvironment: ObservableObject {
     @Published var signedOut = false
     @Published var dashboardRoute: DashboardSection = .home
     @Published var dashboardRunID: String?
-    /// The space the panel should open on, set by the notch or the cursor card.
-    @Published var dashboardSpaceID: String?
     @Published var askPulse = 0
     @Published var shakePulse = 0
     @Published var inCall = false
@@ -93,14 +85,16 @@ final class AppEnvironment: ObservableObject {
     private var pendingToolInstalls: [String: String] = [:]
     /// Approved-later connector calls by run id: the brain's call JSON, handed back untouched when the run starts.
     private var pendingConnectorCalls: [String: String] = [:]
-    private var syncWork: DispatchWorkItem?
-    private var syncTimer: Timer?
     private var memoryWork: DispatchWorkItem?
     /// Seconds before the next try after the memory index failed to sync; doubles up to two minutes.
     private var memoryRetryDelay: Double = 5
     /// Hash of the last memory payload the brain accepted, so an unchanged store isn't re-sent.
     private var lastMemoryHash: Int?
     private var callTimer: Timer?
+    /// Checks okidoki's own reminders (see `AppEnvironment+Reminders`).
+    var reminderTimer: Timer?
+    /// Lets local tools (the MCP server, scripts) replay skills and add notes. 127.0.0.1 only, token required.
+    private var control: ControlServer?
     private var nudgeTimer: Timer?
     private var serviceStatusTimer: Timer?
     private var nudgedEvents: Set<String> = []
@@ -116,7 +110,7 @@ final class AppEnvironment: ObservableObject {
         self.speaker = VoiceSpeaker()
         self.watch = WatchRecorder()
         self.glows = CursorGlowController()
-        self.convex = ConvexSyncService()
+        self.vault = LocalVault(folder: URL(fileURLWithPath: store.settings.vaultFolder, isDirectory: true))
         self.shake = ShakeDetector()
         self.summon = SummonController(environment: self, speech: speech, glow: glows)
         self.draw = DrawingController(environment: self)
@@ -143,41 +137,6 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // Space jobs go through the same pipeline as a typed request, in their own thread, with no card or voice here.
-        worker.runJob = { [weak self] prompt, threadID in await self?.askFromSpace(prompt, threadID: threadID) }
-        worker.approveRun = { [weak self] id in self?.approveRun(id) }
-        worker.cancelRun = { [weak self] id in self?.cancelRun(id) }
-        worker.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        enterprise.start(store: store)
-        worker.onSummary = { [weak self] json in self?.enterprise.apply(json) }
-        enterprise.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        enterprise.$pendingWelcome
-            .receive(on: RunLoop.main)
-            .compactMap { $0 }
-            .sink { [weak self] welcome in self?.showOrgWelcome(welcome) }
-            .store(in: &cancellables)
-        worker.start(store: store)
-        nearby.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        // Browsing is a passive multicast listen; it runs whenever a work account is selected.
-        store.$currentAccountID.combineLatest(store.$accounts)
-            .map { id, accounts in accounts.first { $0.id == id }?.kind == .work }
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] work in
-                guard let self else { return }
-                if work { self.nearby.startBrowsing() } else { self.nearby.stopBrowsing(); self.nearby.stopAdvertising() }
-            }
-            .store(in: &cancellables)
-
         store.$settings
             .receive(on: RunLoop.main)
             .sink { [weak self] settings in
@@ -189,6 +148,16 @@ final class AppEnvironment: ObservableObject {
                 self.notch.model.quiet = settings.quietMode || self.inCall
                 self.applyAppearance(settings.appearance)
             }
+            .store(in: &cancellables)
+
+        // The panel's Vault page follows the folder as files come and go.
+        vault.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        store.$settings.map(\.vaultFolder).removeDuplicates().dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] path in self?.vault.setFolder(URL(fileURLWithPath: path, isDirectory: true)) }
             .store(in: &cancellables)
 
         store.$settings.map(\.mcpServers).removeDuplicates()
@@ -203,12 +172,11 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.refreshInstalled() }
             .store(in: &cancellables)
 
-        // Taken synchronously (the store is on the main actor), so a save landing or a sync finishing,
-        // which the store marks as housekeeping, doesn't schedule the next sync and the next after that.
+        // Taken synchronously (the store is on the main actor), so a save landing, which the store
+        // marks as housekeeping, doesn't schedule the next index push and the next after that.
         store.objectWillChange
             .sink { [weak self] _ in
                 guard let self, !self.store.isHousekeeping else { return }
-                self.scheduleSync()
                 self.scheduleMemoryIndex()
             }
             .store(in: &cancellables)
@@ -218,10 +186,8 @@ final class AppEnvironment: ObservableObject {
 
     func start() {
         applyBuiltinServices()
-        // An IT-provisioned Mac is in its organization before anyone types: the deployment URL
-        // and a join code arrive with the managed configuration.
-        ManagedConfig.current().apply(to: store)
         applyAppearance(store.settings.appearance)
+        vault.start()
         statusBar = StatusBarController(environment: self)
         dashboard = DashboardWindowController(environment: self)
         onboarding = OnboardingWindowController(environment: self)
@@ -238,6 +204,9 @@ final class AppEnvironment: ObservableObject {
             Task { @MainActor in self?.runRoutine(routine) }
         }
         scheduler.start()
+        startReminders()
+        control = ControlServer(environment: self)
+        control?.start()
 
         refreshInstalled()
         // Start MCP servers whenever the brain comes up, so the first request doesn't wait on a cold start.
@@ -288,13 +257,6 @@ final class AppEnvironment: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.openOnboarding() }
         }
 
-        // Sync is two-way: on launch, and every few minutes after, this Mac pulls what the account's other
-        // Macs changed (cheap when nothing did: one version check per account) and merges it in.
-        refreshSync()
-        syncTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshSync() }
-        }
-
         if ProcessInfo.processInfo.environment["OKIDOKI_DEV_HOOKS"] == "1" { installDevHooks() }
     }
 
@@ -305,22 +267,22 @@ final class AppEnvironment: ObservableObject {
     /// Off unless the app is launched with OKIDOKI_DEV_HOOKS=1, since any local process could post them.
     private func installDevHooks() {
         let center = DistributedNotificationCenter.default()
-        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.drive"), object: nil, queue: .main) { [weak self] note in
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.drive"), object: nil, queue: .main) { [weak self] note in
             guard let goal = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { return }
             Task { @MainActor in await self?.devDrive(goal: goal) }
         }
-        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.ask"), object: nil, queue: .main) { [weak self] note in
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.ask"), object: nil, queue: .main) { [weak self] note in
             guard let text = note.object as? String else { return }
             Task { @MainActor in self?.askFromDashboard(text) }
         }
         // "x,y" in global Quartz points: a click as the learner, so a scripted run can follow a lesson.
-        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.click"), object: nil, queue: .main) { note in
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.click"), object: nil, queue: .main) { note in
             let parts = ((note.object as? String) ?? "").split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
             guard parts.count == 2 else { return }
             Task { await EventActuator.click(at: CGPoint(x: parts[0], y: parts[1])) }
         }
         // A lesson on the frontmost app, straight to the tutor (no router); what it does goes to teach.log.
-        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.teach"), object: nil, queue: .main) { [weak self] note in
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.teach"), object: nil, queue: .main) { [weak self] note in
             guard let topic = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !topic.isEmpty else { return }
             Task { @MainActor in
                 guard let self else { return }
@@ -329,7 +291,7 @@ final class AppEnvironment: ObservableObject {
                 self.teach.start(topic: topic, outline: [], appBundleID: "", runID: run.id, threadID: nil)
             }
         }
-        center.addObserver(forName: Notification.Name("com.jaykatariya.okidoki.dev.stop"), object: nil, queue: .main) { [weak self] _ in
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.stop"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 if self.driver.isActive { self.driver.cancel(reason: "stopped by the test script") }
@@ -358,6 +320,7 @@ final class AppEnvironment: ObservableObject {
 
     func stop() {
         store.saveNow()
+        control?.stop()
         speech.stop()
         speaker.stop()
         shake.stop()
@@ -538,15 +501,6 @@ final class AppEnvironment: ObservableObject {
             notch.collapse()
             return
         }
-        // A space chosen on the capsule sends the request to that space's agent instead of this Mac.
-        // A circled screenshot can't travel in a chat line, so it stays local.
-        if screenshot == nil, let scope = summon.model.scope, let space = enterprise.space(id: scope.id),
-           ChatCommands.parse(text, context: chatContext()) == nil {
-            summonContext?.cancel()
-            summonContext = nil
-            handleChatCommand(.askSpace(spaceID: space.id, text: text), text: text, appName: appName, threadID: nil, source: "summon")
-            return
-        }
         let pendingContext = claimSummonContext()
         startForegroundRequest { [weak self] in
             guard let self else { return }
@@ -555,7 +509,7 @@ final class AppEnvironment: ObservableObject {
             await self.handleRequest(text: text, appName: appName, bundleID: bundleID, threadID: nil,
                                      screenshot: screenshot, selection: selection,
                                      attachmentName: attachmentName, documentText: "", source: "summon",
-                                     screenContext: screenContext)
+                                     screenContext: screenContext, mode: self.summon.model.summonMode.rawValue)
             guard !Task.isCancelled else { return }
             self.summon.hideInput()
         }
@@ -583,8 +537,6 @@ final class AppEnvironment: ObservableObject {
     /// the reply starts a new run in the same thread that carries on from where this one stopped.
     func presentDriveQuestion(runID: String, question: String) {
         guard let run = store.run(runID) else { return }
-        // A colleague's job reports through its space chat; a card here would interrupt whoever's at this Mac.
-        guard run.threadID == nil || run.threadID != worker.activeThreadID else { return }
         let card = AnswerCardModel(title: "one thing first", text: question,
                                    threadTitle: run.threadID.flatMap { store.thread($0)?.title },
                                    runID: runID, threadID: run.threadID)
@@ -627,16 +579,6 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// A job from a space: a colleague's request, run here. Typed, so nothing is spoken aloud.
-    func askFromSpace(_ text: String, threadID: String) async {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        noteSpokenInput(false)
-        await handleRequest(text: trimmed, appName: "mac", bundleID: "", threadID: threadID,
-                            screenshot: nil, selection: nil, attachmentName: "",
-                            documentText: "", source: "space")
-    }
-
     func requestAsk() {
         askPulse += 1
         if !dashboardOpen { openDashboard(.home) }
@@ -665,7 +607,7 @@ final class AppEnvironment: ObservableObject {
     private func handleRequest(text: String, appName: String, bundleID: String, threadID: String?,
                                screenshot: Data?, selection: CGRect?, attachmentName: String,
                                documentText: String, source: String,
-                               screenContext: ScreenContext? = nil) async {
+                               screenContext: ScreenContext? = nil, mode: String = "auto") async {
         // Skills and recordings are driven straight from the chat: "replay invoice flow", "stop",
         // "save as …", "my skills". No brain round trip, no key needed, no variance.
         if screenshot == nil, documentText.isEmpty, source != "repair",
@@ -686,7 +628,7 @@ final class AppEnvironment: ObservableObject {
         var docName = attachmentName
         let lower = text.lowercased()
         // A circled region is the thing to summarise; only ask for a file when there's nothing attached,
-        // and never for a space job or a routine: a file picker would sit open on an unattended Mac.
+        // and never for a routine: a file picker would sit open on an unattended Mac.
         if builtin == nil, document.isEmpty, screenshot == nil, !Self.isUnattended(source),
            (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
             if let url = await pickFile(kind: "pdf", prompt: "choose a PDF to read") {
@@ -707,7 +649,8 @@ final class AppEnvironment: ObservableObject {
 
         store.appendMessage(threadID: thread.id, role: .user, text: text.isEmpty ? "look at this" : text)
         if let builtin {
-            let request = BrainRequest(text: text, appName: appName, bundleID: bundleID, threadID: thread.id, source: source)
+            var request = BrainRequest(text: text, appName: appName, bundleID: bundleID, threadID: thread.id, source: source)
+            request.mode = mode
             await handleDecision(builtin, request: request, threadID: thread.id, source: source)
             return
         }
@@ -721,11 +664,12 @@ final class AppEnvironment: ObservableObject {
             clipboard = BrainService.relevantClipboard(NSPasteboard.general.string(forType: .string) ?? "",
                                                        request: text, history: priorTurns)
         }
-        let request = BrainRequest(text: text, appName: appName, bundleID: bundleID,
+        var request = BrainRequest(text: text, appName: appName, bundleID: bundleID,
                                    threadID: thread.id, screenshotPNG: screenshot,
                                    selection: selection, source: source,
                                    attachmentName: docName, documentText: document,
                                    clipboardText: clipboard, screen: screenContext)
+        request.mode = mode
         var events: [BrainNativeEvent] = []
         if store.settings.appleCalendar,
            lower.contains("calendar") || lower.contains("meeting") || lower.contains("schedule") || lower.contains("what's next") {
@@ -771,19 +715,37 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// Space jobs and routines run with nobody at this Mac: nothing may wait on a person here.
-    static func isUnattended(_ source: String) -> Bool { source == "space" || source == "routine" }
+    /// Routines run with nobody at this Mac: nothing may wait on a person here.
+    static func isUnattended(_ source: String) -> Bool { source == "routine" }
 
     private func handleDecision(_ decision: BrainDecision, request: BrainRequest, threadID: String, source: String) async {
         guard !Task.isCancelled else { return }
         var decision = withoutShowOrDoChoice(decision, request: request)
         if Self.isUnattended(source), let needsPerson = Self.needsSomeoneHere(decision.kind) {
             // A lesson, a recording, the ghost cursor or a drawing takes over this Mac's screen and
-            // waits for whoever is at it; from a space or a schedule that is nobody.
+            // waits for whoever is at it; from a schedule that is nobody.
             decision.kind = .answer
             decision.answer = "That would need someone at this Mac (\(needsPerson)). Ask it from the Mac itself, or ask for something it can do on its own, like a command, a script or a web task."
             decision.speak = ""
             decision.title = String(request.text.prefix(60))
+        }
+        // The mode picked on the cursor card wins, even over a brain that routed differently.
+        switch request.mode {
+        case "chat" where ![.answer, .memory].contains(decision.kind):
+            let said = decision.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let plan = decision.previewSteps.isEmpty ? "" : "\n\n" + decision.previewSteps.map { "· \($0)" }.joined(separator: "\n")
+            decision.kind = .answer
+            decision.answer = (said.isEmpty ? "here's how i'd go about it:" : said) + plan + "\n\nswitch the card to Act and i'll do it."
+        case "teach" where decision.kind != .teach:
+            decision.kind = .teach
+            decision.title = "teach: " + String(request.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(54))
+            decision.answer = "let's do it together, one step at a time."
+            decision.lessonKind = nil
+        case "act" where decision.kind == .teach:
+            decision.kind = .computerUse
+            decision.previewSummary = decision.previewSummary.isEmpty ? request.text : decision.previewSummary
+        default:
+            break
         }
         if decision.kind == .teach {
             // Same rule as the brain, applied once more here so the sidecar and the native
@@ -902,7 +864,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     func present(_ card: AnswerCardModel, source: String) {
-        // Routines and space jobs report elsewhere; a card at the cursor would interrupt whoever's at this Mac.
+        // Routines report elsewhere; a card at the cursor would interrupt whoever's at this Mac.
         guard !Self.isUnattended(source) else { return }
         // A request the user backed out of has nothing to show.
         guard !Task.isCancelled else { return }
@@ -1007,15 +969,29 @@ final class AppEnvironment: ObservableObject {
             var toastDetail = decision.previewSummary
             switch action.type {
             case "reminder":
+                // okidoki keeps and fires its own reminders; the Reminders app gets a copy when it's connected.
                 let date = action.date.flatMap(DateParsing.iso8601)
-                let id = try await AppleBridge.shared.addReminder(title: action.title, due: date)
-                undo = { Task { try? await AppleBridge.shared.deleteReminder(id: id) } }
+                let repeats = ReminderParsing.repeats(in: request.text)
+                let reminder = store.addReminder(title: action.title, dueAt: date, repeats: repeats)
+                var appleID: String?
+                if store.settings.appleReminders { appleID = try? await AppleBridge.shared.addReminder(title: action.title, due: date) }
+                undo = { [weak self] in
+                    self?.store.deleteReminder(reminder.id)
+                    if let appleID { Task { try? await AppleBridge.shared.deleteReminder(id: appleID) } }
+                }
                 if toastDetail.isEmpty {
-                    toastDetail = date.map { "for \(relativeTime($0))" } ?? "no date"
+                    toastDetail = (date.map { "for \(relativeTime($0))" } ?? "no date") + (repeats == .never ? "" : " · \(repeats.rawValue)")
                 }
             case "note":
-                let id = try await AppleBridge.shared.addNote(title: action.title, body: action.body ?? "")
-                undo = { Task { try? await AppleBridge.shared.deleteNote(id: id) } }
+                // Notes live on the Notes page; the Notes app gets a copy when it's connected.
+                let body = action.body ?? ""
+                let note = store.addNote(title: action.title.hasPrefix("okidoki · ") ? Note.title(from: body) : action.title, body: body)
+                var appleID: String?
+                if store.settings.appleNotes { appleID = try? await AppleBridge.shared.addNote(title: action.title, body: body) }
+                undo = { [weak self] in
+                    self?.store.deleteNote(note.id)
+                    if let appleID { Task { try? await AppleBridge.shared.deleteNote(id: appleID) } }
+                }
                 if toastDetail.isEmpty { toastDetail = "saved in notes" }
             case "event":
                 let start = action.date.flatMap(DateParsing.iso8601) ?? Date().addingTimeInterval(3600)
@@ -2305,17 +2281,13 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Chat commands (skills and recordings, no brain)
 
-    /// What the chat can act on by itself: this Mac's skills, and — on a linked work account — its
-    /// spaces and colleagues' shared skills.
+    /// What the chat can act on by itself: this Mac's skills and the records they replay against.
     private func chatContext() -> ChatCommands.Context {
-        let work = store.activeAccount.kind == .work && enterprise.linked
-        return ChatCommands.Context(skills: store.activeSkills,
-                                    recording: watch.isRecording,
-                                    replaying: replayer.isActive,
-                                    hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil,
-                                    spaces: work ? enterprise.spaces.map { ChatSpaceRef(id: $0.id, name: $0.name, joined: $0.joined) } : [],
-                                    sharedSkills: work ? enterprise.pullableSkills.map { ChatSharedSkillRef(id: $0.id, name: $0.name, publishedBy: $0.publishedBy) } : [],
-                                    records: SkillRecords.load())
+        ChatCommands.Context(skills: store.activeSkills,
+                             recording: watch.isRecording,
+                             replaying: replayer.isActive,
+                             hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil,
+                             records: SkillRecords.load())
     }
 
     private func handleChatCommand(_ command: ChatCommand, text: String, appName: String, threadID: String?, source: String) {
@@ -2435,110 +2407,28 @@ final class AppEnvironment: ObservableObject {
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
             store.appendMessage(threadID: thread.id, role: .assistant, text: "renamed “\(skill.name)” to “\(name)”.")
 
-        // MARK: Enterprise
-
-        case .askSpace(let spaceID, let request):
-            guard let space = enterprise.space(id: spaceID) else { return reply("hm", "that space isn't around any more.") }
-            summon.hideInput()
-            answerController.close(restoreApp: false)
-            Task {
-                guard await askSpace(space, text: request) else { return }
-                store.appendMessage(threadID: thread.id, role: .assistant, text: "sent to #\(space.name): “\(request)”. a Mac in the space will pick it up.")
-                toast(title: "sent to #\(space.name)", detail: request, kind: .success,
-                      undoLabel: nil, onUndo: nil, editLabel: "open chat", onEdit: { [weak self] in self?.openSpace(space.id) }, runID: nil)
-                speak("Sent to \(space.name).")
-            }
-
-        case .unknownSpace(let query, let request):
-            let spaces = enterprise.spaces
-            var actions = spaces.prefix(2).map { space in
-                CardAction(title: "#\(space.name)", kind: .secondary, glyph: "number") { [weak self] in
-                    guard let self else { return }
-                    self.answerController.close(restoreApp: false)
-                    Task { await self.askSpace(space, text: request) }
-                }
-            }
-            actions.append(CardAction(title: "open spaces", kind: .ghost, glyph: "people") { [weak self] in self?.openDashboard(.spaces) })
-            reply("no #\(query)", spaces.isEmpty ? "you're not in any spaces yet." : "no space called “\(query)”. yours are:\n\n" + spaces.prefix(8).map { "· #\($0.name)\($0.joined ? "" : " (not joined)")" }.joined(separator: "\n"),
-                  actions: Array(actions), say: "Which space?")
+        case .addNote(let body):
+            let note = store.addNote(title: "", body: body)
+            store.saveNow()
+            reply("noted", "“\(note.title)” is on the Notes page.",
+                  actions: [CardAction(title: "open notes", kind: .secondary, glyph: "note") { [weak self] in self?.openDashboard(.notes) }],
+                  say: "Noted.")
 
         case .whatsWaiting:
             let mine = store.waitingRuns
-            let theirs = enterprise.approvals.filter { !$0.workerIsYou }
             var lines: [String] = []
-            if !mine.isEmpty { lines.append("on this mac:\n" + mine.prefix(5).map { "· \($0.title)" }.joined(separator: "\n")) }
-            if !theirs.isEmpty { lines.append("from your team:\n" + theirs.prefix(5).map { "· #\($0.spaceName) — \($0.title.isEmpty ? $0.prompt : $0.title) (\($0.requestedBy))" }.joined(separator: "\n")) }
-            let pending = enterprise.org?.pendingJoins ?? 0
-            if pending > 0 { lines.append("\(pending) \(pending == 1 ? "person wants" : "people want") to join \(enterprise.org?.name ?? "your organization").") }
-            let unread = enterprise.unreadCount
-            if unread > 0 { lines.append("\(unread) unread in \(enterprise.unreadSpaces.prefix(3).map { "#\($0.name)" }.joined(separator: ", ")).") }
+            if !mine.isEmpty { lines.append(mine.prefix(5).map { "· \($0.title)" }.joined(separator: "\n")) }
             var actions: [CardAction] = []
             if let first = mine.first {
                 actions.append(CardAction(title: "do it · \(first.title.prefix(18))", kind: .primary, glyph: "bolt") { [weak self] in
                     self?.answerController.close(restoreApp: false); self?.approveRun(first.id)
                 })
-            } else if let first = theirs.first {
-                actions.append(CardAction(title: "do it · #\(first.spaceName)", kind: .primary, glyph: "bolt") { [weak self] in
-                    self?.answerController.close(restoreApp: false); self?.decideSpaceJob(first.id, approve: true)
-                })
+                actions.append(CardAction(title: "open runs", kind: .secondary, glyph: "runs") { [weak self] in self?.openDashboard(.runs) })
             }
-            if pending > 0 { actions.append(CardAction(title: "review requests", kind: .secondary, glyph: "people") { [weak self] in self?.openDashboard(.team) }) }
-            else if !theirs.isEmpty || unread > 0 { actions.append(CardAction(title: "open spaces", kind: .secondary, glyph: "chat") { [weak self] in self?.openDashboard(.spaces) }) }
-            else if !mine.isEmpty { actions.append(CardAction(title: "open runs", kind: .secondary, glyph: "runs") { [weak self] in self?.openDashboard(.runs) }) }
-            let count = mine.count + theirs.count
+            let count = mine.count
             reply(count == 0 ? "nothing's waiting" : "\(count) \(count == 1 ? "thing needs" : "things need") you",
                   lines.isEmpty ? "all clear. nothing needs an okay right now." : lines.joined(separator: "\n\n"),
                   actions: actions, say: count == 0 ? "Nothing's waiting on you." : "\(count) \(count == 1 ? "thing needs" : "things need") you.")
-
-        case .listSpaces:
-            let spaces = enterprise.spaces
-            let actions = spaces.filter(\.joined).prefix(2).map { space in
-                CardAction(title: "#\(space.name)", kind: .secondary, glyph: "number") { [weak self] in self?.readSpace(space) }
-            } + [CardAction(title: "open spaces", kind: .ghost, glyph: "people") { [weak self] in self?.openDashboard(.spaces) }]
-            let body = spaces.isEmpty
-                ? "no spaces yet. ask an admin to make one, or open Team to create your own."
-                : spaces.prefix(12).map { "· #\($0.name)\($0.joined ? ($0.unread > 0 ? " · \($0.unread) new" : "") : " · not joined")" }.joined(separator: "\n")
-                  + "\n\nsay “ask #name to …” to hand the agent a job there."
-            reply(enterprise.org.map { "\($0.name) · \(spaces.count) \(spaces.count == 1 ? "space" : "spaces")" } ?? "spaces", body, actions: Array(actions))
-
-        case .openSpace(let spaceID):
-            summon.hideInput()
-            answerController.close(restoreApp: false)
-            if let space = enterprise.space(id: spaceID) { readSpace(space) } else { openSpace(spaceID) }
-
-        case .shareSkill(let skillID, let spaceID):
-            guard let skill = store.skill(skillID) else { return }
-            let target = spaceID.flatMap { enterprise.space(id: $0) }
-            let where_ = target.map { "#\($0.name)" } ?? (enterprise.org?.name ?? "your team")
-            summon.hideInput()
-            answerController.close(restoreApp: false)
-            Task { [weak self] in
-                guard let self else { return }
-                let outcome = await enterprise.publish(skill, spaceID: spaceID)
-                if let error = outcome.error {
-                    toast(title: "couldn't share “\(skill.name)”", detail: error, kind: .warning,
-                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-                    return
-                }
-                store.appendMessage(threadID: thread.id, role: .assistant, text: "shared “\(skill.name)” with \(where_). colleagues can say “replay \(skill.name)” on their own Mac.")
-                toast(title: "shared with \(where_)", detail: "“\(skill.name)” — colleagues can replay it now", kind: .success,
-                      undoLabel: nil, onUndo: nil, editLabel: "open replay", onEdit: { [weak self] in self?.openDashboard(.skills) }, runID: nil)
-                speak("Shared with \(target?.name ?? "your team").")
-            }
-
-        case .replayShared(let sharedID, let times):
-            guard let shared = enterprise.sharedSkills.first(where: { $0.id == sharedID }) else { return reply("hm", "that skill isn't shared any more.") }
-            summon.hideInput()
-            answerController.close(restoreApp: false)
-            Task {
-                guard let skill = await enterprise.pullSkill(shared) else {
-                    toast(title: "couldn't get “\(shared.name)”", detail: enterprise.lastError ?? "try again in a moment", kind: .warning,
-                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-                    return
-                }
-                store.appendMessage(threadID: thread.id, role: .assistant, text: "pulled “\(shared.name)” from \(shared.publishedBy)\(shared.requires.isEmpty ? "" : " · needs \(shared.requires.joined(separator: ", "))").")
-                startReplayFromChat(skill, times: times, threadID: thread.id, source: source)
-            }
 
         // MARK: Records and the vault
 
@@ -2549,8 +2439,8 @@ final class AppEnvironment: ObservableObject {
             let passes = picked.isEmpty ? [values] : picked.map { $0.fillValues.merging(values) { _, typed in typed } }
             startReplayFromChat(skill, times: 1, threadID: thread.id, source: source, values: passes)
 
-        case .addToVault(let query, let url, let space):
-            addToVault(query: query, url: url, space: space, request: text, threadID: thread.id, source: source)
+        case .addToVault(let query, let url, let folder):
+            addToVault(query: query, url: url, folder: folder, request: text, threadID: thread.id, source: source)
 
         case .unknownRecord(let query):
             let records = SkillRecords.load()
@@ -2582,12 +2472,11 @@ final class AppEnvironment: ObservableObject {
     func finishReplay(runID: String, passes: Int) {
         if let run = store.run(runID), let id = run.pickedPath {
             store.incrementSkillRun(id, by: passes)
-            if let skill = store.skill(id) { noteSharedReplay(skill) }
         }
-        // Records that came back with a receipt ("MTS-4471 → entry … accepted") say more than a count.
+        // Records name what was done ("INV-4471 done") and say more than a count.
         let receipts = (store.run(runID)?.output ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         let line = !receipts.isEmpty ? receipts.joined(separator: "; ") : passes > 1 ? "replayed \(passes) times" : "replayed once"
-        // Several records: one reply that lists them all, which is also what a space sees last.
+        // Several records: one reply that lists them all.
         if receipts.count > 1, let threadID = store.run(runID)?.threadID {
             store.appendMessage(threadID: threadID, role: .assistant,
                                 text: "done · \(receipts.count) records:\n" + receipts.joined(separator: "\n"), runID: runID)
@@ -2761,11 +2650,9 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// Points this Mac at the Convex deployment and a Cartesia voice. Credentials come from env.
-    /// Sync itself stays the user's choice: the Settings switch is the only thing that turns it on.
+    /// A voice to start with. Without a Cartesia key, the Mac's own voice is the one that speaks.
     private func applyBuiltinServices() {
         var settings = store.settings
-        if settings.convexSiteURL.isEmpty { settings.convexSiteURL = ServiceSecrets.convexSiteURL }
         if settings.voiceID.isEmpty { settings.voiceID = "sarah" }
         store.settings = settings
         store.saveNow()
@@ -2783,9 +2670,7 @@ final class AppEnvironment: ObservableObject {
             store.appendMessage(threadID: thread.id, role: .user, text: asked)
         }
         let decision = BrainService.needsKeyDecision()
-        // A space job that never reached the model is a failure the chat should see, not an answer.
-        let run = store.createRun(kind: .answer, title: decision.title, prompt: asked, threadID: thread.id, status: source == "space" ? .failed : .done)
-        if source == "space" { store.updateRun(run.id) { $0.summary = "the model isn't available on this Mac yet — add an Anthropic key under Settings › Keys" } }
+        let run = store.createRun(kind: .answer, title: decision.title, prompt: asked, threadID: thread.id, status: .done)
         store.appendMessage(threadID: thread.id, role: .assistant, text: decision.answer, runID: run.id)
         let request = BrainRequest(text: asked, threadID: thread.id, source: source)
         let card = makeAnswerCard(decision: decision, request: request, threadID: thread.id, run: run)
@@ -2817,6 +2702,15 @@ final class AppEnvironment: ObservableObject {
                     self?.toast(title: check.ok ? "cartesia connected" : "cartesia key didn't work",
                                 detail: check.detail + missing,
                                 kind: check.ok && check.missingVoices.isEmpty ? .success : .warning,
+                                undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+                }
+            }
+            if provider == "anthropic", !onboardingOpen {
+                // Bring-your-own-key: say now whether it works, not on the first request.
+                Task { [weak self] in
+                    let check = await AnthropicKeyCheck.run(key: trimmed)
+                    self?.toast(title: check.ok ? "anthropic connected" : "anthropic key didn't work", detail: check.detail,
+                                kind: check.ok ? .success : .warning,
                                 undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
                 }
             }
@@ -3128,30 +3022,6 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// Pulls, merges and pushes now. Does nothing while sync is off.
-    func refreshSync() {
-        guard store.settings.syncEnabled else { return }
-        Task { await convex.sync(store: store) }
-    }
-
-    func shareRun(_ id: String) {
-        guard let run = store.run(id) else { return }
-        Task {
-            if let url = await convex.share(run: run, account: store.activeAccount, store: store) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url, forType: .string)
-                toast(title: "share link copied", detail: "read-only · anyone can watch the work",
-                      kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: id)
-            } else {
-                let text = "\(run.title)\n\n\(run.prompt)\n\n\(run.summary)\n\n\(run.output.suffix(3000))"
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                toast(title: "run copied", detail: "share pages aren't up yet, so the run itself is on the clipboard",
-                      kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: id)
-            }
-        }
-    }
-
     // MARK: - Memory index (Moss)
 
     /// Moss credentials from Keys, saved as "projectId:projectKey".
@@ -3175,12 +3045,11 @@ final class AppEnvironment: ObservableObject {
 
     private func pushMemoryIndex() async {
         guard sidecar.status.isReady, let credentials = mossCredentials() else { return }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         // Only what the index uses: notes, recent turns, recent tasks and skills, never run output.
         let index = MemoryIndexPayload(store: store)
         let payload = BrainMemorySyncPayload(
             projectId: credentials.projectId, projectKey: credentials.projectKey,
-            cacheDir: support.appendingPathComponent("Okidoki/moss", isDirectory: true).path,
+            cacheDir: AppPaths.support("moss", isDirectory: true).path,
             memories: index.memories, threads: index.threads, runs: index.runs, skills: index.skills)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -3199,17 +3068,6 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    private func scheduleSync() {
-        guard store.settings.syncEnabled else { return }
-        syncWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            Task { await self.convex.sync(store: self.store) }
-        }
-        syncWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
-    }
-
     // MARK: - Onboarding helpers
 
     func completeOnboarding() {
@@ -3217,8 +3075,7 @@ final class AppEnvironment: ObservableObject {
         store.settings.tourComplete = true
         store.saveNow()
         onboarding.hide()
-        // A join accepted during onboarding finishes on Team, where the sync login lives.
-        openDashboard(store.settings.pendingJoinCode.isEmpty ? .home : .team)
+        openDashboard(.home)
         toast(title: "you're in", detail: "shake your mouse anywhere. that's the only way in.",
               kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
     }
@@ -3241,7 +3098,6 @@ final class AppEnvironment: ObservableObject {
     func openDashboard(_ section: DashboardSection, runID: String? = nil) {
         dashboardRoute = section
         if let runID { dashboardRunID = runID }
-        refreshSync()
         if signedOut {
             dashboard.show(section: .home, runID: runID)
             return
@@ -3259,100 +3115,6 @@ final class AppEnvironment: ObservableObject {
         notch.refresh()
     }
 
-    // MARK: - Enterprise, from the notch and the cursor card
-
-    /// Opens the panel on a space's chat.
-    func openSpace(_ spaceID: String) {
-        dashboardSpaceID = spaceID
-        openDashboard(.spaces)
-    }
-
-    /// Do it / Not now on a colleague's run, from the notch. The chat hears who answered.
-    func decideSpaceJob(_ jobID: String, approve: Bool) {
-        let approval = enterprise.approvals.first { $0.id == jobID }
-        Task { [weak self] in
-            guard let self else { return }
-            let outcome = await enterprise.decide(jobID: jobID, decision: approve ? "approve" : "decline")
-            if let error = outcome.error {
-                toast(title: "that didn't go through", detail: error, kind: .warning,
-                      undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-            } else if let approval {
-                toast(title: approve ? "okayed for #\(approval.spaceName)" : "held in #\(approval.spaceName)",
-                      detail: approve ? "\(approval.workerName.isEmpty ? "A Mac" : approval.workerName + "'s Mac") goes ahead with it" : "\(approval.requestedBy) will see it stopped",
-                      kind: approve ? .success : .info, undoLabel: nil, onUndo: nil,
-                      editLabel: "open chat", onEdit: { [weak self] in self?.openSpace(approval.spaceId) }, runID: nil)
-            }
-        }
-    }
-
-    /// Hands a request to the agent in a space, the way "@okidoki …" in its chat would.
-    /// Returns the line to show, or nil with a toast when it couldn't be sent.
-    @discardableResult
-    func askSpace(_ space: EnterpriseSummary.Space, text: String) async -> Bool {
-        if !space.joined {
-            if let error = await enterprise.joinSpace(spaceID: space.id).error {
-                toast(title: "couldn't join #\(space.name)", detail: error, kind: .warning,
-                      undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-                return false
-            }
-        }
-        switch await enterprise.ask(spaceID: space.id, text: text) {
-        case .success:
-            return true
-        case .failure(let error):
-            toast(title: "couldn't reach #\(space.name)", detail: error.message, kind: .warning,
-                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-            return false
-        }
-    }
-
-    /// Open a space from the notch: the chat comes up and its count clears.
-    func readSpace(_ space: EnterpriseSummary.Space) {
-        Task { await enterprise.markRead(spaceID: space.id) }
-        openSpace(space.id)
-    }
-
-    /// The admin's welcome note, once per organization, the first time this Mac sees it linked.
-    private func showOrgWelcome(_ welcome: (org: String, text: String)) {
-        let name = enterprise.org?.name ?? "your organization"
-        toast(title: "welcome to \(name)", detail: welcome.text, kind: .info,
-              undoLabel: nil, onUndo: nil, editLabel: "see spaces", onEdit: { [weak self] in self?.openDashboard(.spaces) }, runID: nil)
-        enterprise.welcomeShown()
-    }
-
-    /// A replay of a colleague's skill ended here: the organization's count goes up.
-    func noteSharedReplay(_ skill: Skill) {
-        enterprise.recordSkillRun(skill)
-    }
-
-    /// The organization this Mac could join with one click, if any: a managed join code, or a
-    /// colleague's Mac inviting over the network.
-    var teamInvitation: (orgName: String, code: String, via: String)? {
-        let code = store.settings.pendingJoinCode
-        if !code.isEmpty {
-            return (store.settings.pendingJoinOrgName.isEmpty ? "your organization" : store.settings.pendingJoinOrgName, code, "set up by your IT team")
-        }
-        if let invite = nearby.invites.first { return (invite.orgName, invite.code, "\(invite.device), on this network") }
-        return nil
-    }
-
-    /// Takes an invitation: makes sure there's a work account, keeps the code for the login, and
-    /// opens Team so the join finishes the moment the sync login exists.
-    func acceptTeamInvitation(orgName: String, code: String, openTeam: Bool = true) {
-        let cleaned = ManagedConfig.cleanCode(code)
-        guard !cleaned.isEmpty else { return }
-        if let work = store.accounts.first(where: { $0.kind == .work }) {
-            store.switchAccount(work.id)
-        } else {
-            store.createAccount(name: "\(store.activeAccount.firstName) at \(orgName)", email: "", kind: .work)
-        }
-        store.settings.pendingJoinCode = cleaned
-        store.settings.pendingJoinOrgName = orgName
-        store.saveNow()
-        if openTeam { openDashboard(.team) }
-    }
-
-    /// A typed question stays silent until the next spoken one.
     private var typedTurn = false
 
     func noteSpokenInput(_ spoken: Bool) {
@@ -3393,38 +3155,10 @@ final class AppEnvironment: ObservableObject {
         openDashboard(.home)
     }
 
-    /// This Mac is now paired with the sync login: everything that talks to Convex can start.
-    func pairDevice(token: String, userID: String, email: String) {
-        let changed = KeyStore.deviceToken != token
-        KeyStore.pairDevice(token: token, userID: userID, email: email)
-        keysVersion += 1
-        guard changed else { return }
-        refreshSync()
-        toast(title: "this Mac is paired", detail: email.isEmpty ? "synced with your login" : "synced as \(email)",
-              kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-    }
-
-    /// The sync login signed out: retire this Mac's token on the backend, then forget it here.
-    func unpairDevice() {
-        guard let token = KeyStore.deviceToken else { return }
-        let base = store.settings.convexSiteURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        KeyStore.unpairDevice()
-        keysVersion += 1
-        convex.forgetPairing()
-        guard !base.isEmpty, let url = URL(string: base + "/api/unpair") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        Task.detached { _ = try? await URLSession.shared.data(for: request) }
-    }
-
     func signIn(accountID: String) {
         store.switchAccount(accountID)
         signedOut = false
         store.saveNow()
-        // The account in front should be current with its other Macs.
-        refreshSync()
     }
 
     func createAccountAndSignIn(name: String, email: String, kind: AccountKind) {

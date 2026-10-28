@@ -11,11 +11,10 @@ import { closeAll, forget, reconcile, validateMcpServer } from "./mcp";
 import { mcpCatalog, runConnector, stopConnector, stopAllConnectors, validateConnectorRun } from "./connectors";
 import { closeMemory, memoryStatus, syncMemory, warmMemory } from "./memory";
 import { anthropicKey, apifyToken, mossCredentials } from "./keys";
-import { portalRoute } from "./portal";
 import { findDocument } from "./finder";
 import { CODING_AGENTS, type ComputerRequest, type ConceptFollowRequest, type ConceptRequest, type ConnectorRunRequest, type ExecuteRequest, type McpServerConfig, type MemorySyncRequest, type TeachRefineRequest, type TeachStepRequest, type ThinkRequest } from "./types";
 
-const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4319);
+const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
 const token = process.env.OKIDOKI_BRAIN_TOKEN || crypto.randomUUID();
 const corsHeaders: Record<string, string> = {};
@@ -58,9 +57,6 @@ export async function handleRequest(request: Request): Promise<Response> {
 
 async function route(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    // The entry workbench is a page for this Mac's browser, so it can't carry the sidecar token.
-    const portal = await portalRoute(request, url);
-    if (portal) return portal;
     if (request.headers.has("origin") || request.headers.get("authorization") !== `Bearer ${token}`) {
       return json({ error: "unauthorized" }, 401);
     }

@@ -305,7 +305,6 @@ private struct NotchContent: View {
         if model.recording != nil { return "Recording" }
         if model.caption != nil { return "Speaking" }
         if model.needsYou > 0 { return "Needs you" }
-        if let space = model.live.first?.forSpace { return "For #\(space)" }
         if !model.live.isEmpty { return "Working" }
         if !model.toasts.isEmpty { return "Just now" }
         return "Okidoki"
@@ -356,15 +355,9 @@ private struct NotchContent: View {
     // surface: an approval takes the stage (with the newest toast queued under it), else the
     // toast stack, else the top live run.
 
-    private var isEmpty: Bool { model.needsYou == 0 && model.toasts.isEmpty && model.live.isEmpty && model.recording == nil && (!model.expanded || model.unread.isEmpty) }
+    private var isEmpty: Bool { model.needsYou == 0 && model.toasts.isEmpty && model.live.isEmpty && model.recording == nil }
 
     private var shownWaiting: [NotchRunItem] { Array(model.waiting.prefix(model.expanded ? 3 : 1)) }
-
-    /// Colleagues' approvals come after my own; compact shows one card of either kind.
-    private var shownApprovals: [NotchSpaceApproval] {
-        if model.expanded { return Array(model.approvals.prefix(3)) }
-        return model.waiting.isEmpty ? Array(model.approvals.prefix(1)) : []
-    }
 
     private var shownToasts: [NotchToast] {
         let newestFirst = Array(model.toasts.reversed())
@@ -376,9 +369,6 @@ private struct NotchContent: View {
         if model.expanded { return Array(model.live.prefix(4)) }
         return model.needsYou == 0 && model.toasts.isEmpty && model.recording == nil ? Array(model.live.prefix(1)) : []
     }
-
-    /// Unread chat only while open: it's a nudge, not an interruption.
-    private var shownUnread: [NotchSpaceUnread] { model.expanded ? model.unread : [] }
 
     private var stage: some View {
         VStack(alignment: .center, spacing: 0) {
@@ -407,13 +397,6 @@ private struct NotchContent: View {
                     if model.waiting.count > shownWaiting.count {
                         moreLink("\(model.waiting.count - shownWaiting.count) more waiting") { env.openDashboard(.runs) }
                     }
-                    ForEach(shownApprovals) { approval in
-                        NotchSpaceApprovalCard(approval: approval, env: env, compact: !model.expanded)
-                            .transition(rowTransition)
-                    }
-                    if model.approvals.count > shownApprovals.count, model.expanded {
-                        moreLink("\(model.approvals.count - shownApprovals.count) more from your team") { env.openDashboard(.spaces) }
-                    }
                     ForEach(shownToasts) { toast in
                         NotchToastRow(toast: toast, model: model, env: env)
                             .transition(rowTransition)
@@ -424,10 +407,6 @@ private struct NotchContent: View {
                     }
                     if model.live.count > shownLive.count && model.expanded {
                         moreLink("\(model.live.count - shownLive.count) more working") { env.openDashboard(.runs) }
-                    }
-                    ForEach(shownUnread) { space in
-                        NotchSpaceRow(space: space, env: env)
-                            .transition(rowTransition)
                     }
                     if model.expanded && isEmpty && model.caption == nil {
                         openOnly(greeting)
@@ -495,12 +474,6 @@ private struct NotchContent: View {
                 env.startSummon()
             }
             Spacer(minLength: 0)
-            if model.hasTeam {
-                NotchButton(title: "Team", symbol: "person.2.fill", kind: .secondary, height: 30) {
-                    model.onClose?()
-                    env.openDashboard(.spaces)
-                }
-            }
             NotchButton(title: "Replay", symbol: "wand.and.stars", kind: .secondary, height: 30) {
                 model.onClose?()
                 env.openDashboard(.skills)
@@ -698,11 +671,8 @@ private struct NotchLiveRow: View {
 
     private var paused: Bool { run.status == .paused }
 
-    /// "For #sales · step" when this Mac is working a colleague's job, so nobody wonders what it's doing.
     private var liveDetail: String {
-        let step = paused ? "Paused" : (run.step.isEmpty ? "Working on it" : run.step.notchSentence)
-        guard let space = run.forSpace else { return step }
-        return "For #\(space) · \(step)"
+        paused ? "Paused" : (run.step.isEmpty ? "Working on it" : run.step.notchSentence)
     }
 
     var body: some View {
@@ -839,161 +809,6 @@ private struct NotchApprovalCard: View {
         .frame(height: 20)
         .background(Capsule().fill((run.risk == .low ? Color.white : riskColor).opacity(0.1)))
         .fixedSize()
-    }
-}
-
-/// A colleague's run waiting in one of my spaces. Same shape as a local approval; the answer
-/// goes to the deployment and the space's chat says who gave it.
-private struct NotchSpaceApprovalCard: View {
-    var approval: NotchSpaceApproval
-    let env: AppEnvironment
-    var compact: Bool
-    @State private var showCommands = false
-    @State private var hovering = false
-
-    private var riskColor: Color {
-        switch approval.risk {
-        case .low: return OKBrand.mint
-        case .medium: return NotchInk.amber
-        case .high: return NotchInk.coral
-        }
-    }
-
-    private var byline: String {
-        let who = approval.workerName.isEmpty ? "a Mac" : "\(approval.workerName)'s Mac"
-        return "#\(approval.spaceName) · \(approval.requestedBy) asked · on \(who)"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                NotchBadge(symbol: "person.2.fill", tint: riskColor)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(approval.title.notchSentence)
-                            .font(.okBody(13, .medium))
-                            .foregroundStyle(NotchInk.primary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                        riskChip
-                    }
-                    Text(byline)
-                        .font(.okBody(11.5))
-                        .foregroundStyle(NotchInk.tertiary)
-                        .lineLimit(1)
-                    if !approval.summary.isEmpty {
-                        Text(approval.summary.notchSentence)
-                            .font(.okBody(12))
-                            .foregroundStyle(NotchInk.secondary)
-                            .lineLimit(compact ? 2 : 4)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { env.openSpace(approval.spaceId) }
-            }
-
-            if !compact && !approval.commands.isEmpty && showCommands {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(approval.commands.prefix(4).enumerated()), id: \.offset) { _, command in
-                        Text(command)
-                            .font(.okMono(11))
-                            .foregroundStyle(NotchInk.secondary)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                    }
-                    if approval.commands.count > 4 {
-                        Text("+\(approval.commands.count - 4) more")
-                            .font(.okBody(11))
-                            .foregroundStyle(NotchInk.tertiary)
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.45)))
-                .transition(.opacity)
-            }
-
-            HStack(spacing: 4) {
-                if !compact {
-                    if !approval.commands.isEmpty {
-                        NotchButton(title: showCommands ? "Hide commands" : "Commands",
-                                    trailingSymbol: showCommands ? "chevron.up" : "chevron.down", kind: .plain) {
-                            withAnimation(NotchMotion.content) { showCommands.toggle() }
-                        }
-                    }
-                    NotchButton(title: "Open chat", kind: .plain) { env.openSpace(approval.spaceId) }
-                }
-                Spacer(minLength: 0)
-                NotchButton(title: "Not now", kind: .secondary) { env.decideSpaceJob(approval.id, approve: false) }
-                    .padding(.trailing, 4)
-                NotchButton(title: "Do it", kind: .primary) { env.decideSpaceJob(approval.id, approve: true) }
-            }
-            .padding(.leading, compact ? NotchBadge.size + 12 : -6)
-        }
-        .notchCard(hovering: hovering, padding: 14)
-        .onHover { hovering = $0 }
-        .animation(NotchMotion.hover, value: hovering)
-    }
-
-    private var riskChip: some View {
-        HStack(spacing: 4) {
-            Circle().fill(riskColor).frame(width: 5, height: 5)
-            Text("\(approval.risk.label.notchSentence) risk")
-        }
-        .font(.okBody(11, .medium))
-        .foregroundStyle(approval.risk == .low ? NotchInk.secondary : riskColor)
-        .padding(.horizontal, 7)
-        .frame(height: 20)
-        .background(Capsule().fill((approval.risk == .low ? Color.white : riskColor).opacity(0.1)))
-        .fixedSize()
-    }
-}
-
-/// A space with unread chat: a tinted dot, the count, the last line. Tap opens the chat and clears it.
-private struct NotchSpaceRow: View {
-    var space: NotchSpaceUnread
-    let env: AppEnvironment
-    @State private var hovering = false
-
-    private var tint: Color { Color(hexString: space.colorHex) }
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            NotchBadge(symbol: "number", tint: tint)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text("#\(space.name)")
-                        .font(.okBody(13, .medium))
-                        .foregroundStyle(NotchInk.primary)
-                        .lineLimit(1)
-                    Text("\(space.unread) new")
-                        .font(.okBody(11, .semibold))
-                        .foregroundStyle(tint)
-                        .monospacedDigit()
-                }
-                if !space.lastMessage.isEmpty {
-                    Text(space.lastMessage)
-                        .font(.okBody(12))
-                        .foregroundStyle(NotchInk.secondary)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            NotchButton(title: "Open", trailingSymbol: "chevron.right", kind: .plain) { open() }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { open() }
-        .notchCard(hovering: hovering)
-        .onHover { hovering = $0 }
-        .animation(NotchMotion.hover, value: hovering)
-    }
-
-    private func open() {
-        guard let full = env.enterprise.space(id: space.id) else { return env.openSpace(space.id) }
-        env.readSpace(full)
     }
 }
 

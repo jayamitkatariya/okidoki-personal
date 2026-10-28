@@ -4,23 +4,20 @@ import { DashboardProvider, useDashboard } from "./store";
 import { AppShell, AuthGate } from "./components/Layout";
 import { isPage, jumpToSettingsSection, resolveRoute, type Page } from "./nav";
 import { HomePage } from "./pages/HomePage";
-import { TeamPage } from "./pages/TeamPage";
-import { SpacesPage } from "./pages/SpacesPage";
 import { VaultPage } from "./pages/VaultPage";
 import { RunsPage } from "./pages/RunsPage";
 import { LivePage } from "./pages/LivePage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { MemoryPage } from "./pages/MemoryPage";
+import { NotesPage } from "./pages/NotesPage";
+import { RemindersPage } from "./pages/RemindersPage";
+import { TerminalPage } from "./pages/TerminalPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ToolboxPage } from "./pages/ToolboxPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { SharePage } from "./pages/SharePage";
 import { ToastStack } from "./components/ui";
-import { CloudSignIn } from "./components/CloudAuth";
 
 export default function App() {
-  const shareToken = window.location.hash.match(/^#\/share\/(.+)$/)?.[1];
-  if (shareToken) return <SharePage token={shareToken} />;
   return (
     <MotionConfig reducedMotion="user">
       <DashboardProvider>
@@ -31,7 +28,7 @@ export default function App() {
 }
 
 function Root() {
-  const { state, toasts, dismissToast, hosted, cloud } = useDashboard();
+  const { state, toasts, dismissToast } = useDashboard();
   const raw = window.location.hash.replace("#/", "");
   const initial = resolveRoute(raw);
   const [page, setPage] = useState<Page>(isPage(initial.page) ? initial.page : "home");
@@ -59,16 +56,6 @@ function Root() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // In a browser, the panel opens only for a signed-in login that has a Mac linked.
-  if (hosted && (cloud.status !== "signedIn" || !cloud.accounts.length)) {
-    return (
-      <>
-        <CloudSignIn />
-        <ToastStack toasts={toasts} onDismiss={dismissToast} />
-      </>
-    );
-  }
-
   if (state.signedOut) {
     return (
       <>
@@ -85,11 +72,12 @@ function Root() {
       {page === "live" ? <LivePage /> : null}
       {page === "history" ? <HistoryPage go={setPage} /> : null}
       {page === "memory" ? <MemoryPage /> : null}
+      {page === "notes" ? <NotesPage /> : null}
+      {page === "reminders" ? <RemindersPage /> : null}
       {page === "skills" ? <SkillsPage /> : null}
+      {page === "terminal" ? <TerminalPage /> : null}
       {page === "toolbox" ? <ToolboxPage /> : null}
       {page === "settings" ? <SettingsPage go={setPage} /> : null}
-      {page === "spaces" ? <SpacesPage go={setPage} /> : null}
-      {page === "team" ? <TeamPage go={setPage} /> : null}
       {page === "vault" ? <VaultPage go={setPage} /> : null}
     </AppShell>
   );

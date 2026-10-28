@@ -8,7 +8,7 @@ import { think } from "../src/llm";
 let key = process.env.ANTHROPIC_API_KEY?.trim();
 if (!key) {
   // The key okidoki saved in Keys (see KeyStore.swift).
-  const file = process.env.OKIDOKI_KEYS_FILE || join(homedir(), "Library", "Application Support", "Okidoki", "keys.json");
+  const file = process.env.OKIDOKI_KEYS_FILE || join(process.env.OKIDOKI_SUPPORT_DIR || join(homedir(), "Library", "Application Support", "Okidoki Personal"), "keys.json");
   try {
     key = (JSON.parse(readFileSync(file, "utf8")) as Record<string, string>).anthropic?.trim();
   } catch {}

@@ -282,6 +282,8 @@ export interface ThinkRequest {
   connectors?: ConnectorsContext;
   /** The current okidoki account, so recall stays within it (plus shared memories). */
   accountId?: string;
+  /** What the person picked on the cursor card: act, teach or chat. Missing means decide. */
+  mode?: "act" | "teach" | "chat";
 }
 
 /** What the Mac sends to keep the memory index current: the parts of its items the index uses.

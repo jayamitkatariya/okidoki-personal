@@ -1,4 +1,4 @@
-.PHONY: build test verify-terminal verify-sync app run demo install clean backend
+.PHONY: build test verify-terminal verify-memory app run demo install clean
 
 build:
 	swift build
@@ -11,14 +11,12 @@ verify-terminal:
 	cd web && bun test && bun run build
 	swift test --filter 'TerminalActionsTests|ToolboxTests'
 
-# Memory and sync end to end: the Convex routes (in-memory Convex), the brain's index and recall, the
-# Mac's merge and two-Mac sync against a fake backend. OKIDOKI_LIVE_MOSS=1 adds the real Moss engine.
-verify-sync:
-	cd backend && npm run typecheck && npm test
+# Memory end to end: the brain's index and recall with an in-memory engine. OKIDOKI_LIVE_MOSS=1 adds the real Moss engine.
+verify-memory:
 	cd brain && bun run typecheck && bun test tests/memory.test.ts tests/memory-sync.test.ts
 	cd web && bunx tsc --noEmit -p .
-	swift test --filter 'SyncMergeTests|OkidokiStoreSyncTests|ConvexSyncServiceTests|ContextTests'
-	@if [ "$$OKIDOKI_LIVE_MOSS" = "1" ]; then cd brain && OKIDOKI_LIVE_MOSS=1 bun --env-file=../.env test tests/memory-live.test.ts; fi
+	swift test --filter 'ContextTests'
+	@if [ "$$OKIDOKI_LIVE_MOSS" = "1" ]; then cd brain && OKIDOKI_LIVE_MOSS=1 bun test tests/memory-live.test.ts; fi
 
 app:
 	./scripts/build-app.sh
@@ -29,17 +27,16 @@ app:
 run: install
 
 demo: app
-	OKIDOKI_DEMO=1 OKIDOKI_OPEN_DASHBOARD=1 ./build/Okidoki.app/Contents/MacOS/Okidoki
+	OKIDOKI_DEMO=1 OKIDOKI_OPEN_DASHBOARD=1 "./build/Okidoki Personal.app/Contents/MacOS/OkidokiPersonal"
 
+# Installs as "/Applications/Okidoki Personal.app" (bundle id dev.okidoki.personal). Only that app is
+# quit or replaced; any other okidoki on this Mac is left alone.
 install: app
-	-osascript -e 'tell application id "com.jaykatariya.okidoki" to quit' >/dev/null 2>&1
-	@for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pgrep -xq Okidoki || break; sleep 0.25; done
-	rm -rf /Applications/Okidoki.app
-	cp -R build/Okidoki.app /Applications/
+	-osascript -e 'tell application id "dev.okidoki.personal" to quit' >/dev/null 2>&1
+	@for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pgrep -xq OkidokiPersonal || break; sleep 0.25; done
+	rm -rf "/Applications/Okidoki Personal.app"
+	cp -R "build/Okidoki Personal.app" /Applications/
 	./scripts/launch-app.sh
-
-backend:
-	cd backend && npm install && npx convex dev
 
 clean:
 	rm -rf .build build

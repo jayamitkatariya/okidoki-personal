@@ -65,28 +65,8 @@ function spentLabel(seconds: number): string {
 }
 
 export function HomePage({ go }: { go: (page: Page) => void }) {
-  const { state, settings, account, enterprise, invoke, updateSettings, notify } = useDashboard();
-  // The enterprise row shows for a work account linked to an organization; personal accounts never see it.
-  const org = account.kind === "work" && enterprise.status === "ready" ? enterprise.view : null;
-  // The Mac's own view covers every space, not just the open one, and keeps flowing while the panel is closed.
-  const native = account.kind === "work" && state.enterprise?.linked ? state.enterprise : null;
-  const unreadChats = native ? native.unread : enterprise.spaces.reduce((sum, space) => sum + space.unread, 0);
-  const teamApprovals = native
-    ? native.approvals.filter((approval) => !approval.workerIsYou)
-    : enterprise.jobs.filter((job) => job.status === "waiting" && !job.decision).map((job) => ({
-        id: job.id, spaceId: job.spaceId, spaceName: enterprise.spaces.find((space) => space.id === job.spaceId)?.name ?? "a space",
-        prompt: job.prompt, title: job.title, requestedBy: job.requestedBy, workerName: job.workerName, workerIsYou: false,
-        summary: job.preview?.summary ?? "", risk: job.preview?.risk ?? "low", createdAt: new Date(job.createdAt).toISOString(),
-      }));
-  const approvals = teamApprovals.length;
-  const workersOnline = enterprise.workers.filter((worker) => worker.online).length;
-  const needsCount = () => waiting.length + teamApprovals.length;
-  const openSpace = (spaceId: string) => {
-    (window as unknown as { __okidokiFocusSpace?: string }).__okidokiFocusSpace = spaceId;
-    window.dispatchEvent(new CustomEvent("okidoki-focus-space", { detail: spaceId }));
-    go("spaces");
-  };
-  const nearby = state.nearby?.invites.length ?? 0;
+  const { state, settings, account, invoke, updateSettings, notify } = useDashboard();
+  const needsCount = () => waiting.length;
   const runs = state.runs ?? [];
   const waiting = runs.filter((run) => run.status === "waiting" || run.status === "previewing");
   const live = runs.filter((run) => run.status === "running" || run.status === "paused");
@@ -228,15 +208,6 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
         />
       </section>
 
-      {org ? (
-        <section className="home-stats home-stats-enterprise" aria-label={`${org.org.name} overview`}>
-          <StatCard tone="mint" icon="chat" label="Unread in spaces" value={unreadChats} note={unreadChats ? "Colleagues are talking" : `${enterprise.spaces.filter((space) => space.joined).length || "No"} spaces joined`} onClick={() => go("spaces")} />
-          <StatCard tone="rose" icon="hand" label="Jobs awaiting an okay" value={approvals} note={approvals ? "Someone's run needs a Do it" : "The agent has nothing waiting"} onClick={() => go("spaces")} />
-          <StatCard tone="lilac" icon="bolt" label="Worker Macs online" value={workersOnline} note={settings.workerEnabled ? `This Mac is one of them` : "This Mac isn't taking jobs"} onClick={() => go("settings")} />
-          <StatCard tone="peach" icon="people" label={nearby ? "Nearby invitations" : "People"} value={nearby || org.org.memberCount} note={nearby ? "A colleague's Mac is open on this network" : `${org.pending.length ? `${org.pending.length} waiting to join · ` : ""}${org.org.name}`} onClick={() => go("team")} />
-        </section>
-      ) : null}
-
       <div className="bento">
         <section className="tile span-7 reveal reveal-2">
           <header className="tile-head">
@@ -284,78 +255,6 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                 <button className="row is-clickable more-row" onClick={() => go("runs")}>
                   <span className="row-copy">
                     <em>+{waiting.length - 3} more waiting</em>
-                  </span>
-                </button>
-              ) : null}
-              {teamApprovals.slice(0, waiting.length ? 2 : 3).map((approval) => (
-                <div className="needs-row is-team" key={approval.id}>
-                  <span className="kind-icon">
-                    <PixelIcon name="people" size={17} />
-                  </span>
-                  <div className="needs-copy">
-                    <div className="needs-title">
-                      <strong>{approval.title || approval.prompt}</strong>
-                      <RiskBadge risk={approval.risk} />
-                    </div>
-                    <p>
-                      <b>#{approval.spaceName}</b> · {approval.requestedBy} asked{approval.workerName ? ` · on ${approval.workerName}'s Mac` : ""}
-                      {approval.summary ? ` — ${approval.summary}` : ""}
-                    </p>
-                  </div>
-                  <div className="needs-actions">
-                    <Button variant="ghost" size="sm" onClick={() => openSpace(approval.spaceId)}>
-                      Open chat
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        const label = `#${approval.spaceName} · ${approval.title || approval.prompt}`;
-                        if (native) {
-                          invoke("decideSpaceJob", { jobId: approval.id, decision: "decline" });
-                          notify("Held", label);
-                        } else {
-                          enterprise.actions
-                            .decide(approval.id, "decline")
-                            .then(() => notify("Held", label))
-                            .catch((error: Error) => notify("That didn't work", error.message, "warning"));
-                        }
-                      }}
-                    >
-                      Not now
-                    </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={() => {
-                        const label = `#${approval.spaceName} · ${approval.title || approval.prompt}`;
-                        if (native) {
-                          invoke("decideSpaceJob", { jobId: approval.id, decision: "approve" });
-                          notify("Approved", label);
-                        } else {
-                          enterprise.actions
-                            .decide(approval.id, "approve")
-                            .then(() => notify("Approved", label))
-                            .catch((error: Error) => notify("That didn't work", error.message, "warning"));
-                        }
-                      }}
-                    >
-                      Do it
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              {teamApprovals.length > (waiting.length ? 2 : 3) ? (
-                <button className="row is-clickable more-row" onClick={() => go("spaces")}>
-                  <span className="row-copy">
-                    <em>+{teamApprovals.length - (waiting.length ? 2 : 3)} more from your team</em>
-                  </span>
-                </button>
-              ) : null}
-              {native && native.pendingJoins > 0 ? (
-                <button className="row is-clickable more-row" onClick={() => go("team")}>
-                  <span className="row-copy">
-                    <em>{native.pendingJoins} {native.pendingJoins === 1 ? "person wants" : "people want"} to join {native.orgName ?? "your organization"}</em>
                   </span>
                 </button>
               ) : null}
@@ -630,7 +529,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
       <footer className="home-footer">
         <p className="home-footer-note">
           <PixelIcon name="lock" size={13} />
-          Voice uses Cartesia. Recent context uses Moss. Your account lives in Convex.
+          Everything lives on this Mac. Models only see what you ask them about.
         </p>
       </footer>
     </div>

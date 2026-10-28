@@ -275,9 +275,7 @@ public enum AskPass {
     """
 
     public static var directory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Okidoki", isDirectory: true)
+        AppPaths.support
     }
 
     /// Path to the helper, written on first use. Nil only if the support folder can't be created.

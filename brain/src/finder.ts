@@ -31,7 +31,7 @@ export async function findDocument(query: string, key: string | undefined, fetch
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
         messages: [{
           role: "user",
-          content: `Find the official, current PDF for: ${wanted}\n\nPrefer the issuing agency or publisher's own site (for customs forms: cbp.gov, cbsa-asfc.gc.ca). `
+          content: `Find the official, current PDF for: ${wanted}\n\nPrefer the issuing agency or publisher's own site (for government forms: the agency's .gov site). `
             + `Reply with only JSON: {"title": "<the document's real title>", "url": "<direct .pdf link if you found one, otherwise the page that links to it>"}.`
             + ` If nothing official exists, reply {"title": "", "url": ""}.`,
         }],

@@ -294,6 +294,8 @@ export function ToolboxPage() {
         )}
       </section>
 
+      <UseFromAgents />
+
       <section className="tile">
         <header className="tile-head">
           <h2>Connectors</h2>
@@ -375,6 +377,7 @@ function ConnectorRow({ connector }: { connector: Connector }) {
 function McpServers() {
   const { state, settings, updateSettings, invoke, notify, native } = useDashboard();
   const [editing, setEditing] = useState<McpServer | "new" | null>(null);
+  const [importing, setImporting] = useState(false);
   const servers = settings.mcpServers ?? [];
   return (
     <div className="tb-mcp">
@@ -415,6 +418,9 @@ function McpServers() {
         <Button variant="secondary" size="sm" icon="plus" onClick={() => setEditing("new")}>
           Add server
         </Button>
+        <Button variant="ghost" size="sm" icon="download" onClick={() => setImporting(true)}>
+          Paste a config
+        </Button>
         {servers.length ? (
           <Button
             variant="ghost"
@@ -437,7 +443,88 @@ function McpServers() {
         ) : null}
       </div>
       <McpServerModal server={editing} onClose={() => setEditing(null)} />
+      <McpImportModal open={importing} onClose={() => setImporting(false)} />
     </div>
+  );
+}
+
+/** The servers in a Claude Desktop, Claude Code or Cursor config: `{"mcpServers": {name: {command, args, env} | {url, headers}}}`. */
+export function serversFromConfig(text: string): { server: McpServer; secrets: { env: Record<string, string>; headers: Record<string, string> } }[] {
+  const parsed = JSON.parse(text) as Record<string, unknown>;
+  const table = (parsed.mcpServers ?? parsed.servers ?? parsed) as Record<string, Record<string, unknown>>;
+  return Object.entries(table)
+    .filter(([, value]) => value && typeof value === "object" && (typeof value.command === "string" || typeof value.url === "string"))
+    .map(([name, value]) => {
+      const http = typeof value.url === "string";
+      const strings = (raw: unknown) => Object.fromEntries(Object.entries((raw ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
+      return {
+        server: {
+          id: `mcp-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+          name,
+          transport: http ? "http" : "stdio",
+          command: http ? "" : String(value.command),
+          args: http ? [] : ((value.args as unknown[]) ?? []).map(String),
+          url: http ? String(value.url) : "",
+          enabled: true,
+        } as McpServer,
+        secrets: { env: strings(value.env), headers: strings(value.headers) },
+      };
+    });
+}
+
+function McpImportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { invoke, notify } = useDashboard();
+  const [text, setText] = useState("");
+  let found: ReturnType<typeof serversFromConfig> = [];
+  let problem = "";
+  if (text.trim()) {
+    try {
+      found = serversFromConfig(text);
+      if (!found.length) problem = "No servers in that. Paste the part with \"mcpServers\".";
+    } catch {
+      problem = "That isn't valid JSON yet.";
+    }
+  }
+  const add = () => {
+    for (const { server, secrets } of found) invoke("saveMcpServer", { server, secrets });
+    notify(found.length === 1 ? "Server added" : `${found.length} servers added`, found.map((item) => item.server.name).join(", "), "info");
+    setText("");
+    onClose();
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Paste an MCP config" subtitle="From Claude Desktop, Claude Code or Cursor. Secrets go to this Mac's key file." width={560}>
+      <TextArea value={text} onChange={setText} rows={10} placeholder={'{\n  "mcpServers": {\n    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }\n  }\n}'} />
+      <p className="form-hint">{problem || (found.length ? `Found ${found.map((item) => item.server.name).join(", ")}.` : " ")}</p>
+      <footer className="modal-actions">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!found.length} onClick={add}>
+          Add {found.length > 1 ? `${found.length} servers` : "server"}
+        </Button>
+      </footer>
+    </Modal>
+  );
+}
+
+/** How to reach okidoki from another agent: its own MCP server, over this Mac's control endpoint. */
+function UseFromAgents() {
+  const { notify } = useDashboard();
+  const command = "claude mcp add okidoki -- bun ~/Desktop/okidoki-personal/mcp/okidoki-mcp.ts";
+  return (
+    <section className="tile">
+      <header className="tile-head">
+        <h2>Use okidoki from other agents</h2>
+      </header>
+      <p className="tb-mcp-hint">
+        Claude Code, Cursor and any MCP client can list and replay your skills, search the vault, and add notes and reminders. Replays still ask
+        for your okay here.
+      </p>
+      <div className="tb-mcp-row">
+        <code className="tb-mcp-cmd">{command}</code>
+        <IconButton icon="copy" label="Copy" onClick={() => void copyText(command).then(() => notify("Copied", "Paste it in a terminal", "info"))} />
+      </div>
+    </section>
   );
 }
 

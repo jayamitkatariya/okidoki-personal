@@ -38,7 +38,7 @@ export function AppShell({
   setAskOpen: (value: boolean) => void;
   children: React.ReactNode;
 }) {
-  const { state, settings, account, enterprise, invoke, updateSettings, toasts, dismissToast, convexConnected, native } = useDashboard();
+  const { state, settings, account, invoke, updateSettings, toasts, dismissToast, native } = useDashboard();
   const nav = useMemo(() => navFor(account.kind), [account.kind]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteAsk, setPaletteAsk] = useState(false);
@@ -129,7 +129,7 @@ export function AppShell({
     };
   }, [setPage, nav]);
 
-  // Switching to a personal account while on an enterprise page lands on Home, never on a blank page.
+  // A page that isn't in the sidebar (an old deep link) lands on Home, never on a blank page.
   useEffect(() => {
     if (!pageAvailable(page, account.kind)) setPage("home");
   }, [page, account.kind, setPage]);
@@ -148,17 +148,12 @@ export function AppShell({
             ? [`${live} working`, ""]
             : ["Ready when you are", ""];
 
-  const pendingJoins = enterprise.view?.pending.length ?? 0;
-  const unreadChats = enterprise.spaces.reduce((sum, space) => sum + space.unread, 0);
   const runBadge = (id: Page): number => {
     if (id === "home") return waiting;
     if (id === "runs") return live;
-    if (id === "spaces") return unreadChats;
-    if (id === "team") return pendingJoins;
     return 0;
   };
-  const enterprisePage = nav.find((group) => group.enterprise)?.items.some((item) => item.id === page) ?? false;
-  const crumbRoot = enterprisePage ? (enterprise.view?.org.name ?? "Enterprise") : "Workspace";
+  const crumbRoot = "Workspace";
 
   const openAsk = () => {
     setPalettePrompt("");
@@ -282,7 +277,7 @@ export function AppShell({
 
         <nav className="nav" ref={navRef} aria-label="Main navigation">
           {nav.map((group) => (
-            <div className={cx("nav-group", group.enterprise && "nav-group-enterprise")} key={group.label}>
+            <div className="nav-group" key={group.label}>
               <span className="nav-label">{group.label}</span>
               {group.items.map((item) => {
                 const badge = runBadge(item.id);
@@ -307,11 +302,11 @@ export function AppShell({
 
         <div className="sidebar-bottom">
           <div
-            className={cx("sidebar-foot", convexConnected ? "is-live" : native ? "is-local" : "")}
-            data-tip={`${convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}${state.version ? ` · v${state.version}` : ""}`}
+            className={cx("sidebar-foot", native ? "is-local" : "")}
+            data-tip={`${native ? "Saved on this Mac" : "Browser preview"}${state.version ? ` · v${state.version}` : ""}`}
           >
             <i />
-            <span>{convexConnected ? "Synced with Convex" : native ? "Saved on this Mac" : "Browser preview"}</span>
+            <span>{native ? "Saved on this Mac" : "Browser preview"}</span>
             <span className="spacer" />
             {state.version ? <span>v{state.version}</span> : null}
           </div>
@@ -340,7 +335,7 @@ export function AppShell({
           <div className="workspace-actions">
             <span className="workspace-local">
               <PixelIcon name="lock" size={12} />
-              {convexConnected ? "Synced" : native ? "On your Mac" : "Preview"}
+              {native ? "On your Mac" : "Preview"}
             </span>
             <button className="bar-ask" onClick={openAsk} aria-label="Ask okidoki">
               <PixelIcon name="spark" size={14} />
@@ -778,7 +773,7 @@ export function AuthGate() {
         )}
         <div className="auth-note">
           <PixelIcon name="lock" size={13} />
-          Stays on this Mac. Accounts and history sync through Convex.
+          Stays on this Mac. Nothing leaves it unless you ask a model.
         </div>
       </div>
     </div>

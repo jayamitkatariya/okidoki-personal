@@ -5,7 +5,7 @@ process.env.OKIDOKI_BRAIN_TOKEN = token;
 // These cases assert the no-key path. A developer .env must not satisfy them.
 delete process.env.ANTHROPIC_API_KEY;
 const { handleRequest } = await import("../src/server");
-const base = "http://127.0.0.1:4319";
+const base = "http://127.0.0.1:4329";
 const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 // Exercise the real HTTP handler and streamed Responses without binding a socket.
 const fetch = (url: string, init?: RequestInit) => handleRequest(new Request(url, init));
@@ -238,9 +238,4 @@ test("a body that isn't JSON, or isn't an object, is a 400 with a reason — nev
     // {} is an object; the route then says which field it wanted (apify/check falls back to the environment)
     expect([path, missing.status]).toEqual([path, path === "/apify/check" ? 200 : 400]);
   }
-});
-
-test("the workbench's one unauthenticated route treats Origin: null as another host", async () => {
-  const response = await fetch("http://localhost/ace/api/entries", { method: "POST", headers: { origin: "null", "content-type": "application/json" }, body: "{}" });
-  expect(response.status).toBe(403);
 });

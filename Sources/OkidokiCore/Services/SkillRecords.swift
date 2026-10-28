@@ -28,9 +28,7 @@ public enum SkillRecords {
     private struct Book: Codable { var records: [SkillRecord] }
 
     public static var fileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Okidoki/records.json")
+        AppPaths.support("records.json")
     }
 
     /// Accepts `{"records": [...]}` or a bare array. A missing or broken file is simply no records.
@@ -111,15 +109,15 @@ public enum ParameterFill {
         return (result, missing)
     }
 
-    /// Values the Mac knows without being told: today's date and where the brain serves pages.
-    public static func builtins(portal: String, now: Date = Date()) -> [String: String] {
+    /// Values the Mac knows without being told: today's date.
+    public static func builtins(now: Date = Date()) -> [String: String] {
         let us = DateFormatter()
         us.locale = Locale(identifier: "en_US_POSIX")
         us.dateFormat = "MM/dd/yyyy"
         let iso = DateFormatter()
         iso.locale = Locale(identifier: "en_US_POSIX")
         iso.dateFormat = "yyyy-MM-dd"
-        return ["portal": portal, "today": us.string(from: now), "today_iso": iso.string(from: now)]
+        return ["today": us.string(from: now), "today_iso": iso.string(from: now)]
     }
 
     /// `importer=Acme`, `value: 52000`, `hts="8471.30.0100"` from a request, after a "with" if there is one.

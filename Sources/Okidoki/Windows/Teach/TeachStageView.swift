@@ -210,6 +210,28 @@ final class TeachStageView: NSView {
         if thinking { setThinking(true) }
     }
 
+    /// The window moved (or scrolled) under a step: carry every mark along by the same amount instead
+    /// of drawing the step again, so nothing blinks, re-animates or re-crops while it follows.
+    /// `shifted` is the same scene with its geometry already moved, in overlay-local points.
+    func translate(to shifted: TeachScene, dx: CGFloat, dy: CGFloat) {
+        guard scene != nil else { return present(shifted, animated: false) }
+        scene = shifted
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        let marks: [CALayer] = [halo, glow, fill, ring, orbit, arrowGlow, arrow, arrowHead, comet, dropTarget, alsoBox, leader]
+            + (tagLayer.map { [$0] } ?? []) + (alsoTag.map { [$0] } ?? []) + (ghost.map { [$0] } ?? []) + drawingLayers
+        // Scene points run top-down; layers run bottom-up.
+        for mark in marks { mark.position = CGPoint(x: mark.position.x + dx, y: mark.position.y - dy) }
+        tagRect = tagRect?.offsetBy(dx: dx, dy: dy)
+        if let hole = shifted.drawings.first(where: { $0.kind == "spotlight" })?.rect, spotlight.opacity > 0 {
+            let path = CGMutablePath()
+            path.addRect(bounds)
+            path.addPath(CGPath(roundedRect: flip(hole.insetBy(dx: -10, dy: -10)), cornerWidth: 12, cornerHeight: 12, transform: nil))
+            spotlight.path = path
+        }
+    }
+
     private func hideTarget() {
         for shape in [halo, glow, fill, ring, orbit] { shape.isHidden = true; shape.removeAllAnimations() }
     }

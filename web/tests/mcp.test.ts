@@ -21,3 +21,20 @@ test("README MCP snippets preserve typed arguments and reject malformed configur
   expect(splitCommand(joinCommand([parsed!.command!, ...parsed!.args!]))).toEqual([source.command, ...source.args]);
   for (const value of [null, [], {}, { command: 42 }, { command: "node", args: [1] }, { command: "node", env: { TOKEN: 42 } }, { mcpServers: null }]) expect(parseServerJSON(JSON.stringify(value))).toBeNull();
 });
+
+import { serversFromConfig } from "../src/pages/ToolboxPage";
+
+test("a pasted Claude Desktop config becomes servers, with secrets kept apart", () => {
+  const found = serversFromConfig(JSON.stringify({
+    mcpServers: {
+      github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: { GITHUB_TOKEN: "t" } },
+      "Team Wiki": { url: "https://wiki.example.com/mcp", headers: { Authorization: "Bearer x" } },
+      broken: { nothing: true },
+    },
+  }));
+  expect(found.map((item) => item.server.id)).toEqual(["mcp-github", "mcp-team-wiki"]);
+  expect(found[0].server).toMatchObject({ transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] });
+  expect(found[0].secrets.env).toEqual({ GITHUB_TOKEN: "t" });
+  expect(found[1].server).toMatchObject({ transport: "http", url: "https://wiki.example.com/mcp" });
+  expect(found[1].secrets.headers).toEqual({ Authorization: "Bearer x" });
+});
