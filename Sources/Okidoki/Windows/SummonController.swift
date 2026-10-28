@@ -635,7 +635,8 @@ struct InputCapsuleView: View {
     }
 }
 
-/// Auto / Act / Teach / Chat: what the request is for. A menu, so one click changes it and the choice sticks.
+/// Auto / Act / Teach / Chat: what the request is for. One click opens the choices and the pick sticks.
+/// A plain button that pops an AppKit menu: SwiftUI's `Menu` doesn't open from this non-activating panel.
 private struct SummonModeChip: View {
     @ObservedObject var model: SummonModel
     var palette: OverlayPalette
@@ -645,14 +646,8 @@ private struct SummonModeChip: View {
     private var active: Bool { mode != .auto }
 
     var body: some View {
-        Menu {
-            ForEach(SummonMode.allCases) { option in
-                Button {
-                    model.onMode?(option)
-                } label: {
-                    Label("\(option.title) — \(option.blurb)", systemImage: option == mode ? "checkmark" : option.symbol)
-                }
-            }
+        Button {
+            SummonModeMenu.show(current: mode) { model.onMode?($0) }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: mode.symbol)
@@ -672,13 +667,47 @@ private struct SummonModeChip: View {
             }
             .contentShape(Capsule())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
         .fixedSize()
         .onHover { hovering = $0 }
         .animation(OKMotion.snappy, value: hovering)
         .help("\(mode.title): \(mode.blurb.lowercased()). Click to change.")
         .accessibilityLabel("Mode: \(mode.title)")
+    }
+}
+
+/// The mode choices as a native menu, just under the pointer.
+@MainActor
+private final class SummonModeMenu: NSObject {
+    private static var current: SummonModeMenu?
+    private let onPick: (SummonMode) -> Void
+
+    private init(onPick: @escaping (SummonMode) -> Void) {
+        self.onPick = onPick
+    }
+
+    static func show(current mode: SummonMode, onPick: @escaping (SummonMode) -> Void) {
+        let handler = SummonModeMenu(onPick: onPick)
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for option in SummonMode.allCases {
+            let item = NSMenuItem(title: "\(option.title) — \(option.blurb)", action: #selector(picked(_:)), keyEquivalent: "")
+            item.target = handler
+            item.representedObject = option.rawValue
+            item.state = option == mode ? .on : .off
+            item.image = NSImage(systemSymbolName: option.symbol, accessibilityDescription: option.title)
+            menu.addItem(item)
+        }
+        // the menu only holds its items weakly to their target, so keep the handler alive while it's open
+        Self.current = handler
+        let point = NSEvent.mouseLocation
+        menu.popUp(positioning: menu.items.first { $0.state == .on }, at: NSPoint(x: point.x - 12, y: point.y - 6), in: nil)
+        Self.current = nil
+    }
+
+    @objc private func picked(_ item: NSMenuItem) {
+        guard let raw = item.representedObject as? String, let mode = SummonMode(rawValue: raw) else { return }
+        onPick(mode)
     }
 }
 
