@@ -17,14 +17,14 @@ final class SummonLevelMeter: ObservableObject {
     @Published var level: Double = 0
 }
 
-/// What a request typed at the cursor is for. Auto leaves it to the brain.
+/// What a request typed at the cursor is for. Act is the default: okidoki still picks how
+/// (terminal, the screen, a quick action, or just an answer), it only never turns it into a lesson.
 enum SummonMode: String, CaseIterable, Identifiable {
-    case auto, act, teach, chat
+    case act, teach, chat
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .auto: return "Auto"
         case .act: return "Act"
         case .teach: return "Teach"
         case .chat: return "Chat"
@@ -33,7 +33,6 @@ enum SummonMode: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .auto: return "sparkle"
         case .act: return "bolt.fill"
         case .teach: return "graduationcap.fill"
         case .chat: return "bubble.left.fill"
@@ -42,7 +41,6 @@ enum SummonMode: String, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
-        case .auto: return "Decide for me"
         case .act: return "Do it on this Mac"
         case .teach: return "Show me how, on screen"
         case .chat: return "Just answer"
@@ -51,7 +49,6 @@ enum SummonMode: String, CaseIterable, Identifiable {
 
     var placeholder: String {
         switch self {
-        case .auto: return "Ask anything"
         case .act: return "What should I do?"
         case .teach: return "What should I teach you?"
         case .chat: return "Ask me anything"
@@ -65,7 +62,7 @@ final class SummonModel: ObservableObject {
     @Published var mode: InputMode = .typing
     @Published var text: String = ""
     /// Auto, act, teach or chat. Remembered between summons.
-    @Published var summonMode: SummonMode = .auto
+    @Published var summonMode: SummonMode = .act
     @Published var transcript: String = ""
     @Published var error: String?
     @Published var attachmentName: String = ""
@@ -300,7 +297,7 @@ final class SummonController {
     /// The mode picked last time.
     private func refreshMode() {
         guard let env else { return }
-        let remembered = SummonMode(rawValue: env.store.settings.summonMode) ?? .auto
+        let remembered = SummonMode(rawValue: env.store.settings.summonMode) ?? .act
         if model.summonMode != remembered { model.summonMode = remembered }
     }
 
@@ -635,14 +632,15 @@ struct InputCapsuleView: View {
     }
 }
 
-/// Auto / Act / Teach / Chat: what the request is for. A menu, so one click changes it and the choice sticks.
+/// Act / Teach / Chat: what the request is for. A menu, so one click changes it and the choice sticks.
 private struct SummonModeChip: View {
     @ObservedObject var model: SummonModel
     var palette: OverlayPalette
     @State private var hovering = false
 
     private var mode: SummonMode { model.summonMode }
-    private var active: Bool { mode != .auto }
+    // the default stays quiet; picking Teach or Chat tints the chip so it's obvious
+    private var active: Bool { mode != .act }
 
     var body: some View {
         Menu {

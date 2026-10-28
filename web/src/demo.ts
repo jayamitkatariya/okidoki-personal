@@ -738,7 +738,7 @@ export const demoState: NativeState = {
     appleNotes: true,
     automationGranted: true,
     inputMonitoringGranted: true,
-    summonMode: "auto",
+    summonMode: "act",
     vaultFolder: "~/Desktop/Okidoki Vault",
     onboardingComplete: true,
     tourComplete: true,

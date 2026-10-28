@@ -52,8 +52,9 @@ Replays still ask for your okay in the notch whenever okidoki would ask anyway.
 
 | Type | What happens |
 |---|---|
-| anything | the brain decides: answer, act, teach or run a terminal job |
-| pick **Act / Teach / Chat** on the chip | forces that mode |
+| anything (**Act**, the default) | okidoki gets it done: a quick action, a terminal job, driving an app, or just an answer |
+| pick **Teach** on the chip | a lesson on your own screen, one step at a time |
+| pick **Chat** on the chip | just talk; it never touches the Mac |
 | `watch me …`, `replay …`, `again`, `my skills` | recordings and replays, instant, no key needed |
 | `note: …` | straight onto the Notes page |
 | `remind me to … at 5pm` / `every weekday at 9` | a reminder okidoki fires itself |

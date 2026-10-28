@@ -81,7 +81,7 @@ export interface Settings {
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
   /** What a request typed at the cursor is for. Missing on older builds. */
-  summonMode?: "auto" | "act" | "teach" | "chat";
+  summonMode?: "act" | "teach" | "chat";
   /** The vault folder on disk. Missing on older builds. */
   vaultFolder?: string;
 }
