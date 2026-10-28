@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { createPortal } from "react-dom";
 import { useDashboard } from "../store";
 import { cx } from "../lib";
-import { jumpToSettingsSection, navFor, pageAvailable, resolveRoute, SECTION_META, type NavGroup, type Page } from "../nav";
+import { groupOf, jumpToSettingsSection, navFor, ON_DEMAND, pageAvailable, resolveRoute, SECTION_META, SETTINGS_ITEM, type NavGroup, type NavItem, type Page } from "../nav";
 import type { AccountKind } from "../types";
 import { useDialog } from "./useDialog";
 import {
@@ -12,7 +12,6 @@ import {
   isComposing,
   KeyHint,
   Logo,
-  Modal,
   PixelIcon,
   Segmented,
   TextField,
@@ -40,11 +39,12 @@ export function AppShell({
 }) {
   const { state, settings, account, invoke, updateSettings, toasts, dismissToast, native } = useDashboard();
   const nav = useMemo(() => navFor(account.kind), [account.kind]);
+  // the palette can jump anywhere, including the pinned Settings row
+  const paletteNav = useMemo(() => [...nav, { label: "setup", items: [SETTINGS_ITEM] }], [nav]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteAsk, setPaletteAsk] = useState(false);
   const [palettePrompt, setPalettePrompt] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
-  const [addAccount, setAddAccount] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
@@ -120,14 +120,14 @@ export function AppShell({
     };
     bridge.okidokiNavigate = (next: string) => {
       const route = resolveRoute(next);
-      if (nav.some((group) => group.items.some((item) => item.id === route.page))) setPage(route.page as Page);
+      if (pageAvailable(route.page as Page, account.kind)) setPage(route.page as Page);
       if (route.section) jumpToSettingsSection(route.section);
     };
     return () => {
       delete bridge.okidokiOpenAsk;
       delete bridge.okidokiNavigate;
     };
-  }, [setPage, nav]);
+  }, [setPage, account.kind]);
 
   // A page that isn't in the sidebar (an old deep link) lands on Home, never on a blank page.
   useEffect(() => {
@@ -148,12 +148,37 @@ export function AppShell({
             ? [`${live} working`, ""]
             : ["Ready when you are", ""];
 
+  // reminders due by the end of today, so the sidebar says when one is coming up
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  const dueToday = (state.reminders ?? []).filter((reminder) => !reminder.done && reminder.dueAt && new Date(reminder.dueAt) <= endOfToday).length;
   const runBadge = (id: Page): number => {
     if (id === "home") return waiting;
     if (id === "runs") return live;
+    if (id === "reminders") return dueToday;
     return 0;
   };
-  const crumbRoot = "Workspace";
+  // Live is empty unless okidoki is driving, so its row only shows up then (or while you're on it)
+  const showItem = (id: Page) => !ON_DEMAND.has(id) || id === page || Boolean(state.live?.active || state.live?.steps?.length);
+  const crumbRoot = groupOf(page).replace(/^./, (letter) => letter.toUpperCase());
+  const navButton = (item: NavItem) => {
+    const badge = runBadge(item.id);
+    return (
+      <button
+        key={item.id}
+        className={cx("nav-item", page === item.id && "nav-active")}
+        onClick={() => setPage(item.id)}
+        aria-current={page === item.id ? "page" : undefined}
+        aria-label={badge ? `${item.title}, ${badge}` : item.title}
+        data-tip={badge ? `${item.title} · ${badge}` : item.title}
+      >
+        <PixelIcon name={item.icon} size={17} />
+        <span>{item.title}</span>
+        {item.id === "live" && state.live?.active ? <em className="nav-badge nav-badge-hot">live</em> : null}
+        {badge > 0 ? <em className={cx("nav-badge", item.id === "home" && "nav-badge-hot")}>{badge}</em> : null}
+      </button>
+    );
+  };
 
   const openAsk = () => {
     setPalettePrompt("");
@@ -189,14 +214,14 @@ export function AppShell({
             className={cx("account", accountOpen && "is-open")}
             aria-expanded={accountOpen}
             aria-haspopup="menu"
-            aria-label="Switch workspace"
+            aria-label="Profile"
             data-tip={account.name}
             onClick={() => setAccountOpen((value) => !value)}
           >
             <Avatar account={account} size={28} />
             <span className="account-text">
               <strong>{account.name}</strong>
-              <em>{account.kind === "work" ? "Work" : "Personal"}</em>
+              <em>Local</em>
             </span>
             <PixelIcon name="chevron" size={15} className="account-chevron" />
           </button>
@@ -209,32 +234,16 @@ export function AppShell({
                 exit={{ opacity: 0, y: -4, scale: 0.98 }}
                 transition={{ type: "spring", stiffness: 460, damping: 34 }}
               >
-                <div className="pop-label">Accounts</div>
-                {state.accounts.map((item) => (
-                  <button
-                    key={item.id}
-                    className={cx("pop-account", item.id === state.currentAccountID && "is-current")}
-                    onClick={() => {
-                      invoke("switchAccount", { id: item.id });
-                      setAccountOpen(false);
-                    }}
-                  >
-                    <Avatar account={item} size={26} />
-                    <span>
-                      <strong>{item.name}</strong>
-                      <em>{item.email || item.kind}</em>
-                    </span>
-                    {item.id === state.currentAccountID ? <PixelIcon name="check" size={15} /> : null}
-                  </button>
-                ))}
+                <div className="pop-label">{account.email || account.name}</div>
                 <button
                   className="pop-action"
                   onClick={() => {
+                    setPage("settings");
+                    jumpToSettingsSection("account");
                     setAccountOpen(false);
-                    setAddAccount(true);
                   }}
                 >
-                  <PixelIcon name="plus" size={15} /> Add account
+                  <PixelIcon name="user" size={15} /> Edit profile
                 </button>
                 <div className="pop-sep" />
                 <button
@@ -250,19 +259,11 @@ export function AppShell({
                   className="pop-action"
                   onClick={() => {
                     setPage("settings");
+                    jumpToSettingsSection("keys");
                     setAccountOpen(false);
                   }}
                 >
-                  <PixelIcon name="gear" size={15} /> Settings
-                </button>
-                <button
-                  className="pop-action pop-danger"
-                  onClick={() => {
-                    invoke("signOut");
-                    setAccountOpen(false);
-                  }}
-                >
-                  <PixelIcon name="logout" size={15} /> Sign out
+                  <PixelIcon name="key" size={15} /> API keys
                 </button>
               </motion.div>
             ) : null}
@@ -279,28 +280,13 @@ export function AppShell({
           {nav.map((group) => (
             <div className="nav-group" key={group.label}>
               <span className="nav-label">{group.label}</span>
-              {group.items.map((item) => {
-                const badge = runBadge(item.id);
-                return (
-                  <button
-                    key={item.id}
-                    className={cx("nav-item", page === item.id && "nav-active")}
-                    onClick={() => setPage(item.id)}
-                    aria-current={page === item.id ? "page" : undefined}
-                    aria-label={badge ? `${item.title}, ${badge}` : item.title}
-                    data-tip={badge ? `${item.title} · ${badge}` : item.title}
-                  >
-                    <PixelIcon name={item.icon} size={17} />
-                    <span>{item.title}</span>
-                    {badge > 0 ? <em className={cx("nav-badge", item.id === "home" && "nav-badge-hot")}>{badge}</em> : null}
-                  </button>
-                );
-              })}
+              {group.items.filter((item) => showItem(item.id)).map(navButton)}
             </div>
           ))}
         </nav>
 
         <div className="sidebar-bottom">
+          {navButton(SETTINGS_ITEM)}
           <div
             className={cx("sidebar-foot", native ? "is-local" : "")}
             data-tip={`${native ? "Saved on this Mac" : "Browser preview"}${state.version ? ` · v${state.version}` : ""}`}
@@ -367,7 +353,7 @@ export function AppShell({
 
       <CommandPalette
         open={paletteOpen}
-        nav={nav}
+        nav={paletteNav}
         askFirst={paletteAsk}
         initialQuery={palettePrompt}
         onClose={() => setPaletteOpen(false)}
@@ -377,7 +363,6 @@ export function AppShell({
         }}
       />
 
-      <AddAccountModal open={addAccount} onClose={() => setAddAccount(false)} />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
@@ -671,42 +656,6 @@ function AccountFields({
         />
       </div>
     </div>
-  );
-}
-
-function AddAccountModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { invoke, notify } = useDashboard();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [kind, setKind] = useState<AccountKind>("personal");
-
-  useEffect(() => {
-    if (open) {
-      setName("");
-      setEmail("");
-      setKind("personal");
-    }
-  }, [open]);
-
-  const create = () => {
-    const finalName = name.trim() || "You";
-    invoke("createAccount", { name: finalName, email: email.trim(), kind });
-    notify("Account added", finalName);
-    onClose();
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title="Add an account" subtitle="Each account keeps its own threads and memory." width={420}>
-      <AccountFields name={name} setName={setName} email={email} setEmail={setEmail} kind={kind} setKind={setKind} autoFocus />
-      <footer className="modal-actions">
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button variant="primary" onClick={create}>
-          Add account
-        </Button>
-      </footer>
-    </Modal>
   );
 }
 

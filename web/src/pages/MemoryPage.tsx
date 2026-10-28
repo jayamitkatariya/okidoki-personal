@@ -83,7 +83,7 @@ export function MemoryPage() {
     <div className="memory-page">
       <PageTitle
         title="Memory"
-        subtitle="About you stays with your account. Right now is short-term memory, searched with Moss."
+        subtitle="What okidoki knows about you, kept on this Mac. Notes count too."
         trailing={state.services ? <MemoryIndexBadge services={state.services} onFix={() => (window.location.hash = "#/keys")} /> : null}
       />
 

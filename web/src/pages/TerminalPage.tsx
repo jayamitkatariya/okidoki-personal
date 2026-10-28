@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useDashboard } from "../store";
 import { copyText, cx, relativeTime } from "../lib";
-import type { Run } from "../types";
+import type { CodingAgentID, Run } from "../types";
+import { jumpToSettingsSection } from "../nav";
 import { Button, Chip, Empty, IconButton, PageTitle, PixelIcon, RiskBadge, StatusBadge, TextField } from "../components/ui";
 
 const EXAMPLES = [
@@ -14,8 +15,8 @@ const EXAMPLES = [
 ];
 
 /** Terminal work in plain English: ask for it, see every command before it runs, run it again later. */
-export function TerminalPage() {
-  const { state, invoke, notify } = useDashboard();
+export function TerminalPage({ go }: { go: (page: "settings") => void }) {
+  const { state, settings, updateSettings, invoke, notify } = useDashboard();
   const [text, setText] = useState("");
   const [openID, setOpenID] = useState<string | null>(null);
   const runs = (state.runs ?? []).filter((run) => run.kind === "terminal" || run.kind === "coding").slice(0, 40);
@@ -53,6 +54,15 @@ export function TerminalPage() {
           <header className="tile-head">
             <h2>Coding agents</h2>
             <span className="tile-count">{agents.filter((agent) => agent.installed).length}</span>
+            <button
+              className="tile-link"
+              onClick={() => {
+                go("settings");
+                jumpToSettingsSection("agents");
+              }}
+            >
+              Agent settings <PixelIcon name="chevron" size={14} />
+            </button>
           </header>
           <div className="terminal-agents">
             {agents.map((agent) => (
@@ -64,6 +74,20 @@ export function TerminalPage() {
                   <strong>{agent.name}</strong>
                   <em>{agent.installed ? (agent.signedIn ? "ready" : `installed · run ${agent.loginHint}`) : "not installed"}</em>
                 </span>
+                {agent.installed && settings.selectedAgent === agent.id ? (
+                  <Chip tone="green">default</Chip>
+                ) : agent.installed ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      updateSettings({ selectedAgent: agent.id as CodingAgentID });
+                      notify("Default agent", agent.name);
+                    }}
+                  >
+                    Make default
+                  </Button>
+                ) : null}
                 {agent.installed ? (
                   <Button variant="secondary" size="sm" onClick={() => ask(`open ${agent.name} in my project`)}>
                     Open

@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 import { useDashboard } from "../store";
-import { cx, futureTime, relativeTime, scheduleLabel, timeOfDay, todayLabel, toolPrice } from "../lib";
-import type { Run, RunKind, Settings } from "../types";
-import { Button, CountUp, KeyHint, PixelIcon, Progress, RiskBadge, StatusBadge } from "../components/ui";
+import { cx, futureTime, relativeTime, scheduleLabel, timeOfDay, todayLabel } from "../lib";
+import type { Note, Reminder, Run, RunKind, Settings } from "../types";
+import { Button, KeyHint, PixelIcon, Progress, RiskBadge, StatusBadge } from "../components/ui";
+import { when } from "./RemindersPage";
+import { focusNote } from "./NotesPage";
 import type { Page } from "../components/Layout";
 import { PixelWordmark } from "../components/PixelWordmark";
 
@@ -79,9 +81,10 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
   );
   const routines = (state.routines ?? []).filter((routine) => routine.enabled);
   const skills = state.skills ?? [];
-  const memories = state.memories ?? [];
-  const installedTools = (state.tools ?? []).filter((tool) => tool.installed);
-  const savings = state.savings || installedTools.reduce((sum, tool) => sum + toolPrice(tool.id), 0);
+  const upcoming = useMemo(() => upcomingReminders(state.reminders ?? []), [state.reminders]);
+  const overdue = upcoming.some((reminder) => reminder.dueAt && +new Date(reminder.dueAt) < Date.now());
+  const dueSoon = upcoming.filter((reminder) => reminder.dueAt && +new Date(reminder.dueAt) < Date.now() + 24 * 60 * 60 * 1000);
+  const recentNotes = useMemo(() => newestNotes(state.notes ?? []), [state.notes]);
   const firstWord = account.name.split(" ")[0] || "there";
   const firstName = firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
 
@@ -172,44 +175,9 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
         </article>
       </section>
 
-      <section className="home-stats" aria-label="Workspace overview">
-        <StatCard
-          tone="rose"
-          icon="hand"
-          label="Needs review"
-          value={waiting.length}
-          note={waiting.length ? "Your approval comes first" : "You're all caught up"}
-          onClick={() => go("runs")}
-        />
-        <StatCard
-          tone="mint"
-          icon="runs"
-          label="In progress"
-          value={live.length}
-          note={live.length ? "Working in the background" : "Ready for your next idea"}
-          onClick={() => go("runs")}
-        />
-        <StatCard
-          tone="lilac"
-          icon="clock"
-          label="Finished this week"
-          value={week.done}
-          note={week.done ? `${week.spent} reclaimed for you` : "Nothing wrapped up yet"}
-          onClick={() => go("history")}
-        />
-        <StatCard
-          tone="peach"
-          icon="grid"
-          label="Annual savings"
-          value={Math.round(savings)}
-          prefix="$"
-          note={installedTools.length ? `With ${installedTools.length} free ${installedTools.length === 1 ? "tool" : "tools"} in your toolbox` : "Discover free tools in your toolbox"}
-          onClick={() => go("toolbox")}
-        />
-      </section>
-
       <div className="bento">
-        <section className="tile span-7 reveal reveal-2">
+        {/* with nothing running, attention gets the full row instead of sitting beside an empty tile */}
+        <section className={cx("tile reveal reveal-2", live.length ? "span-7" : "span-12")}>
           <header className="tile-head">
             <span className="tile-icon tone-rose">
               <PixelIcon name="hand" size={15} />
@@ -272,164 +240,43 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           )}
         </section>
 
+        {live.length ? (
         <section className="tile span-5 reveal reveal-2">
-          <header className="tile-head">
-            <span className="tile-icon tone-mint">
-              <PixelIcon name="runs" size={15} />
-            </span>
-            <h2>In progress</h2>
-            {live.length ? <span className="tile-count">{live.length}</span> : null}
-            <button className="tile-link" onClick={() => go("runs")}>
-              Runs <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {live.length ? (
-            <div>
-              {live.slice(0, 2).map((run) => (
-                <LiveItem
-                  key={run.id}
-                  run={run}
-                  onOpen={() => openRun(run.id)}
-                  onPause={() => invoke("pauseRun", { id: run.id })}
-                  onStop={() => invoke("stopRun", { id: run.id })}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <span className="tile-empty-icon">
-                <PixelIcon name="runs" size={16} />
+            <header className="tile-head">
+              <span className="tile-icon tone-mint">
+                <PixelIcon name="runs" size={15} />
               </span>
-              <strong>Nothing running</strong>
-              Background work and agents show progress here.
-            </div>
-          )}
-        </section>
+              <h2>In progress</h2>
+              {live.length ? <span className="tile-count">{live.length}</span> : null}
+              <button className="tile-link" onClick={() => go("runs")}>
+                Runs <PixelIcon name="chevron" size={14} />
+              </button>
+            </header>
+            {live.length ? (
+              <div>
+                {live.slice(0, 2).map((run) => (
+                  <LiveItem
+                    key={run.id}
+                    run={run}
+                    onOpen={() => openRun(run.id)}
+                    onPause={() => invoke("pauseRun", { id: run.id })}
+                    onStop={() => invoke("stopRun", { id: run.id })}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="tile-empty">
+                <span className="tile-empty-icon">
+                  <PixelIcon name="runs" size={16} />
+                </span>
+                <strong>Nothing running</strong>
+                Background work and agents show progress here.
+              </div>
+            )}
+          </section>
+        ) : null}
 
         <section className="tile span-4 reveal reveal-3">
-          <header className="tile-head">
-            <span className="tile-icon tone-lilac">
-              <PixelIcon name="calendar" size={15} />
-            </span>
-            <h2>This week</h2>
-            <button className="tile-link" onClick={() => go("history")}>
-              History <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          <WeekChart runs={runs} />
-        </section>
-
-        <section className="tile span-8 reveal reveal-3">
-          <header className="tile-head">
-            <span className="tile-icon tone-sky">
-              <PixelIcon name="clock" size={15} />
-            </span>
-            <h2>Recent activity</h2>
-            <button className="tile-link" onClick={() => go("history")}>
-              See all <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {recent.length ? (
-            <div className="rows">
-              {recent.slice(0, 4).map((run) => (
-                <button className="row" key={run.id} onClick={() => openRun(run.id)}>
-                  <span className="kind-icon small">
-                    <PixelIcon name={kindGlyph[run.kind] ?? "spark"} size={14} />
-                  </span>
-                  <span className="row-copy">
-                    <strong className="sentence">{run.title}</strong>
-                    <em className="sentence">{run.summary || run.prompt}</em>
-                  </span>
-                  <span className="row-meta">{relativeTime(run.endedAt ?? run.createdAt)}</span>
-                  <StatusBadge status={run.status} />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <span className="tile-empty-icon">
-                <PixelIcon name="clock" size={16} />
-              </span>
-              <strong>No history yet</strong>
-              Finished requests land here.
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-12 reveal reveal-3">
-          <header className="tile-head">
-            <span className="tile-icon tone-amber">
-              <PixelIcon name="gear" size={15} />
-            </span>
-            <h2>Controls</h2>
-            <button className="tile-link" onClick={() => go("settings")}>
-              Settings <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          <div className="controls">
-            {CONTROLS.map((control) => {
-              const on = Boolean(settings[control.key]);
-              return (
-                <button
-                  key={control.key}
-                  className={cx("control", on && "is-on")}
-                  role="switch"
-                  aria-label={control.title}
-                  aria-checked={on}
-                  onClick={() => toggle(control.key, control.title)}
-                >
-                  <span className="control-top">
-                    <span className="control-icon">
-                      <PixelIcon name={control.icon} size={16} />
-                    </span>
-                    <i className="control-switch" aria-hidden="true" />
-                  </span>
-                  <span>
-                    <strong>{control.title}</strong>
-                    <em>{on ? control.on : control.off}</em>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="tile span-4 reveal reveal-4">
-          <header className="tile-head">
-            <span className="tile-icon tone-peach">
-              <PixelIcon name="grid" size={15} />
-            </span>
-            <h2>Toolbox</h2>
-            <button className="tile-link" onClick={() => go("toolbox")}>
-              Browse <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {installedTools.length ? (
-            <div className="rows">
-              {installedTools.slice(0, 4).map((tool) => (
-                <div className="row" key={tool.id}>
-                  <span className="kind-icon small">
-                    <PixelIcon name="terminal" size={14} />
-                  </span>
-                  <span className="row-copy">
-                    <strong>{tool.name}</strong>
-                    <em>Instead of {tool.replaces}</em>
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <span className="tile-empty-icon">
-                <PixelIcon name="grid" size={16} />
-              </span>
-              <strong>No tools installed</strong>
-              Mole, ffmpeg and Pandoc are one click away.
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-4 reveal reveal-4">
           <header className="tile-head">
             <span className="tile-icon tone-rose">
               <PixelIcon name="record" size={15} />
@@ -493,23 +340,38 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           )}
         </section>
 
-        <section className="tile span-4 reveal reveal-4">
+        <section className="tile span-4 reveal reveal-3">
           <header className="tile-head">
-            <span className="tile-icon tone-lilac">
-              <PixelIcon name="memory" size={15} />
+            <span className="tile-icon tone-amber">
+              <PixelIcon name="bell" size={15} />
             </span>
-            <h2>Memory</h2>
-            <button className="tile-link" onClick={() => go("memory")}>
-              Edit <PixelIcon name="chevron" size={14} />
+            <h2>Up next</h2>
+            {dueSoon.length ? <span className={cx("tile-count", overdue && "is-hot")}>{dueSoon.length}</span> : null}
+            <button className="tile-link" onClick={() => go("reminders")}>
+              {upcoming.length ? "Reminders" : "Add one"} <PixelIcon name="chevron" size={14} />
             </button>
           </header>
-          {memories.length ? (
+          {upcoming.length ? (
             <div className="rows">
-              {memories.slice(0, 3).map((memory) => (
-                <div className="row" key={memory.id}>
-                  <span className="row-dot" />
+              {upcoming.slice(0, 4).map((reminder) => (
+                <div className="row" key={reminder.id}>
+                  <button
+                    className="icon-btn"
+                    aria-label={`Mark ${reminder.title} done`}
+                    title="Done"
+                    onClick={() => {
+                      invoke("completeReminder", { id: reminder.id, done: true });
+                      notify("Done", reminder.title, "info");
+                    }}
+                  >
+                    <PixelIcon name="check" size={14} />
+                  </button>
                   <span className="row-copy">
-                    <strong className="wrap sentence">{memory.text}</strong>
+                    <strong className="sentence">{reminder.title}</strong>
+                    <em>
+                      {when(reminder)}
+                      {reminder.skillID ? " · replays a skill" : ""}
+                    </em>
                   </span>
                 </div>
               ))}
@@ -517,13 +379,147 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           ) : (
             <div className="tile-empty">
               <span className="tile-empty-icon">
-                <PixelIcon name="memory" size={16} />
+                <PixelIcon name="bell" size={16} />
               </span>
-              <strong>Nothing remembered yet</strong>
-              Tell okidoki about yourself once. Edit it anytime.
+              <strong>Nothing coming up</strong>
+              Say “remind me to … at 5pm” at the cursor.
             </div>
           )}
         </section>
+
+        <section className="tile span-4 reveal reveal-3">
+          <header className="tile-head">
+            <span className="tile-icon tone-sky">
+              <PixelIcon name="note" size={15} />
+            </span>
+            <h2>Notes</h2>
+            <button className="tile-link" onClick={() => go("notes")}>
+              {recentNotes.length ? "All notes" : "Write one"} <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          {recentNotes.length ? (
+            <div className="rows">
+              {recentNotes.slice(0, 4).map((note) => (
+                <button
+                  className="row"
+                  key={note.id}
+                  onClick={() => {
+                    focusNote(note.id);
+                    go("notes");
+                  }}
+                >
+                  <span className="kind-icon small">
+                    <PixelIcon name="note" size={14} />
+                  </span>
+                  <span className="row-copy">
+                    <strong className="sentence">{note.title || "untitled"}</strong>
+                    <em>
+                      {note.tags.length ? `${note.tags.map((tag) => `#${tag}`).join(" ")} · ` : ""}
+                      {relativeTime(note.updatedAt)}
+                    </em>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="tile-empty">
+              <span className="tile-empty-icon">
+                <PixelIcon name="note" size={16} />
+              </span>
+              <strong>No notes yet</strong>
+              Type “note: …” at the cursor, or write one here.
+            </div>
+          )}
+        </section>
+
+        <section className="tile span-4 reveal reveal-4">
+          <header className="tile-head">
+            <span className="tile-icon tone-lilac">
+              <PixelIcon name="calendar" size={15} />
+            </span>
+            <h2>This week</h2>
+            <button className="tile-link" onClick={() => go("history")}>
+              History <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          <WeekChart runs={runs} />
+        </section>
+
+        <section className="tile span-8 reveal reveal-4">
+          <header className="tile-head">
+            <span className="tile-icon tone-sky">
+              <PixelIcon name="clock" size={15} />
+            </span>
+            <h2>Recent activity</h2>
+            <button className="tile-link" onClick={() => go("history")}>
+              See all <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          {recent.length ? (
+            <div className="rows">
+              {recent.slice(0, 4).map((run) => (
+                <button className="row" key={run.id} onClick={() => openRun(run.id)}>
+                  <span className="kind-icon small">
+                    <PixelIcon name={kindGlyph[run.kind] ?? "spark"} size={14} />
+                  </span>
+                  <span className="row-copy">
+                    <strong className="sentence">{run.title}</strong>
+                    <em className="sentence">{run.summary || run.prompt}</em>
+                  </span>
+                  <span className="row-meta">{relativeTime(run.endedAt ?? run.createdAt)}</span>
+                  <StatusBadge status={run.status} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="tile-empty">
+              <span className="tile-empty-icon">
+                <PixelIcon name="clock" size={16} />
+              </span>
+              <strong>No history yet</strong>
+              Finished requests land here.
+            </div>
+          )}
+        </section>
+
+        <section className="tile span-12 reveal reveal-4">
+          <header className="tile-head">
+            <span className="tile-icon tone-amber">
+              <PixelIcon name="gear" size={15} />
+            </span>
+            <h2>Controls</h2>
+            <button className="tile-link" onClick={() => go("settings")}>
+              Settings <PixelIcon name="chevron" size={14} />
+            </button>
+          </header>
+          <div className="controls">
+            {CONTROLS.map((control) => {
+              const on = Boolean(settings[control.key]);
+              return (
+                <button
+                  key={control.key}
+                  className={cx("control", on && "is-on")}
+                  role="switch"
+                  aria-label={control.title}
+                  aria-checked={on}
+                  onClick={() => toggle(control.key, control.title)}
+                >
+                  <span className="control-top">
+                    <span className="control-icon">
+                      <PixelIcon name={control.icon} size={16} />
+                    </span>
+                    <i className="control-switch" aria-hidden="true" />
+                  </span>
+                  <span>
+                    <strong>{control.title}</strong>
+                    <em>{on ? control.on : control.off}</em>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
       </div>
 
       <footer className="home-footer">
@@ -536,38 +532,15 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
   );
 }
 
-function StatCard({
-  tone,
-  icon,
-  label,
-  value,
-  note,
-  prefix = "",
-  onClick,
-}: {
-  tone: "rose" | "mint" | "lilac" | "peach";
-  icon: string;
-  label: string;
-  value: number;
-  note: string;
-  prefix?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button className={cx("stat-card", `tone-${tone}`)} onClick={onClick}>
-      <span className="stat-top">
-        <span className="stat-icon">
-          <PixelIcon name={icon} size={14} />
-        </span>
-        <span className="stat-label">{label}</span>
-        <PixelIcon name="chevron" size={14} className="stat-arrow" />
-      </span>
-      <strong className="stat-value">
-        <CountUp end={value} duration={650} prefix={prefix} />
-      </strong>
-      <span className="stat-note">{note}</span>
-    </button>
-  );
+/** Open reminders, soonest first; ones with no time go last. */
+function upcomingReminders(reminders: Reminder[]): Reminder[] {
+  const at = (reminder: Reminder) => (reminder.dueAt ? +new Date(reminder.dueAt) : Number.POSITIVE_INFINITY);
+  return reminders.filter((reminder) => !reminder.done).sort((a, b) => at(a) - at(b));
+}
+
+/** Pinned notes first, then the most recently edited. */
+function newestNotes(notes: Note[]): Note[] {
+  return [...notes].sort((a, b) => Number(b.pinned) - Number(a.pinned) || +new Date(b.updatedAt) - +new Date(a.updatedAt));
 }
 
 /** Seven days of activity, oldest first, with today picked out. */

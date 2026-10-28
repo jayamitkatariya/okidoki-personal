@@ -75,7 +75,7 @@ function Root() {
       {page === "notes" ? <NotesPage /> : null}
       {page === "reminders" ? <RemindersPage /> : null}
       {page === "skills" ? <SkillsPage /> : null}
-      {page === "terminal" ? <TerminalPage /> : null}
+      {page === "terminal" ? <TerminalPage go={setPage} /> : null}
       {page === "toolbox" ? <ToolboxPage /> : null}
       {page === "settings" ? <SettingsPage go={setPage} /> : null}
       {page === "vault" ? <VaultPage go={setPage} /> : null}

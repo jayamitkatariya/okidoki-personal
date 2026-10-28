@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
-import type { AccountKind, AgentStatus, CodingAgentID, KeyProvider, PrivateMacPhase, PrivateMacState, ServicesState, Toast } from "../types";
+import type { AgentStatus, CodingAgentID, KeyProvider, PrivateMacPhase, PrivateMacState, ServicesState, Toast } from "../types";
 import { SETTINGS_JUMP_EVENT, type Page } from "../nav";
-import { Avatar, Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
+import { Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
   { id: "sarah", name: "Sarah", blurb: "Soothing and calm · American" },
@@ -29,16 +29,16 @@ const PERMISSIONS = [
 const COLORS = ["44E45E", "1FB57A", "3DDC97", "9BE8C6", "0B8A5E", "B8F26B", "8FB7FF", "F7F2E9"];
 
 const SECTIONS = [
-  { id: "instructions", label: "Instructions", icon: "pencil" },
-  { id: "agents", label: "Agents", icon: "code" },
-  { id: "voice", label: "Voice & input", icon: "mic" },
+  { id: "keys", label: "Keys", icon: "key" },
   { id: "permissions", label: "Permissions", icon: "lock" },
-  { id: "private-mac", label: "Private Mac", icon: "screen" },
+  { id: "instructions", label: "Instructions", icon: "pencil" },
+  { id: "voice", label: "Voice & input", icon: "mic" },
   { id: "safety", label: "Safety", icon: "hand" },
+  { id: "agents", label: "Agents", icon: "code" },
+  { id: "private-mac", label: "Private Mac", icon: "screen" },
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
-  { id: "account", label: "Account", icon: "user" },
-  { id: "keys", label: "Keys", icon: "key" },
+  { id: "account", label: "Profile", icon: "user" },
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
 
@@ -47,7 +47,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
   const [instructions, setInstructions] = useState(settings.customInstructions);
   const [name, setName] = useState(account.name);
   const [email, setEmail] = useState(account.email);
-  const [kind, setKind] = useState<AccountKind>(account.kind);
   const [appDraft, setAppDraft] = useState("");
   const [askDraft, setAskDraft] = useState("");
   const [active, setActive] = useState(SECTIONS[0].id);
@@ -57,8 +56,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
   useEffect(() => {
     setName(account.name);
     setEmail(account.email);
-    setKind(account.kind);
-  }, [account.id, account.name, account.email, account.kind]);
+  }, [account.id, account.name, account.email]);
 
   // Highlight the section at the top of the scroll area. Driven by scroll position, so the
   // last sections still light up at the bottom, and a click holds its section while the
@@ -72,7 +70,8 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
       frame = 0;
       if (jumping.current !== null) return;
       const top = root.getBoundingClientRect().top + 96;
-      let current: string = SECTIONS[0].id;
+      // Keys only exists in the Mac app, so start from the first section actually on the page
+      let current: string = SECTIONS.find((section) => document.getElementById(`settings-${section.id}`))?.id ?? SECTIONS[0].id;
       for (const section of SECTIONS) {
         const node = document.getElementById(`settings-${section.id}`);
         if (node && node.getBoundingClientRect().top <= top) current = section.id;
@@ -112,7 +111,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
     updateSettings({ [list]: [...settings[list], value.trim()] } as never);
   };
 
-  const profileDirty = name !== account.name || email !== account.email || kind !== account.kind;
+  const profileDirty = name !== account.name || email !== account.email;
   const instructionsDirty = instructions !== settings.customInstructions;
 
   return (
@@ -131,6 +130,66 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
         </nav>
 
         <div className="settings-body">
+          {/* Keys: only inside the Mac app, which holds the key file. */}
+          {native ? (
+            <SettingsSection id="keys" title="Keys" description="Bring your own keys. Each goes in a private file on this Mac, readable only by you, and is sent only to the service it belongs to.">
+              <div className="pref-group">
+                {(state.keyProviders ?? []).map((provider) => (
+                  <KeyRow key={provider.id} provider={provider} invoke={invoke} notify={notify} />
+                ))}
+                {!state.keyProviders?.length ? (
+                  <PrefRow title="Keys" detail="Open this in the okidoki app on your Mac to add or remove keys.">
+                    <span className="pref-hint">Mac only</span>
+                  </PrefRow>
+                ) : null}
+              </div>
+            </SettingsSection>
+          ) : null}
+
+          <SettingsSection id="permissions" title="Permissions" description="macOS owns these. Reopen okidoki after changing screen recording.">
+            <div className="pref-group">
+              {PERMISSIONS.map((permission) => {
+                const status = state.permissions[permission.id] ?? "not yet";
+                const granted = status === "granted";
+                return (
+                  <div className="pref-row" key={permission.id}>
+                    <span className={cx("kind-icon small", !granted && "is-warn")}>
+                      <PixelIcon name={permission.icon} size={14} />
+                    </span>
+                    <span className="pref-copy">
+                      <strong>{permission.title}</strong>
+                      <em>{permission.blurb}</em>
+                    </span>
+                    <span className="pref-control">
+                      {granted ? (
+                        <span className="pref-status is-on">
+                          <PixelIcon name="check" size={13} /> Granted
+                        </span>
+                      ) : (
+                        <>
+                          <span className="pref-status is-warn">{native ? status : "on your Mac"}</span>
+                          {native ? (
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => {
+                                invoke("requestPermission", { kind: permission.id });
+                                notify("Asking macOS", permission.title, "info");
+                              }}
+                            >
+                              Grant
+                            </Button>
+                          ) : null}
+                        </>
+                      )}
+                      <IconButton icon="external" label={`Open ${permission.title} in System Settings`} onClick={() => invoke("openPermissionSettings", { kind: permission.id })} />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </SettingsSection>
+
           <SettingsSection id="instructions" title="Instructions" description="Added to the top of every request. Keep it short and concrete.">
             <div className="pref-group">
               <div className="pref-row is-stack">
@@ -151,19 +210,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                 </div>
               </div>
             </div>
-          </SettingsSection>
-
-          <SettingsSection id="agents" title="Agents" description="Coding agents on this Mac. okidoki reads each CLI's own login files to see who's signed in; nothing is copied and the Keychain is never opened.">
-            <AgentsSettings
-              agents={state.agents}
-              selected={settings.selectedAgent}
-              autoConnect={settings.autoConnectAgents ?? true}
-              native={native}
-              onSelect={(id) => updateSettings({ selectedAgent: id })}
-              onAutoConnect={(value) => updateSettings({ autoConnectAgents: value })}
-              invoke={invoke}
-              notify={notify}
-            />
           </SettingsSection>
 
           <SettingsSection id="voice" title="Voice & input" description="Your default for every summon. You can switch for a single request.">
@@ -228,62 +274,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                 </div>
               </div>
             </div>
-          </SettingsSection>
-
-          <SettingsSection id="permissions" title="Permissions" description="macOS owns these. Reopen okidoki after changing screen recording.">
-            <div className="pref-group">
-              {PERMISSIONS.map((permission) => {
-                const status = state.permissions[permission.id] ?? "not yet";
-                const granted = status === "granted";
-                return (
-                  <div className="pref-row" key={permission.id}>
-                    <span className={cx("kind-icon small", !granted && "is-warn")}>
-                      <PixelIcon name={permission.icon} size={14} />
-                    </span>
-                    <span className="pref-copy">
-                      <strong>{permission.title}</strong>
-                      <em>{permission.blurb}</em>
-                    </span>
-                    <span className="pref-control">
-                      {granted ? (
-                        <span className="pref-status is-on">
-                          <PixelIcon name="check" size={13} /> Granted
-                        </span>
-                      ) : (
-                        <>
-                          <span className="pref-status is-warn">{native ? status : "on your Mac"}</span>
-                          {native ? (
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              onClick={() => {
-                                invoke("requestPermission", { kind: permission.id });
-                                notify("Asking macOS", permission.title, "info");
-                              }}
-                            >
-                              Grant
-                            </Button>
-                          ) : null}
-                        </>
-                      )}
-                      <IconButton icon="external" label={`Open ${permission.title} in System Settings`} onClick={() => invoke("openPermissionSettings", { kind: permission.id })} />
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="private-mac" title="Private Mac" description="Give okidoki its own macOS, in a window. Runs that drive apps happen there while you keep working here.">
-            <PrivateMacSettings
-              privateMac={state.privateMac ?? null}
-              target={settings.computerTarget}
-              native={native}
-              onTarget={(value) => updateSettings({ computerTarget: value })}
-              invoke={invoke}
-              notify={notify}
-              confirm={setConfirm}
-            />
           </SettingsSection>
 
           <SettingsSection id="safety" title="Safety" description="okidoki always asks before sending, buying, deleting, installing or running risky commands.">
@@ -351,6 +341,31 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </div>
           </SettingsSection>
 
+          <SettingsSection id="agents" title="Agents" description="Coding agents on this Mac. okidoki reads each CLI's own login files to see who's signed in; nothing is copied and the Keychain is never opened.">
+            <AgentsSettings
+              agents={state.agents}
+              selected={settings.selectedAgent}
+              autoConnect={settings.autoConnectAgents ?? true}
+              native={native}
+              onSelect={(id) => updateSettings({ selectedAgent: id })}
+              onAutoConnect={(value) => updateSettings({ autoConnectAgents: value })}
+              invoke={invoke}
+              notify={notify}
+            />
+          </SettingsSection>
+
+          <SettingsSection id="private-mac" title="Private Mac" description="Give okidoki its own macOS, in a window. Runs that drive apps happen there while you keep working here.">
+            <PrivateMacSettings
+              privateMac={state.privateMac ?? null}
+              target={settings.computerTarget}
+              native={native}
+              onTarget={(value) => updateSettings({ computerTarget: value })}
+              invoke={invoke}
+              notify={notify}
+              confirm={setConfirm}
+            />
+          </SettingsSection>
+
           <SettingsSection id="notch" title="Notch" description="Your status center. On Macs without a notch it floats at the top.">
             <div className="pref-group">
               <PrefRow title="Show in the notch" detail="Toasts, progress and approvals">
@@ -416,7 +431,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="account" title="Account" description="Personal and work accounts keep separate threads, runs, skills and routines. Memory is shared by every account on this Mac.">
+          <SettingsSection id="account" title="Profile" description="What okidoki calls you. It stays on this Mac.">
             <div className="pref-group">
               <PrefRow title="Name">
                 <TextField value={name} onChange={setName} className="pref-field" />
@@ -424,23 +439,13 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
               <PrefRow title="Email">
                 <TextField value={email} onChange={setEmail} type="email" className="pref-field" />
               </PrefRow>
-              <PrefRow title="Type">
-                <Segmented
-                  options={[
-                    { value: "personal", label: "Personal" },
-                    { value: "work", label: "Work" },
-                  ]}
-                  value={kind}
-                  onChange={(value) => setKind(value as AccountKind)}
-                />
-              </PrefRow>
               <div className="pref-row pref-row-end">
                 <Button
                   variant="primary"
                   size="sm"
                   disabled={!profileDirty}
                   onClick={() => {
-                    invoke("updateAccount", { name, email, kind });
+                    invoke("updateAccount", { name, email, kind: account.kind });
                     notify("Profile saved", name);
                   }}
                 >
@@ -448,68 +453,7 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                 </Button>
               </div>
             </div>
-
-            <div className="pref-group">
-              {state.accounts.map((item) => {
-                const current = item.id === state.currentAccountID;
-                return (
-                  <button key={item.id} className={cx("pref-row pref-row-button", current && "is-current")} onClick={() => invoke("switchAccount", { id: item.id })}>
-                    <Avatar account={item} size={28} />
-                    <span className="pref-copy">
-                      <strong className="capitalize">{item.name}</strong>
-                      <em>{item.kind}</em>
-                    </span>
-                    {current ? (
-                      <span className="pref-status is-on">
-                        <PixelIcon name="check" size={13} /> Current
-                      </span>
-                    ) : (
-                      <span className="pref-switch-hint">
-                        Switch <PixelIcon name="chevron" size={14} />
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-              <button className="pref-row pref-row-button pref-action" onClick={() => invoke("signOut")}>
-                <PixelIcon name="logout" size={15} />
-                Sign out
-              </button>
-              <button
-                className="pref-row pref-row-button pref-action is-danger"
-                disabled={state.accounts.length <= 1}
-                title={state.accounts.length <= 1 ? "Your only account can't be deleted. Add another first." : undefined}
-                onClick={() =>
-                  setConfirm({
-                    title: `Delete ${account.name}?`,
-                    detail: "Its threads, runs, skills and routines go with it. Memory is shared and stays. This can't be undone.",
-                    action: "Delete account",
-                    onConfirm: () => invoke("deleteAccount", { id: state.currentAccountID }),
-                  })
-                }
-              >
-                <PixelIcon name="trash" size={15} />
-                Delete account…
-                {state.accounts.length <= 1 ? <span className="pref-hint">Add another account first</span> : null}
-              </button>
-            </div>
           </SettingsSection>
-
-          {/* Keys: only inside the Mac app, which holds the key file. */}
-          {native ? (
-            <SettingsSection id="keys" title="Keys" description="Bring your own keys. Each goes in a private file on this Mac, readable only by you, and is sent only to the service it belongs to.">
-              <div className="pref-group">
-                {(state.keyProviders ?? []).map((provider) => (
-                  <KeyRow key={provider.id} provider={provider} invoke={invoke} notify={notify} />
-                ))}
-                {!state.keyProviders?.length ? (
-                  <PrefRow title="Keys" detail="Open this in the okidoki app on your Mac to add or remove keys.">
-                    <span className="pref-hint">Mac only</span>
-                  </PrefRow>
-                ) : null}
-              </div>
-            </SettingsSection>
-          ) : null}
 
           <SettingsSection id="advanced" title="Advanced" description="The boring but necessary bits.">
             <div className="pref-group">

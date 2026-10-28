@@ -13,35 +13,42 @@ export interface NavGroup {
   items: NavItem[];
 }
 
+// Ordered by how often you reach for each page: the daily tools first, setup last.
+// Settings isn't here; it's pinned to the bottom of the sidebar so it never scrolls away.
 export const NAV: NavGroup[] = [
   {
     label: "workspace",
     items: [
       { id: "home", title: "Home", icon: "home" },
+      { id: "skills", title: "Replay", icon: "record" },
+      { id: "notes", title: "Notes", icon: "note" },
+      { id: "reminders", title: "Reminders", icon: "bell" },
+      { id: "terminal", title: "Terminal", icon: "terminal" },
+    ],
+  },
+  {
+    label: "activity",
+    items: [
       { id: "runs", title: "Runs", icon: "runs" },
       { id: "live", title: "Live", icon: "eye" },
       { id: "history", title: "History", icon: "clock" },
     ],
   },
   {
-    label: "knowledge",
+    label: "library",
     items: [
       { id: "memory", title: "Memory", icon: "memory" },
-      { id: "skills", title: "Replay", icon: "record" },
-      { id: "notes", title: "Notes", icon: "note" },
-      { id: "reminders", title: "Reminders", icon: "bell" },
       { id: "vault", title: "Vault", icon: "lock" },
-    ],
-  },
-  {
-    label: "setup",
-    items: [
-      { id: "terminal", title: "Terminal", icon: "terminal" },
       { id: "toolbox", title: "Toolbox", icon: "grid" },
-      { id: "settings", title: "Settings", icon: "gear" },
     ],
   },
 ];
+
+/** Pinned under the groups. */
+export const SETTINGS_ITEM: NavItem = { id: "settings", title: "Settings", icon: "gear" };
+
+/** Pages that only earn a sidebar row while they have something to show. */
+export const ON_DEMAND: ReadonlySet<Page> = new Set<Page>(["live"]);
 
 export const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "Home", subtitle: "What needs you, and what's moving" },
@@ -50,10 +57,10 @@ export const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   history: { title: "History", subtitle: "Threads and past requests" },
   memory: { title: "Memory", subtitle: "What okidoki knows about you" },
   skills: { title: "Replay", subtitle: "Show it once, replay it forever" },
-  toolbox: { title: "Toolbox", subtitle: "Free tools, agents and Apple apps" },
-  settings: { title: "Settings", subtitle: "Input, voice, permissions, look" },
+  toolbox: { title: "Toolbox", subtitle: "Free tools, connectors and MCP servers" },
+  settings: { title: "Settings", subtitle: "Keys, permissions, voice, safety, look" },
   vault: { title: "Vault", subtitle: "Your documents folder and sealed logins" },
-  terminal: { title: "Terminal", subtitle: "Plain English in, reviewed commands out" },
+  terminal: { title: "Terminal", subtitle: "Plain English in, reviewed commands out, plus your coding agents" },
   notes: { title: "Notes", subtitle: "Jot it down; okidoki can find it later" },
   reminders: { title: "Reminders", subtitle: "okidoki taps you on the shoulder, or does the chore itself" },
 };
@@ -74,9 +81,15 @@ export function jumpToSettingsSection(section: string) {
   window.setTimeout(() => window.dispatchEvent(new CustomEvent(SETTINGS_JUMP_EVENT, { detail: section })), 60);
 }
 
-/** The sidebar. Every account sees the same pages. */
+/** The sidebar groups. Every account sees the same pages. */
 export function navFor(_kind?: AccountKind): NavGroup[] {
   return NAV;
+}
+
+/** The group a page sits in, for the breadcrumb. */
+export function groupOf(page: Page): string {
+  if (page === SETTINGS_ITEM.id) return "setup";
+  return NAV.find((group) => group.items.some((item) => item.id === page))?.label ?? "workspace";
 }
 
 export function isPage(value: string): value is Page {
@@ -85,5 +98,5 @@ export function isPage(value: string): value is Page {
 
 /** Whether a page is in the sidebar. */
 export function pageAvailable(page: Page, kind?: AccountKind): boolean {
-  return navFor(kind).some((group) => group.items.some((item) => item.id === page));
+  return page === SETTINGS_ITEM.id || navFor(kind).some((group) => group.items.some((item) => item.id === page));
 }

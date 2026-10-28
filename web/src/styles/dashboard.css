@@ -163,7 +163,7 @@
 
 .side-ask { flex-shrink: 0; height: 40px; color: var(--muted); margin-bottom: 22px; }
 /* 4px of padding so a focused item's outline (2px + 2px offset) isn't clipped by the scrolling column */
-.nav { flex: 1; min-height: 0; overflow-y: auto; gap: 20px; padding: 4px; margin: -4px; scroll-padding: 4px; }
+.nav { flex: 1; min-height: 0; overflow-y: auto; gap: 16px; padding: 4px; margin: -4px; scroll-padding: 4px; }
 .nav-group { gap: 2px; }
 .nav-label {
   padding: 0 12px 6px;
@@ -179,6 +179,7 @@
 .nav-active::before { content: none; }
 .nav-badge { flex-shrink: 0; }
 .sidebar-bottom { flex-shrink: 0; padding-top: 14px; margin-top: 18px; border-top: 1px solid var(--line); }
+.sidebar-bottom > .nav-item { width: 100%; margin-bottom: 10px; }
 .sidebar-foot { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: 11px; color: var(--faint); }
 .sidebar-foot i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: 0 0 6px; }
 .sidebar-foot.is-live i { background: var(--accent-bright); }

@@ -24,7 +24,8 @@ function inAnHour(): string {
   return localInput(date);
 }
 
-function when(reminder: Reminder): string {
+/** "today, 5:00 PM" or "Thu, Oct 29, 9:00 AM". Home uses it too. */
+export function when(reminder: Reminder): string {
   if (!reminder.dueAt) return "no time";
   const due = new Date(reminder.dueAt);
   const today = new Date();

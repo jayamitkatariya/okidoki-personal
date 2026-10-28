@@ -11,12 +11,25 @@ function tagsFrom(text: string): string[] {
   return text.split(/[,\s]+/).map((tag) => tag.replace(/^#/, "").trim().toLowerCase()).filter(Boolean);
 }
 
+/** Asks the Notes page to open a note, the way Home opens a run. */
+export function focusNote(id: string) {
+  (window as unknown as { __okidokiFocusNote?: string }).__okidokiFocusNote = id;
+}
+
+function takeFocusNote(): string | null {
+  const bridge = window as unknown as { __okidokiFocusNote?: string };
+  const id = bridge.__okidokiFocusNote ?? null;
+  delete bridge.__okidokiFocusNote;
+  return id;
+}
+
 export function NotesPage() {
   const { state, invoke, notify } = useDashboard();
   const notes = state.notes ?? [];
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("all");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // opens the note Home asked for, else the newest one, so the editor is never an empty pane
+  const [selectedId, setSelectedId] = useState<string | null>(() => takeFocusNote() ?? notes[0]?.id ?? null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   // A note made here opens straight away once the Mac says which one it is.

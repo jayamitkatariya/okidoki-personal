@@ -5,51 +5,6 @@ import { cx, copyText, findTools, money, relativeTime, searchTools, toolBlocked,
 import type { Connector, McpServer, Tool } from "../types";
 import { Button, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField } from "../components/ui";
 
-const AGENTS = [
-  {
-    id: "claude",
-    name: "Claude Code",
-    blurb: "Careful, tight diffs. Great in a single repo.",
-    install: "npm install -g @anthropic-ai/claude-code",
-  },
-  {
-    id: "opencode",
-    name: "OpenCode",
-    blurb: "Open source and works with any provider.",
-    install: "curl -fsSL https://opencode.ai/install | bash",
-  },
-  {
-    id: "omp",
-    name: "omp",
-    blurb: "Long, autonomous jobs with a mix of models.",
-    install: "https://omp.sh",
-  },
-  {
-    id: "hermes",
-    name: "Hermes",
-    blurb: "Tool-heavy workflows and MCP.",
-    install: "pipx install hermes-agent",
-  },
-  {
-    id: "codex",
-    name: "Codex",
-    blurb: "OpenAI's agent. Sandboxed edits, ChatGPT login.",
-    install: "npm install -g @openai/codex",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    blurb: "Google's agent. Big context, free tier.",
-    install: "npm install -g @google/gemini-cli",
-  },
-  {
-    id: "cursor",
-    name: "Cursor Agent",
-    blurb: "Cursor's models from the terminal.",
-    install: "curl https://cursor.com/install -fsS | bash",
-  },
-] as const;
-
 const CONNECTOR_ICON: Record<string, string> = {
   calendar: "calendar",
   reminders: "bell",
@@ -175,48 +130,6 @@ export function ToolboxPage() {
           )}
         </section>
       </div>
-
-      <section className="tile">
-        <header className="tile-head">
-          <h2>Coding agent</h2>
-          <span className="tb-head-note">Name another agent in a request to use it once.</span>
-        </header>
-        <div className="tb-agents" role="radiogroup" aria-label="Default coding agent">
-          {AGENTS.map((agent) => {
-            const isInstalled = state.installedAgents.includes(agent.id);
-            const selected = settings.selectedAgent === agent.id;
-            return (
-              <button
-                key={agent.id}
-                role="radio"
-                aria-checked={selected}
-                className={cx("tb-agent", selected && "is-selected", !isInstalled && "is-missing")}
-                onClick={() => {
-                  updateSettings({ selectedAgent: agent.id as typeof settings.selectedAgent });
-                  if (isInstalled) notify("Default agent", agent.name);
-                  else notify(`${agent.name} isn't installed yet`, `Coding tasks need it first: ${agent.install}`, "warning");
-                }}
-              >
-                <span className="tb-agent-top">
-                  <span className="kind-icon small">
-                    <PixelIcon name="code" size={14} />
-                  </span>
-                  <span className={cx("tb-radio", selected && "is-on")}>{selected ? <PixelIcon name="check" size={11} /> : null}</span>
-                </span>
-                <strong>{agent.name}</strong>
-                <em>{agent.blurb}</em>
-                {isInstalled ? (
-                  <span className="tb-agent-state">{selected ? "Default" : "Installed"}</span>
-                ) : (
-                  <code className="tb-agent-install" title={agent.install}>
-                    {agent.install}
-                  </code>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </section>
 
       <section>
         <div className="section-head tb-catalog-head">
