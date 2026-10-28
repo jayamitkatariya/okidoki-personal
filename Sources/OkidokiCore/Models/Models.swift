@@ -73,7 +73,7 @@ public enum DrawingStyle: String, Codable, CaseIterable, Identifiable, Sendable 
 }
 
 public struct AppSettings: Codable, Equatable, Sendable {
-    public static let summonModes = ["act", "teach", "chat"]
+    public static let summonModes = ["auto", "act", "teach", "chat"]
     public static var defaultVaultFolder: String {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/Okidoki Vault", isDirectory: true).path
     }
@@ -131,7 +131,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var computerTarget: String = "mac"
     /// What a request typed at the cursor is for: "auto" lets the brain decide, "act" does it,
     /// "teach" shows how on screen, "chat" just answers.
-    public var summonMode: String = "act"
+    public var summonMode: String = "auto"
     /// The vault: a folder of documents okidoki can file into and search. On the Desktop unless moved.
     public var vaultFolder: String = AppSettings.defaultVaultFolder
 
@@ -206,9 +206,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
         drivePace = string(.drivePace, "fast")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
-        // "auto" from before the card dropped it reads as Act
-        let mode = string(.summonMode, "act")
-        summonMode = Self.summonModes.contains(mode) ? mode : "act"
+        let mode = string(.summonMode, "auto")
+        summonMode = Self.summonModes.contains(mode) ? mode : "auto"
         vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
         teachVoice = bool(.teachVoice, true)
         screenContext = bool(.screenContext, true)
