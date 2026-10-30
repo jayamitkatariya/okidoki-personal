@@ -317,18 +317,15 @@ export function localRouter(request: ThinkRequest): Decision {
   }
 
   if ((t.includes("keynote") || t.includes("decks")) && t.includes("export")) {
+    // The Mac drives Keynote itself, deck by deck.
     return {
-      kind: "background",
+      kind: "computer_use",
       title: "export keynote decks",
-      answer: "pick the folder of decks. i'll export each one to PDF into a new folder, quietly, while you keep working.",
-      speak: "Pick the folder and I'll export them in the background.",
-      risk: "low",
-      previewSummary: "batch-export Keynote decks to PDF",
-      previewSteps: ["scan the folder for .key files", "open each deck in Keynote", "export PDFs into one folder"],
+      answer: "exporting each deck to PDF in Keynote.",
+      risk: "medium",
+      previewSummary: "export Keynote decks to PDF",
+      previewSteps: ["open each deck in Keynote", "export it as PDF", "hand control back"],
       apps: ["Keynote"],
-      pickFile: "folder",
-      builtin: "export-keynote",
-      actions: ["choose folder"],
     };
   }
 

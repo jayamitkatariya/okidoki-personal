@@ -45,6 +45,20 @@ final class BrowserStepsTests: XCTestCase {
         XCTAssertEqual(ParameterFill.names(in: steps), ["city"])
     }
 
+    func testLoginsOnlyMatchTheirOwnSite() {
+        XCTAssertTrue(BrowserSteps.sameSite("github.com", "https://www.github.com/login"))
+        XCTAssertTrue(BrowserSteps.sameSite("accounts.google.com", "google.com"))
+        XCTAssertFalse(BrowserSteps.sameSite("box.com", "x.com"), "a suffix isn't a subdomain")
+        XCTAssertFalse(BrowserSteps.sameSite("evil-bank.com", "bank.com"))
+        XCTAssertFalse(BrowserSteps.sameSite("", "bank.com"))
+    }
+
+    func testRunsOfRemovedKindsStillLoad() throws {
+        let old = #"{"id":"r","accountID":"a","kind":"teach","title":"t","prompt":"p","status":"done","steps":[],"output":"","summary":"","createdAt":0}"#
+        let run = try JSONDecoder().decode(AgentRun.self, from: Data(old.utf8))
+        XCTAssertEqual(run.kind, .answer)
+    }
+
     func testAddressBar() {
         XCTAssertEqual(BrowserSteps.addressURL("github.com")?.absoluteString, "https://github.com")
         XCTAssertEqual(BrowserSteps.addressURL("https://a.b/c?d=1")?.absoluteString, "https://a.b/c?d=1")

@@ -20,9 +20,8 @@ export const kindGlyph: Record<RunKind, string> = {
   quick_action: "bolt",
   computer_use: "hand",
   browser: "globe",
-  background: "runs",
   watch: "eye",
-  borrow: "hand",
+  borrow: "record",
   routine: "clock",
   connector: "link",
 };
@@ -32,9 +31,9 @@ const KIND_LABEL: Record<RunKind, string> = {
   quick_action: "quick actions",
   computer_use: "screen work",
   browser: "browser work",
-  background: "background jobs",
   watch: "watching",
-  borrow: "screen access",
+  // Skill replays run as borrow runs, alongside the odd single click.
+  borrow: "replays",
   routine: "routines",
   connector: "connected services",
 };

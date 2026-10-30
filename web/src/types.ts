@@ -55,7 +55,7 @@ export interface Settings {
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
   /** What a request typed at the cursor is for. Missing on older builds. */
-  summonMode?: "auto" | "act" | "chat";
+  summonMode?: "auto" | "act" | "browser" | "chat";
   /** The vault folder on disk. Missing on older builds. */
   vaultFolder?: string;
 }
@@ -124,7 +124,7 @@ export interface KeyProvider {
   builtin: boolean;
 }
 
-export type RunKind = "answer" | "quick_action" | "background" | "watch" | "borrow" | "computer_use" | "browser" | "routine" | "connector";
+export type RunKind = "answer" | "quick_action" | "watch" | "borrow" | "computer_use" | "browser" | "routine" | "connector";
 export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled" | "asked";
 export type Risk = "low" | "medium" | "high";
 

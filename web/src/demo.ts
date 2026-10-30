@@ -7,7 +7,7 @@ const runs: Run[] = [
   {
     id: "run-keynote",
     accountID: "acct-jay",
-    kind: "background",
+    kind: "computer_use",
     title: "export keynote decks",
     prompt: "export all my keynote decks to PDF and put them in one folder",
     status: "running",
@@ -57,7 +57,7 @@ const runs: Run[] = [
   {
     id: "run-clean",
     accountID: "acct-jay",
-    kind: "background",
+    kind: "computer_use",
     title: "free up 23 GB",
     prompt: "my mac is out of space",
     status: "done",

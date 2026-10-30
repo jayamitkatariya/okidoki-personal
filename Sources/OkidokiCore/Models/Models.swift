@@ -348,6 +348,12 @@ public enum RunKind: String, Codable, CaseIterable, Sendable {
         case .connector: return "connector"
         }
     }
+
+    /// Kinds this build no longer has (teach, terminal, coding…) read as answers, so their history stays.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = RunKind(rawValue: raw) ?? .answer
+    }
 }
 
 public enum RunStatus: String, Codable, CaseIterable, Sendable {

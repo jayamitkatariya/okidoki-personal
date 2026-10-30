@@ -222,6 +222,8 @@ export function modeRule(mode: ThinkRequest["mode"]): string {
   switch (mode) {
     case "act":
       return `\nThe person picked Act: they want it done on this Mac, not explained. Choose the route that does the work (quick_action, browser, computer_use, connector). Answer only when there is truly nothing to do.`;
+    case "browser":
+      return `\nThe person picked Browser: do it on the web in okidoki's own browser. kind must be browser unless it truly needs a Mac app or just a spoken answer.`;
     case "chat":
       return `\nThe person picked Chat: just talk. kind must be answer (or memory when they tell you something to remember). Never act or touch the screen; if it needs doing, say how and that Act will do it.`;
     default:

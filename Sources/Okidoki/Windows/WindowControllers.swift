@@ -63,6 +63,22 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         env.dashboardOpen = true
     }
 
+    /// In front on the Space they're looking at (another desktop, or over a full-screen app), without
+    /// taking the keyboard from the app they're in: for the browser agent and replays to be watched.
+    /// A window already placed on another Space stays there when ordered front, so it joins every
+    /// Space for a moment, comes forward here, and then belongs to this one.
+    func showQuietly(section: DashboardSection) {
+        guard let env, let window else { return }
+        env.dashboardRoute = section
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        if !window.isVisible { window.okFitToScreen() }
+        let home = window.collectionBehavior
+        window.collectionBehavior = home.union([.canJoinAllSpaces, .fullScreenAuxiliary])
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { window.collectionBehavior = home }
+        env.dashboardOpen = true
+    }
+
     func windowWillClose(_ notification: Notification) {
         env?.dashboardOpen = false
         if env?.onboardingOpen != true {

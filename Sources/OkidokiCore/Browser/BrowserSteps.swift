@@ -67,6 +67,20 @@ public enum BrowserSteps {
         return (String(inner[..<dot]), String(inner[inner.index(after: dot)...]))
     }
 
+    /// The same site: equal hosts, or one a subdomain of the other at a dot ("accounts.google.com" and
+    /// "google.com"), never a mere suffix ("box.com" isn't "x.com"). Hosts or bare domains both work.
+    public static func sameSite(_ a: String, _ b: String) -> Bool {
+        let x = bareHost(a), y = bareHost(b)
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        return x == y || x.hasSuffix("." + y) || y.hasSuffix("." + x)
+    }
+
+    /// "https://www.GitHub.com/login" or "github.com" → "github.com".
+    public static func bareHost(_ site: String) -> String {
+        let trimmed = site.trimmingCharacters(in: .whitespacesAndNewlines)
+        return host(of: trimmed.contains("://") ? trimmed : "https://" + trimmed)
+    }
+
     public static func host(of url: String) -> String {
         guard let host = URL(string: url)?.host?.lowercased() else { return "" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host

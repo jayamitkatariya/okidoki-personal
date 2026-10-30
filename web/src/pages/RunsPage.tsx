@@ -7,7 +7,6 @@ import { Button, Chip, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
   quick_action: "bolt",
-  background: "runs",
   watch: "eye",
   borrow: "hand",
   computer_use: "hand",
@@ -19,7 +18,6 @@ const kindGlyph: Record<RunKind, string> = {
 const kindName: Record<RunKind, string> = {
   answer: "Answer",
   quick_action: "Quick action",
-  background: "Background",
   watch: "Watch",
   borrow: "Borrow",
   computer_use: "Computer use",

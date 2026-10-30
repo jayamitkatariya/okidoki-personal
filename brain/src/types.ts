@@ -3,7 +3,6 @@ export type RiskLevel = "low" | "medium" | "high";
 export type DecisionKind =
   | "answer"
   | "quick_action"
-  | "background"
   | "borrow"
   | "watch"
   | "memory"
@@ -139,7 +138,7 @@ export interface ThinkRequest {
   /** The current okidoki account, so recall stays within it (plus shared memories). */
   accountId?: string;
   /** What the person picked on the cursor card: act or chat. Missing means decide. */
-  mode?: "act" | "chat";
+  mode?: "act" | "browser" | "chat";
 }
 
 /** What the Mac sends to keep the memory index current: the parts of its items the index uses.

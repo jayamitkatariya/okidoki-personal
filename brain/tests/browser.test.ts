@@ -61,6 +61,22 @@ test("the next turn answers every tool call before the new page", async () => {
   expect(turn.at(-1).text).toContain("element 2 is gone");
 });
 
+test("a malformed call doesn't shift the results of the calls after it", async () => {
+  const api = fakeAPI([
+    reply([
+      { type: "tool_use", id: "bad", name: "click", input: { ref: "two" } },
+      { type: "tool_use", id: "good", name: "click", input: { ref: 2 } },
+    ]),
+    reply([{ type: "tool_use", id: "t3", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  const first = await browserStep(request(0), "key", api.impl);
+  expect(first.actions).toEqual([{ type: "click", ref: 2 }]);
+  await browserStep(request(1, { results: [{ ok: false, detail: "element 2 is gone" }] }), "key", api.impl);
+  const turn = api.sent[1].body.messages.at(-1).content;
+  expect(turn[0]).toMatchObject({ tool_use_id: "bad", is_error: true });
+  expect(turn[1]).toMatchObject({ tool_use_id: "good", is_error: true, content: "failed: element 2 is gone" });
+});
+
 test("a reply without tool calls ends the run instead of hanging", async () => {
   const api = fakeAPI([reply([{ type: "text", text: "This site needs a captcha." }])]);
   const response = await browserStep(request(0), "key", api.impl);

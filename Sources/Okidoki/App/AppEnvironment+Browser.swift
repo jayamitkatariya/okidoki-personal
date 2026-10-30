@@ -38,9 +38,10 @@ extension AppEnvironment {
 
     /// A finished browser run. One that worked can be kept as a skill that replays without the model.
     func browserRunFinished(_ run: AgentRun, success: Bool, summary: String, learned: [SkillStep]) {
+        lastBrowserRun = success && !learned.isEmpty ? (run.title, learned) : nil
         var actions: [CardAction] = []
         if success, learned.contains(where: { $0.action != "navigate" }) {
-            actions.append(CardAction(title: "save as skill", kind: .primary, glyph: "record") { [weak self] in
+            actions.append(CardAction(title: "save as skill", kind: .primary, glyph: "wand") { [weak self] in
                 self?.answerController.close(restoreApp: false)
                 self?.saveBrowserSkill(name: run.title, steps: learned, source: "act")
             })
@@ -71,12 +72,7 @@ extension AppEnvironment {
     /// The login saved for `site`, opened with the passphrase remembered on this Mac. Nil when there's
     /// none or the vault isn't remembered here; the secret stays in memory for the one fill.
     func vaultLogin(for site: String) -> (site: String, username: String, password: String)? {
-        let wanted = BrowserSteps.host(of: site.contains("://") ? site : "https://\(site)")
-        guard !wanted.isEmpty,
-              let login = vault.logins.first(where: { saved in
-                  let host = BrowserSteps.host(of: saved.site.contains("://") ? saved.site : "https://\(saved.site)")
-                  return !host.isEmpty && (host == wanted || wanted.hasSuffix("." + host) || host.hasSuffix("." + wanted))
-              }),
+        guard let login = vault.logins.first(where: { BrowserSteps.sameSite($0.site, site) }),
               let passphrase = KeyStore.get(LocalVault.passphraseKey), !passphrase.isEmpty,
               let key = VaultCrypto.key(passphrase: passphrase, vaultID: vault.salt),
               let password = VaultCrypto.open(ciphertext: login.ciphertext, iv: login.iv, key: key) else { return nil }

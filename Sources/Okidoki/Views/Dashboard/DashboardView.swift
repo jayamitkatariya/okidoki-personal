@@ -10,10 +10,37 @@ struct DashboardView: View {
     // No store observation or preferred scheme here: the web view must keep a stable identity
     // (it is never rebuilt on a theme flip), and the controller already pushes state on change.
     var body: some View {
-        WebDashboardView(environment: env)
-            .frame(minWidth: 900, minHeight: 600)
-            .background(Color(nsColor: .okDashboardBackground))
+        ZStack(alignment: .topLeading) {
+            WebDashboardView(environment: env)
+            BrowserSlot(environment: env)
+        }
+        .frame(minWidth: 900, minHeight: 600)
+        .background(Color(nsColor: .okDashboardBackground))
     }
+}
+
+/// okidoki's browser, placed exactly where the Browser page leaves room for it. Off that page it stays
+/// in the window, invisible and out of the way, so a run or a replay keeps its page.
+private struct BrowserSlot: View {
+    @ObservedObject var environment: AppEnvironment
+
+    var body: some View {
+        let frame = environment.browserFrame
+        HostedView(view: environment.browser.view, hidden: frame == nil)
+            .frame(width: max(frame?.width ?? 1000, 1), height: max(frame?.height ?? 700, 1))
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 19, bottomTrailingRadius: 19))
+            .offset(x: frame?.minX ?? 0, y: frame?.minY ?? 0)
+            .opacity(frame == nil ? 0 : 1)
+            .allowsHitTesting(frame != nil)
+    }
+}
+
+private struct HostedView: NSViewRepresentable {
+    let view: NSView
+    /// Hidden at the AppKit level too: SwiftUI's hit-testing switch doesn't stop an NSView from taking clicks.
+    let hidden: Bool
+    func makeNSView(context: Context) -> NSView { view }
+    func updateNSView(_ nsView: NSView, context: Context) { nsView.isHidden = hidden }
 }
 
 struct WebDashboardView: NSViewRepresentable {
@@ -169,6 +196,8 @@ struct DashboardPrivateMacPayload: Encodable {
 
 @MainActor
 final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    /// The panel's page, for the dev hooks' `dash` command (scripts/dev-browser.sh).
+    static weak var current: WKWebView?
     private weak var env: AppEnvironment?
     private var webView: WKWebView?
     private var cancellables = Set<AnyCancellable>()
@@ -299,6 +328,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         webView.isInspectable = true
         #endif
         self.webView = webView
+        Self.current = webView
         load(into: webView)
         return webView
     }
@@ -805,6 +835,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.signOut()
         case "signIn":
             if let id = payload["id"] as? String { env.signIn(accountID: id) }
+        case "browserFrame":
+            if payload["hidden"] as? Bool == true { env.browserFrame = nil }
+            else if let x = payload["x"] as? Double, let y = payload["y"] as? Double,
+                    let width = payload["width"] as? Double, let height = payload["height"] as? Double, width > 0, height > 0 {
+                env.browserFrame = CGRect(x: x, y: y, width: width, height: height)
+            }
         case "openBrowser":
             env.openBrowser(url: (payload["url"] as? String).flatMap(URL.init(string:)))
         case "openExternal":

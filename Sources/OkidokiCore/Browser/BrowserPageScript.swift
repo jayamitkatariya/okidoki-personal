@@ -181,13 +181,19 @@ public enum BrowserPageScript {
       };
 
       function key(el, name) {
-        const init = { key: name, code: name === 'Enter' ? 'Enter' : name, bubbles: true, cancelable: true };
+        const init = { key: name, code: name === 'Enter' ? 'Enter' : name, keyCode: name === 'Enter' ? 13 : 0, which: name === 'Enter' ? 13 : 0, bubbles: true, cancelable: true };
+        // A page whose own Enter handler submits the form: notice, so it isn't submitted twice.
+        let submitted = false;
+        const form = el.form;
+        const saw = () => { submitted = true; };
+        form?.addEventListener('submit', saw, true);
         const go = el.dispatchEvent(new KeyboardEvent('keydown', init));
         el.dispatchEvent(new KeyboardEvent('keypress', init));
         el.dispatchEvent(new KeyboardEvent('keyup', init));
+        form?.removeEventListener('submit', saw, true);
         // Synthetic keys don't submit forms by themselves.
-        if (go && name === 'Enter' && el.form) {
-          try { el.form.requestSubmit(); } catch { el.form.submit(); }
+        if (go && !submitted && name === 'Enter' && form) {
+          try { form.requestSubmit(); } catch { form.submit(); }
         }
       }
 
@@ -298,9 +304,14 @@ public enum BrowserPageScript {
         action, url: location.href, title: document.title, selectors: selectorsFor(el),
         label: labelFor(el), role: role(el), tag: el.tagName.toLowerCase(), ...extra,
       });
+      let enterAt = 0;
       function flushTyping(el) {
-        if (!el || !('value' in el)) return;
-        const value = el.value ?? '';
+        if (!el) return;
+        // Rich editors (a mail body, a chat box) hold their text in the element, not a value.
+        const rich = !('value' in el) && el.isContentEditable;
+        if (!('value' in el) && !rich) return;
+        if (rich) el = el.closest('[contenteditable=""],[contenteditable=true]') || el;
+        const value = rich ? (el.innerText ?? '') : (el.value ?? '');
         if (typed.get(el) === value) return;
         typed.set(el, value);
         const secret = el.type === 'password' || /one-time-code|cc-|card/i.test(el.autocomplete || '');
@@ -312,6 +323,8 @@ public enum BrowserPageScript {
         if (!el || el === document.body) return;
         const r = role(el);
         if (['textbox', 'searchbox', 'password', 'combobox'].includes(r) && el.tagName !== 'BUTTON') return;
+        // Enter in a field makes the browser "click" the form's submit button; the Enter is already recorded.
+        if (Date.now() - enterAt < 400 && (el.type === 'submit' || el.tagName === 'BUTTON') && el.form) return;
         post(step(el, 'click'));
       }, true);
       addEventListener('change', e => {
@@ -326,9 +339,16 @@ public enum BrowserPageScript {
         if (e.key === 'Enter' && e.target && 'value' in e.target && e.target.tagName !== 'TEXTAREA') {
           flushTyping(e.target);
           post(step(e.target, 'press', { key: 'Enter' }));
+          enterAt = Date.now();
         }
       }, true);
       addEventListener('blur', e => { if (recording && e.isTrusted) flushTyping(e.target); }, true);
+      // A click elsewhere ends typing in a rich editor, which has no change event.
+      addEventListener('pointerdown', e => {
+        if (!recording || !e.isTrusted) return;
+        const active = document.activeElement;
+        if (active && active.isContentEditable && !active.contains(e.target)) flushTyping(active);
+      }, true);
 
       window.__okidoki = {
         snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },

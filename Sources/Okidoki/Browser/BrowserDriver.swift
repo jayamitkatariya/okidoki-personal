@@ -34,13 +34,14 @@ final class BrowserDriver {
     init(environment: AppEnvironment) { self.env = environment }
 
     func begin(run: AgentRun) {
-        guard let env, task == nil else {
+        guard let env, task == nil, !env.browserReplayer.isActive else {
             env?.store.finishRun(run.id, status: .failed, summary: "the browser is busy with another task — let it finish or stop it first")
             return
         }
         let browser = env.browser
         runID = run.id
-        learned = []
+        // A run that continues after the person answered a question keeps what the first part learned.
+        learned = run.threadID.flatMap { env.browserLearnedBeforeQuestion.removeValue(forKey: $0) } ?? []
         browser.showQuietly()
         browser.beginWork("browsing · \(run.title)")
         browser.onEscape = { [weak self] in self?.cancel(reason: "you stopped me") }
@@ -59,7 +60,7 @@ final class BrowserDriver {
         self.runID = nil
     }
 
-    private func drive(run: AgentRun, browser: BrowserWindowController) async {
+    private func drive(run: AgentRun, browser: BrowserController) async {
         guard let env else { return }
         var results: [[String: Any]] = []
         var lookNext = false
@@ -95,7 +96,7 @@ final class BrowserDriver {
                 let type = action["type"] as? String ?? ""
                 switch type {
                 case "finish":
-                    if let extracted { env.store.updateRun(run.id) { $0.output = Self.json(extracted) } }
+                    if let extracted { log(run.id, "data:\n" + Self.json(extracted)) }
                     finish(run, success: action["success"] as? Bool ?? false, summary: action["summary"] as? String ?? "done")
                     return
                 case "ask":
@@ -111,6 +112,7 @@ final class BrowserDriver {
                     let outcome = await perform(type, action, browser: browser, url: page.url)
                     results.append(outcome.ok ? ["ok": true] : ["ok": false, "detail": outcome.detail ?? "didn't work"])
                     if outcome.ok, let line = outcome.line { browser.updateWork(line) }
+                    log(run.id, outcome.ok ? "→ \(outcome.line ?? type)" : "✗ \(type): \(outcome.detail ?? "didn't work")")
                     if !outcome.ok { halted = true }
                 }
             }
@@ -120,7 +122,12 @@ final class BrowserDriver {
 
     private struct Outcome { var ok: Bool; var detail: String?; var line: String? }
 
-    private func perform(_ type: String, _ action: [String: Any], browser: BrowserWindowController, url: String) async -> Outcome {
+    /// The run's step log, as the Live page and history show it.
+    private func log(_ runID: String, _ line: String) {
+        env?.store.updateRun(runID) { run in run.output += (run.output.isEmpty ? "" : "\n") + line }
+    }
+
+    private func perform(_ type: String, _ action: [String: Any], browser: BrowserController, url: String) async -> Outcome {
         guard let env else { return Outcome(ok: false) }
         let gap = 0.6
         switch type {
@@ -131,11 +138,19 @@ final class BrowserDriver {
             return Outcome(ok: true, line: "opening \(BrowserSteps.displayURL(target.absoluteString))")
         case "back":
             await browser.goBack()
+            // Back undoes the wrong turn: the step that led away isn't part of the skill.
+            if !learned.isEmpty { learned.removeLast() }
             return Outcome(ok: true, line: "going back")
         case "fill_login":
-            let site = action["site"] as? String ?? BrowserSteps.host(of: url)
-            guard let login = env.vaultLogin(for: site) else {
-                return Outcome(ok: false, detail: "no saved login for \(site), or the vault is locked on this Mac (turn on “remember on this Mac” in Vault)")
+            // Only ever the login for the page's own site, whatever site the model names: a page that
+            // talks the model into "filling the bank login" here gets nothing.
+            let here = BrowserSteps.host(of: browser.webView.url?.absoluteString ?? url)
+            let named = action["site"] as? String ?? here
+            guard !here.isEmpty, BrowserSteps.sameSite(here, named) else {
+                return Outcome(ok: false, detail: "this page is \(here.isEmpty ? "not a website" : here), not \(named); logins are only filled on their own site")
+            }
+            guard let login = env.vaultLogin(for: here) else {
+                return Outcome(ok: false, detail: "no saved login for \(here), or the vault is locked on this Mac (turn on “remember on this Mac” in Vault)")
             }
             let result = await browser.fillLogin(username: login.username, password: login.password)
             if result.ok { learned.append(BrowserSteps.login(site: login.site, url: url, delay: gap)) }
@@ -156,8 +171,10 @@ final class BrowserDriver {
             }
             // Scrolling isn't part of the skill: a replay finds elements wherever they are.
             guard type != "scroll" else { return Outcome(ok: true, line: "scrolling") }
-            let input: String? = type == "type" ? payload["text"] as? String : type == "select" ? payload["value"] as? String
+            var input: String? = type == "type" ? payload["text"] as? String : type == "select" ? payload["value"] as? String
                 : type == "press" ? (payload["key"] as? String ?? "Enter") : nil
+            // Whatever went into a password field (a code they gave in an answer, say) isn't kept in the skill.
+            if type == "type", result.role == "password" { input = BrowserSteps.vaultPlaceholder(site: BrowserSteps.host(of: url), field: "password") }
             learned.append(.browser(type, text: BrowserSteps.line(type, label: result.label, input: input), url: url,
                                     selectors: result.selectors, label: result.label, role: result.role, input: input, delay: gap))
             if type == "type", payload["submit"] as? Bool == true {
@@ -186,6 +203,7 @@ final class BrowserDriver {
         task = nil
         runID = nil
         env.browser.endWork()
+        if let threadID = run.threadID { env.browserLearnedBeforeQuestion[threadID] = learned }
         env.store.finishRun(run.id, status: .asked, summary: question)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: question, runID: run.id) }
         env.presentDriveQuestion(runID: run.id, question: question)
@@ -214,7 +232,10 @@ final class BrowserReplayer {
     init(environment: AppEnvironment) { self.env = environment }
 
     func begin(skill: Skill, runID: String, times: Int, values: [[String: String]]) {
-        guard let env, task == nil else { env?.failReplay(runID: runID, reason: "a replay is already running in the browser"); return }
+        guard let env, task == nil, !env.browserDriver.isActive else {
+            env?.failReplay(runID: runID, reason: "the browser is busy — let the current task finish or stop it first")
+            return
+        }
         let builtins = ParameterFill.builtins()
         let passValues = values.isEmpty ? [builtins] : values.map { builtins.merging($0) { _, given in given } }
         let needed = ParameterFill.names(in: skill.steps)
@@ -237,10 +258,15 @@ final class BrowserReplayer {
             var changed = false
             for pass in 1...passes {
                 let given = passValues[(pass - 1) % passValues.count]
-                for (index, step) in skill.steps.enumerated() {
+                for index in healed.indices {
+                    // Later passes use what earlier ones repaired, so a fix is paid for once.
+                    let step = healed[index]
                     if Task.isCancelled { return }
                     self.mark(index, .running, total: skill.steps.count, pass: pass, of: passes, text: ParameterFill.fill(step.text, values: given).text)
-                    switch await self.perform(step, values: given, browser: browser) {
+                    let outcome = await self.perform(step, values: given, browser: browser, pass: pass)
+                    // Stopped while that step was in flight: the run is already marked cancelled.
+                    if Task.isCancelled || self.runID != runID { return }
+                    switch outcome {
                     case .done:
                         break
                     case .healed(let selectors):
@@ -257,6 +283,7 @@ final class BrowserReplayer {
                 }
             }
             if changed { env.store.updateSkillSteps(skill.id, healed) }
+            if Task.isCancelled || self.runID != runID { return }
             self.end()
             env.finishReplay(runID: runID, passes: passes)
         }
@@ -289,7 +316,7 @@ final class BrowserReplayer {
 
     private enum StepOutcome { case done, healed([String]), failed(String) }
 
-    private func perform(_ step: SkillStep, values: [String: String], browser: BrowserWindowController) async -> StepOutcome {
+    private func perform(_ step: SkillStep, values: [String: String], browser: BrowserController, pass: Int) async -> StepOutcome {
         guard let env else { return .failed("okidoki quit") }
         let action = step.action ?? "click"
         switch action {
@@ -301,6 +328,9 @@ final class BrowserReplayer {
             return .done
         case "login":
             let site = BrowserSteps.vaultReference(in: step.input ?? "")?.site ?? BrowserSteps.host(of: step.url ?? "")
+            let here = BrowserSteps.host(of: browser.webView.url?.absoluteString ?? "")
+            // A redirect to some other site since recording: its login fields don't get this site's login.
+            guard BrowserSteps.sameSite(here, site) else { return .failed("the page is \(here), not \(site), so the login wasn't filled") }
             guard let login = env.vaultLogin(for: site) else { return .failed("no unlocked vault login for \(site)") }
             let result = await browser.fillLogin(username: login.username, password: login.password)
             return result.ok ? .done : .failed(result.detail ?? "couldn't find the login fields")
@@ -308,6 +338,8 @@ final class BrowserReplayer {
             var input = step.input
             if let raw = input {
                 if let ref = BrowserSteps.vaultReference(in: raw) {
+                    let here = BrowserSteps.host(of: browser.webView.url?.absoluteString ?? "")
+                    guard BrowserSteps.sameSite(here, ref.site) else { return .failed("the page is \(here), not \(ref.site), so the secret wasn't typed") }
                     guard let secret = env.vaultSecret(site: ref.site, field: ref.field) else {
                         return .failed("no unlocked vault login for \(ref.site)")
                     }
@@ -330,7 +362,7 @@ final class BrowserReplayer {
             }
             if !result.ok {
                 // None of the saved ways find it: the brain looks at the page for this one step.
-                guard let rescued = await rescue(step, input: input, browser: browser) else {
+                guard let rescued = await rescue(step, input: input, browser: browser, pass: pass) else {
                     return .failed(result.detail ?? "couldn't find it")
                 }
                 result = rescued
@@ -355,21 +387,32 @@ final class BrowserReplayer {
     }
 
     /// One step, by the brain: it's told what the step was and picks the element on today's page.
-    private func rescue(_ step: SkillStep, input: String?, browser: BrowserWindowController) async -> BrowserActResult? {
+    private func rescue(_ step: SkillStep, input: String?, browser: BrowserController, pass: Int) async -> BrowserActResult? {
         guard let env, env.hasKey("anthropic"), let runID else { return nil }
         let page = await browser.snapshot()
+        let action = step.action ?? "click"
+        let what = step.label.map { "the element labelled “\($0)”" } ?? "the element"
+        // The text itself only when it isn't a secret; the app types the real value either way.
+        let typed = (action == "type" && !(step.input ?? "").hasPrefix("{{vault:")) ? " with “\(input ?? "")”" : ""
         let goal = """
-        Do exactly one step of a recorded skill on this page, then finish: \(step.action ?? "click") \
-        \(step.label.map { "the element labelled “\($0)”" } ?? "the element") (role \(step.role ?? "unknown")). \
-        It was recorded on \(step.url ?? "this site"). Pick the element that matches it now; don't do anything else.
+        One step of a recorded skill no longer finds its element on this page: \(action) \(what)\(typed) \
+        (it was a \(step.role ?? "control") when recorded on \(step.url ?? "this site")). Call \(action == "press" ? "press" : action) \
+        once on the element that matches it now, by its number, and nothing else. If nothing on the page matches, finish with success false.
         """
         let body: [String: Any] = [
-            "runID": "\(runID)-rescue-\(step.id)", "goal": goal, "step": 0,
+            // Its own conversation each time, so a second rescue never gets the first one's element number.
+            "runID": "\(runID)-rescue-\(step.id)-\(pass)-\(UUID().uuidString.prefix(6))", "goal": goal, "step": 0,
             "observation": ["url": page.url, "title": page.title, "elements": page.elements, "text": String(page.text.prefix(3000))],
             "settings": ["claudeModel": env.store.settings.claudeModel],
         ]
-        guard let actions = await BrainClient.shared.browserStep(body),
-              let pick = actions.first(where: { $0["ref"] is Int }), let ref = pick["ref"] as? Int else { return nil }
+        let actions = await BrainClient.shared.browserStep(body)
+        let pick = actions?.first { ($0["ref"] as? NSNumber) != nil }
+        guard let ref = (pick?["ref"] as? NSNumber)?.intValue else {
+            let said = actions?.first?["summary"] as? String ?? (actions == nil ? "the brain didn't answer" : "no element picked")
+            env.store.updateRun(runID) { $0.output += ($0.output.isEmpty ? "" : "\n") + "✗ rescue: \(said)" }
+            return nil
+        }
+        env.store.updateRun(runID) { $0.output += ($0.output.isEmpty ? "" : "\n") + "→ rescued by the model: element \(ref)" }
         var payload: [String: Any] = ["action": step.action ?? "click", "ref": ref]
         if step.action == "type" { payload["text"] = input ?? "" }
         if step.action == "select" { payload["value"] = input ?? "" }

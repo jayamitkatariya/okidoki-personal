@@ -122,7 +122,8 @@ function observationText(request: BrowserRequest): string {
 }
 
 type Message = { role: "user" | "assistant"; content: unknown };
-type Session = { messages: Message[]; pendingIds: string[]; used: number; lastStep?: number; lastResponse?: BrowserResponse };
+/** `pendingIds`: every tool call of the last turn, with the index of its action in what the Mac ran, or -1 if it was malformed and dropped. */
+type Session = { messages: Message[]; pendingIds: Array<{ id: string; action: number }>; used: number; lastStep?: number; lastResponse?: BrowserResponse };
 
 const SESSION_TTL_MS = 20 * 60_000;
 const sessions = new Map<string, Session>();
@@ -138,10 +139,14 @@ function sweep(now: number) {
 function userTurn(session: Session, request: BrowserRequest): Message {
   const content: unknown[] = [];
   // Every tool call of the last turn needs its result first; the details ride in the text below.
-  session.pendingIds.forEach((id, i) => {
-    const result = request.results?.[i];
+  for (const { id, action } of session.pendingIds) {
+    if (action < 0) {
+      content.push({ type: "tool_result", tool_use_id: id, content: "not run: that call was missing a field or named an unknown tool", is_error: true });
+      continue;
+    }
+    const result = request.results?.[action];
     content.push({ type: "tool_result", tool_use_id: id, content: result ? (result.ok ? "ok" : `failed: ${result.detail ?? ""}`) : "not run", is_error: result ? !result.ok : false });
-  });
+  }
   if (request.observation.screenshotBase64) {
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: request.observation.screenshotBase64 } });
   }
@@ -207,7 +212,13 @@ export async function browserStep(
   const reply: ModelReply = result.reply;
   const content = reply.content ?? [];
   const uses = content.filter((block) => block.type === "tool_use") as Array<{ id: string; name: string; input: Record<string, any> }>;
-  const actions = uses.map((use) => mapBrowserTool(use.name, use.input ?? {})).filter((a): a is BrowserAction => Boolean(a));
+  const actions: BrowserAction[] = [];
+  const pendingIds = uses.map((use) => {
+    const action = mapBrowserTool(use.name, use.input ?? {});
+    if (!action) return { id: use.id, action: -1 };
+    actions.push(action);
+    return { id: use.id, action: actions.length - 1 };
+  });
   if (actions.length === 0) {
     const said = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join(" ").trim();
     actions.push({ type: "finish", success: false, summary: said || "i couldn't tell what to do next on this page." });
@@ -217,7 +228,7 @@ export async function browserStep(
   session.messages = [...messages, { role: "assistant" as const, content }].map((message, index, all) =>
     message.role === "user" && index < all.length - 4 ? trimObservation(message) : message,
   );
-  session.pendingIds = uses.map((use) => use.id);
+  session.pendingIds = pendingIds;
   const response: BrowserResponse = { actions, meta: { model, modelMs: Date.now() - started, usage: readUsage(reply.usage) } };
   session.lastStep = request.step;
   session.lastResponse = response;

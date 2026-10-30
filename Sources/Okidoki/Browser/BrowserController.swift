@@ -21,19 +21,22 @@ final class BrowserModel: ObservableObject {
     @Published var hasLogin = false
 }
 
-/// okidoki's own browser: a window with one page, its own saved logins (a separate website data
-/// store, so nothing is shared with Safari), and the page script in a content world of its own.
+/// okidoki's own browser: one page shown on the dashboard's Browser page, its own saved logins (a
+/// separate website data store, so nothing is shared with Safari), and the page script in a content
+/// world of its own. The view stays in the dashboard window while other pages are showing, just
+/// hidden, so a run or a replay carries on wherever the person goes.
 /// The agent, recordings and replays all work through `snapshot`, `act` and `settle` here, on the
 /// DOM rather than with the mouse, so the person can keep using the rest of the Mac meanwhile.
 @MainActor
-final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
-                                     WKScriptMessageHandler, WKDownloadDelegate {
+final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
+                               WKScriptMessageHandler, WKDownloadDelegate {
     /// One profile for every launch; WebKit keeps its cookies and storage under this id.
     private static let profileID = UUID(uuidString: "6B1D9E2A-0C55-4E1F-9A0B-0D0E1D0C1B1E")!
 
     let model = BrowserModel()
     private(set) var webView: WKWebView!
-    private var window: NSWindow?
+    /// The toolbar and the page, for the dashboard to place over its Browser page.
+    private(set) var view: NSView!
     private weak var env: AppEnvironment?
     private let world = WKContentWorld.world(name: BrowserPageScript.worldName)
     private var observations: [NSKeyValueObservation] = []
@@ -44,6 +47,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDel
     var onEscape: (() -> Void)?
     /// Files the page downloaded since the agent last asked, by name.
     private(set) var finishedDownloads: [String] = []
+    /// Where each download in flight is being saved, so its name is known when it finishes.
+    private var downloadDestinations: [ObjectIdentifier: URL] = [:]
     private var lastRecordedAt: Date?
 
     init(environment: AppEnvironment) {
@@ -80,42 +85,21 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDel
             webView.observe(\.estimatedProgress) { [weak self] view, _ in Task { @MainActor in self?.model.progress = view.estimatedProgress } },
         ]
 
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.title = "okidoki browser"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.titlebarSeparatorStyle = .none
-        window.backgroundColor = .okDashboardBackground
-        window.minSize = NSSize(width: 640, height: 420)
-        window.setFrameAutosaveName("OkidokiBrowser")
-        if window.frame.origin == .zero { window.center() }
-        window.contentView = NSHostingView(rootView: BrowserView(model: model, webView: webView, controller: self))
-        window.delegate = self
-        self.window = window
+        view = NSHostingView(rootView: BrowserView(model: model, webView: webView, controller: self))
     }
 
-    var isVisible: Bool { window?.isVisible == true }
+    private var window: NSWindow? { webView.window }
 
+    /// The Browser page, with the dashboard in front.
     func show(url: URL? = nil) {
-        guard let window else { return }
-        NSApp.setActivationPolicy(.regular)
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        if !window.isVisible { window.okFitToScreen() }
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        env?.openDashboard(.browser)
         if let url { load(url) } else if webView.url == nil { load(URL(string: "https://www.google.com")!) }
     }
 
-    /// Brings the window up without taking focus from the app they're in, for the agent and replays.
+    /// The Browser page in front for the agent and replays, so the person can watch, without taking the
+    /// keyboard from the app they're in.
     func showQuietly() {
-        guard let window else { return }
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        if !window.isVisible { window.okFitToScreen() }
-        window.orderFront(nil)
+        env?.showDashboardQuietly(.browser)
     }
 
     func load(_ url: URL) {
@@ -131,7 +115,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDel
     private func urlChanged(_ url: URL?) {
         model.address = url?.absoluteString ?? ""
         let site = BrowserSteps.host(of: model.address)
-        model.hasLogin = !site.isEmpty && env?.vault.logins.contains { BrowserSteps.host(of: $0.site).hasSuffix(site) || site.hasSuffix(BrowserSteps.host(of: $0.site)) } == true
+        model.hasLogin = !site.isEmpty && env?.vault.logins.contains { BrowserSteps.sameSite($0.site, site) } == true
     }
 
     // MARK: - The page, for the agent and replays
@@ -202,6 +186,31 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDel
         guard let image = try? await webView.takeSnapshot(configuration: config),
               let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
         return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7])
+    }
+
+    /// Where an element is on screen (Quartz points, top-left origin), for scripted clicks that
+    /// arrive as a person's would.
+    func screenPoint(of selector: String) async -> CGPoint? {
+        guard let window, let rect = await call("""
+            const el = document.querySelector(s); if (!el) return null;
+            el.scrollIntoView({block: 'center'}); const r = el.getBoundingClientRect();
+            return [r.left + r.width / 2, r.top + r.height / 2];
+            """, ["s": selector]) as? [Double], rect.count == 2 else { return nil }
+        let inView = NSPoint(x: rect[0], y: webView.isFlipped ? rect[1] : webView.bounds.height - rect[1])
+        let inWindow = webView.convert(inView, to: nil)
+        let onScreen = window.convertPoint(toScreen: inWindow)
+        let primary = NSScreen.screens.first?.frame.height ?? 0
+        return CGPoint(x: onScreen.x, y: primary - onScreen.y)
+    }
+
+    /// For scripts/dev-browser.sh: where the window is and whether macOS thinks it can be seen.
+    func windowInfo() -> String {
+        let slot = "slot=\(env?.browserFrame.map { "\($0)" } ?? "hidden") viewHidden=\(view.isHidden) "
+        guard let window else { return slot + "no window" }
+        return slot + "visible=\(window.isVisible) onActiveSpace=\(window.isOnActiveSpace) occlusion=\(window.occlusionState.contains(.visible)) " +
+            "frame=\(window.frame) screen=\(window.screen?.localizedName ?? "nil") level=\(window.level.rawValue) " +
+            "policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) mini=\(window.isMiniaturized) " +
+            "content=\(window.contentView?.frame ?? .zero) web=\(webView.frame)"
     }
 
     // MARK: - Agent and replay presence
@@ -305,12 +314,13 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDel
             url = folder.appendingPathComponent("\(base) \(n)" + (ext.isEmpty ? "" : ".\(ext)"))
             n += 1
         }
+        downloadDestinations[ObjectIdentifier(download)] = url
         return url
     }
 
     func downloadDidFinish(_ download: WKDownload) {
         Task { @MainActor in
-            let name = download.progress.fileURL?.lastPathComponent ?? "a file"
+            let name = downloadDestinations.removeValue(forKey: ObjectIdentifier(download))?.lastPathComponent ?? "a file"
             finishedDownloads.append(name)
             env?.vault.rescan()
             env?.toast(title: "saved to your vault", detail: "Downloads/\(name)", kind: .success,
@@ -321,20 +331,12 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, WKNavigationDel
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         Task { @MainActor in
+            downloadDestinations[ObjectIdentifier(download)] = nil
             env?.toast(title: "download failed", detail: error.localizedDescription, kind: .warning,
                        undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
         }
     }
 
-    // MARK: - Window
-
-    func windowWillClose(_ notification: Notification) {
-        if model.recording { env?.stopBrowserRecording() }
-        if model.status != nil { onEscape?() }
-        if env?.dashboardOpen != true, env?.onboardingOpen != true {
-            NSApp.setActivationPolicy(.accessory)
-        }
-    }
 }
 
 struct BrowserSnapshot {
@@ -361,7 +363,7 @@ struct BrowserActResult {
 private struct BrowserView: View {
     @ObservedObject var model: BrowserModel
     let webView: WKWebView
-    weak var controller: BrowserWindowController?
+    weak var controller: BrowserController?
     @Environment(\.colorScheme) private var scheme
     @FocusState private var addressFocused: Bool
     @State private var typed = ""
@@ -370,13 +372,11 @@ private struct BrowserView: View {
         let theme = OKTheme(scheme)
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                // Room for the traffic lights.
-                Color.clear.frame(width: 64, height: 1)
-                OKIconButton(glyph: "chevron.left", help: "Back") { webView.goBack() }
+                OKIconButton(glyph: "chevron-left", help: "Back") { webView.goBack() }
                     .disabled(!model.canGoBack).opacity(model.canGoBack ? 1 : 0.4)
-                OKIconButton(glyph: "chevron.right", help: "Forward") { webView.goForward() }
+                OKIconButton(glyph: "chevron", help: "Forward") { webView.goForward() }
                     .disabled(!model.canGoForward).opacity(model.canGoForward ? 1 : 0.4)
-                OKIconButton(glyph: model.loading ? "xmark" : "arrow.clockwise", help: model.loading ? "Stop" : "Reload") {
+                OKIconButton(glyph: model.loading ? "x" : "refresh", help: model.loading ? "Stop" : "Reload") {
                     if model.loading { webView.stopLoading() } else { webView.reload() }
                 }
                 HStack(spacing: 6) {
@@ -440,7 +440,7 @@ private struct BrowserWebView: NSViewRepresentable {
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 }
 
-extension BrowserWindowController {
+extension BrowserController {
     fileprivate func env_startRecording() { env?.startBrowserRecording() }
     fileprivate func env_stopRecording() { env?.stopBrowserRecording() }
 }

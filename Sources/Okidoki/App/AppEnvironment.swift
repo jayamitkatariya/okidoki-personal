@@ -29,11 +29,15 @@ final class AppEnvironment: ObservableObject {
     private(set) var notch: NotchController!
     private(set) var driver: ComputerUseDriver!
     /// okidoki's own browser window, made the first time it's needed.
-    private(set) lazy var browser = BrowserWindowController(environment: self)
+    private(set) lazy var browser = BrowserController(environment: self)
     private(set) lazy var browserDriver = BrowserDriver(environment: self)
     private(set) lazy var browserReplayer = BrowserReplayer(environment: self)
     /// The steps of a recording in the browser so far, while one is going.
     var browserRecording: (() -> [SkillStep])?
+    /// What a browser run learned before it stopped to ask something, by thread, for the run that continues it.
+    var browserLearnedBeforeQuestion: [String: [SkillStep]] = [:]
+    /// The last browser run that worked, with what it learned, until it's saved or replaced.
+    var lastBrowserRun: (title: String, steps: [SkillStep])?
     /// The macOS VM computer-use runs drive when settings say so; this Mac otherwise.
     let privateMac = PrivateMacService()
     private(set) var simOverlay: SimOverlayController!
@@ -48,6 +52,8 @@ final class AppEnvironment: ObservableObject {
     @Published var signedOut = false
     @Published var dashboardRoute: DashboardSection = .home
     @Published var dashboardRunID: String?
+    /// Where the dashboard's Browser page holds the browser, in the page's points; nil while another page shows.
+    @Published var browserFrame: CGRect?
     @Published var askPulse = 0
     @Published var shakePulse = 0
     @Published var inCall = false
@@ -274,7 +280,84 @@ final class AppEnvironment: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if self.driver.isActive { self.driver.cancel(reason: "stopped by the test script") }
+                if self.browserDriver.isActive { self.browserDriver.cancel(reason: "stopped by the test script") }
+                if self.browserReplayer.isActive { self.browserReplayer.cancel(reason: "stopped by the test script") }
             }
+        }
+        // The browser, for scripts/dev-browser.sh: run a goal there, open a page, record, save, replay.
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.browse"), object: nil, queue: .main) { [weak self] note in
+            guard let goal = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { return }
+            Task { @MainActor in self?.devBrowse(goal: goal) }
+        }
+        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.browser"), object: nil, queue: .main) { [weak self] note in
+            let command = (note.object as? String) ?? ""
+            Task { @MainActor in self?.devBrowser(command) }
+        }
+    }
+
+    private func devBrowse(goal: String) {
+        guard !browserDriver.isActive else { return }
+        let preview = ActionPreview(summary: String(goal.prefix(54)), risk: .medium,
+                                    steps: [PreviewStep("open the site"), PreviewStep("read the page and work through it"), PreviewStep("report back")],
+                                    commands: [], apps: ["okidoki browser"], files: [])
+        let thread = store.threadForContext(app: "okidoki browser", topic: inferTopic(goal), text: goal)
+        store.appendMessage(threadID: thread.id, role: .user, text: goal)
+        let run = store.createRun(kind: .browser, title: String(goal.prefix(54)), prompt: goal, threadID: thread.id, preview: preview,
+                                  steps: preview.steps.map { RunStep(title: $0.text) }, status: .waiting, builtin: "browser")
+        store.saveNow()
+        approveRun(run.id)
+    }
+
+    /// `open <url>` · `record` · `save <name>` · `keep <name>` (save the last run's steps) · `replay <name>` ·
+    /// `eval <js>` (result written to dev-browser.json beside the state file).
+    private func devBrowser(_ command: String) {
+        let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
+        let arg = parts.count > 1 ? parts[1] : ""
+        switch parts.first ?? "" {
+        case "open": browser.show(url: BrowserSteps.addressURL(arg))
+        case "record": startBrowserRecording()
+        case "save":
+            if let steps = browserRecording?() { browser.stopRecording(); browserRecording = nil
+                saveBrowserSkill(name: arg.isEmpty ? "recorded flow" : arg, steps: BrowserRecordingCleanup.tidy(steps), source: "watch me") }
+        case "keep":
+            if let last = lastBrowserRun { saveBrowserSkill(name: arg.isEmpty ? last.title : arg, steps: last.steps, source: "act") }
+        case "replay":
+            if let skill = store.activeSkills.first(where: { $0.name == arg }) {
+                let run = makeReplayRun(skill, times: 1, threadID: nil)
+                approveRun(run.id)
+            }
+        // A person's input, through the real event system: `click <css selector>`, `type <text>`, `key <combo>`.
+        case "click":
+            Task { @MainActor in
+                guard let point = await browser.screenPoint(of: arg) else { return }
+                await EventActuator.click(at: point)
+            }
+        case "type": Task { await EventActuator.typeText(arg) }
+        case "key": Task { _ = await EventActuator.pressKey(arg) }
+        case "route":
+            if let section = DashboardSection(rawValue: arg) { dashboardRoute = section }
+        case "dash":
+            Task { @MainActor in
+                let value: Any? = try? await WebDashboardController.current?.callAsyncJavaScript(arg, arguments: [:], in: nil, contentWorld: .page)
+                let text: Any = value.map { "\($0)" } ?? NSNull()
+                if let data = try? JSONSerialization.data(withJSONObject: ["result": text, "url": ""]) {
+                    try? data.write(to: AppPaths.support("dev-browser.json"))
+                }
+            }
+        case "winfo":
+            let info = browser.windowInfo()
+            if let data = try? JSONSerialization.data(withJSONObject: ["result": info, "url": ""]) {
+                try? data.write(to: AppPaths.support("dev-browser.json"))
+            }
+        case "eval":
+            Task { @MainActor in
+                let value = await browser.call(arg)
+                let json: Any = ["result": value.map { "\($0)" } ?? NSNull(), "url": browser.webView.url?.absoluteString ?? ""]
+                if let data = try? JSONSerialization.data(withJSONObject: json) {
+                    try? data.write(to: AppPaths.support("dev-browser.json"))
+                }
+            }
+        default: break
         }
     }
 
@@ -1681,7 +1764,9 @@ final class AppEnvironment: ObservableObject {
             store.incrementSkillRun(id, by: passes)
         }
         // Records name what was done ("INV-4471 done") and say more than a count.
-        let receipts = (store.run(runID)?.output ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        // The step log ("→ rescued by the model…") isn't a receipt.
+        let receipts = (store.run(runID)?.output ?? "").split(separator: "\n").map(String.init)
+            .filter { !$0.isEmpty && !$0.hasPrefix("→") && !$0.hasPrefix("✗") }
         let line = !receipts.isEmpty ? receipts.joined(separator: "; ") : passes > 1 ? "replayed \(passes) times" : "replayed once"
         // Several records: one reply that lists them all.
         if receipts.count > 1, let threadID = store.run(runID)?.threadID {
@@ -2175,6 +2260,10 @@ final class AppEnvironment: ObservableObject {
     }
 
     // MARK: - Dashboard + toast
+
+    func showDashboardQuietly(_ section: DashboardSection) {
+        dashboard.showQuietly(section: section)
+    }
 
     func openDashboard(_ section: DashboardSection, runID: String? = nil) {
         dashboardRoute = section

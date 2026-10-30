@@ -319,16 +319,6 @@ export function SkillsPage() {
                   >
                     Repeat…
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      invoke("startSkill", { id: skill.id });
-                      notify("Walkthrough started", skill.name);
-                    }}
-                  >
-                    Walk me through
-                  </Button>
                 </footer>
               </article>
             ))}

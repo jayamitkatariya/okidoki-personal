@@ -158,6 +158,11 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
   return true;
 }
 
+/** Inside the Mac app, where native views (the browser) can sit on the page. */
+export function isNative(): boolean {
+  return Boolean(window.webkit?.messageHandlers?.okidoki);
+}
+
 export function invoke(type: string, payload: Record<string, unknown> = {}): void {
   if (window.okidokiInvoke) {
     window.okidokiInvoke(type, payload);
