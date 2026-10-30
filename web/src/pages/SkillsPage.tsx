@@ -38,9 +38,9 @@ export function SkillsPage() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
 
-  // teach
-  const [teachOpen, setTeachOpen] = useState(false);
-  const [teachName, setTeachName] = useState("");
+  // record
+  const [recordOpen, setRecordOpen] = useState(false);
+  const [recordName, setRecordName] = useState("");
 
   // replay × N
   const [repeatFor, setRepeatFor] = useState<Skill | null>(null);
@@ -70,8 +70,8 @@ export function SkillsPage() {
   }, [watching.recording]);
 
   const startRecording = () => {
-    invoke("startWatching", { name: teachName.trim() });
-    setTeachOpen(false);
+    invoke("startWatching", { name: recordName.trim() });
+    setRecordOpen(false);
     notify("Recording", "Do the task once. Stop from the notch at the top of your screen, or come back here.", "info");
   };
 
@@ -182,8 +182,8 @@ export function SkillsPage() {
               <Button
                 variant="primary"
                 onClick={() => {
-                  setTeachName("");
-                  setTeachOpen(true);
+                  setRecordName("");
+                  setRecordOpen(true);
                 }}
               >
                 <span className="rec-dot" />
@@ -368,8 +368,8 @@ export function SkillsPage() {
               variant="primary"
              
               onClick={() => {
-                setTeachName("");
-                setTeachOpen(true);
+                setRecordName("");
+                setRecordOpen(true);
               }}
             >
               <span className="rec-dot" />
@@ -456,13 +456,13 @@ export function SkillsPage() {
         )}
       </section>
 
-      <Modal open={teachOpen} onClose={() => setTeachOpen(false)} title="Record a skill" subtitle="You'll do the task once. okidoki learns it move by move." width={480}>
+      <Modal open={recordOpen} onClose={() => setRecordOpen(false)} title="Record a skill" subtitle="You'll do the task once. okidoki learns it move by move." width={480}>
         <div className="routine-form">
           <div className="routine-field">
             <span className="form-label">Name (optional)</span>
-            <TextField value={teachName} onChange={setTeachName} placeholder="Export the weekly report" autoFocus onEnter={startRecording} />
+            <TextField value={recordName} onChange={setRecordName} placeholder="Export the weekly report" autoFocus onEnter={startRecording} />
           </div>
-          <ul className="teach-tips">
+          <ul className="record-tips">
             <li>
               <PixelIcon name="cursor" size={13} />
               <span>Go at a normal pace. Clicks are remembered by what you clicked, so a moved window still works.</span>
@@ -478,7 +478,7 @@ export function SkillsPage() {
           </ul>
         </div>
         <footer className="modal-actions">
-          <Button variant="ghost" onClick={() => setTeachOpen(false)}>
+          <Button variant="ghost" onClick={() => setRecordOpen(false)}>
             Cancel
           </Button>
           <Button variant="primary" onClick={startRecording}>

@@ -1,13 +1,22 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { delimiter } from "node:path";
 import type { McpServerConfig, McpToolInfo } from "./types";
-import { hostEnvironment } from "./executor";
 
 // A small Model Context Protocol client: stdio servers (a command we spawn) and streamable HTTP servers.
 // Only what okidoki needs: initialize, list tools, call a tool.
 
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "okidoki", version: "0.9.1" };
+
+/** The brain's own credentials stay with the brain: MCP servers don't inherit them. */
+const PRIVATE_ENV = ["ANTHROPIC_API_KEY", "APIFY_API_KEY", "CARTESIA_API_KEY", "MOSS_PROJECT_ID", "MOSS_PROJECT_KEY",
+  "OKIDOKI_SYNC_SECRET", "OKIDOKI_BRAIN_TOKEN", "OKIDOKI_BRAIN_PORT", "CONVEX_DEPLOY_KEY"];
+
+export function hostEnvironment(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const name of PRIVATE_ENV) delete env[name];
+  return env;
+}
 
 type JsonRpcResponse = { id?: number; method?: string; result?: any; error?: { code: number; message: string } };
 

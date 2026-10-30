@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeMemory, memoryStatus, recall, recallTools, syncMemory, warmMemory } from "../src/memory";
+import { closeMemory, memoryStatus, recall, syncMemory, warmMemory } from "../src/memory";
 
 // Against the real Moss engine, in a throwaway folder. Opt-in, like smoke:api: it needs the Moss key
 // (from the repo's .env) and signs in to Moss once; documents are embedded and searched on this Mac.
@@ -31,7 +31,7 @@ test.skipIf(!live)(
         { id: "theirs", accountID: "work", text: "Work launch videos need a legal review before they're posted", section: "aboutYou", updatedAt: now },
       ],
       threads: [{ id: "t1", accountID: "personal", title: "trip", messages: [{ id: "m1", role: "user", text: "plan a weekend trip to Chicago with a museum day", createdAt: now }] }],
-      runs: [{ id: "r1", accountID: "personal", kind: "terminal", status: "done", title: "compress video", prompt: "compress the launch video for discord", summary: "24 MB", createdAt: now }],
+      runs: [{ id: "r1", accountID: "personal", kind: "computer_use", status: "done", title: "compress video", prompt: "compress the launch video for discord", summary: "24 MB", createdAt: now }],
       skills: [{ id: "s1", accountID: "personal", name: "expense report", summary: "files my receipts in Concur", steps: [{ text: "open Concur" }, { text: "attach receipts" }], createdAt: now }],
     });
     expect(result.ok).toBe(true);
@@ -44,9 +44,6 @@ test.skipIf(!live)(
 
     const expenses = await recall("file my expense receipts again", "personal");
     expect(expenses[0]?.type).toBe("skill");
-
-    const tools = await recallTools("make this video smaller", 3);
-    expect(tools.length).toBeGreaterThan(0);
 
     // A new brain process: the saved index answers before the Mac has sent anything.
     await closeMemory();

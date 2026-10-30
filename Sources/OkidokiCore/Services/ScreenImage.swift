@@ -4,9 +4,9 @@ import Foundation
 import Vision
 import CoreText
 
-/// Pixel work for the tutor: scaling, crops, numbered markers, the icon snap and a settle hash.
+/// Pixel work on screen captures: scaling, crops, numbered markers, the icon snap and a settle hash.
 /// Everything here is pure CoreGraphics and safe to call from a detached task.
-public enum TeachImage {
+public enum ScreenImage {
     public static func png(_ image: CGImage) -> Data? {
         NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }

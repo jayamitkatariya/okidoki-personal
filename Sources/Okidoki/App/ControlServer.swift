@@ -3,7 +3,7 @@ import Network
 import OkidokiCore
 
 /// A small HTTP endpoint on 127.0.0.1 so other tools on this Mac — the okidoki MCP server, a
-/// script, a shortcut — can list and replay skills, search the vault, and add notes and reminders.
+/// script, a shortcut — can list and replay skills, and search the vault.
 ///
 /// Every request needs the token in `control.json` in the support folder (owner-only), which also
 /// says the port. Nothing listens beyond this Mac. Replays still go through the usual approval rules.
@@ -156,24 +156,6 @@ final class ControlServer {
                 ["name": file.name, "folder": file.folder, "path": env.vault.folderURL.appendingPathComponent(file.id).path,
                  "size": file.size, "modifiedAt": ISO8601DateFormatter().string(from: file.modifiedAt)] as [String: Any]
             }])
-        case ("POST", "/notes"):
-            let body = request.body["body"] as? String ?? ""
-            let note = env.store.addNote(title: request.body["title"] as? String ?? "", body: body,
-                                         tags: request.body["tags"] as? [String] ?? [])
-            env.store.saveNow()
-            return (200, ["ok": true, "id": note.id, "title": note.title])
-        case ("GET", "/notes"):
-            let q = (request.query["q"] ?? "").lowercased()
-            let notes = env.store.activeNotes.filter { q.isEmpty || $0.title.lowercased().contains(q) || $0.body.lowercased().contains(q) }
-            return (200, ["notes": notes.prefix(20).map { ["id": $0.id, "title": $0.title, "body": $0.body, "tags": $0.tags] as [String: Any] }])
-        case ("POST", "/reminders"):
-            let title = (request.body["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty else { return (400, ["error": "a reminder needs a title"]) }
-            let due = (request.body["dueAt"] as? String).flatMap(DateParsing.iso8601)
-            let repeats = ReminderRepeat(rawValue: request.body["repeats"] as? String ?? "") ?? .never
-            let reminder = env.store.addReminder(title: title, dueAt: due, repeats: repeats)
-            env.store.saveNow()
-            return (200, ["ok": true, "id": reminder.id])
         case ("POST", "/ask"):
             let text = (request.body["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return (400, ["error": "nothing to ask"]) }

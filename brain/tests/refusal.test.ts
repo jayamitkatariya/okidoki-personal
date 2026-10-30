@@ -26,8 +26,8 @@ test("a prose reply gets one nudge back to the tool, and the nudged decision is 
       : respond({ kind: "computer_use", title: "send the message", answer: "sending it.", apps: ["Messages"] });
   }) as typeof fetch;
   const result = await think({ text: "text sam that i'm here" }, "fixture-key", api);
-  // First call, the nudge, then the plan review that computer_use always gets.
-  expect(requests).toHaveLength(3);
+  // First call, then the nudge. No plan-review pass follows.
+  expect(requests).toHaveLength(2);
   const nudge = requests[1].messages;
   expect(nudge.at(-2).role).toBe("assistant");
   expect(JSON.stringify(nudge.at(-2).content)).toContain("I can't send messages");

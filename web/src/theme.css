@@ -842,8 +842,7 @@ kbd {
 :root[data-theme="dark"] .thread-message.is-user .bubble time,
 :root[data-theme="dark"] .thread-send,
 :root[data-theme="dark"] .run-approve-icon,
-:root[data-theme="dark"] .voice-radio.is-on,
-:root[data-theme="dark"] .tb-radio.is-on {
+:root[data-theme="dark"] .voice-radio.is-on {
   color: #03170f;
 }
 .btn-secondary {

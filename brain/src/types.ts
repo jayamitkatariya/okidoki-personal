@@ -3,153 +3,18 @@ export type RiskLevel = "low" | "medium" | "high";
 export type DecisionKind =
   | "answer"
   | "quick_action"
-  | "terminal"
-  | "coding"
   | "background"
-  | "teach"
   | "borrow"
   | "watch"
   | "memory"
   | "routine"
   | "computer_use"
+  | "browser"
   | "overlay"
   | "connector";
 
-export interface TeachMark {
-  kind: "circle" | "box" | "arrow" | "label" | "dim" | "cursor" | "ink";
-  target?: string;
-  point?: [number, number];
-  rect?: [number, number, number, number];
-  to?: [number, number];
-  text?: string;
-  seconds?: number;
-  /** "window" (default) is the app window. "screen" is the whole display. */
-  space?: "window" | "screen";
-}
-
-export interface TeachPlanStep {
-  say: string;
-  marks: TeachMark[];
-}
-
-/** What happened on one live tutoring step: what was taught and what the learner did. */
-export interface TeachLogEntry {
-  say: string;
-  action: string;
-  label?: string;
-  outcome: string;
-}
-
-/** A control the Mac can see, with its center in screenshot pixels and the number drawn on its marker. */
-export interface TeachControlHint {
-  id: number;
-  label: string;
-  role: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface TeachStepRequest {
-  topic: string;
-  app?: string;
-  outline?: string[];
-  log: TeachLogEntry[];
-  stepNumber: number;
-  imageWidth: number;
-  imageHeight: number;
-  screenshotBase64?: string;
-  controls?: TeachControlHint[];
-  /** "guide" (they do it), "show" (okidoki does it) or "practice" (hints held back). */
-  mode?: string;
-  /** What this person already knows in this app. */
-  known?: string[];
-  milestones?: string[];
-  language?: string;
-  model?: string;
-  /** The browser tab in front, when the app is a browser, so the tutor teaches the site, not the browser. */
-  pageTitle?: string;
-  pageURL?: string;
-  /** The app's real menu bar, one line per menu, so the tutor never names an item that isn't there. */
-  menus?: string[];
-  /** Okidoki saw the learner's action hit the previous step's target. */
-  landed?: boolean;
-}
-
-export type TeachAction = "click" | "double_click" | "right_click" | "drag" | "type" | "key" | "scroll" | "look" | "open_app" | "done";
-
-export interface TeachAnnotation {
-  kind: "callout" | "badge" | "bracket" | "underline" | "flow" | "measure" | "spotlight" | "lens" | "sketch" | "ghost" | "typing" | "scroll";
-  text?: string;
-  element?: number;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-  to_x?: number;
-  to_y?: number;
-  n?: number;
-}
-
-export interface TeachNextGuess {
-  say: string;
-  action: TeachAction;
-  label?: string;
-  element?: number;
-  x?: number;
-  y?: number;
-  key?: string;
-}
-
-/** Zoomed second look at one control, to land the ring on the exact pixels. */
-export interface TeachRefineRequest {
-  cropBase64: string;
-  cropWidth: number;
-  cropHeight: number;
-  describe: string;
-  model?: string;
-}
-
-/** One live tutoring step. Coordinates are pixels in the screenshot, origin top-left. */
-export interface TeachStep {
-  previous_done: boolean;
-  waiting: boolean;
-  action: TeachAction;
-  say: string;
-  why?: string;
-  label?: string;
-  element?: number;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-  from_x?: number;
-  from_y?: number;
-  to_x?: number;
-  to_y?: number;
-  to_element?: number;
-  target?: string;
-  key?: string;
-  text?: string;
-  app?: string;
-  risky: boolean;
-  summary?: string;
-  remaining?: number;
-  /** An optional second region worth a glance, e.g. where the result will appear. */
-  also_x?: number;
-  also_y?: number;
-  also_w?: number;
-  also_h?: number;
-  also_label?: string;
-  annotations: TeachAnnotation[];
-  next?: TeachNextGuess;
-  milestones?: string[];
-  milestone?: number;
-}
-
 export interface QuickAction {
-  type: "reminder" | "note" | "event" | "move_event" | "click";
+  type: "event" | "move_event" | "click";
   title: string;
   body?: string;
   date?: string;
@@ -168,7 +33,6 @@ export interface Decision {
   commands?: string[];
   apps?: string[];
   files?: string[];
-  teachSteps?: string[];
   memory?: string[];
   routineName?: string;
   routineCadence?: "hourly" | "daily" | "weekdays" | "weekly" | "manual";
@@ -180,11 +44,6 @@ export interface Decision {
   quickAction?: QuickAction;
   pickFile?: "video" | "pdf" | "document" | "images" | "folder";
   builtin?: string;
-  teachPlan?: TeachPlanStep[];
-  /** For teach: "app" walks through the app on screen, "concept" explains with a 2D/3D stage. */
-  lessonKind?: "app" | "concept";
-  /** What the model saw in front of them: watching, reading, working, or other. */
-  scene?: "watching" | "reading" | "working" | "other";
   overlayHTML?: string;
   overlayTitle?: string;
   overlayWidth?: number;
@@ -247,7 +106,6 @@ export interface HistoryMessage {
 export interface NativeContext {
   now: string;
   events?: { title: string; start: string }[];
-  reminders?: string[];
   frontWindow?: string;
   /** The browser tab in front, when the current app is a browser. */
   pageTitle?: string;
@@ -266,7 +124,6 @@ export interface ThinkRequest {
   settings?: {
     claudeModel?: string;
     customInstructions?: string;
-    selectedAgent?: string;
     defaultInput?: string;
     voiceEnabled?: boolean;
   };
@@ -277,13 +134,12 @@ export interface ThinkRequest {
   documentText?: string;
   documentName?: string;
   clipboardText?: string;
-  installedTools?: string[];
   nativeContext?: NativeContext;
   connectors?: ConnectorsContext;
   /** The current okidoki account, so recall stays within it (plus shared memories). */
   accountId?: string;
-  /** What the person picked on the cursor card: act, teach or chat. Missing means decide. */
-  mode?: "act" | "teach" | "chat";
+  /** What the person picked on the cursor card: act or chat. Missing means decide. */
+  mode?: "act" | "chat";
 }
 
 /** What the Mac sends to keep the memory index current: the parts of its items the index uses.
@@ -311,22 +167,6 @@ export interface RecalledItem {
   section?: string;
   /** Runs: how the task ended. */
   status?: string;
-}
-
-/** Mirrors CodingAgentID in Sources/OkidokiCore/Models/Models.swift. */
-export const CODING_AGENTS = ["claude", "opencode", "omp", "hermes", "codex", "gemini", "cursor"] as const;
-export type CodingAgent = (typeof CODING_AGENTS)[number];
-
-export interface ExecuteRequest {
-  runId: string;
-  kind: "terminal" | "background" | "coding";
-  commands?: string[];
-  agent?: CodingAgent;
-  prompt?: string;
-  workingDirectory?: string;
-  model?: string;
-  extraArgs?: string;
-  toolId?: string;
 }
 
 export interface ComputerHistoryEntry {
@@ -505,75 +345,3 @@ export type ComputerAct = {
   summary?: string;
   say?: string;
 };
-
-export interface ToolSpec {
-  id: string;
-  name: string;
-  command: string;
-  replaces: string;
-  blurb: string;
-  examples: string[];
-  installCommand: string;
-  docs: string;
-  license: string;
-  category: string;
-}
-
-// MARK: concept lessons (2D/3D stage)
-
-export interface ConceptRequest {
-  topic: string;
-  /** What's on screen / the page they're looking at. */
-  context?: string;
-  pageTitle?: string;
-  pageURL?: string;
-  screenshotBase64?: string;
-  imageWidth?: number;
-  imageHeight?: number;
-  language?: string;
-  model?: string;
-}
-
-export interface ConceptBeat {
-  say: string;
-  caption?: string;
-  duration?: number;
-  /** Fractions of the display the tutor wants circled while this beat plays. */
-  points: [number, number][];
-}
-
-export interface ConceptPhoto {
-  title: string;
-  caption: string;
-  dataURL: string;
-  credit: string;
-}
-
-export interface ConceptLesson {
-  title: string;
-  intro: string;
-  mode: "3d" | "2d";
-  /** The stage scene (parts + beats) as a JSON string, handed to the web runtime untouched. */
-  sceneJSON: string;
-  beats: ConceptBeat[];
-  photo?: ConceptPhoto;
-  parts: string[];
-}
-
-export interface ConceptFollowRequest {
-  topic: string;
-  question: string;
-  partId?: string;
-  partName?: string;
-  /** Short description of the current scene: part ids and names, beats said so far. */
-  sceneSummary: string;
-  language?: string;
-  model?: string;
-}
-
-export interface ConceptFollowUp {
-  answer: string;
-  /** {parts?, beats?} JSON for stage.append */
-  appendJSON: string;
-  beats: ConceptBeat[];
-}

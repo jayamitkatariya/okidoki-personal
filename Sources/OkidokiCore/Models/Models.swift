@@ -73,7 +73,7 @@ public enum DrawingStyle: String, Codable, CaseIterable, Identifiable, Sendable 
 }
 
 public struct AppSettings: Codable, Equatable, Sendable {
-    public static let summonModes = ["auto", "act", "teach", "chat"]
+    public static let summonModes = ["auto", "act", "browser", "chat"]
     public static var defaultVaultFolder: String {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/Okidoki Vault", isDirectory: true).path
     }
@@ -85,7 +85,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var voiceEnabled: Bool = true
     public var captions: Bool = true
     public var confirmOK: Bool = true
-    public var selectedAgent: CodingAgentID = .claude
     public var customInstructions: String = ""
 
     public var backgroundMode: Bool = true
@@ -111,8 +110,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var hideInScreenshots: Bool = true
 
     public var appleCalendar: Bool = false
-    public var appleReminders: Bool = false
-    public var appleNotes: Bool = false
     public var automationGranted: Bool = false
     public var inputMonitoringGranted: Bool = false
 
@@ -121,22 +118,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var showedWelcome: Bool = false
 
     public var claudeModel: String = "claude-haiku-5-5"
-    public var agentExtraArgs: [String: String] = [:]
-    /// When the chosen coding agent is missing or logged out, switch to one that's installed and signed in.
-    public var autoConnectAgents: Bool = true
-    public var lastWorkingDirectory: String = ""
     /// How visibly the pointer moves while okidoki drives: "calm" glides, "fast" is quicker.
     public var drivePace: String = "fast"
     /// Where computer-use runs happen: "mac" is this Mac, "vm" is okidoki's private Mac (a macOS VM).
     public var computerTarget: String = "mac"
-    /// What a request typed at the cursor is for: "auto" lets the brain decide, "act" does it,
-    /// "teach" shows how on screen, "chat" just answers.
+    /// What a request typed at the cursor is for: "auto" lets the brain decide, "act" drives the Mac,
+    /// "browser" works in okidoki's own browser, "chat" just answers.
     public var summonMode: String = "auto"
     /// The vault: a folder of documents okidoki can file into and search. On the Desktop unless moved.
     public var vaultFolder: String = AppSettings.defaultVaultFolder
 
-    /// Voice during lessons, remembered separately from the app-wide voice switch.
-    public var teachVoice: Bool = true
     /// Send the front window, browser tab and a small screenshot with every request, so the
     /// brain knows what's on screen before it decides how to help. Never stored.
     public var screenContext: Bool = true
@@ -148,14 +139,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case okidokiEnabled, defaultInput, voiceID, voiceSpeed, voiceEnabled, captions, confirmOK
-        case selectedAgent, customInstructions, backgroundMode, screenBorrowing, proactiveNudges
+        case customInstructions, backgroundMode, screenBorrowing, proactiveNudges
         case quietMode, notchEnabled, notificationStyle, notchExternalPosition, appearance
         case cursorGlowHex, glowEnabled, shakeSensitivity, drawingStyle, drawingColorHex
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
-        case appleCalendar, appleReminders, appleNotes, automationGranted, inputMonitoringGranted
+        case appleCalendar, automationGranted, inputMonitoringGranted
         case onboardingComplete, tourComplete, showedWelcome
-        case claudeModel, agentExtraArgs, lastWorkingDirectory, mcpServers, drivePace, computerTarget
-        case teachVoice, autoConnectAgents, screenContext, summonMode, vaultFolder
+        case claudeModel, mcpServers, drivePace, computerTarget
+        case screenContext, summonMode, vaultFolder
     }
 
     public init(from decoder: Decoder) throws {
@@ -171,7 +162,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         voiceEnabled = bool(.voiceEnabled, true)
         captions = bool(.captions, true)
         confirmOK = bool(.confirmOK, true)
-        selectedAgent = (try? c.decodeIfPresent(CodingAgentID.self, forKey: .selectedAgent)).flatMap { $0 } ?? .claude
         customInstructions = string(.customInstructions, "")
         backgroundMode = bool(.backgroundMode, true)
         screenBorrowing = bool(.screenBorrowing, true)
@@ -192,24 +182,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
         spendingLimit = double(.spendingLimit, 25)
         hideInScreenshots = bool(.hideInScreenshots, true)
         appleCalendar = bool(.appleCalendar, false)
-        appleReminders = bool(.appleReminders, false)
-        appleNotes = bool(.appleNotes, false)
         automationGranted = bool(.automationGranted, false)
         inputMonitoringGranted = bool(.inputMonitoringGranted, false)
         onboardingComplete = bool(.onboardingComplete, false)
         tourComplete = bool(.tourComplete, false)
         showedWelcome = bool(.showedWelcome, false)
         claudeModel = string(.claudeModel, "claude-haiku-5-5")
-        agentExtraArgs = (try? c.decodeIfPresent([String: String].self, forKey: .agentExtraArgs)).flatMap { $0 } ?? [:]
-        autoConnectAgents = bool(.autoConnectAgents, true)
-        lastWorkingDirectory = string(.lastWorkingDirectory, "")
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
         drivePace = string(.drivePace, "fast")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
         let mode = string(.summonMode, "auto")
         summonMode = Self.summonModes.contains(mode) ? mode : "auto"
         vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
-        teachVoice = bool(.teachVoice, true)
         screenContext = bool(.screenContext, true)
     }
 }
@@ -250,125 +234,7 @@ public struct MCPServer: Identifiable, Codable, Equatable, Sendable {
     public var secretsKey: String { "mcp.\(id)" }
 }
 
-// MARK: - Coding agents
-
-public enum CodingAgentID: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// Order is preference: when auto-connect picks a default, the first signed-in agent wins.
-    case claude, opencode, omp, hermes, codex, gemini, cursor
-
-    public var id: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .claude: return "Claude Code"
-        case .opencode: return "OpenCode"
-        case .omp: return "omp"
-        case .hermes: return "Hermes"
-        case .codex: return "Codex"
-        case .gemini: return "Gemini CLI"
-        case .cursor: return "Cursor Agent"
-        }
-    }
-
-    public var binary: String {
-        switch self {
-        case .claude: return "claude"
-        case .opencode: return "opencode"
-        case .omp: return "omp"
-        case .hermes: return "hermes"
-        case .codex: return "codex"
-        case .gemini: return "gemini"
-        case .cursor: return "cursor-agent"
-        }
-    }
-
-    public var blurb: String {
-        switch self {
-        case .claude: return "thoughtful, tight diffs; great on a single repo"
-        case .opencode: return "open source, provider agnostic, runs anywhere"
-        case .omp: return "long-running autonomous work, model mix"
-        case .hermes: return "tool-heavy workflows and MCP"
-        case .codex: return "OpenAI's agent; sandboxed edits, ChatGPT login"
-        case .gemini: return "Google's agent; big context, free tier"
-        case .cursor: return "Cursor's models from the terminal"
-        }
-    }
-
-    public var accentHex: String {
-        switch self {
-        case .claude: return "D97757"
-        case .opencode: return "7A8CFF"
-        case .omp: return "B8F26B"
-        case .hermes: return "C9A7FF"
-        case .codex: return "10A37F"
-        case .gemini: return "4E8CFF"
-        case .cursor: return "9A9A9A"
-        }
-    }
-
-    public var defaultArguments: [String] {
-        switch self {
-        case .claude: return ["-p", "{prompt}", "--output-format", "text", "--permission-mode", "acceptEdits"]
-        case .opencode: return ["run", "--auto", "{prompt}"]
-        case .omp: return ["-p", "--auto-approve", "{prompt}"]
-        case .hermes: return ["-z", "{prompt}"]
-        case .codex: return ["exec", "--skip-git-repo-check", "-s", "workspace-write", "{prompt}"]
-        case .gemini: return ["-p", "{prompt}", "--yolo"]
-        case .cursor: return ["-p", "{prompt}", "--output-format", "text", "--force"]
-        }
-    }
-
-    public var installHint: String {
-        switch self {
-        case .claude: return "npm install -g @anthropic-ai/claude-code"
-        case .opencode: return "curl -fsSL https://opencode.ai/install | bash"
-        case .omp: return "https://omp.sh"
-        case .hermes: return "pipx install hermes-agent"
-        case .codex: return "npm install -g @openai/codex"
-        case .gemini: return "npm install -g @google/gemini-cli"
-        case .cursor: return "curl https://cursor.com/install -fsS | bash"
-        }
-    }
-
-    /// The command that signs the CLI in, for the row's hint when it's installed but logged out.
-    public var loginHint: String {
-        switch self {
-        case .claude: return "claude login"
-        case .opencode: return "opencode auth login"
-        case .omp: return "omp auth-broker login"
-        case .hermes: return "hermes auth"
-        case .codex: return "codex login"
-        case .gemini: return "gemini (sign in on first run)"
-        case .cursor: return "cursor-agent login"
-        }
-    }
-}
-
-// MARK: - Tools
-
-public struct ToolSpec: Identifiable, Codable, Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var command: String
-    public var replaces: String
-    public var blurb: String
-    public var examples: [String]
-    public var installCommand: String
-    public var checkCommand: String
-    public var docs: String
-    public var license: String
-    public var popularity: Int
-    public var category: String
-
-    public init(id: String, name: String, command: String, replaces: String, blurb: String,
-                examples: [String], installCommand: String, checkCommand: String, docs: String,
-                license: String, popularity: Int, category: String) {
-        self.id = id; self.name = name; self.command = command; self.replaces = replaces
-        self.blurb = blurb; self.examples = examples; self.installCommand = installCommand
-        self.checkCommand = checkCommand; self.docs = docs; self.license = license
-        self.popularity = popularity; self.category = category
-    }
-}
+// MARK: - Connectors
 
 public struct Connector: Identifiable, Codable, Equatable, Sendable {
     public var id: String
@@ -469,18 +335,15 @@ public struct ChatThread: Identifiable, Codable, Equatable, Sendable {
 // MARK: - Runs
 
 public enum RunKind: String, Codable, CaseIterable, Sendable {
-    case answer, quickAction = "quick_action", terminal, coding, background, teach, watch, borrow, computerUse = "computer_use", routine, connector
+    case answer, quickAction = "quick_action", watch, borrow, computerUse = "computer_use", browser, routine, connector
     public var label: String {
         switch self {
         case .answer: return "answer"
         case .quickAction: return "quick action"
-        case .terminal: return "terminal bridge"
-        case .coding: return "coding agent"
-        case .background: return "background"
-        case .teach: return "teach"
         case .watch: return "watch me"
         case .borrow: return "screen borrow"
         case .computerUse: return "computer use"
+        case .browser: return "browser"
         case .routine: return "routine"
         case .connector: return "connector"
         }
@@ -562,8 +425,6 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     public var steps: [RunStep]
     public var output: String
     public var summary: String
-    public var agent: CodingAgentID?
-    public var workingDirectory: String?
     public var createdAt: Date
     public var startedAt: Date?
     public var endedAt: Date?
@@ -580,14 +441,12 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
                 title: String, prompt: String, threadID: String? = nil,
                 status: RunStatus = .previewing, preview: ActionPreview? = nil,
                 steps: [RunStep] = [], output: String = "", summary: String = "",
-                agent: CodingAgentID? = nil, workingDirectory: String? = nil,
                 createdAt: Date = Date(), startedAt: Date? = nil, endedAt: Date? = nil,
                 freedBytes: Int64? = nil, builtin: String? = nil, pickedPath: String? = nil,
                 updatedAt: Date? = nil, origin: String? = nil) {
         self.id = id; self.accountID = accountID; self.kind = kind; self.title = title
         self.prompt = prompt; self.threadID = threadID; self.status = status
         self.preview = preview; self.steps = steps; self.output = output; self.summary = summary
-        self.agent = agent; self.workingDirectory = workingDirectory
         self.createdAt = createdAt; self.startedAt = startedAt; self.endedAt = endedAt
         self.freedBytes = freedBytes
         self.builtin = builtin; self.pickedPath = pickedPath
@@ -783,389 +642,6 @@ public struct Routine: Identifiable, Codable, Equatable, Sendable {
 
 // MARK: - Brain
 
-/// One drawing instruction for the teach overlay.
-/// `circle` hugs a control, `box` hugs a region, `arrow` shows a drag (`point` → `to`).
-/// `text` is the short gold label drawn with the mark.
-/// Fractions are 0–1, origin top-left. `space` "window" (default) is the app window;
-/// "screen" is the whole display the overlay covers.
-public struct TeachMark: Codable, Equatable, Sendable {
-    public var kind: String
-    public var target: String?
-    public var point: [Double]?
-    public var rect: [Double]?
-    public var to: [Double]?
-    public var text: String?
-    public var seconds: Double?
-    public var space: String?
-
-    public init(kind: String, target: String? = nil, point: [Double]? = nil,
-                rect: [Double]? = nil, to: [Double]? = nil, text: String? = nil,
-                seconds: Double? = nil, space: String? = nil) {
-        self.kind = kind; self.target = target; self.point = point; self.rect = rect
-        self.to = to; self.text = text; self.seconds = seconds; self.space = space
-    }
-
-    enum CodingKeys: String, CodingKey { case kind, target, point, rect, to, text, seconds, space }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        kind = (try? c.decode(String.self, forKey: .kind)) ?? "box"
-        target = try? c.decodeIfPresent(String.self, forKey: .target)
-        point = try? c.decodeIfPresent([Double].self, forKey: .point)
-        rect = try? c.decodeIfPresent([Double].self, forKey: .rect)
-        to = try? c.decodeIfPresent([Double].self, forKey: .to)
-        text = try? c.decodeIfPresent(String.self, forKey: .text)
-        seconds = try? c.decodeIfPresent(Double.self, forKey: .seconds)
-        space = try? c.decodeIfPresent(String.self, forKey: .space)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(kind, forKey: .kind)
-        try c.encodeIfPresent(target, forKey: .target)
-        try c.encodeIfPresent(point, forKey: .point)
-        try c.encodeIfPresent(rect, forKey: .rect)
-        try c.encodeIfPresent(to, forKey: .to)
-        try c.encodeIfPresent(text, forKey: .text)
-        try c.encodeIfPresent(seconds, forKey: .seconds)
-        try c.encodeIfPresent(space, forKey: .space)
-    }
-}
-
-/// A teach step: what to say plus what to draw.
-public struct TeachPlanStep: Codable, Equatable, Sendable {
-    public var say: String
-    public var marks: [TeachMark]
-
-    public init(say: String, marks: [TeachMark] = []) {
-        self.say = say; self.marks = marks
-    }
-
-    enum CodingKeys: String, CodingKey { case say, marks }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        say = (try? c.decode(String.self, forKey: .say)) ?? ""
-        marks = (try? c.decode([TeachMark].self, forKey: .marks)) ?? []
-    }
-}
-
-/// What happened on one live tutoring step: what was taught and what the learner did.
-public struct TeachLogEntry: Codable, Equatable, Sendable {
-    public var say: String
-    public var action: String
-    public var label: String?
-    public var outcome: String
-
-    public init(say: String, action: String, label: String? = nil, outcome: String) {
-        self.say = say; self.action = action; self.label = label; self.outcome = outcome
-    }
-}
-
-/// An extra drawing the tutor adds to a step. Coordinates are pixels in the screenshot it saw.
-public struct TeachAnnotation: Codable, Equatable, Sendable {
-    /// callout, badge, bracket, underline, flow, measure, spotlight, lens, sketch, ghost, typing, scroll
-    public var kind: String
-    public var text: String?
-    public var element: Int?
-    public var x: Double?
-    public var y: Double?
-    public var w: Double?
-    public var h: Double?
-    public var toX: Double?
-    public var toY: Double?
-    public var n: Int?
-
-    public init(kind: String, text: String? = nil, element: Int? = nil, x: Double? = nil, y: Double? = nil,
-                w: Double? = nil, h: Double? = nil, toX: Double? = nil, toY: Double? = nil, n: Int? = nil) {
-        self.kind = kind; self.text = text; self.element = element; self.x = x; self.y = y
-        self.w = w; self.h = h; self.toX = toX; self.toY = toY; self.n = n
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case kind, text, element, x, y, w, h, n
-        case toX = "to_x", toY = "to_y"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        kind = (try? c.decode(String.self, forKey: .kind)) ?? "callout"
-        text = try? c.decodeIfPresent(String.self, forKey: .text)
-        element = try? c.decodeIfPresent(Int.self, forKey: .element)
-        x = try? c.decodeIfPresent(Double.self, forKey: .x)
-        y = try? c.decodeIfPresent(Double.self, forKey: .y)
-        w = try? c.decodeIfPresent(Double.self, forKey: .w)
-        h = try? c.decodeIfPresent(Double.self, forKey: .h)
-        toX = try? c.decodeIfPresent(Double.self, forKey: .toX)
-        toY = try? c.decodeIfPresent(Double.self, forKey: .toY)
-        n = try? c.decodeIfPresent(Int.self, forKey: .n)
-    }
-}
-
-/// The tutor's guess at the step after this one, shown the instant the learner lands this one.
-public struct TeachNextGuess: Codable, Equatable, Sendable {
-    public var say: String
-    public var action: String
-    public var label: String?
-    public var element: Int?
-    public var x: Double?
-    public var y: Double?
-    public var key: String?
-
-    public init(say: String, action: String, label: String? = nil, element: Int? = nil,
-                x: Double? = nil, y: Double? = nil, key: String? = nil) {
-        self.say = say; self.action = action; self.label = label; self.element = element
-        self.x = x; self.y = y; self.key = key
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        say = (try? c.decode(String.self, forKey: .say)) ?? ""
-        action = (try? c.decode(String.self, forKey: .action)) ?? "look"
-        label = try? c.decodeIfPresent(String.self, forKey: .label)
-        element = try? c.decodeIfPresent(Int.self, forKey: .element)
-        x = try? c.decodeIfPresent(Double.self, forKey: .x)
-        y = try? c.decodeIfPresent(Double.self, forKey: .y)
-        key = try? c.decodeIfPresent(String.self, forKey: .key)
-    }
-}
-
-/// One live tutoring step from the model. Coordinates are pixels in the screenshot it saw, origin top-left.
-public struct TeachLiveStep: Codable, Equatable, Sendable {
-    public var previousDone: Bool
-    public var action: String
-    public var say: String
-    public var why: String?
-    public var label: String?
-    /// A numbered element from the markers drawn on the screenshot. Beats x,y when present.
-    public var element: Int?
-    public var x: Double?
-    public var y: Double?
-    public var w: Double?
-    public var h: Double?
-    public var fromX: Double?
-    public var fromY: Double?
-    public var toX: Double?
-    public var toY: Double?
-    public var toElement: Int?
-    public var target: String?
-    public var key: String?
-    public var text: String?
-    public var app: String?
-    public var summary: String?
-    public var remaining: Int?
-    public var alsoX: Double?
-    public var alsoY: Double?
-    public var alsoW: Double?
-    public var alsoH: Double?
-    public var alsoLabel: String?
-    /// Irreversible or costly (send, delete, buy, publish, overwrite): never done without a real click.
-    public var risky: Bool
-    /// The screen is still loading; look again shortly instead of teaching.
-    public var waiting: Bool
-    public var annotations: [TeachAnnotation]
-    public var next: TeachNextGuess?
-    /// Set on the first step: the 3–6 chapters of this lesson.
-    public var milestones: [String]?
-    /// Which milestone this step belongs to (0-based).
-    public var milestone: Int?
-
-    public init(previousDone: Bool = true, action: String, say: String, why: String? = nil, label: String? = nil,
-                element: Int? = nil, x: Double? = nil, y: Double? = nil, w: Double? = nil, h: Double? = nil,
-                fromX: Double? = nil, fromY: Double? = nil, toX: Double? = nil, toY: Double? = nil, toElement: Int? = nil,
-                target: String? = nil, key: String? = nil, text: String? = nil, app: String? = nil,
-                summary: String? = nil, remaining: Int? = nil,
-                alsoX: Double? = nil, alsoY: Double? = nil, alsoW: Double? = nil, alsoH: Double? = nil,
-                alsoLabel: String? = nil, risky: Bool = false, waiting: Bool = false,
-                annotations: [TeachAnnotation] = [], next: TeachNextGuess? = nil,
-                milestones: [String]? = nil, milestone: Int? = nil) {
-        self.previousDone = previousDone; self.action = action; self.say = say; self.why = why; self.label = label
-        self.element = element; self.x = x; self.y = y; self.w = w; self.h = h
-        self.fromX = fromX; self.fromY = fromY; self.toX = toX; self.toY = toY; self.toElement = toElement
-        self.target = target; self.key = key; self.text = text; self.app = app
-        self.summary = summary; self.remaining = remaining
-        self.alsoX = alsoX; self.alsoY = alsoY; self.alsoW = alsoW; self.alsoH = alsoH; self.alsoLabel = alsoLabel
-        self.risky = risky; self.waiting = waiting; self.annotations = annotations; self.next = next
-        self.milestones = milestones; self.milestone = milestone
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case previousDone = "previous_done", action, say, why, label, element, x, y, w, h
-        case fromX = "from_x", fromY = "from_y", toX = "to_x", toY = "to_y", toElement = "to_element"
-        case target, key, text, app, summary, remaining
-        case alsoX = "also_x", alsoY = "also_y", alsoW = "also_w", alsoH = "also_h", alsoLabel = "also_label"
-        case risky, waiting, annotations, next, milestones, milestone
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        previousDone = (try? c.decodeIfPresent(Bool.self, forKey: .previousDone)) ?? true
-        action = (try? c.decode(String.self, forKey: .action)) ?? "look"
-        say = (try? c.decode(String.self, forKey: .say)) ?? ""
-        why = try? c.decodeIfPresent(String.self, forKey: .why)
-        label = (try? c.decodeIfPresent(String.self, forKey: .label))?.lowercased()
-        element = try? c.decodeIfPresent(Int.self, forKey: .element)
-        x = try? c.decodeIfPresent(Double.self, forKey: .x)
-        y = try? c.decodeIfPresent(Double.self, forKey: .y)
-        w = try? c.decodeIfPresent(Double.self, forKey: .w)
-        h = try? c.decodeIfPresent(Double.self, forKey: .h)
-        fromX = try? c.decodeIfPresent(Double.self, forKey: .fromX)
-        fromY = try? c.decodeIfPresent(Double.self, forKey: .fromY)
-        toX = try? c.decodeIfPresent(Double.self, forKey: .toX)
-        toY = try? c.decodeIfPresent(Double.self, forKey: .toY)
-        toElement = try? c.decodeIfPresent(Int.self, forKey: .toElement)
-        target = try? c.decodeIfPresent(String.self, forKey: .target)
-        key = try? c.decodeIfPresent(String.self, forKey: .key)
-        text = try? c.decodeIfPresent(String.self, forKey: .text)
-        app = try? c.decodeIfPresent(String.self, forKey: .app)
-        summary = try? c.decodeIfPresent(String.self, forKey: .summary)
-        remaining = try? c.decodeIfPresent(Int.self, forKey: .remaining)
-        alsoX = try? c.decodeIfPresent(Double.self, forKey: .alsoX)
-        alsoY = try? c.decodeIfPresent(Double.self, forKey: .alsoY)
-        alsoW = try? c.decodeIfPresent(Double.self, forKey: .alsoW)
-        alsoH = try? c.decodeIfPresent(Double.self, forKey: .alsoH)
-        alsoLabel = (try? c.decodeIfPresent(String.self, forKey: .alsoLabel))?.lowercased()
-        risky = (try? c.decodeIfPresent(Bool.self, forKey: .risky)) ?? false
-        waiting = (try? c.decodeIfPresent(Bool.self, forKey: .waiting)) ?? false
-        // At most one extra drawing, whichever path wrote the step (the brain trims to one as well).
-        annotations = Array(((try? c.decodeIfPresent([TeachAnnotation].self, forKey: .annotations)) ?? []).prefix(1))
-        next = try? c.decodeIfPresent(TeachNextGuess.self, forKey: .next)
-        milestones = try? c.decodeIfPresent([String].self, forKey: .milestones)
-        milestone = try? c.decodeIfPresent(Int.self, forKey: .milestone)
-    }
-
-    /// Steps the learner performs with the pointer, so a click on the ring counts as done.
-    public var isPointerStep: Bool {
-        ["click", "double_click", "right_click", "type", "scroll"].contains(action)
-    }
-
-    public var hasPoint: Bool { (x != nil && y != nil) || element != nil }
-
-    /// Steps the tutor can perform on the learner's behalf.
-    public var isDoable: Bool {
-        ["click", "double_click", "right_click", "drag", "type", "key", "scroll", "open_app"].contains(action)
-    }
-}
-
-/// A control the Mac can see, with its center in screenshot pixels and the number drawn on its marker.
-public struct TeachControlHint: Codable, Equatable, Sendable {
-    public var id: Int
-    public var label: String
-    public var role: String
-    public var x: Double
-    public var y: Double
-    public var w: Double
-    public var h: Double
-
-    public init(id: Int, label: String, role: String, x: Double, y: Double, w: Double, h: Double) {
-        self.id = id; self.label = label; self.role = role; self.x = x; self.y = y; self.w = w; self.h = h
-    }
-}
-
-/// Everything the tutor needs to pick the next step.
-public struct TeachStepRequest: Codable, Sendable {
-    public var topic: String
-    public var app: String
-    public var outline: [String]
-    public var log: [TeachLogEntry]
-    public var stepNumber: Int
-    public var imageWidth: Double
-    public var imageHeight: Double
-    public var screenshotBase64: String?
-    public var controls: [TeachControlHint]
-    /// "guide" (they do it), "show" (okidoki does it while explaining) or "practice" (hints held back).
-    public var mode: String
-    /// What this person already knows in this app, from memory.
-    public var known: [String]
-    public var milestones: [String]
-    public var language: String?
-    public var model: String?
-    /// The browser tab in front, when the app is a browser, so the tutor teaches the site, not the browser.
-    public var pageTitle: String?
-    public var pageURL: String?
-    /// The app's real menu bar, one line per menu, so the tutor never names an item that isn't there.
-    public var menus: [String]
-    /// Okidoki saw the learner's action hit the previous step's target.
-    public var landed: Bool
-
-    public init(topic: String, app: String, outline: [String], log: [TeachLogEntry], stepNumber: Int,
-                imageWidth: Double, imageHeight: Double, screenshotBase64: String?,
-                controls: [TeachControlHint] = [], mode: String = "guide", known: [String] = [],
-                milestones: [String] = [], language: String? = nil, model: String?,
-                pageTitle: String? = nil, pageURL: String? = nil, menus: [String] = [], landed: Bool = false) {
-        self.topic = topic; self.app = app; self.outline = outline; self.log = log; self.stepNumber = stepNumber
-        self.imageWidth = imageWidth; self.imageHeight = imageHeight
-        self.screenshotBase64 = screenshotBase64; self.controls = controls
-        self.mode = mode; self.known = known; self.milestones = milestones; self.language = language; self.model = model
-        self.pageTitle = pageTitle; self.pageURL = pageURL; self.menus = menus; self.landed = landed
-    }
-}
-
-// MARK: - Concept lessons (2D/3D stage)
-
-/// A narrated beat of a concept lesson. The stage runtime plays the actions; Swift speaks `say`
-/// and draws any `point` on the real screen.
-public struct ConceptBeat: Codable, Equatable, Sendable {
-    public var say: String
-    public var caption: String?
-    public var duration: Double?
-    /// Fractions of the display (0–1) the tutor wants circled while this beat plays.
-    public var points: [[Double]]
-}
-
-public struct ConceptPhoto: Codable, Equatable, Sendable {
-    public var title: String
-    public var caption: String
-    public var dataURL: String
-    public var credit: String
-}
-
-/// A whole concept lesson: the stage scene as JSON text (handed to the web runtime untouched) plus
-/// the beats Swift narrates.
-public struct ConceptLesson: Codable, Equatable, Sendable {
-    public var title: String
-    public var intro: String
-    public var mode: String
-    public var sceneJSON: String
-    public var beats: [ConceptBeat]
-    public var photo: ConceptPhoto?
-    /// Names of clickable parts, for the "ask about a part" flow.
-    public var parts: [String]
-}
-
-/// More beats (and maybe parts) added to a running concept lesson after a question.
-public struct ConceptFollowUp: Codable, Equatable, Sendable {
-    public var answer: String
-    public var appendJSON: String
-    public var beats: [ConceptBeat]
-}
-
-/// A zoomed second look at one control so the ring lands on the exact pixels.
-public struct TeachRefineRequest: Codable, Sendable {
-    public var cropBase64: String
-    public var cropWidth: Double
-    public var cropHeight: Double
-    public var describe: String
-    public var model: String?
-
-    public init(cropBase64: String, cropWidth: Double, cropHeight: Double, describe: String, model: String?) {
-        self.cropBase64 = cropBase64; self.cropWidth = cropWidth; self.cropHeight = cropHeight
-        self.describe = describe; self.model = model
-    }
-}
-
-public struct TeachRefineResult: Codable, Equatable, Sendable {
-    public var found: Bool
-    public var x: Double?
-    public var y: Double?
-    public var w: Double?
-    public var h: Double?
-
-    public init(found: Bool, x: Double? = nil, y: Double? = nil, w: Double? = nil, h: Double? = nil) {
-        self.found = found; self.x = x; self.y = y; self.w = w; self.h = h
-    }
-}
-
 /// What was on screen when the person summoned okidoki: the front window's title, the browser
 /// tab (title and URL) when the front app is a browser, and a small screenshot of the display.
 /// Gathered before the request is routed so the brain knows a "circuit" asked about on
@@ -1210,7 +686,7 @@ public struct BrainRequest: Sendable {
     public var clipboardText: String
     /// The window, browser tab and display as they were at summon time.
     public var screen: ScreenContext?
-    /// "act", "teach" or "chat" from the cursor card; "auto" leaves it to the brain.
+    /// "act", "browser" or "chat" from the cursor card; "auto" leaves it to the brain.
     public var mode: String = "auto"
 
     public init(text: String, appName: String = "", bundleID: String = "",
@@ -1239,15 +715,12 @@ public struct BrainDecision: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, CaseIterable, Sendable {
         case answer
         case quickAction = "quick_action"
-        case terminal
-        case coding
-        case background
-        case teach
         case borrow
         case watch
         case memory
         case routine
         case computerUse = "computer_use"
+        case browser
         case overlay
         case connector
     }
@@ -1262,7 +735,6 @@ public struct BrainDecision: Codable, Equatable, Sendable {
     public var commands: [String]
     public var apps: [String]
     public var files: [String]
-    public var teachSteps: [String]
     public var memory: [String]
     public var routineName: String?
     public var routineCadence: String?
@@ -1274,53 +746,46 @@ public struct BrainDecision: Codable, Equatable, Sendable {
     public var quickAction: QuickActionPayload?
     public var pickFile: String?
     public var builtin: String?
-    public var teachPlan: [TeachPlanStep]
     public var overlayHTML: String?
     public var overlayTitle: String?
     public var overlayWidth: Int?
     public var overlayHeight: Int?
     /// For connector: the Apify or MCP call as JSON. The app keeps it opaque and hands it back to the brain to run.
     public var connectorCallJSON: String?
-    /// For teach: "app" walks through the app on screen, "concept" explains with a 2D/3D stage.
-    public var lessonKind: String?
     /// What the model saw in front of them: "watching", "reading", "working" or "other".
     public var scene: String?
 
     public init(kind: Kind, title: String, answer: String, speak: String = "",
                 risk: RiskLevel = .low, previewSummary: String = "", previewSteps: [String] = [],
                 commands: [String] = [], apps: [String] = [], files: [String] = [],
-                teachSteps: [String] = [], memory: [String] = [], routineName: String? = nil,
+                memory: [String] = [], routineName: String? = nil,
                 routineCadence: String? = nil, routineWeekday: Int? = nil, routineHour: Int? = nil,
                 routineMinute: Int? = nil, clarification: String? = nil, actions: [String] = [],
                 quickAction: QuickActionPayload? = nil, pickFile: String? = nil, builtin: String? = nil,
-                teachPlan: [TeachPlanStep] = [], overlayHTML: String? = nil, overlayTitle: String? = nil,
+                overlayHTML: String? = nil, overlayTitle: String? = nil,
                 overlayWidth: Int? = nil, overlayHeight: Int? = nil, connectorCallJSON: String? = nil) {
         self.kind = kind; self.title = title; self.answer = answer; self.speak = speak
         self.risk = risk; self.previewSummary = previewSummary; self.previewSteps = previewSteps
-        self.commands = commands; self.apps = apps; self.files = files; self.teachSteps = teachSteps
+        self.commands = commands; self.apps = apps; self.files = files
         self.memory = memory; self.routineName = routineName; self.routineCadence = routineCadence
         self.routineWeekday = routineWeekday; self.routineHour = routineHour
         self.routineMinute = routineMinute; self.clarification = clarification; self.actions = actions
         self.quickAction = quickAction; self.pickFile = pickFile; self.builtin = builtin
-        self.teachPlan = teachPlan; self.overlayHTML = overlayHTML; self.overlayTitle = overlayTitle
+        self.overlayHTML = overlayHTML; self.overlayTitle = overlayTitle
         self.overlayWidth = overlayWidth; self.overlayHeight = overlayHeight
         self.connectorCallJSON = connectorCallJSON
-        self.lessonKind = nil
         self.scene = nil
     }
 
     enum CodingKeys: String, CodingKey {
         case kind, title, answer, speak, risk, previewSummary, previewSteps, commands, apps, files
-        case teachSteps, memory, routineName, routineCadence, routineWeekday, routineHour, routineMinute
+        case memory, routineName, routineCadence, routineWeekday, routineHour, routineMinute
         case clarification, actions, quickAction, pickFile, builtin
-        case teachPlan, overlayHTML, overlayTitle, overlayWidth, overlayHeight, connectorCallJSON
-        case teachStepsSnake = "teach_steps"
-        case teachPlanSnake = "teach_plan"
+        case overlayHTML, overlayTitle, overlayWidth, overlayHeight, connectorCallJSON
         case overlayHTMLSnake = "overlay_html"
         case overlayTitleSnake = "overlay_title"
         case overlayWidthSnake = "overlay_width"
         case overlayHeightSnake = "overlay_height"
-        case lessonKind, lessonKindSnake = "lesson_kind"
         case scene
     }
 
@@ -1336,9 +801,6 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         commands = (try? c.decode([String].self, forKey: .commands)) ?? []
         apps = (try? c.decode([String].self, forKey: .apps)) ?? []
         files = (try? c.decode([String].self, forKey: .files)) ?? []
-        teachSteps = (try? c.decode([String].self, forKey: .teachSteps))
-            ?? (try? c.decode([String].self, forKey: .teachStepsSnake))
-            ?? []
         memory = (try? c.decode([String].self, forKey: .memory)) ?? []
         routineName = try? c.decodeIfPresent(String.self, forKey: .routineName)
         routineCadence = try? c.decodeIfPresent(String.self, forKey: .routineCadence)
@@ -1351,9 +813,6 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         pickFile = try? c.decodeIfPresent(String.self, forKey: .pickFile)
         builtin = try? c.decodeIfPresent(String.self, forKey: .builtin)
         // Accept both the normalized camelCase (brain maps keys) and raw snake_case payloads.
-        teachPlan = (try? c.decodeIfPresent([TeachPlanStep].self, forKey: .teachPlan)).flatMap { $0 }
-            ?? (try? c.decodeIfPresent([TeachPlanStep].self, forKey: .teachPlanSnake)).flatMap { $0 }
-            ?? []
         overlayHTML = (try? c.decodeIfPresent(String.self, forKey: .overlayHTML))
             ?? (try? c.decodeIfPresent(String.self, forKey: .overlayHTMLSnake))
         overlayTitle = (try? c.decodeIfPresent(String.self, forKey: .overlayTitle))
@@ -1363,8 +822,6 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         overlayHeight = (try? c.decodeIfPresent(Int.self, forKey: .overlayHeight))
             ?? (try? c.decodeIfPresent(Int.self, forKey: .overlayHeightSnake))
         connectorCallJSON = try? c.decodeIfPresent(String.self, forKey: .connectorCallJSON)
-        lessonKind = (try? c.decodeIfPresent(String.self, forKey: .lessonKind))
-            ?? (try? c.decodeIfPresent(String.self, forKey: .lessonKindSnake))
         scene = try? c.decodeIfPresent(String.self, forKey: .scene)
     }
 
@@ -1380,7 +837,6 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         try c.encode(commands, forKey: .commands)
         try c.encode(apps, forKey: .apps)
         try c.encode(files, forKey: .files)
-        try c.encode(teachSteps, forKey: .teachSteps)
         try c.encode(memory, forKey: .memory)
         try c.encode(routineName, forKey: .routineName)
         try c.encode(routineCadence, forKey: .routineCadence)
@@ -1392,13 +848,11 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         try c.encodeIfPresent(quickAction, forKey: .quickAction)
         try c.encodeIfPresent(pickFile, forKey: .pickFile)
         try c.encodeIfPresent(builtin, forKey: .builtin)
-        try c.encode(teachPlan, forKey: .teachPlan)
         try c.encodeIfPresent(overlayHTML, forKey: .overlayHTML)
         try c.encodeIfPresent(overlayTitle, forKey: .overlayTitle)
         try c.encodeIfPresent(overlayWidth, forKey: .overlayWidth)
         try c.encodeIfPresent(overlayHeight, forKey: .overlayHeight)
         try c.encodeIfPresent(connectorCallJSON, forKey: .connectorCallJSON)
-        try c.encodeIfPresent(lessonKind, forKey: .lessonKind)
         try c.encodeIfPresent(scene, forKey: .scene)
     }
 }
@@ -1449,8 +903,6 @@ public struct AppState: Codable, Sendable {
     public var skills: [Skill]
     public var routines: [Routine]
     public var connectors: [Connector]
-    public var notes: [Note]
-    public var reminders: [Reminder]
     /// Items deleted on this Mac (id → when). Kept for a while, then dropped.
     public var deletions: [String: Date]
     /// Left from older builds that synced; read so their state files still load.
@@ -1463,18 +915,17 @@ public struct AppState: Codable, Sendable {
     public init(version: Int = AppState.currentVersion, accounts: [Account] = [], currentAccountID: String = "",
                 settings: AppSettings = AppSettings(), threads: [ChatThread] = [],
                 memories: [MemoryItem] = [], runs: [AgentRun] = [], skills: [Skill] = [],
-                routines: [Routine] = [], connectors: [Connector] = [], notes: [Note] = [], reminders: [Reminder] = [],
+                routines: [Routine] = [], connectors: [Connector] = [],
                 deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = []) {
         self.version = version; self.accounts = accounts; self.currentAccountID = currentAccountID
         self.settings = settings; self.threads = threads; self.memories = memories; self.runs = runs
         self.skills = skills; self.routines = routines; self.connectors = connectors
-        self.notes = notes; self.reminders = reminders
         self.deletions = deletions; self.syncCursors = syncCursors; self.unreadable = unreadable
     }
 
     enum CodingKeys: String, CodingKey {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
-        case notes, reminders, deletions, syncCursors, unreadable
+        case deletions, syncCursors, unreadable
     }
 
     /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
@@ -1504,9 +955,9 @@ public struct AppState: Codable, Sendable {
         runs = Self.items(AgentRun.self, c, .runs, dropped: &dropped) ?? []
         skills = Self.items(Skill.self, c, .skills, dropped: &dropped) ?? []
         routines = Self.items(Routine.self, c, .routines, dropped: &dropped) ?? []
-        connectors = Self.items(Connector.self, c, .connectors, dropped: &dropped) ?? ToolCatalog.defaultConnectors
-        notes = Self.items(Note.self, c, .notes, dropped: &dropped) ?? []
-        reminders = Self.items(Reminder.self, c, .reminders, dropped: &dropped) ?? []
+        // Apple Notes and Reminders were connectors in older builds.
+        connectors = (Self.items(Connector.self, c, .connectors, dropped: &dropped) ?? Connectors.defaults)
+            .filter { $0.id != "notes" && $0.id != "reminders" }
         deletions = (try? c.decodeIfPresent([String: Date].self, forKey: .deletions)).flatMap { $0 } ?? [:]
         syncCursors = (try? c.decodeIfPresent([String: Int].self, forKey: .syncCursors)).flatMap { $0 } ?? [:]
         unreadable = Self.items(UnreadableItem.self, c, .unreadable, dropped: &dropped) ?? []

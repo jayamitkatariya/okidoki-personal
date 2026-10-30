@@ -1,100 +1,5 @@
 import Foundation
 
-public struct CodingAgentCommand {
-    public var agent: CodingAgentID
-    public var binaryPath: String
-    public var command: String
-    public var workingDirectory: String
-
-    public static func build(agent: CodingAgentID, prompt: String, workingDirectory: String,
-                             extraArgs: String = "") -> CodingAgentCommand? {
-        guard let path = ShellRunner.which(agent.binary) else { return nil }
-        var args = agent.defaultArguments
-        let quoted = shellQuote(prompt)
-        args = args.map { $0 == "{prompt}" ? quoted : $0 }
-        if !extraArgs.trimmingCharacters(in: .whitespaces).isEmpty {
-            args.append(extraArgs)
-        }
-        let command = ([path] + args).joined(separator: " ")
-        return CodingAgentCommand(agent: agent, binaryPath: path, command: command, workingDirectory: workingDirectory)
-    }
-
-    public static func installedAgents() -> [CodingAgentID] {
-        CodingAgentID.allCases.filter { ShellRunner.which($0.binary) != nil }
-    }
-}
-
-public enum PlaceholderFiller {
-    public static func fill(_ commands: [String], file: URL?, folder: URL?) -> [String] {
-        let fileURL = file
-        let outputDir: URL? = {
-            if let fileURL { return fileURL.deletingLastPathComponent() }
-            if let folder { return folder.deletingLastPathComponent().appendingPathComponent(folder.lastPathComponent + "-out") }
-            return nil
-        }()
-        let base = fileURL?.deletingPathExtension().lastPathComponent ?? "output"
-        let filled = commands.map { command in
-            var value = command
-            for token in ["file", "dir", "outputDir", "basename"] {
-                value = value.replacingOccurrences(of: "\"{{\(token)}}\"", with: "{{\(token)}}")
-                value = value.replacingOccurrences(of: "'{{\(token)}}'", with: "{{\(token)}}")
-            }
-            value = value.replacingOccurrences(of: "{{file}}", with: fileURL.map { shellQuote($0.path) } ?? "{{file}}")
-            value = value.replacingOccurrences(of: "{{dir}}", with: folder.map { shellQuote($0.path) } ?? (fileURL.map { shellQuote($0.deletingLastPathComponent().path) } ?? "{{dir}}"))
-            value = value.replacingOccurrences(of: "{{outputDir}}", with: shellQuote(outputDir?.path ?? NSHomeDirectory()))
-            value = value.replacingOccurrences(of: "{{basename}}", with: shellQuote(base))
-            return value
-        }
-        return filled
-    }
-}
-
-public enum OutputInsights {
-    public static func freedBytes(in output: String) -> Int64? {
-        // "Freed 23 GB", "23.4GB freed", "recovered 1,204 MB"
-        let pattern = #"([0-9]+(?:[.,][0-9]+)?)\s*(GB|GiB|MB|MiB)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
-        let range = NSRange(output.startIndex..., in: output)
-        var total: Double = 0
-        for match in regex.matches(in: output, range: range) {
-            guard let numberRange = Range(match.range(at: 1), in: output),
-                  let unitRange = Range(match.range(at: 2), in: output),
-                  let number = Double(output[numberRange].replacingOccurrences(of: ",", with: ".")) else { continue }
-            let unit = output[unitRange].lowercased()
-            total += unit.hasPrefix("g") ? number : number / 1024
-        }
-        guard total > 0 else { return nil }
-        return Int64(total * 1_073_741_824)
-    }
-
-    /// What a dry run says it could free, read from its last "would free" / "potential" / "total" line.
-    /// Unlike `freedBytes` it doesn't add up every size it sees, since previews also list free space and item sizes.
-    public static func reclaimableBytes(in output: String) -> Int64? {
-        let pattern = #"\b(?:would|could|can|potential|reclaimable|to free|total)\b[^\n]*?([0-9]+(?:[.,][0-9]+)?)\s*(GB|GiB|MB|MiB)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
-        let range = NSRange(output.startIndex..., in: output)
-        guard let match = regex.matches(in: output, range: range).last,
-              let numberRange = Range(match.range(at: 1), in: output),
-              let unitRange = Range(match.range(at: 2), in: output),
-              let number = Double(output[numberRange].replacingOccurrences(of: ",", with: ".")), number > 0 else { return nil }
-        let gigabytes = output[unitRange].lowercased().hasPrefix("g") ? number : number / 1024
-        return Int64(gigabytes * 1_073_741_824)
-    }
-
-    public static func plainSummary(from output: String, maxLines: Int = 4) -> String {
-        let lines = output
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("===") && !$0.hasPrefix("---") && $0.count < 180 }
-        let meaningful = lines.filter { line in
-            let lower = line.lowercased()
-            return !lower.hasPrefix("warning:") && !lower.contains("deprecat") && !lower.hasPrefix("hint:")
-        }
-        let tail = meaningful.suffix(maxLines).joined(separator: "\n")
-        return tail.isEmpty ? "done." : tail
-    }
-}
-
 public enum SafetyPolicy {
     /// Switches may have changed since this connector job was planned.
     public static func connectorUnavailable(callJSON: String, connectors: [Connector], settings: AppSettings,
@@ -105,12 +10,12 @@ public enum SafetyPolicy {
             return "This connector plan is invalid. Ask again to prepare a new one."
         }
         guard connectors.contains(where: { $0.id == kind && $0.enabled }) else {
-            return "\(kind == "mcp" ? "MCP" : "Apify") is off in Toolbox. Turn it on and ask again."
+            return "\(kind == "mcp" ? "MCP" : "Apify") is off in Settings › Connectors. Turn it on and ask again."
         }
         if kind == "apify" { return hasApifyKey ? nil : "Apify isn't set up in this build." }
         guard let id = call["server"] as? String,
               let server = settings.mcpServers.first(where: { $0.id == id && $0.enabled }) else {
-            return "This MCP server is off or was removed. Check Toolbox and ask again."
+            return "This MCP server is off or was removed. Check Settings › MCP servers and ask again."
         }
         return blocked(commands: [server.name, server.command], settings: settings)
     }

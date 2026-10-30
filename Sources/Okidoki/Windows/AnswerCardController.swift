@@ -32,8 +32,6 @@ final class AnswerCardModel: ObservableObject {
     @Published var actions: [CardAction]
     @Published var isThinking = false
     @Published var followUpEnabled = true
-    @Published var terminalCommands: [String] = []
-    @Published var terminalOutput = ""
     @Published var draft = ""
     @Published var threadTitle: String?
     @Published var runID: String?
@@ -459,22 +457,6 @@ struct AnswerCardView: View {
             if !model.text.isEmpty {
                 OKMarkdown(text: model.text, size: 14, color: palette.ink, lineSpacing: 4.4)
                     .textSelection(.enabled)
-            }
-            if !model.terminalCommands.isEmpty {
-                DisclosureGroup("Show commands") {
-                    Text(model.terminalCommands.map { "$ " + $0 }.joined(separator: "\n\n"))
-                        .font(.okMono(11)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.okBody(12)).foregroundStyle(palette.ink)
-            }
-            if !model.terminalOutput.isEmpty {
-                DisclosureGroup("Show output") {
-                    Text(String(model.terminalOutput.suffix(6000)))
-                        .font(.okMono(11)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.okBody(12)).foregroundStyle(palette.ink)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

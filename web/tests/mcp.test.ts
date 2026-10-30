@@ -22,7 +22,7 @@ test("README MCP snippets preserve typed arguments and reject malformed configur
   for (const value of [null, [], {}, { command: 42 }, { command: "node", args: [1] }, { command: "node", env: { TOKEN: 42 } }, { mcpServers: null }]) expect(parseServerJSON(JSON.stringify(value))).toBeNull();
 });
 
-import { serversFromConfig } from "../src/pages/ToolboxPage";
+import { serversFromConfig } from "../src/mcp";
 
 test("a pasted Claude Desktop config becomes servers, with secrets kept apart", () => {
   const found = serversFromConfig(JSON.stringify({

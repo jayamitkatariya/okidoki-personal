@@ -24,8 +24,6 @@ public enum ChatCommand: Equatable, Sendable {
 
     /// "what's waiting on me": runs waiting for an okay, with Do it right there.
     case whatsWaiting
-    /// "note: buy milk on the way home", "jot down …": straight onto the Notes page.
-    case addNote(text: String)
 
     /// "file the entry for INV-4471": one pass per record, `{{placeholders}}` filled from it; `values`
     /// are key=value overrides typed with the request (and all there is when no record is named).
@@ -62,7 +60,6 @@ public enum ChatCommands {
             return .stopReplay
         }
         if let command = startRecordingCommand(t) { return command }
-        if let note = noteText(text) { return .addNote(text: note) }
         if let command = vaultCommand(t, raw: text) { return command }
         if Self.listPhrases.contains(t) || t.hasPrefix("list my skills") || t.hasPrefix("list skills")
             || t.hasPrefix("what skills") || t.hasPrefix("which skills") || t.hasPrefix("show my skills") || t.hasPrefix("show me my skills") {
@@ -73,22 +70,6 @@ public enum ChatCommands {
         if let command = deleteCommand(t, skills: context.skills) { return command }
         if let command = recordCommand(t, raw: text, skills: context.skills, records: context.records) { return command }
         return replayCommand(t, skills: context.skills, hasReplayed: context.hasReplayed)
-    }
-
-    // MARK: - Notes
-
-    /// The text after "note:", "note to self:", "jot down", "take a note:", as typed.
-    static func noteText(_ raw: String) -> String? {
-        let pattern = #"^\s*(?:okidoki,?\s+)?(?:note to self|note|jot down|jot|take a note|make a note)\s*[:\-–—]\s*(.+)$|^\s*(?:jot down|take a note|make a note)\s+(?:that\s+)?(.+)$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
-              let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)) else { return nil }
-        for group in 1...2 {
-            if let range = Range(match.range(at: group), in: raw) {
-                let text = raw[range].trimmingCharacters(in: .whitespacesAndNewlines)
-                return text.isEmpty ? nil : text
-            }
-        }
-        return nil
     }
 
     // MARK: - Waiting

@@ -14,25 +14,6 @@ export type Appearance = "system" | "light" | "dark";
 export type NotificationStyle = "everything" | "approvalsAndDone" | "silent";
 export type DrawingStyle = "ink" | "marker" | "pencil";
 
-/** Mirrors CodingAgentID in Sources/OkidokiCore/Models/Models.swift. */
-export type CodingAgentID = "claude" | "opencode" | "omp" | "hermes" | "codex" | "gemini" | "cursor";
-
-/** A coding agent on the Mac: on the PATH, and signed in to something that can answer. */
-export interface AgentStatus {
-  id: CodingAgentID;
-  name: string;
-  installed: boolean;
-  signedIn: boolean;
-  /** Who the CLI is signed in as, when it writes that down. Empty when unknown. */
-  account: string;
-  /** Providers the CLI holds credentials for, e.g. ["anthropic", "openrouter"]. */
-  providers: string[];
-  /** Where okidoki looked, e.g. "~/.claude/.credentials.json". */
-  source: string;
-  installHint: string;
-  loginHint: string;
-}
-
 export interface Settings {
   okidokiEnabled: boolean;
   defaultInput: InputMode;
@@ -41,7 +22,6 @@ export interface Settings {
   voiceEnabled: boolean;
   captions: boolean;
   confirmOK: boolean;
-  selectedAgent: CodingAgentID;
   customInstructions: string;
   backgroundMode: boolean;
   screenBorrowing: boolean;
@@ -64,24 +44,18 @@ export interface Settings {
   /** Send the front window, browser tab and a small screenshot with every request so the brain knows what's on screen. */
   screenContext?: boolean;
   appleCalendar: boolean;
-  appleReminders: boolean;
-  appleNotes: boolean;
   automationGranted: boolean;
   inputMonitoringGranted: boolean;
   onboardingComplete: boolean;
   tourComplete: boolean;
   showedWelcome: boolean;
   claudeModel: string;
-  agentExtraArgs: Record<string, string>;
-  /** Switch the default agent to one that's installed and signed in when the chosen one can't answer. */
-  autoConnectAgents: boolean;
-  lastWorkingDirectory: string;
   mcpServers: McpServer[];
   drivePace: "calm" | "fast";
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
   /** What a request typed at the cursor is for. Missing on older builds. */
-  summonMode?: "auto" | "act" | "teach" | "chat";
+  summonMode?: "auto" | "act" | "chat";
   /** The vault folder on disk. Missing on older builds. */
   vaultFolder?: string;
 }
@@ -150,7 +124,7 @@ export interface KeyProvider {
   builtin: boolean;
 }
 
-export type RunKind = "answer" | "quick_action" | "terminal" | "coding" | "background" | "teach" | "watch" | "borrow" | "computer_use" | "routine" | "connector";
+export type RunKind = "answer" | "quick_action" | "background" | "watch" | "borrow" | "computer_use" | "browser" | "routine" | "connector";
 export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled" | "asked";
 export type Risk = "low" | "medium" | "high";
 
@@ -190,8 +164,6 @@ export interface Run {
   steps: RunStep[];
   output: string;
   summary: string;
-  agent?: string | null;
-  workingDirectory?: string | null;
   createdAt: string;
   startedAt?: string | null;
   endedAt?: string | null;
@@ -310,21 +282,6 @@ export interface Connector {
   docs: string;
 }
 
-export interface Tool {
-  id: string;
-  name: string;
-  command: string;
-  replaces: string;
-  blurb: string;
-  installed: boolean;
-  installCommand: string;
-  docs: string;
-  license: string;
-  category: string;
-  examples: string[];
-  popularity?: number;
-}
-
 export interface LiveStep {
   index: number;
   say: string;
@@ -365,10 +322,6 @@ export interface NativeState {
   skills: Skill[];
   routines: Routine[];
   connectors: Connector[];
-  tools: Tool[];
-  installedAgents: string[];
-  /** Missing on older builds; only the Mac can read its own login files. */
-  agents?: AgentStatus[];
   keys: Record<string, boolean>;
   permissions: Record<string, string>;
   signedOut: boolean;
@@ -379,7 +332,6 @@ export interface NativeState {
   version: string;
   /** This Mac's name. Missing on older builds. */
   hostName?: string;
-  savings: number;
   /** Missing on older builds. */
   services?: ServicesState | null;
   /** Only the Mac knows what's in its key file. */
@@ -390,38 +342,6 @@ export interface NativeState {
   privateMac?: PrivateMacState | null;
   /** The vault folder and sealed logins. Missing in the browser preview. */
   vault?: VaultState | null;
-  /** Missing on older builds. */
-  notes?: Note[];
-  reminders?: Reminder[];
-}
-
-/** A note on the Notes page. Markdown body. */
-export interface Note {
-  id: string;
-  accountID: string;
-  title: string;
-  body: string;
-  tags: string[];
-  pinned: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type ReminderRepeat = "never" | "daily" | "weekdays" | "weekly" | "monthly";
-
-/** A reminder okidoki fires itself; one with a skill replays it when it's due. */
-export interface Reminder {
-  id: string;
-  accountID: string;
-  title: string;
-  dueAt?: string | null;
-  repeats: ReminderRepeat;
-  done: boolean;
-  doneAt?: string | null;
-  skillID?: string | null;
-  firedAt?: string | null;
-  createdAt: string;
-  updatedAt: string;
 }
 
 /** A document in the vault folder. `id` is its path inside the folder. */

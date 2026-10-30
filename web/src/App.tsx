@@ -9,11 +9,8 @@ import { RunsPage } from "./pages/RunsPage";
 import { LivePage } from "./pages/LivePage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { MemoryPage } from "./pages/MemoryPage";
-import { NotesPage } from "./pages/NotesPage";
-import { RemindersPage } from "./pages/RemindersPage";
-import { TerminalPage } from "./pages/TerminalPage";
 import { SkillsPage } from "./pages/SkillsPage";
-import { ToolboxPage } from "./pages/ToolboxPage";
+import { BrowserPage } from "./pages/BrowserPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ToastStack } from "./components/ui";
 
@@ -68,16 +65,13 @@ function Root() {
   return (
     <AppShell page={page} setPage={setPage} askOpen={askOpen} setAskOpen={setAskOpen}>
       {page === "home" ? <HomePage go={setPage} /> : null}
+      {page === "browser" ? <BrowserPage /> : null}
       {page === "runs" ? <RunsPage /> : null}
       {page === "live" ? <LivePage /> : null}
       {page === "history" ? <HistoryPage go={setPage} /> : null}
       {page === "memory" ? <MemoryPage /> : null}
-      {page === "notes" ? <NotesPage /> : null}
-      {page === "reminders" ? <RemindersPage /> : null}
       {page === "skills" ? <SkillsPage /> : null}
-      {page === "terminal" ? <TerminalPage go={setPage} /> : null}
-      {page === "toolbox" ? <ToolboxPage /> : null}
-      {page === "settings" ? <SettingsPage go={setPage} /> : null}
+      {page === "settings" ? <SettingsPage /> : null}
       {page === "vault" ? <VaultPage go={setPage} /> : null}
     </AppShell>
   );

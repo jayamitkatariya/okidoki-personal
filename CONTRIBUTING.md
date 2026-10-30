@@ -32,6 +32,4 @@ Point test data away from your own with `OKIDOKI_SUPPORT_DIR=/tmp/okidoki-test`.
 
 ## Good first issues
 
-- Recipes for more terminal jobs (`Sources/OkidokiCore/Services/TerminalActions.swift`)
-- More Toolbox tools (`Sources/OkidokiCore/Models/ToolCatalog.swift`)
 - Example skills in `skills/`

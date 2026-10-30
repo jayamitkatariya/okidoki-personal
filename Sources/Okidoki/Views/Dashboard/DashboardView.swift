@@ -39,21 +39,6 @@ struct WebDashboardView: NSViewRepresentable {
 
 // MARK: - Payload
 
-struct DashboardToolPayload: Encodable {
-    var id: String
-    var name: String
-    var command: String
-    var replaces: String
-    var blurb: String
-    var installed: Bool
-    var installCommand: String
-    var docs: String
-    var license: String
-    var category: String
-    var examples: [String]
-    var popularity: Int
-}
-
 struct DashboardWatchPayload: Encodable {
     var recording: Bool
     var startedAt: Date?
@@ -83,10 +68,6 @@ struct DashboardPayload: Encodable {
     var skills: [Skill]
     var routines: [Routine]
     var connectors: [Connector]
-    var tools: [DashboardToolPayload]
-    var installedAgents: [String]
-    /// Each coding agent with whether it's installed and signed in, for the Settings "Agents" section.
-    var agents: [AgentStatus]
     var keys: [String: Bool]
     var permissions: [String: String]
     var signedOut: Bool
@@ -97,7 +78,6 @@ struct DashboardPayload: Encodable {
     var version: String
     /// This Mac's name.
     var hostName: String
-    var savings: Double
     /// The brain, the Moss index and MCP, as they are right now. The page shows these
     /// instead of guessing from settings.
     var services: DashboardServicesPayload
@@ -112,8 +92,6 @@ struct DashboardPayload: Encodable {
     var privateMac: DashboardPrivateMacPayload
     /// The vault folder's files and the sealed logins.
     var vault: DashboardVaultPayload
-    var notes: [Note]
-    var reminders: [Reminder]
 }
 
 struct DashboardVaultPayload: Encodable {
@@ -493,16 +471,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             skills: env.store.activeSkills,
             routines: env.store.activeRoutines,
             connectors: env.store.connectors,
-            tools: ToolCatalog.tools.map { tool in
-                DashboardToolPayload(id: tool.id, name: tool.name, command: tool.command,
-                                     replaces: tool.replaces, blurb: tool.blurb,
-                                     installed: env.store.toolInstalled[tool.id] == true,
-                                     installCommand: tool.installCommand, docs: tool.docs,
-                                     license: tool.license, category: tool.category,
-                                     examples: tool.examples, popularity: tool.popularity)
-            },
-            installedAgents: env.installedAgents.map(\.rawValue),
-            agents: env.agentStatus,
             keys: Dictionary(uniqueKeysWithValues: KeyProviders.all.map { ($0.id, env.hasKey($0.id)) }),
             permissions: Dictionary(uniqueKeysWithValues: PermissionKind.allCases.map { ($0.rawValue, PermissionsService.shared.state($0).label) }),
             signedOut: env.signedOut,
@@ -512,7 +480,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             sidecar: env.sidecar.status.label,
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
             hostName: Host.current().localizedName ?? "Mac",
-            savings: env.store.savings,
             services: services(env),
             keyProviders: KeyProviders.all.map { spec in
                 DashboardKeyProviderPayload(id: spec.id, name: spec.name, blurb: spec.blurb, placeholder: spec.placeholder,
@@ -551,9 +518,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 folders: env.vault.folders,
                 logins: env.vault.logins,
                 salt: env.vault.salt,
-                rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? ""),
-            notes: env.store.activeNotes,
-            reminders: env.store.activeReminders
+                rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? "")
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -645,7 +610,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 env.replaySkill(skill, times: payload["times"] as? Int ?? 1)
             }
         case "startWatching":
-            env.startTeaching(name: payload["name"] as? String ?? "")
+            env.startRecording(name: payload["name"] as? String ?? "")
         case "stopWatching":
             env.stopWatching()
         case "discardWatching":
@@ -655,8 +620,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 env.store.updateSkill(id, name: payload["name"] as? String, summary: payload["summary"] as? String)
                 env.store.saveNow()
             }
-        case "startSkill":
-            if let id = payload["id"] as? String, let skill = env.store.skill(id) { env.startSkillWalkthrough(skill) }
         case "runRoutine":
             if let id = payload["id"] as? String, let routine = env.store.routine(id) { env.runRoutine(routine) }
         case "toggleRoutine":
@@ -738,44 +701,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "deleteKey":
             if let provider = payload["provider"] as? String { env.deleteKey(provider: provider) }
-        case "addNote":
-            let note = env.store.addNote(title: payload["title"] as? String ?? "", body: payload["body"] as? String ?? "",
-                                         tags: payload["tags"] as? [String] ?? [])
-            env.store.saveNow()
-            replyToPage("okidokiNoteCreated", note.id)
-        case "updateNote":
-            if let id = payload["id"] as? String {
-                env.store.updateNote(id, title: payload["title"] as? String, body: payload["body"] as? String,
-                                     tags: payload["tags"] as? [String], pinned: payload["pinned"] as? Bool)
-                env.store.saveNow()
-            }
-        case "deleteNote":
-            if let id = payload["id"] as? String { env.store.deleteNote(id); env.store.saveNow() }
-        case "addReminder":
-            if let title = payload["title"] as? String, !title.trimmingCharacters(in: .whitespaces).isEmpty {
-                env.store.addReminder(title: title, dueAt: (payload["dueAt"] as? String).flatMap(DateParsing.iso8601),
-                                      repeats: ReminderRepeat(rawValue: payload["repeats"] as? String ?? "") ?? .never,
-                                      skillID: (payload["skillID"] as? String).flatMap { $0.isEmpty ? nil : $0 })
-                env.store.saveNow()
-            }
-        case "updateReminder":
-            if let id = payload["id"] as? String, var reminder = env.store.reminders.first(where: { $0.id == id }) {
-                if let title = payload["title"] as? String { reminder.title = title }
-                if payload.keys.contains("dueAt") { reminder.dueAt = (payload["dueAt"] as? String).flatMap(DateParsing.iso8601) }
-                if let repeats = (payload["repeats"] as? String).flatMap(ReminderRepeat.init(rawValue:)) { reminder.repeats = repeats }
-                if payload.keys.contains("skillID") { reminder.skillID = (payload["skillID"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
-                env.store.updateReminder(reminder)
-                env.store.saveNow()
-            }
-        case "completeReminder":
-            if let id = payload["id"] as? String {
-                env.store.completeReminder(id, done: payload["done"] as? Bool ?? true)
-                env.store.saveNow()
-            }
-        case "snoozeReminder":
-            if let id = payload["id"] as? String { env.snoozeReminder(id, minutes: payload["minutes"] as? Int ?? 10) }
-        case "deleteReminder":
-            if let id = payload["id"] as? String { env.store.deleteReminder(id); env.store.saveNow() }
         case "exportSkill":
             if let id = payload["id"] as? String { env.exportSkill(id) }
         case "importSkillFile":
@@ -808,8 +733,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String { env.vault.deleteLogin(id: id) }
         case "vaultTouchLogin":
             if let id = payload["id"] as? String { env.vault.touchLogin(id: id) }
-        case "installTool":
-            if let id = payload["id"] as? String, let tool = ToolCatalog.tool(id: id) { env.installTool(tool) }
         case "connectApple":
             if let id = payload["id"] as? String {
                 Task { _ = await env.connectApple(id); sendState() }
@@ -882,8 +805,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.signOut()
         case "signIn":
             if let id = payload["id"] as? String { env.signIn(accountID: id) }
-        case "refreshTools":
-            env.refreshInstalled()
+        case "openBrowser":
+            env.openBrowser(url: (payload["url"] as? String).flatMap(URL.init(string:)))
         case "openExternal":
             if let value = payload["url"] as? String, let url = URL(string: value) {
                 NSWorkspace.shared.open(url)

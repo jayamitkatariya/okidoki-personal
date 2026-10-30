@@ -100,7 +100,7 @@ public struct KeyProviderSpec: Identifiable, Sendable {
 public enum KeyProviders {
     public static let all: [KeyProviderSpec] = [
         KeyProviderSpec(id: "anthropic", name: "Anthropic",
-                        blurb: "Required. Reads the screen, teaches, and plans every action.",
+                        blurb: "Required. Reads the screen, browses, and plans every action.",
                         placeholder: "sk-ant-…", url: "https://console.anthropic.com/settings/keys"),
         KeyProviderSpec(id: "cartesia", name: "Cartesia",
                         blurb: "Fast, warm voices for spoken answers. Without it, your Mac's own voice speaks.",

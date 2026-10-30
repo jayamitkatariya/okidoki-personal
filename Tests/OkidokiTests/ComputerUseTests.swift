@@ -67,25 +67,23 @@ final class ComputerUseTests: XCTestCase {
         XCTAssertEqual(decoded, action)
     }
 
-    func testTeachPlanAndDecisionDecoding() throws {
+    func testDecisionDecoding() throws {
         let json = """
         {"kind":"overlay","title":"flow","answer":"here you go",
-         "overlay_html":"<html></html>","overlay_title":"flow","overlay_width":560,"overlay_height":380,
-         "teach_plan":[{"say":"press shift+a","marks":[{"kind":"circle","target":"New chat"}]}]}
+         "overlay_html":"<html></html>","overlay_title":"flow","overlay_width":560,"overlay_height":380}
         """.data(using: .utf8)!
         let decision = try JSONDecoder().decode(BrainDecision.self, from: json)
         XCTAssertEqual(decision.kind, .overlay)
         XCTAssertEqual(decision.overlayHTML, "<html></html>")
         XCTAssertEqual(decision.overlayWidth, 560)
-        XCTAssertEqual(decision.teachPlan.count, 1)
-        XCTAssertEqual(decision.teachPlan[0].marks.first?.kind, "circle")
-        XCTAssertEqual(decision.teachPlan[0].marks.first?.target, "New chat")
 
-        // Old-format teach decisions still decode.
-        let legacy = #"{"kind":"teach","title":"t","answer":"a","teach_steps":["one","two"]}"#.data(using: .utf8)!
-        let teach = try JSONDecoder().decode(BrainDecision.self, from: legacy)
-        XCTAssertEqual(teach.teachSteps, ["one", "two"])
-        XCTAssertEqual(teach.teachPlan, [])
+        let browser = try JSONDecoder().decode(BrainDecision.self, from: Data(#"{"kind":"browser","title":"flights","answer":"on it"}"#.utf8))
+        XCTAssertEqual(browser.kind, .browser)
+
+        // Kinds older builds could send (teach, terminal) fall back to a plain answer instead of failing.
+        let legacy = try JSONDecoder().decode(BrainDecision.self, from: Data(#"{"kind":"teach","title":"t","answer":"a","teach_steps":["one"]}"#.utf8))
+        XCTAssertEqual(legacy.kind, .answer)
+        XCTAssertEqual(legacy.answer, "a")
     }
 
     func testRunningAppsAndFrontmost() {

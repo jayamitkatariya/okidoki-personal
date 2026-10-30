@@ -27,53 +27,44 @@ final class MemoryImportTests: XCTestCase {
         XCTAssertFalse(MemoryImport.asked("how much memory does my mac have"))
         XCTAssertFalse(MemoryImport.asked("get more memory for my mac"))
         XCTAssertFalse(MemoryImport.asked("free up memory"))
-        XCTAssertNil(TerminalActions.decide("install claude code", installed: { _ in true })?.builtin)
         XCTAssertEqual(MemoryImport.source(in: "import my memory from claude code")?.id, "claude-code")
         XCTAssertEqual(MemoryImport.source(in: "import memory from claude")?.id, "claude")
         XCTAssertEqual(MemoryImport.source(in: "what does chatgpt remember about me, import it")?.id, "chatgpt")
         XCTAssertNil(MemoryImport.source(in: "import my memory from other assistants"))
     }
 
-    func testLocalFilesAreReadWithTheTerminalAndNothingElse() throws {
+    func testLocalFilesAreReadAndNothingElse() throws {
         try put(".hermes/memories/USER.md", "Jay builds Mac apps.")
         try put(".claude/CLAUDE.md", "")
         try put(".claude/projects/a/memory/MEMORY.md", "Prefers short answers.")
         try put(".claude/projects/b/memory/notes.md", "Works on okidoki.")
 
-        let hermes = try XCTUnwrap(MemoryImport.decide("import my memory from hermes", home: home))
-        XCTAssertEqual(hermes.kind, .terminal)
-        XCTAssertEqual(hermes.builtin, MemoryImport.builtin)
-        XCTAssertEqual(hermes.commands.count, 1)
-        XCTAssertTrue(hermes.commands[0].contains("cat "), hermes.commands[0])
-        XCTAssertTrue(hermes.commands[0].contains(".hermes/memories/USER.md"))
-        XCTAssertNil(hermes.pickFile)
-        XCTAssertEqual(hermes.previewSteps.count, hermes.commands.count)
-        XCTAssertEqual(hermes.risk, .low)
-        XCTAssertFalse(hermes.commands[0].contains(">"), "reads only; the other assistant's files are never written")
+        let hermes = try XCTUnwrap(MemoryImport.plan("import my memory from hermes", home: home))
+        XCTAssertFalse(hermes.needsExport)
+        XCTAssertEqual(hermes.files.count, 1)
+        XCTAssertTrue(hermes.files[0].hasSuffix(".hermes/memories/USER.md"))
+        XCTAssertEqual(hermes.steps.count, 1)
 
-        let claude = try XCTUnwrap(MemoryImport.decide("import my memory from claude code", home: home))
+        let claude = try XCTUnwrap(MemoryImport.plan("import my memory from claude code", home: home))
         XCTAssertEqual(claude.files.count, 2, "the empty CLAUDE.md is skipped, both project notes are read")
 
-        let everything = try XCTUnwrap(MemoryImport.decide("import my memories from other assistants", home: home))
-        XCTAssertEqual(everything.commands.count, 2, "one step per assistant with files")
+        let everything = try XCTUnwrap(MemoryImport.plan("import my memories from other assistants", home: home))
+        XCTAssertEqual(everything.steps.count, 2, "one step per assistant with files")
         XCTAssertEqual(everything.title, "import memory from other assistants")
 
-        // Through the built-in planner, ahead of "install claude code".
-        let viaTerminal = try XCTUnwrap(TerminalActions.decide("get my memories from claude code", installed: { _ in false }))
-        XCTAssertEqual(viaTerminal.builtin, MemoryImport.builtin)
-        XCTAssertFalse(viaTerminal.commands.contains { $0.contains("install") })
+        let items = MemoryImport.parse(MemoryImport.read(files: everything.files))
+        XCTAssertEqual(Set(items.map(\.text)), ["Jay builds Mac apps", "Prefers short answers", "Works on okidoki"])
+        XCTAssertEqual(MemoryImport.source(forFile: items.first { $0.text.hasPrefix("Jay") }!.file, home: home)?.id, "hermes")
     }
 
     func testHostedAssistantsAndMissingFilesAskForAnExport() throws {
-        let chatgpt = try XCTUnwrap(MemoryImport.decide("import my memory from chatgpt", home: home))
-        XCTAssertEqual(chatgpt.pickFile, "document")
-        XCTAssertEqual(chatgpt.commands, [MemoryImport.exportCommand])
-        XCTAssertTrue(chatgpt.answer.contains("Export everything you remember about me"), "tells them what to ask the other assistant")
+        let chatgpt = try XCTUnwrap(MemoryImport.plan("import my memory from chatgpt", home: home))
+        XCTAssertTrue(chatgpt.needsExport)
+        XCTAssertTrue(chatgpt.summary.contains("Export everything you remember about me"), "tells them what to ask the other assistant")
 
-        let hermes = try XCTUnwrap(MemoryImport.decide("import my memory from hermes", home: home))
-        XCTAssertEqual(hermes.pickFile, "document", "nothing on disk, so an export is the fallback")
-        XCTAssertTrue(hermes.previewSummary.contains("hasn't saved any memory files"))
-        XCTAssertThrowsError(try TerminalActions.prepare(chatgpt.commands), "the placeholder is filled after the picker")
+        let hermes = try XCTUnwrap(MemoryImport.plan("import my memory from hermes", home: home))
+        XCTAssertTrue(hermes.needsExport, "nothing on disk, so an export is the fallback")
+        XCTAssertTrue(hermes.summary.contains("hasn't saved any memory files"))
     }
 
     func testParsesWhatOtherAssistantsWrite() {

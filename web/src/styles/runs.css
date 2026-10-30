@@ -251,9 +251,6 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.run-agent {
-  text-transform: capitalize;
-}
 .run-thread {
   display: inline-flex;
   align-items: center;
@@ -639,7 +636,7 @@
   background: currentColor;
   animation: pulse 1.4s infinite;
 }
-.terminal {
+.run-output {
   margin: 0;
   max-height: 300px;
   overflow: auto;

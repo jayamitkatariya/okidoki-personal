@@ -13,9 +13,6 @@ public final class OkidokiStore: ObservableObject {
     @Published public var skills: [Skill]
     @Published public var routines: [Routine]
     @Published public var connectors: [Connector]
-    @Published public var notes: [Note]
-    @Published public var reminders: [Reminder]
-    @Published public var toolInstalled: [String: Bool] = [:]
     @Published public private(set) var lastSavedAt: Date?
     @Published public private(set) var loadError: String?
     /// The saved file had items this build couldn't read. They're kept in a copy beside it.
@@ -125,8 +122,6 @@ public final class OkidokiStore: ObservableObject {
         self.skills = state.skills
         self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)
-        self.notes = state.notes.map { note in var note = note; if note.accountID.isEmpty { note.accountID = current }; return note }
-        self.reminders = state.reminders.map { item in var item = item; if item.accountID.isEmpty { item.accountID = current }; return item }
         self.deletions = state.deletions
         self.syncCursors = state.syncCursors
         var unreadable = state.unreadable
@@ -203,12 +198,6 @@ public final class OkidokiStore: ObservableObject {
 
     public func isFromThisMac(_ run: AgentRun) -> Bool { run.origin == deviceID }
     public func isFromThisMac(_ routine: Routine) -> Bool { routine.origin == deviceID }
-
-    public var savings: Double {
-        ToolCatalog.tools.reduce(0) { partial, tool in
-            toolInstalled[tool.id] == true ? partial + (ToolCatalog.paidAlternatives[tool.id] ?? 0) : partial
-        }
-    }
 
     public func run(_ id: String) -> AgentRun? { runs.first { $0.id == id } }
     public func thread(_ id: String) -> ChatThread? { threads.first { $0.id == id } }
@@ -363,7 +352,7 @@ public final class OkidokiStore: ObservableObject {
 
     /// Sources that mean the model wrote the memory itself. Anything the person typed, answered
     /// in onboarding or imported from another assistant is theirs to keep.
-    private static let modelSources: Set<String> = ["said", "followup", "dashboard", "routine", "repair", "lesson"]
+    private static let modelSources: Set<String> = ["said", "followup", "dashboard", "routine", "repair"]
 
     /// Memories the model saved before `isDurableFact` existed — notes about the clipboard, a
     /// screenshot or its own limits — were fed back with every request and kept the model stuck on
@@ -387,13 +376,12 @@ public final class OkidokiStore: ObservableObject {
     @discardableResult
     public func createRun(kind: RunKind, title: String, prompt: String, threadID: String? = nil,
                           preview: ActionPreview? = nil, steps: [RunStep] = [],
-                          agent: CodingAgentID? = nil, workingDirectory: String? = nil,
                           status: RunStatus = .previewing, builtin: String? = nil,
                           pickedPath: String? = nil) -> AgentRun {
         let now = Date()
         let run = AgentRun(accountID: currentAccountID, kind: kind, title: title, prompt: prompt,
                            threadID: threadID, status: status, preview: preview, steps: steps,
-                           agent: agent, workingDirectory: workingDirectory, createdAt: now,
+                           createdAt: now,
                            builtin: builtin, pickedPath: pickedPath, updatedAt: now, origin: deviceID)
         runs.insert(run, at: 0)
         return run
@@ -594,106 +582,6 @@ public final class OkidokiStore: ObservableObject {
         return found
     }
 
-    // MARK: - Notes
-
-    public var activeNotes: [Note] {
-        notes.filter { $0.accountID == currentAccountID }
-            .sorted { $0.pinned != $1.pinned ? $0.pinned : $0.updatedAt > $1.updatedAt }
-    }
-
-    @discardableResult
-    public func addNote(title: String, body: String = "", tags: [String] = []) -> Note {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let note = Note(accountID: currentAccountID, title: trimmed.isEmpty ? Note.title(from: body) : trimmed, body: body,
-                        tags: Self.cleanTags(tags))
-        notes.insert(note, at: 0)
-        return note
-    }
-
-    public func updateNote(_ id: String, title: String? = nil, body: String? = nil, tags: [String]? = nil, pinned: Bool? = nil) {
-        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
-        if let title { notes[index].title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "untitled" : title }
-        if let body { notes[index].body = body }
-        if let tags { notes[index].tags = Self.cleanTags(tags) }
-        if let pinned { notes[index].pinned = pinned }
-        notes[index].updatedAt = Date()
-    }
-
-    public func deleteNote(_ id: String) {
-        notes.removeAll { $0.id == id }
-        rememberDeletion(id)
-    }
-
-    static func cleanTags(_ tags: [String]) -> [String] {
-        var seen = Set<String>()
-        return tags.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ").union(.whitespacesAndNewlines)).lowercased() }
-            .filter { !$0.isEmpty && seen.insert($0).inserted }
-    }
-
-    // MARK: - Reminders
-
-    public var activeReminders: [Reminder] {
-        reminders.filter { $0.accountID == currentAccountID }.sorted { a, b in
-            if a.done != b.done { return !a.done }
-            switch (a.dueAt, b.dueAt) {
-            case let (x?, y?): return x < y
-            case (_?, nil): return true
-            case (nil, _?): return false
-            default: return a.createdAt > b.createdAt
-            }
-        }
-    }
-
-    @discardableResult
-    public func addReminder(title: String, dueAt: Date?, repeats: ReminderRepeat = .never, skillID: String? = nil) -> Reminder {
-        let reminder = Reminder(accountID: currentAccountID, title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-                                dueAt: dueAt, repeats: repeats, skillID: skillID)
-        reminders.insert(reminder, at: 0)
-        return reminder
-    }
-
-    public func updateReminder(_ reminder: Reminder) {
-        guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
-        var next = reminder
-        // A new due time means it hasn't fired for that one yet.
-        if next.dueAt != reminders[index].dueAt { next.firedAt = nil }
-        next.updatedAt = Date()
-        reminders[index] = next
-    }
-
-    /// Ticks it off. A repeating one moves on to its next time instead.
-    public func completeReminder(_ id: String, done: Bool = true, now: Date = Date()) {
-        guard let index = reminders.firstIndex(where: { $0.id == id }) else { return }
-        if done, let due = reminders[index].dueAt, let next = reminders[index].repeats.next(after: max(due, now.addingTimeInterval(-60))) {
-            reminders[index].dueAt = next
-            reminders[index].firedAt = nil
-            reminders[index].done = false
-        } else {
-            reminders[index].done = done
-            reminders[index].doneAt = done ? now : nil
-        }
-        reminders[index].updatedAt = now
-    }
-
-    /// It fired: remember that, and line a repeating one up for its next time.
-    public func markReminderFired(_ id: String, at date: Date = Date()) {
-        guard let index = reminders.firstIndex(where: { $0.id == id }) else { return }
-        reminders[index].firedAt = date
-        if let due = reminders[index].dueAt, let next = reminders[index].repeats.next(after: due) {
-            var upcoming = next
-            // Long asleep: skip the times that already passed rather than fire them all at once.
-            while upcoming <= date, let later = reminders[index].repeats.next(after: upcoming) { upcoming = later }
-            reminders[index].dueAt = upcoming
-            reminders[index].firedAt = nil
-        }
-        reminders[index].updatedAt = date
-    }
-
-    public func deleteReminder(_ id: String) {
-        reminders.removeAll { $0.id == id }
-        rememberDeletion(id)
-    }
-
     // MARK: - Connectors
 
     public func setConnector(_ id: String, enabled: Bool? = nil, installed: Bool? = nil) {
@@ -703,7 +591,7 @@ public final class OkidokiStore: ObservableObject {
     }
 
     private static func mergeConnectors(_ existing: [Connector]) -> [Connector] {
-        ToolCatalog.defaultConnectors.map { spec in
+        Connectors.defaults.map { spec in
             if let saved = existing.first(where: { $0.id == spec.id }) {
                 var merged = spec
                 merged.enabled = saved.enabled
@@ -730,7 +618,6 @@ public final class OkidokiStore: ObservableObject {
         let state = AppState(accounts: accounts, currentAccountID: currentAccountID,
                              settings: settings, threads: threads, memories: memories, runs: runs,
                              skills: skills, routines: routines, connectors: connectors,
-                             notes: notes, reminders: reminders,
                              deletions: deletions, syncCursors: syncCursors, unreadable: unreadable)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -766,23 +653,19 @@ public final class OkidokiStore: ObservableObject {
         settings.tourComplete = true
         settings.defaultInput = .voice
         settings.appleCalendar = true
-        settings.appleReminders = true
-        settings.appleNotes = true
         settings.automationGranted = true
         settings.voiceID = "sarah"
-        toolInstalled = ["ffmpeg": true, "pandoc": true, "mole": true]
 
         let now = Date()
-        var figma = ChatThread(accountID: jay.id, title: "learning figma", app: "Figma", topic: "figma",
+        var figma = ChatThread(accountID: jay.id, title: "flights to chicago", app: "okidoki browser", topic: "travel",
                            messages: [
-                            ChatMessage(role: .user, text: "teach me auto layout", createdAt: now.addingTimeInterval(-7200)),
-                            ChatMessage(role: .assistant, text: "last time you learned frames. auto layout is the next step: frames that arrange themselves. open Figma and select two cards.", createdAt: now.addingTimeInterval(-7150)),
-                            ChatMessage(role: .user, text: "ok done", createdAt: now.addingTimeInterval(-7000)),
+                            ChatMessage(role: .user, text: "find the cheapest flight to chicago next friday", createdAt: now.addingTimeInterval(-7200)),
+                            ChatMessage(role: .assistant, text: "cheapest is $148 on united, leaving 7:05am. i saved the search as a skill so next time it takes seconds.", createdAt: now.addingTimeInterval(-7150)),
                            ], createdAt: now.addingTimeInterval(-7200), updatedAt: now.addingTimeInterval(-7000))
-        var space = ChatThread(accountID: jay.id, title: "free up space", app: "Finder", topic: "space",
+        var space = ChatThread(accountID: jay.id, title: "keynote export", app: "Keynote", topic: "decks",
                            messages: [
-                            ChatMessage(role: .user, text: "my mac is out of space", createdAt: now.addingTimeInterval(-3600)),
-                            ChatMessage(role: .assistant, text: "you're at 94%. the biggest wins are xcode derived data and old installers. want me to clean them?", createdAt: now.addingTimeInterval(-3590)),
+                            ChatMessage(role: .user, text: "export all my keynote decks to pdf", createdAt: now.addingTimeInterval(-3600)),
+                            ChatMessage(role: .assistant, text: "on it. six decks, one folder on your desktop.", createdAt: now.addingTimeInterval(-3590)),
                            ], createdAt: now.addingTimeInterval(-3600), updatedAt: now.addingTimeInterval(-3590))
         figma.updatedAt = now.addingTimeInterval(-720)
         space.updatedAt = now.addingTimeInterval(-3500)
@@ -796,22 +679,19 @@ public final class OkidokiStore: ObservableObject {
             MemoryItem(accountID: work.id, section: .rightNow, text: "redesigning the Workro onboarding", createdAt: now.addingTimeInterval(-86400)),
         ]
 
-        var cleanup = AgentRun(accountID: jay.id, kind: .terminal, title: "free up 23 GB",
-                               prompt: "my mac is out of space", threadID: space.id, status: .done,
-                               preview: ActionPreview(summary: "clean caches and old installers with Mole",
-                                                      risk: .medium,
-                                                      steps: [PreviewStep("scan caches and old installers"),
-                                                              PreviewStep("remove 4.2 GB of Xcode derived data"),
-                                                              PreviewStep("empty trash")],
-                                                      commands: ["mo clean"],
-                                                      apps: ["Finder"], files: []),
-                               summary: "freed 23 GB", createdAt: now.addingTimeInterval(-3600),
-                               startedAt: now.addingTimeInterval(-3595), endedAt: now.addingTimeInterval(-3410),
-                               freedBytes: 23_000_000_000)
-        cleanup.steps = [RunStep(title: "scan caches", status: .done), RunStep(title: "remove derived data", status: .done), RunStep(title: "empty trash", status: .done)]
+        var flights = AgentRun(accountID: jay.id, kind: .browser, title: "cheapest flight to chicago",
+                               prompt: "find the cheapest flight to chicago next friday", threadID: figma.id, status: .done,
+                               preview: ActionPreview(summary: "search flights in okidoki's browser and compare prices",
+                                                      risk: .low,
+                                                      steps: [PreviewStep("open google flights"), PreviewStep("search chicago, next friday"),
+                                                              PreviewStep("sort by price")],
+                                                      commands: [], apps: ["okidoki browser"], files: []),
+                               summary: "$148 on united, 7:05am", createdAt: now.addingTimeInterval(-7100),
+                               startedAt: now.addingTimeInterval(-7095), endedAt: now.addingTimeInterval(-7040))
+        flights.steps = [RunStep(title: "open google flights", status: .done), RunStep(title: "search chicago", status: .done), RunStep(title: "sort by price", status: .done)]
 
-        var keynote = AgentRun(accountID: jay.id, kind: .background, title: "export keynote decks",
-                               prompt: "export all my keynote decks to pdf", status: .running,
+        var keynote = AgentRun(accountID: jay.id, kind: .computerUse, title: "export keynote decks",
+                               prompt: "export all my keynote decks to pdf", threadID: space.id, status: .running,
                                preview: ActionPreview(summary: "export 6 Keynote decks to one folder",
                                                       risk: .low,
                                                       steps: [PreviewStep("open each deck"), PreviewStep("export as PDF"), PreviewStep("put them in ~/Desktop/decks")],
@@ -821,30 +701,17 @@ public final class OkidokiStore: ObservableObject {
                                startedAt: now.addingTimeInterval(-175), endedAt: nil)
         keynote.steps = [RunStep(title: "open each deck", status: .done), RunStep(title: "export as PDF", status: .running), RunStep(title: "collect in one folder", status: .previewing)]
 
-        let rename = AgentRun(accountID: jay.id, kind: .coding, title: "rename screenshots",
-                              prompt: "build me a script that renames my screenshots by date", status: .waiting,
-                              preview: ActionPreview(summary: "write a small Swift script and run it on ~/Desktop",
-                                                     risk: .medium,
-                                                     steps: [PreviewStep("create rename-screenshots.swift"), PreviewStep("dry-run on 128 files"), PreviewStep("rename in place")],
-                                                     commands: ["claude -p 'build me a script…'"],
-                                                     apps: ["Claude Code"], files: ["~/Desktop/rename-screenshots.swift"]),
-                              agent: .claude, workingDirectory: "~/Desktop",
-                              createdAt: now.addingTimeInterval(-95))
-
-        let teach = AgentRun(accountID: jay.id, kind: .teach, title: "auto layout in figma",
-                             prompt: "teach me auto layout in figma", threadID: figma.id, status: .done,
-                             summary: "5 steps · you finished it", createdAt: now.addingTimeInterval(-7000),
-                             startedAt: now.addingTimeInterval(-6990), endedAt: now.addingTimeInterval(-6800))
-
-        runs = [keynote, rename, cleanup, teach]
+        runs = [keynote, flights]
 
         skills = [
             Skill(accountID: jay.id, name: "friday cleanup", summary: "empty downloads, screenshots and old installers",
                   steps: [SkillStep(text: "open Downloads", app: "Finder"), SkillStep(text: "select installers older than 30 days", app: "Finder"), SkillStep(text: "move to trash and empty")],
                   source: "watch me", runCount: 7),
-            Skill(accountID: jay.id, name: "weekly backup", summary: "copy Desktop and Documents to the cloud",
-                  steps: [SkillStep(text: "run rclone copy", app: "Terminal"), SkillStep(text: "check the log", app: "Terminal")],
-                  source: "taught", runCount: 3),
+            Skill(accountID: jay.id, name: "flight search", summary: "google flights, cheapest first",
+                  steps: [SkillStep(text: "open google.com/travel/flights", app: "okidoki browser"),
+                          SkillStep(text: "type “{{city}}” in Where to?", app: "okidoki browser"),
+                          SkillStep(text: "sort by price", app: "okidoki browser")],
+                  source: "act", runCount: 3),
         ]
 
         var friday = Routine(accountID: jay.id, name: "friday cleanup",
@@ -863,8 +730,6 @@ public final class OkidokiStore: ObservableObject {
 
         connectors = Self.mergeConnectors([
             Connector(id: "calendar", name: "Apple Calendar", kind: "apple", blurb: "", enabled: true, installed: true),
-            Connector(id: "reminders", name: "Apple Reminders", kind: "apple", blurb: "", enabled: true, installed: true),
-            Connector(id: "notes", name: "Apple Notes", kind: "apple", blurb: "", enabled: true, installed: true),
         ])
     }
 }

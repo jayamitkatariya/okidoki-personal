@@ -19,14 +19,14 @@ final class SummonLevelMeter: ObservableObject {
 
 /// What a request typed at the cursor is for. Auto leaves it to the brain.
 enum SummonMode: String, CaseIterable, Identifiable {
-    case auto, act, teach, chat
+    case auto, act, browser, chat
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .auto: return "Auto"
         case .act: return "Act"
-        case .teach: return "Teach"
+        case .browser: return "Browser"
         case .chat: return "Chat"
         }
     }
@@ -35,7 +35,7 @@ enum SummonMode: String, CaseIterable, Identifiable {
         switch self {
         case .auto: return "sparkle"
         case .act: return "bolt.fill"
-        case .teach: return "graduationcap.fill"
+        case .browser: return "globe"
         case .chat: return "bubble.left.fill"
         }
     }
@@ -44,7 +44,7 @@ enum SummonMode: String, CaseIterable, Identifiable {
         switch self {
         case .auto: return "Decide for me"
         case .act: return "Do it on this Mac"
-        case .teach: return "Show me how, on screen"
+        case .browser: return "Do it in okidoki's browser"
         case .chat: return "Just answer"
         }
     }
@@ -53,7 +53,7 @@ enum SummonMode: String, CaseIterable, Identifiable {
         switch self {
         case .auto: return "Ask anything"
         case .act: return "What should I do?"
-        case .teach: return "What should I teach you?"
+        case .browser: return "What should I do on the web?"
         case .chat: return "Ask me anything"
         }
     }
@@ -64,7 +64,7 @@ final class SummonModel: ObservableObject {
     @Published var phase: SummonPhase = .hidden
     @Published var mode: InputMode = .typing
     @Published var text: String = ""
-    /// Auto, act, teach or chat. Remembered between summons.
+    /// Auto, act, browser or chat. Remembered between summons.
     @Published var summonMode: SummonMode = .auto
     @Published var transcript: String = ""
     @Published var error: String?
@@ -635,7 +635,7 @@ struct InputCapsuleView: View {
     }
 }
 
-/// Auto / Act / Teach / Chat: what the request is for. One click opens the choices and the pick sticks.
+/// Auto / Act / Browser / Chat: what the request is for. One click opens the choices and the pick sticks.
 /// A plain button that pops an AppKit menu: SwiftUI's `Menu` doesn't open from this non-activating panel.
 private struct SummonModeChip: View {
     @ObservedObject var model: SummonModel

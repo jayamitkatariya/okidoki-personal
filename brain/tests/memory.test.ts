@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
 import { anthropicKey, mossCredentials } from "../src/keys";
-import { RECALL_MIN_SCORE, RIGHT_NOW_DAYS, recallFilter, recallPrompt, selectRecalled, toDocs, toolIndexDocs } from "../src/memory";
-import { tools } from "../src/catalog";
-import { clipboardFor, historyMessages, isDurableFact, normalize, stripMacSuffix, toolSuggestions } from "../src/llm";
+import { RECALL_MIN_SCORE, RIGHT_NOW_DAYS, recallFilter, recallPrompt, selectRecalled, toDocs } from "../src/memory";
+import { clipboardFor, historyMessages, isDurableFact, normalize, stripMacSuffix } from "../src/llm";
 
 test("anthropic and moss credentials prefer the request, then the environment", () => {
   const savedAnthropic = process.env.ANTHROPIC_API_KEY;
@@ -45,7 +44,7 @@ test("the index holds every note, the newest turns, recent tasks and skills, eac
         { id: "legacy", text: "an older Mac's note", section: "aboutYou", updatedAt: "2026-10-01" },
       ],
       threads: [{ id: "t1", accountID: "acct", title: "today", messages }],
-      runs: [{ id: "r1", accountID: "acct", kind: "terminal", status: "done", title: "compress video", prompt: "compress the launch video for discord", summary: "24 MB", createdAt: "2026-10-23T10:00:00Z" }],
+      runs: [{ id: "r1", accountID: "acct", kind: "computer_use", status: "done", title: "compress video", prompt: "compress the launch video for discord", summary: "24 MB", createdAt: "2026-10-23T10:00:00Z" }],
       skills: [{ id: "s1", accountID: "work", name: "expense report", summary: "files receipts in Concur", steps: [{ text: "open Concur" }, { text: "attach receipts" }], createdAt: "2026-09-01" }],
     },
     now,
@@ -78,8 +77,8 @@ test("stale right-now notes, plain answers, unapproved plans and old tasks stay 
       ],
       runs: [
         { id: "answer", accountID: "acct", kind: "answer", status: "done", title: "what's the capital of peru", createdAt: "2026-10-24T00:00:00Z" },
-        { id: "preview", accountID: "acct", kind: "terminal", status: "previewing", title: "install node", createdAt: "2026-10-24T00:00:00Z" },
-        { id: "old", accountID: "acct", kind: "terminal", status: "done", title: "clean up my mac", createdAt: "2026-06-01T00:00:00Z" },
+        { id: "preview", accountID: "acct", kind: "computer_use", status: "previewing", title: "install node", createdAt: "2026-10-24T00:00:00Z" },
+        { id: "old", accountID: "acct", kind: "computer_use", status: "done", title: "clean up my mac", createdAt: "2026-06-01T00:00:00Z" },
         { id: "kept", accountID: "acct", kind: "computer_use", status: "failed", title: "send mom a message", prompt: "send mom a message on whatsapp", createdAt: "2026-10-22T00:00:00Z" },
       ],
     },
@@ -123,7 +122,7 @@ test("recall keeps only relevant hits from this account, never the current threa
     { id: "message:b", text: "find me nike boots size 9", metadata: { type: "message", account: "acct", threadId: "t2", thread: "dia", date: "2026-10-23" }, score: 0.88 },
     { id: "message:c", text: "Find me Nike boots size 9", metadata: { type: "message", account: "acct", threadId: "t3", thread: "safari", date: "2026-10-22" }, score: 0.87 },
     { id: "message:d", text: "blue puma shoes", metadata: { type: "message", account: "acct", threadId: "t4", thread: "dia", date: "2026-10-21" }, score: 0.6 },
-    { id: "message:e", text: "teach me ghostty tabs", metadata: { type: "message", account: "acct", threadId: "t5", thread: "ghostty", date: "2026-10-20" }, score: 0.2 },
+    { id: "message:e", text: "how do i use ghostty tabs", metadata: { type: "message", account: "acct", threadId: "t5", thread: "ghostty", date: "2026-10-20" }, score: 0.2 },
     { id: "message:f", text: "work account thing", metadata: { type: "message", account: "work", threadId: "t6", thread: "slack", date: "2026-10-20" }, score: 0.8 },
     { id: "memory:now", text: "shipping the notch this week", metadata: { type: "memory", account: "", section: "rightNow", date: "2026-10-24" }, score: 0.5 },
   ];
@@ -152,14 +151,9 @@ test("recall leaves out notes the prompt already lists, and labels tasks and ski
   expect(prompt).toContain("replayed by its name");
 });
 
-test("recall asks the index for this account's items and shared notes, never tools", () => {
-  expect(recallFilter("acct")).toEqual({
-    $and: [
-      { field: "type", condition: { $ne: "tool" } },
-      { field: "account", condition: { $in: ["acct", ""] } },
-    ],
-  });
-  expect(recallFilter(undefined)).toEqual({ field: "type", condition: { $ne: "tool" } });
+test("recall asks the index for this account's items and shared notes", () => {
+  expect(recallFilter("acct")).toEqual({ field: "account", condition: { $in: ["acct", ""] } });
+  expect(recallFilter(undefined)).toBeUndefined();
 });
 
 test("the clipboard reaches the model only when the request names it, never as an echo of the chat", () => {
@@ -178,7 +172,7 @@ test("the clipboard reaches the model only when the request names it, never as a
   expect(clipboardFor({ text: "note this", history: [], clipboardText: "call mom at 5" })).toBe("call mom at 5");
   // Typed questions stand on their own; whatever is on the clipboard stays out of them.
   expect(clipboardFor({ text: "open safari private browsing", history: [], clipboardText: "git fetch origin main" })).toBe("");
-  expect(clipboardFor({ text: "teach me how to use notes", history: [], clipboardText: "git fetch origin main" })).toBe("");
+  expect(clipboardFor({ text: "how do i use notes", history: [], clipboardText: "git fetch origin main" })).toBe("");
   expect(clipboardFor({ text: "explain this to me", history: [], clipboardText: "git fetch origin main" })).toBe("");
   expect(clipboardFor({ text: "fix this error", history: [], clipboardText: "git fetch origin main" })).toBe("");
   expect(clipboardFor({ text: "summarize this page", history: [], clipboardText: "git fetch origin main" })).toBe("");
@@ -228,26 +222,5 @@ test("a decision never carries the esc suffix or junk memories", () => {
   expect(decision.speak).toBe("Opening Safari.");
   expect(decision.memory).toEqual(["Jay studies at Purdue"]);
   expect(isDurableFact("Jay prefers Dia over Safari")).toBe(true);
-  expect(isDurableFact("the screenshot showed a terminal")).toBe(false);
-});
-
-test("every toolbox tool is indexed by what it's for, apart from memories", () => {
-  const docs = toolIndexDocs();
-  expect(docs.length).toBe(tools.length);
-  expect(new Set(docs.map((doc) => doc.id)).size).toBe(docs.length);
-  const zip = docs.find((doc) => doc.id === "tool:sevenzip");
-  expect(zip?.metadata).toMatchObject({ type: "tool", account: "", toolId: "sevenzip", title: "7-Zip" });
-  expect(zip?.text).toContain("paid archive apps");
-  expect(zip?.text).toContain("make a 7z of this folder");
-  // How to run a tool stays out of the index; that's for the prompt once it's picked.
-  expect(docs.every((doc) => !doc.text.includes("brew install"))).toBe(true);
-});
-
-test("tool suggestions only describe tools that aren't installed", () => {
-  const pick = tools.filter((tool) => ["ghostscript", "qpdf"].includes(tool.id));
-  const text = toolSuggestions(pick, ["qpdf"]);
-  expect(text).toContain("Ghostscript (not installed; install with: brew install ghostscript)");
-  expect(text).not.toContain("qpdf (not installed");
-  expect(toolSuggestions(pick, ["qpdf", "ghostscript"])).toBe("");
-  expect(toolSuggestions([], [])).toBe("");
+  expect(isDurableFact("the screenshot showed a window")).toBe(false);
 });

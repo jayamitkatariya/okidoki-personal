@@ -100,8 +100,6 @@ public final class AppleBridge: @unchecked Sendable {
         let appName: String
         switch service {
         case "calendar": appName = "Calendar"
-        case "reminders": appName = "Reminders"
-        case "notes": appName = "Notes"
         default: appName = service
         }
         let script = """
@@ -112,36 +110,6 @@ public final class AppleBridge: @unchecked Sendable {
         }
         """
         return try await runJXA(script, args: [appName])
-    }
-
-    // MARK: - Reminders
-
-    public func addReminder(title: String, due: Date?) async throws -> String {
-        let script = """
-        function run(argv) {
-            const app = Application("Reminders");
-            app.includeStandardAdditions = true;
-            const props = { name: argv[0] };
-            if (argv[1]) props.dueDate = new Date(argv[1]);
-            const reminder = app.Reminder(props);
-            app.reminders.push(reminder);
-            try { return reminder.id(); } catch (e) { return argv[0]; }
-        }
-        """
-        let iso = due.map { ISO8601DateFormatter().string(from: $0) } ?? ""
-        return try await runJXA(script, args: [title, iso])
-    }
-
-    public func deleteReminder(id: String) async throws {
-        let script = """
-        function run(argv) {
-            const app = Application("Reminders");
-            const matches = app.reminders.whose({ id: argv[0] })();
-            matches.forEach(r => { try { app.delete(r); } catch (e) {} });
-            return "ok";
-        }
-        """
-        _ = try await runJXA(script, args: [id])
     }
 
     // MARK: - Calendar
@@ -274,60 +242,5 @@ public final class AppleBridge: @unchecked Sendable {
         }
         """
         return try await runJXA(script, args: [String(startingHour), String(toWeekday), hour.map(String.init) ?? ""])
-    }
-
-    // MARK: - Notes
-
-    public func addNote(title: String, body: String) async throws -> String {
-        let script = """
-        function run(argv) {
-            const app = Application("Notes");
-            app.includeStandardAdditions = true;
-            const note = app.Note({ name: argv[0], body: argv[1] });
-            app.notes.push(note);
-            try { return note.id(); } catch (e) { return argv[0]; }
-        }
-        """
-        return try await runJXA(script, args: [title, body])
-    }
-
-    public func deleteNote(id: String) async throws {
-        let script = """
-        function run(argv) {
-            const app = Application("Notes");
-            const matches = app.notes.whose({ id: argv[0] })();
-            matches.forEach(n => { try { app.delete(n); } catch (e) {} });
-            return "ok";
-        }
-        """
-        _ = try await runJXA(script, args: [id])
-    }
-
-    // MARK: - Keynote batch export
-
-    public func exportKeynoteDecks(in folder: String, to outputFolder: String) async throws -> String {
-        let script = """
-        function run(argv) {
-            const app = Application("Keynote");
-            const fm = $.NSFileManager.defaultManager;
-            const files = fm.contentsOfDirectoryAtPathError(argv[0], null);
-            const paths = [];
-            for (let i = 0; i < files.count; i++) {
-                const name = ObjC.unwrap(files.objectAtIndex(i));
-                if (name.toLowerCase().endsWith(".key")) paths.push(argv[0] + "/" + name);
-            }
-            let exported = 0;
-            for (let i = 0; i < paths.length; i++) {
-                const doc = app.open($(paths[i]));
-                const base = paths[i].split("/").pop().replace(/\\.key$/i, "");
-                const out = $(argv[1] + "/" + base + ".pdf");
-                doc.export({ to: out, as: "PDF" });
-                doc.close({ saving: "no" });
-                exported++;
-            }
-            return String(exported);
-        }
-        """
-        return try await runJXA(script, args: [folder, outputFolder])
     }
 }

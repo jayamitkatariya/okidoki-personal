@@ -98,7 +98,6 @@ final class BrainSidecar: ObservableObject {
         env["PATH"] = ShellRunner.shared.pathEnvironment + ":" + (env["PATH"] ?? "")
         env["OKIDOKI_BRAIN_TOKEN"] = BrainConnection.token
         env["OKIDOKI_SUPPORT_DIR"] = AppPaths.support.path
-        if let askpass = AskPass.path { env["OKIDOKI_ASKPASS"] = askpass }
         for (name, value) in ServiceSecrets.brainEnvironment where !value.isEmpty {
             env[name] = value
         }
@@ -325,7 +324,6 @@ struct BrainNativeEvent: Encodable {
 struct BrainNativeContext: Encodable {
     var now: String
     var events: [BrainNativeEvent]
-    var reminders: [String]
     var frontWindow: String
     /// The browser tab in front, when the current app is a browser.
     var pageTitle: String?
@@ -342,7 +340,6 @@ struct BrainMessage: Encodable {
 struct BrainSettingsPayload: Encodable {
     var claudeModel: String
     var customInstructions: String
-    var selectedAgent: String
     var defaultInput: String
     var voiceEnabled: Bool
 }
@@ -374,7 +371,7 @@ struct MCPToolSummary: Codable, Equatable {
     var description: String
 }
 
-/// What the brain found when it connected to an MCP server; shown in the Toolbox.
+/// What the brain found when it connected to an MCP server; shown in Settings.
 struct MCPServerStatus: Codable, Equatable {
     var id: String
     var ok: Bool
@@ -416,12 +413,11 @@ struct BrainThinkPayload: Encodable {
     var documentText: String
     var documentName: String
     var clipboardText: String
-    var installedTools: [String]
     var nativeContext: BrainNativeContext
     var connectors: BrainConnectorsPayload
     /// The current account, so the brain's recall stays within it (plus shared memories).
     var accountId: String
-    /// act · teach · chat from the cursor card; left out for auto.
+    /// act · browser · chat from the cursor card; left out for auto.
     var mode: String?
 }
 
@@ -434,19 +430,6 @@ struct BrainMemorySyncPayload: Encodable {
     var threads: [MemoryIndexPayload.Thread]
     var runs: [MemoryIndexPayload.RunEntry]
     var skills: [MemoryIndexPayload.SkillEntry]
-}
-
-enum BrainExecEvent {
-    case output(String)
-    case step(index: Int, status: String, title: String)
-    case started
-    case done(summary: String, freedBytes: Int64?, code: Int32)
-    case error(String)
-}
-
-struct BrainExecResult {
-    var summary: String
-    var success: Bool
 }
 
 @MainActor
@@ -466,7 +449,7 @@ final class BrainClient {
 
     func think(text: String, request: BrainRequest, history: [BrainMessage], memory: [String],
                events: [BrainNativeEvent], settings: AppSettings, account: Account,
-               installedTools: [String], frontWindow: String,
+               frontWindow: String,
                connectors: BrainConnectorsPayload) async -> BrainThinkOutcome {
         // What they circled wins; otherwise the display shot from summon time gives the brain context.
         let circled = request.screenshotPNG
@@ -481,7 +464,6 @@ final class BrainClient {
             account: BrainAccountPayload(name: account.name, kind: account.kind.rawValue),
             settings: BrainSettingsPayload(claudeModel: settings.claudeModel,
                                            customInstructions: settings.customInstructions,
-                                           selectedAgent: settings.selectedAgent.rawValue,
                                            defaultInput: settings.defaultInput.rawValue,
                                            voiceEnabled: settings.voiceEnabled),
             memory: memory,
@@ -491,9 +473,8 @@ final class BrainClient {
             documentText: request.documentText,
             documentName: request.attachmentName,
             clipboardText: request.clipboardText,
-            installedTools: installedTools,
             nativeContext: BrainNativeContext(now: ISO8601DateFormatter().string(from: Date()),
-                                              events: events, reminders: [], frontWindow: frontWindow,
+                                              events: events, frontWindow: frontWindow,
                                               pageTitle: page?.pageTitle.isEmpty == false ? page?.pageTitle : nil,
                                               pageURL: page?.pageURL.isEmpty == false ? page?.pageURL : nil,
                                               screenshotIsDisplay: circled == nil && screenshot != nil),
@@ -533,81 +514,6 @@ final class BrainClient {
         }
     }
 
-    func execute(runID: String, kind: RunKind, commands: [String], agent: CodingAgentID?,
-                 prompt: String, workingDirectory: String?, extraArgs: String,
-                 onEvent: @MainActor @escaping (BrainExecEvent) -> Void) async -> BrainExecResult? {
-        let executeKind: String
-        switch kind {
-        case .coding: executeKind = "coding"
-        case .background: executeKind = "background"
-        default: executeKind = "terminal"
-        }
-        var body: [String: Any] = [
-            "runId": runID,
-            "kind": executeKind,
-            "commands": commands,
-            "workingDirectory": workingDirectory ?? NSHomeDirectory(),
-            "prompt": prompt,
-        ]
-        if let agent { body["agent"] = agent.rawValue }
-        if !extraArgs.isEmpty { body["extraArgs"] = extraArgs }
-        var request = URLRequest(url: baseURL.appendingPathComponent("execute"))
-        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
-        request.httpMethod = "POST"
-        request.timeoutInterval = 60 * 30
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue("text/event-stream", forHTTPHeaderField: "accept")
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (bytes, response) = try await URLSession.shared.bytes(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                return BrainExecResult(summary: "The execution service rejected this job. Review the plan and try again.", success: false)
-            }
-            var summary = ""
-            var freed: Int64?
-            var success = false
-            var failure: String?
-            var currentEvent = ""
-            for try await line in bytes.lines {
-                if line.hasPrefix("event:") {
-                    currentEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                } else if line.hasPrefix("data:") {
-                    let dataString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-                    guard let data = dataString.data(using: .utf8),
-                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                    switch currentEvent {
-                    case "output":
-                        if let text = json["text"] as? String { onEvent(.output(text)) }
-                    case "step":
-                        let index = json["index"] as? Int ?? 0
-                        let status = json["status"] as? String ?? "running"
-                        let title = json["title"] as? String ?? ""
-                        onEvent(.step(index: index, status: status, title: title))
-                    case "started":
-                        onEvent(.started)
-                    case "done":
-                        summary = json["summary"] as? String ?? "done."
-                        if let bytes = json["freedBytes"] as? Int64 { freed = bytes }
-                        else if let number = json["freedBytes"] as? NSNumber { freed = number.int64Value }
-                        success = true
-                        onEvent(.done(summary: summary, freedBytes: freed, code: Int32(json["code"] as? Int ?? 0)))
-                    case "cancelled":
-                        failure = "stopped by you"
-                    case "error":
-                        failure = json["message"] as? String ?? "the run failed"
-                        onEvent(.error(failure ?? "the run failed"))
-                    default:
-                        break
-                    }
-                }
-            }
-            if let failure { return BrainExecResult(summary: failure, success: false) }
-            return BrainExecResult(summary: success ? summary : "The connection ended before the result arrived. Check this run before trying again.", success: success)
-        } catch {
-            return BrainExecResult(summary: "Lost connection to the job. It may still be running. Stop it or check its output before trying again.", success: false)
-        }
-    }
-
     func stop(runID: String) {
         post("stop", body: ["runId": runID])
     }
@@ -631,163 +537,6 @@ final class BrainClient {
                            scripting: scripting, screenshotPNG: screenshotPNG, previousPNG: previousPNG,
                            referencePNG: referencePNG, zoom: zoom, canClick: canClick, canSee: canSee,
                            remote: remote, model: model).action
-    }
-
-    struct TeachStepEnvelope: Decodable {
-        var step: TeachLiveStep?
-        var usedModel: Bool?
-        var error: String?
-    }
-
-    /// One live tutoring step: the model looks at the screen and the log and points at the next thing.
-    func teachStep(_ request: TeachStepRequest) async -> TeachLiveStep? {
-        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("teach/step"))
-        urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
-        urlRequest.httpMethod = "POST"
-        urlRequest.timeoutInterval = 70
-        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = KeyStore.get("anthropic"), !key.isEmpty {
-            urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
-        }
-        do {
-            urlRequest.httpBody = try JSONEncoder().encode(request)
-            let (data, response) = try await URLSession.shared.data(for: urlRequest)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-            return try JSONDecoder().decode(TeachStepEnvelope.self, from: data).step
-        } catch {
-            return nil
-        }
-    }
-
-    /// Zoomed second look at one control. `found == false` keeps the first guess.
-    func teachRefine(_ request: TeachRefineRequest) async -> TeachRefineResult? {
-        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("teach/refine"))
-        urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
-        urlRequest.httpMethod = "POST"
-        urlRequest.timeoutInterval = 30
-        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = KeyStore.get("anthropic"), !key.isEmpty {
-            urlRequest.setValue(key, forHTTPHeaderField: "x-anthropic-key")
-        }
-        do {
-            urlRequest.httpBody = try JSONEncoder().encode(request)
-            let (data, response) = try await URLSession.shared.data(for: urlRequest)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-            return try JSONDecoder().decode(TeachRefineResult.self, from: data)
-        } catch {
-            return nil
-        }
-    }
-
-    struct ConceptFollowEnvelope: Decodable {
-        var follow: ConceptFollowUp?
-        var error: String?
-    }
-
-    /// What the streaming concept endpoint reports, in order: maybe an intro, then a lesson or an error.
-    enum ConceptStreamEvent {
-        case intro(title: String, intro: String)
-        case lesson(ConceptLesson)
-        case error(String)
-    }
-
-    private struct ConceptStreamLine: Decodable {
-        var type: String
-        var title: String?
-        var intro: String?
-        var lesson: ConceptLesson?
-        var error: String?
-    }
-
-    /// A narrated 2D/3D lesson for the stage; the sidecar also fetches real molecule data and a
-    /// photo card. The title and intro arrive as soon as the model has written them, so narration
-    /// can start while the scene is still being drawn.
-    func teachConceptStream(topic: String, context: String, pageTitle: String?, pageURL: String?,
-                            screenshotBase64: String?, imageWidth: Double, imageHeight: Double,
-                            language: String?, model: String) -> AsyncStream<ConceptStreamEvent> {
-        var body: [String: Any] = ["topic": topic, "context": context, "imageWidth": imageWidth, "imageHeight": imageHeight, "model": model]
-        if let pageTitle { body["pageTitle"] = pageTitle }
-        if let pageURL { body["pageURL"] = pageURL }
-        if let screenshotBase64 { body["screenshotBase64"] = screenshotBase64 }
-        if let language { body["language"] = language }
-        var request = URLRequest(url: baseURL.appendingPathComponent("teach/concept/stream"))
-        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
-        request.httpMethod = "POST"
-        request.timeoutInterval = 130
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = KeyStore.get("anthropic"), !key.isEmpty {
-            request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
-        }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return AsyncStream { continuation in
-            let task = Task {
-                var delivered = false
-                do {
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                        continuation.yield(.error("the brain didn't answer"))
-                        continuation.finish()
-                        return
-                    }
-                    for try await line in bytes.lines {
-                        guard let data = line.data(using: .utf8),
-                              let event = try? JSONDecoder().decode(ConceptStreamLine.self, from: data) else { continue }
-                        switch event.type {
-                        case "intro":
-                            continuation.yield(.intro(title: event.title ?? "", intro: event.intro ?? ""))
-                        case "lesson":
-                            if let lesson = event.lesson { continuation.yield(.lesson(lesson)); delivered = true }
-                        case "error":
-                            continuation.yield(.error(event.error ?? "couldn't build the lesson")); delivered = true
-                        default:
-                            break
-                        }
-                    }
-                } catch {
-                    if !delivered { continuation.yield(.error("the brain didn't answer")) }
-                }
-                if !delivered { continuation.yield(.error("the lesson never arrived")) }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    func teachConceptFollow(topic: String, question: String, partID: String?, partName: String?,
-                            sceneSummary: String, language: String?, model: String) async -> ConceptFollowUp? {
-        var body: [String: Any] = ["topic": topic, "question": question, "sceneSummary": sceneSummary, "model": model]
-        if let partID { body["partId"] = partID }
-        if let partName { body["partName"] = partName }
-        if let language { body["language"] = language }
-        guard let data = await postJSON("teach/concept/follow", body: body, timeout: 70) else { return nil }
-        return (try? JSONDecoder().decode(ConceptFollowEnvelope.self, from: data))?.follow
-    }
-
-    private func postJSON(_ path: String, body: [String: Any], timeout: TimeInterval) async -> Data? {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let key = KeyStore.get("anthropic"), !key.isEmpty {
-            request.setValue(key, forHTTPHeaderField: "x-anthropic-key")
-        }
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-            return data
-        } catch {
-            return nil
-        }
-    }
-
-    func pause(runID: String) {
-        post("pause", body: ["runId": runID])
-    }
-
-    func resume(runID: String) {
-        post("resume", body: ["runId": runID])
     }
 
     private func post(_ path: String, body: [String: Any]) {

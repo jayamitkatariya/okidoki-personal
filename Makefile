@@ -1,4 +1,4 @@
-.PHONY: build test verify-terminal verify-memory app run demo install clean
+.PHONY: build test verify verify-memory app run demo install clean
 
 build:
 	swift build
@@ -6,10 +6,11 @@ build:
 test:
 	swift test
 
-verify-terminal:
-	cd brain && bun run typecheck && bun test tests/terminal.test.ts tests/http.test.ts tests/connectors.test.ts
-	cd web && bun test && bun run build
-	swift test --filter 'TerminalActionsTests|ToolboxTests'
+# Everything that doesn't need a real screen: brain, panel and the Swift unit tests.
+verify:
+	cd brain && bun run typecheck && bun test tests
+	cd web && bunx tsc --noEmit -p . && bun test tests && bun run build
+	swift test --skip SkillReplayRealAppTests
 
 # Memory end to end: the brain's index and recall with an in-memory engine. OKIDOKI_LIVE_MOSS=1 adds the real Moss engine.
 verify-memory:

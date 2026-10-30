@@ -1,10 +1,8 @@
 import { useMemo } from "react";
 import { useDashboard } from "../store";
 import { cx, futureTime, relativeTime, scheduleLabel, timeOfDay, todayLabel } from "../lib";
-import type { Note, Reminder, Run, RunKind, Settings } from "../types";
+import type { Run, RunKind, Settings } from "../types";
 import { Button, KeyHint, PixelIcon, Progress, RiskBadge, StatusBadge } from "../components/ui";
-import { when } from "./RemindersPage";
-import { focusNote } from "./NotesPage";
 import type { Page } from "../components/Layout";
 import { PixelWordmark } from "../components/PixelWordmark";
 
@@ -21,10 +19,8 @@ export const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
   quick_action: "bolt",
   computer_use: "hand",
-  terminal: "terminal",
-  coding: "code",
+  browser: "globe",
   background: "runs",
-  teach: "wand",
   watch: "eye",
   borrow: "hand",
   routine: "clock",
@@ -35,10 +31,8 @@ const KIND_LABEL: Record<RunKind, string> = {
   answer: "answers",
   quick_action: "quick actions",
   computer_use: "screen work",
-  terminal: "terminal work",
-  coding: "coding",
+  browser: "browser work",
   background: "background jobs",
-  teach: "lessons",
   watch: "watching",
   borrow: "screen access",
   routine: "routines",
@@ -81,10 +75,6 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
   );
   const routines = (state.routines ?? []).filter((routine) => routine.enabled);
   const skills = state.skills ?? [];
-  const upcoming = useMemo(() => upcomingReminders(state.reminders ?? []), [state.reminders]);
-  const overdue = upcoming.some((reminder) => reminder.dueAt && +new Date(reminder.dueAt) < Date.now());
-  const dueSoon = upcoming.filter((reminder) => reminder.dueAt && +new Date(reminder.dueAt) < Date.now() + 24 * 60 * 60 * 1000);
-  const recentNotes = useMemo(() => newestNotes(state.notes ?? []), [state.notes]);
   const firstWord = account.name.split(" ")[0] || "there";
   const firstName = firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
 
@@ -141,7 +131,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
             {[
               { icon: "folder", label: "Tidy my Downloads", prompt: "Help me tidy my Downloads folder" },
               { icon: "note", label: "Summarize a document", prompt: "Summarize a document" },
-              { icon: "wand", label: "Teach me something", prompt: "Teach me something new" },
+              { icon: "globe", label: "Look something up", prompt: "Look something up on the web" },
             ].map((suggestion) => (
               <button key={suggestion.label} onClick={() => openAsk(suggestion.prompt)}>
                 <PixelIcon name={suggestion.icon} size={13} />
@@ -185,7 +175,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
             <h2>Needs your attention</h2>
             {needsCount() ? <span className="tile-count is-hot">{needsCount()}</span> : null}
             <button className="tile-link" onClick={() => go("runs")}>
-              All runs <PixelIcon name="chevron" size={14} />
+              Computer <PixelIcon name="chevron" size={14} />
             </button>
           </header>
           {needsCount() ? (
@@ -249,7 +239,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
               <h2>In progress</h2>
               {live.length ? <span className="tile-count">{live.length}</span> : null}
               <button className="tile-link" onClick={() => go("runs")}>
-                Runs <PixelIcon name="chevron" size={14} />
+                Computer <PixelIcon name="chevron" size={14} />
               </button>
             </header>
             {live.length ? (
@@ -276,7 +266,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           </section>
         ) : null}
 
-        <section className="tile span-4 reveal reveal-3">
+        <section className="tile span-7 reveal reveal-3">
           <header className="tile-head">
             <span className="tile-icon tone-rose">
               <PixelIcon name="record" size={15} />
@@ -340,99 +330,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           )}
         </section>
 
-        <section className="tile span-4 reveal reveal-3">
-          <header className="tile-head">
-            <span className="tile-icon tone-amber">
-              <PixelIcon name="bell" size={15} />
-            </span>
-            <h2>Up next</h2>
-            {dueSoon.length ? <span className={cx("tile-count", overdue && "is-hot")}>{dueSoon.length}</span> : null}
-            <button className="tile-link" onClick={() => go("reminders")}>
-              {upcoming.length ? "Reminders" : "Add one"} <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {upcoming.length ? (
-            <div className="rows">
-              {upcoming.slice(0, 4).map((reminder) => (
-                <div className="row" key={reminder.id}>
-                  <button
-                    className="icon-btn"
-                    aria-label={`Mark ${reminder.title} done`}
-                    title="Done"
-                    onClick={() => {
-                      invoke("completeReminder", { id: reminder.id, done: true });
-                      notify("Done", reminder.title, "info");
-                    }}
-                  >
-                    <PixelIcon name="check" size={14} />
-                  </button>
-                  <span className="row-copy">
-                    <strong className="sentence">{reminder.title}</strong>
-                    <em>
-                      {when(reminder)}
-                      {reminder.skillID ? " · replays a skill" : ""}
-                    </em>
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <span className="tile-empty-icon">
-                <PixelIcon name="bell" size={16} />
-              </span>
-              <strong>Nothing coming up</strong>
-              Say “remind me to … at 5pm” at the cursor.
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-4 reveal reveal-3">
-          <header className="tile-head">
-            <span className="tile-icon tone-sky">
-              <PixelIcon name="note" size={15} />
-            </span>
-            <h2>Notes</h2>
-            <button className="tile-link" onClick={() => go("notes")}>
-              {recentNotes.length ? "All notes" : "Write one"} <PixelIcon name="chevron" size={14} />
-            </button>
-          </header>
-          {recentNotes.length ? (
-            <div className="rows">
-              {recentNotes.slice(0, 4).map((note) => (
-                <button
-                  className="row"
-                  key={note.id}
-                  onClick={() => {
-                    focusNote(note.id);
-                    go("notes");
-                  }}
-                >
-                  <span className="kind-icon small">
-                    <PixelIcon name="note" size={14} />
-                  </span>
-                  <span className="row-copy">
-                    <strong className="sentence">{note.title || "untitled"}</strong>
-                    <em>
-                      {note.tags.length ? `${note.tags.map((tag) => `#${tag}`).join(" ")} · ` : ""}
-                      {relativeTime(note.updatedAt)}
-                    </em>
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="tile-empty">
-              <span className="tile-empty-icon">
-                <PixelIcon name="note" size={16} />
-              </span>
-              <strong>No notes yet</strong>
-              Type “note: …” at the cursor, or write one here.
-            </div>
-          )}
-        </section>
-
-        <section className="tile span-4 reveal reveal-4">
+        <section className="tile span-5 reveal reveal-4">
           <header className="tile-head">
             <span className="tile-icon tone-lilac">
               <PixelIcon name="calendar" size={15} />
@@ -445,7 +343,7 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
           <WeekChart runs={runs} />
         </section>
 
-        <section className="tile span-8 reveal reveal-4">
+        <section className="tile span-12 reveal reveal-4">
           <header className="tile-head">
             <span className="tile-icon tone-sky">
               <PixelIcon name="clock" size={15} />
@@ -530,17 +428,6 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
       </footer>
     </div>
   );
-}
-
-/** Open reminders, soonest first; ones with no time go last. */
-function upcomingReminders(reminders: Reminder[]): Reminder[] {
-  const at = (reminder: Reminder) => (reminder.dueAt ? +new Date(reminder.dueAt) : Number.POSITIVE_INFINITY);
-  return reminders.filter((reminder) => !reminder.done).sort((a, b) => at(a) - at(b));
-}
-
-/** Pinned notes first, then the most recently edited. */
-function newestNotes(notes: Note[]): Note[] {
-  return [...notes].sort((a, b) => Number(b.pinned) - Number(a.pinned) || +new Date(b.updatedAt) - +new Date(a.updatedAt));
 }
 
 /** Seven days of activity, oldest first, with today picked out. */

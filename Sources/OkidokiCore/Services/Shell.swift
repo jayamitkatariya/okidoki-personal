@@ -247,17 +247,6 @@ public final class ShellRunner: @unchecked Sendable {
         }
         return nil
     }
-
-    public static func toolInstalled(_ tool: ToolSpec) -> Bool {
-        let candidates = tool.checkCommand.split(separator: "||").map { $0.trimmingCharacters(in: .whitespaces) }
-        return candidates.contains { part in
-            let pieces = part.split(separator: " ").map(String.init)
-            if pieces.first == "command", pieces.count > 2, pieces[1] == "-v" {
-                return which(pieces[2]) != nil
-            }
-            return which(tool.command) != nil
-        }
-    }
 }
 
 /// A tiny helper `sudo` runs when a job needs the Mac login password. It shows a native
@@ -291,27 +280,6 @@ public enum AskPass {
         } catch {
             return nil
         }
-    }
-}
-
-/// Opens a job in a real Terminal window for tools that need one (chat UIs, editors,
-/// full-screen tools). Terminal runs `.command` files directly, so no automation permission is needed.
-public enum TerminalLauncher {
-    public static func open(title: String, commands: [String], workingDirectory: String) async throws -> URL {
-        let folder = AskPass.directory.appendingPathComponent("launch", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let slug = title.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        let url = folder.appendingPathComponent((slug.isEmpty ? "job" : slug) + ".command")
-        try TerminalActions.launcherScript(title: title, commands: commands, workingDirectory: workingDirectory)
-            .write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
-        let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
-            ?? URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        _ = try await NSWorkspace.shared.open([url], withApplicationAt: terminal, configuration: configuration)
-        return url
     }
 }
 

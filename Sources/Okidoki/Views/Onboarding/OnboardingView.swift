@@ -175,10 +175,6 @@ struct OnboardingView: View {
             fieldLabel("Apple apps").padding(.top, 20)
             VStack(spacing: 0) {
                 appleRow("calendar", symbol: "calendar", title: "Calendar", connected: store.settings.appleCalendar)
-                divider
-                appleRow("reminders", symbol: "checklist", title: "Reminders", connected: store.settings.appleReminders)
-                divider
-                appleRow("notes", symbol: "note.text", title: "Notes", connected: store.settings.appleNotes)
             }
             .groupBox()
         }

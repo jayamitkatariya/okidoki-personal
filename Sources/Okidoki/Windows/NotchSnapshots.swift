@@ -81,13 +81,13 @@ enum NotchSnapshots {
             configure(m)
             return m
         }
-        let approval = NotchRunItem(id: "a", title: "clear 4.2 GB of caches", kind: .terminal, status: .waiting,
-                                    step: "", summary: "Removes Xcode DerivedData and old simulator runtimes.",
-                                    risk: .medium, commands: ["rm -rf ~/Library/Developer/Xcode/DerivedData"])
+        let approval = NotchRunItem(id: "a", title: "pay the electricity bill", kind: .browser, status: .waiting,
+                                    step: "", summary: "Logs in to the utility site with your vault login and pays $82.40.",
+                                    risk: .medium, commands: [])
         let live = NotchRunItem(id: "l", title: "message dad on whatsapp", kind: .computerUse, status: .running,
                                 step: "typing the message", summary: "", risk: .low, commands: [])
-        let live2 = NotchRunItem(id: "l2", title: "summarize the q3 report", kind: .background, status: .running,
-                                 step: "reading page 4 of 12", summary: "", risk: .low, commands: [])
+        let live2 = NotchRunItem(id: "l2", title: "replay · file the invoice", kind: .watch, status: .running,
+                                 step: "step 4 of 12", summary: "", risk: .low, commands: [])
         func toast(_ title: String, _ detail: String) -> NotchToast {
             NotchToast(title: title, detail: detail, kind: .success, editLabel: "details", expiresAt: .distantFuture)
         }
@@ -122,9 +122,9 @@ enum NotchSnapshots {
                 $0.caption = String(repeating: "Opening WhatsApp and finding Dad's chat, then typing the message you asked for and pressing return. ", count: 7)
             }),
             ("17-compact-long-approval", model {
-                $0.waiting = [NotchRunItem(id: "a2", title: "install ffmpeg, convert every .mov in ~/Desktop/recordings to .mp4 and delete the originals", kind: .terminal, status: .waiting,
-                                           step: "", summary: "Installs ffmpeg with Homebrew, converts 14 recordings and removes the originals once each conversion succeeds.",
-                                           risk: .high, commands: ["brew install ffmpeg"])]
+                $0.waiting = [NotchRunItem(id: "a2", title: "open every unread invoice in the billing portal, download each pdf into the vault and mark them paid", kind: .browser, status: .waiting,
+                                           step: "", summary: "Signs in with your vault login, downloads 14 invoices into Vault/Invoices and marks each one paid once its file is saved.",
+                                           risk: .high, commands: [])]
             }),
         ]
     }

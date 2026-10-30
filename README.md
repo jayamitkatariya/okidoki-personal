@@ -6,10 +6,9 @@ okidoki lives in your notch. Shake your pointer, and it's there:
 
 - **Replay** — say "watch me", do the task once, and okidoki records every click, keystroke and scroll. Replay it any time, with different values (`{{amount}}`, `{{name}}`), on a schedule, or from another agent. It re-finds each control by its accessibility label, then by sight if the window moved, and asks a model only for the one step that broke.
 - **Act** — ask for a result ("export this as PDF", "send mom a message on WhatsApp") and it drives the Mac itself, narrating as it goes. Esc takes control back instantly.
-- **Teach** — ask how, and it teaches you on your own screen, one step at a time, with marks on the real controls.
-- **Chat** — ask anything; it knows what's on screen, your notes and your memory.
-- **Terminal** — plain English in, reviewed commands out. It installs what's missing and fixes what fails.
-- **Notes, Reminders, Memory, Vault** — all local. The vault is just a folder on your Desktop.
+- **Browser** — web tasks run in okidoki's own browser, which reads the page directly instead of guessing from pixels.
+- **Chat** — ask anything; it knows what's on screen and your memory.
+- **Memory, Vault** — all local. The vault is just a folder on your Desktop.
 
 Everything lives on your Mac. Bring your own Anthropic key; nothing ships with the app.
 
@@ -40,7 +39,7 @@ Skills are files you can share: the share icon on a skill saves a `.okiskill`
 ## Use it from Claude Code, Cursor and other agents
 
 okidoki is also an MCP server, so your coding agent can list and replay your skills, search the
-vault, and add notes and reminders:
+and search the vault:
 
 ```bash
 claude mcp add okidoki -- bun ~/path/to/okidoki-personal/mcp/okidoki-mcp.ts
@@ -52,19 +51,17 @@ Replays still ask for your okay in the notch whenever okidoki would ask anyway.
 
 | Type | What happens |
 |---|---|
-| anything | the brain decides: answer, act, teach or run a terminal job |
-| pick **Act / Teach / Chat** on the chip | forces that mode |
+| anything | the brain decides: answer, act on the Mac, or work in the browser |
+| pick **Act / Browser / Chat** on the chip | forces that mode |
 | `watch me …`, `replay …`, `again`, `my skills` | recordings and replays, instant, no key needed |
-| `note: …` | straight onto the Notes page |
-| `remind me to … at 5pm` / `every weekday at 9` | a reminder okidoki fires itself |
 | `add the W-9 to the vault` | finds the PDF, downloads it into the vault folder |
 
 ## How it works
 
 | Part | Where | What |
 |---|---|---|
-| Mac app | `Sources/` (Swift, SwiftUI, AppKit) | notch, overlays, recorder and replayer, computer use, teach stage, local store |
-| Brain | `brain/` (TypeScript, Bun, local HTTP on 127.0.0.1) | routing, Claude calls, terminal planning, MCP client, memory index |
+| Mac app | `Sources/` (Swift, SwiftUI, AppKit) | notch, overlays, recorder and replayer, computer use, browser, local store |
+| Brain | `brain/` (TypeScript, Bun, local HTTP on 127.0.0.1) | routing, Claude calls, computer use and browser loops, MCP client, memory index |
 | Control panel | `web/` (React, Vite) | the dashboard, bundled into the app |
 | MCP server | `mcp/okidoki-mcp.ts` | okidoki for other agents, through the app's local control endpoint |
 

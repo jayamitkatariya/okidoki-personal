@@ -148,14 +148,9 @@ export function AppShell({
             ? [`${live} working`, ""]
             : ["Ready when you are", ""];
 
-  // reminders due by the end of today, so the sidebar says when one is coming up
-  const endOfToday = new Date();
-  endOfToday.setHours(23, 59, 59, 999);
-  const dueToday = (state.reminders ?? []).filter((reminder) => !reminder.done && reminder.dueAt && new Date(reminder.dueAt) <= endOfToday).length;
   const runBadge = (id: Page): number => {
     if (id === "home") return waiting;
     if (id === "runs") return live;
-    if (id === "reminders") return dueToday;
     return 0;
   };
   // Live is empty unless okidoki is driving, so its row only shows up then (or while you're on it)
@@ -477,9 +472,9 @@ function CommandPalette({
   const examples = [
     "What's on my screen?",
     "Summarize the PDF on my desktop",
-    "Teach me auto layout in Figma",
+    "Find the cheapest flight to Chicago",
     "My Mac is out of space",
-    "Remind me to call Mom at 6",
+    "Clean up my desktop",
   ];
 
   useEffect(() => {
@@ -595,7 +590,7 @@ function CommandPalette({
                     <PixelIcon name="spark" size={17} />
                     <span>
                       <strong>Ask okidoki “{query.trim()}”</strong>
-                      <em>Answer, do, or teach</em>
+                      <em>Answer or do</em>
                     </span>
                   </button>
                 ) : null}

@@ -26,11 +26,18 @@ describe("sidebar navigation", () => {
   });
 
   test("daily tools come first and Settings is pinned rather than in a group", () => {
-    expect(NAV[0].items.map((item) => item.id)).toEqual(["home", "skills", "notes", "reminders", "terminal"]);
+    expect(NAV[0].items.map((item) => item.id)).toEqual(["home", "browser", "runs", "skills"]);
+    expect(NAV.map((group) => group.items.map((item) => item.id))).toEqual([
+      ["home", "browser", "runs", "skills"],
+      ["live", "history"],
+      ["memory", "vault"],
+    ]);
     expect(NAV.flatMap((group) => group.items).some((item) => item.id === "settings")).toBe(false);
     expect(SETTINGS_ITEM.id).toBe("settings");
     expect(groupOf("settings")).toBe("setup");
     expect(groupOf("vault")).toBe("library");
+    expect(groupOf("runs")).toBe("workspace");
+    expect(SECTION_META.runs.title).toBe("Computer");
   });
 
   test("every page appears once, and only Live waits for something to show", () => {

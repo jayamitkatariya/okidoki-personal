@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
-import { cx, relativeTime } from "../lib";
-import type { AgentStatus, CodingAgentID, KeyProvider, PrivateMacPhase, PrivateMacState, ServicesState, Toast } from "../types";
-import { SETTINGS_JUMP_EVENT, type Page } from "../nav";
-import { Button, ConfirmModal, IconButton, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
+import { copyText, cx, relativeTime } from "../lib";
+import { joinCommand, parseServerJSON, serversFromConfig, splitCommand } from "../mcp";
+import type { Connector, KeyProvider, McpServer, PrivateMacPhase, PrivateMacState, ServicesState, Toast } from "../types";
+import { SETTINGS_JUMP_EVENT } from "../nav";
+import { Button, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
   { id: "sarah", name: "Sarah", blurb: "Soothing and calm · American" },
@@ -22,8 +23,16 @@ const PERMISSIONS = [
   { id: "screen", title: "Screen recording", icon: "screen", blurb: "See what you're looking at when you ask" },
   { id: "microphone", title: "Microphone", icon: "mic", blurb: "Talk instead of type" },
   { id: "accessibility", title: "Accessibility", icon: "cursor", blurb: "Click and type when you lend the screen" },
-  { id: "automation", title: "Automation", icon: "bolt", blurb: "Reminders, Calendar and Notes without opening them" },
+  { id: "automation", title: "Automation", icon: "bolt", blurb: "Calendar and other apps without opening them" },
 ];
+
+const CONNECTOR_ICON: Record<string, string> = {
+  calendar: "calendar",
+  apify: "search",
+  mcp: "link",
+};
+
+const HIDDEN_CONNECTORS = new Set(["notes", "reminders"]);
 
 // Brand-green family first; the setting key stays cursorGlowHex / drawingColorHex.
 const COLORS = ["44E45E", "1FB57A", "3DDC97", "9BE8C6", "0B8A5E", "B8F26B", "8FB7FF", "F7F2E9"];
@@ -34,7 +43,9 @@ const SECTIONS = [
   { id: "instructions", label: "Instructions", icon: "pencil" },
   { id: "voice", label: "Voice & input", icon: "mic" },
   { id: "safety", label: "Safety", icon: "hand" },
-  { id: "agents", label: "Agents", icon: "code" },
+  { id: "connectors", label: "Connectors", icon: "link" },
+  { id: "mcp", label: "MCP servers", icon: "grid" },
+  { id: "other-agents", label: "Use from other agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
@@ -42,7 +53,7 @@ const SECTIONS = [
   { id: "advanced", label: "Advanced", icon: "gear" },
 ];
 
-export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
+export function SettingsPage() {
   const { state, settings, account, updateSettings, invoke, notify, native } = useDashboard();
   const [instructions, setInstructions] = useState(settings.customInstructions);
   const [name, setName] = useState(account.name);
@@ -110,6 +121,10 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
     if (settings[list].includes(value.trim())) return;
     updateSettings({ [list]: [...settings[list], value.trim()] } as never);
   };
+
+  // MCP gets its own section; Apple Notes and Reminders aren't offered any more.
+  const connectors = state.connectors.filter((connector) => connector.id !== "mcp" && !HIDDEN_CONNECTORS.has(connector.id));
+  const mcpConnector = state.connectors.find((connector) => connector.id === "mcp");
 
   const profileDirty = name !== account.name || email !== account.email;
   const instructionsDirty = instructions !== settings.customInstructions;
@@ -300,10 +315,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                 draft={appDraft}
                 setDraft={setAppDraft}
                 items={settings.blockedApps}
-                labelFor={(item) => {
-                  const tool = state.tools.find((candidate) => candidate.command.toLowerCase() === item.trim().toLowerCase());
-                  return tool && tool.name.toLowerCase() !== item.toLowerCase() ? `${tool.name} (${item})` : item;
-                }}
                 empty="Nothing blocked."
                 onAdd={() => {
                   addToList("blockedApps", appDraft);
@@ -341,17 +352,34 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="agents" title="Agents" description="Coding agents on this Mac. okidoki reads each CLI's own login files to see who's signed in; nothing is copied and the Keychain is never opened.">
-            <AgentsSettings
-              agents={state.agents}
-              selected={settings.selectedAgent}
-              autoConnect={settings.autoConnectAgents ?? true}
-              native={native}
-              onSelect={(id) => updateSettings({ selectedAgent: id })}
-              onAutoConnect={(value) => updateSettings({ autoConnectAgents: value })}
-              invoke={invoke}
-              notify={notify}
-            />
+          <SettingsSection id="connectors" title="Connectors" description="Services okidoki can reach for you. Each one asks before it changes anything.">
+            <div className="pref-group">
+              {connectors.map((connector) => (
+                <ConnectorRow key={connector.id} connector={connector} />
+              ))}
+              {!connectors.length ? (
+                <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
+                  <span className="pref-hint">Mac only</span>
+                </PrefRow>
+              ) : null}
+            </div>
+          </SettingsSection>
+
+          <SettingsSection id="mcp" title="MCP servers" description="Bring your own tools. okidoki lists what each server offers and asks before calling any of them.">
+            <div className="pref-group">
+              {mcpConnector ? (
+                <ConnectorRow connector={mcpConnector} />
+              ) : (
+                <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
+                  <span className="pref-hint">Mac only</span>
+                </PrefRow>
+              )}
+              {mcpConnector?.enabled ? <McpServers /> : null}
+            </div>
+          </SettingsSection>
+
+          <SettingsSection id="other-agents" title="Use from other agents" description="okidoki runs its own MCP server, so other agents can reach it on this Mac.">
+            <UseFromAgents />
           </SettingsSection>
 
           <SettingsSection id="private-mac" title="Private Mac" description="Give okidoki its own macOS, in a window. Runs that drive apps happen there while you keep working here.">
@@ -467,19 +495,6 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                   Open
                 </Button>
               </PrefRow>
-              <PrefRow title="Installed tools" detail="Check your PATH for new tools">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  icon="refresh"
-                  onClick={() => {
-                    invoke("refreshTools");
-                    notify("Checking tools", "Reading your PATH", "info");
-                  }}
-                >
-                  Rescan
-                </Button>
-              </PrefRow>
             </div>
 
             <div className="pref-group">
@@ -501,8 +516,8 @@ export function SettingsPage({ go }: { go?: (page: Page) => void } = {}) {
                   {mcpLabel(state.services)}
                 </span>
                 {state.services?.mcp.enabled && state.services.mcp.servers ? (
-                  <Button variant="secondary" size="sm" icon="grid" onClick={() => go?.("toolbox")}>
-                    Toolbox
+                  <Button variant="secondary" size="sm" icon="grid" onClick={() => jump("mcp")}>
+                    Servers
                   </Button>
                 ) : null}
               </PrefRow>
@@ -577,8 +592,8 @@ function mcpLabel(services: ServicesState | null | undefined): string {
 }
 
 function mcpDetail(services: ServicesState | null | undefined): string {
-  if (!services?.mcp.enabled) return "Turn on MCP in the Toolbox to bring your own tools in.";
-  if (!services.mcp.servers) return "No servers added yet. Add one in the Toolbox.";
+  if (!services?.mcp.enabled) return "Turn on MCP above to bring your own tools in.";
+  if (!services.mcp.servers) return "No servers added yet. Add one under MCP servers.";
   const checked = services.mcp.checkedAt ? `Checked ${relativeTime(services.mcp.checkedAt)}; rechecked every minute while this is open.` : "Not checked yet.";
   return services.mcp.connected < services.mcp.servers ? `Some servers aren't answering. ${checked}` : checked;
 }
@@ -646,113 +661,6 @@ function formatBytes(bytes: number): string {
   if (!bytes) return "0 MB";
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
   return `${Math.round(bytes / 1e6)} MB`;
-}
-
-function agentDetail(agent: AgentStatus): string {
-  const ready = agent.installed && agent.signedIn;
-  const who = agent.account ? `Signed in as ${agent.account}` : agent.providers.length ? `Signed in to ${agent.providers.join(", ")}` : "Signed in";
-  if (ready) return agent.source ? `${who} · ${agent.source}` : who;
-  if (agent.installed) return `Installed, not signed in · run ${agent.loginHint}`;
-  if (agent.signedIn) return `${who}, but the CLI isn't on your PATH · ${agent.installHint}`;
-  return `Not installed · ${agent.installHint}`;
-}
-
-function AgentsSettings({
-  agents,
-  selected,
-  autoConnect,
-  native,
-  onSelect,
-  onAutoConnect,
-  invoke,
-  notify,
-}: {
-  agents: AgentStatus[] | undefined;
-  selected: CodingAgentID;
-  autoConnect: boolean;
-  native: boolean;
-  onSelect: (id: CodingAgentID) => void;
-  onAutoConnect: (value: boolean) => void;
-  invoke: (type: string, payload?: Record<string, unknown>) => void;
-  notify: (title: string, detail?: string, kind?: Toast["kind"]) => void;
-}) {
-  if (!native || !agents) {
-    return (
-      <div className="pref-group">
-        <PrefRow title="Default coding agent" detail="Open this in the okidoki app on your Mac to see which agents are installed and signed in.">
-          <span className="pref-status">{selected}</span>
-        </PrefRow>
-      </div>
-    );
-  }
-
-  const ready = agents.filter((agent) => agent.installed && agent.signedIn);
-  return (
-    <>
-      <div className="pref-group">
-        <PrefRow
-          title="Auto-connect"
-          detail={autoConnect ? "If the default agent is missing or logged out, okidoki switches to one that's ready" : "The default agent stays put even when it can't answer"}
-        >
-          <Switch label="Auto-connect agents" checked={autoConnect} onChange={onAutoConnect} />
-        </PrefRow>
-        <PrefRow title="Detected" detail={ready.length ? `${ready.length} of ${agents.length} ready: ${ready.map((agent) => agent.name).join(", ")}` : "No agent is both installed and signed in yet"}>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon="refresh"
-            onClick={() => {
-              invoke("refreshTools");
-              notify("Checking agents", "Reading your PATH and each CLI's login files", "info");
-            }}
-          >
-            Rescan
-          </Button>
-        </PrefRow>
-      </div>
-
-      <div className="pref-group">
-        {agents.map((agent) => {
-          const isReady = agent.installed && agent.signedIn;
-          const isDefault = agent.id === selected;
-          return (
-            <div className="pref-row" key={agent.id}>
-              <span className={cx("kind-icon small", !isReady && "is-warn")}>
-                <PixelIcon name="code" size={14} />
-              </span>
-              <span className="pref-copy">
-                <strong>{agent.name}</strong>
-                <em>{agentDetail(agent)}</em>
-              </span>
-              <span className="pref-control">
-                {isDefault ? (
-                  <span className={cx("pref-status", isReady ? "is-on" : "is-warn")}>
-                    <PixelIcon name="check" size={13} /> Default
-                  </span>
-                ) : isReady ? (
-                  <>
-                    <span className="pref-status is-on">Ready</span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        onSelect(agent.id);
-                        notify("Default agent", agent.name);
-                      }}
-                    >
-                      Use
-                    </Button>
-                  </>
-                ) : (
-                  <span className="pref-status is-warn">{agent.installed ? "Logged out" : agent.signedIn ? "Not on PATH" : "Not installed"}</span>
-                )}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </>
-  );
 }
 
 function PrivateMacSettings({
@@ -931,6 +839,339 @@ function PrivateMacSettings({
         </div>
       ) : null}
     </>
+  );
+}
+
+function ConnectorRow({ connector }: { connector: Connector }) {
+  const { state, invoke, notify } = useDashboard();
+  // Apify can't do anything without a key, so the switch asks for one first.
+  const needsKey = connector.id === "apify" && !state.keys.apify;
+  const toggle = (value: boolean) => {
+    if (value && needsKey) {
+      notify("Apify isn't configured", "It stays off until a key is set", "warning");
+      return;
+    }
+    if (connector.kind === "apple") {
+      invoke(value ? "connectApple" : "disconnectApple", { id: connector.id });
+      notify(value ? "Connecting" : "Disconnected", connector.name, "info");
+    } else {
+      invoke("setConnector", { id: connector.id, enabled: value });
+      notify(value ? "Connector on" : "Connector off", connector.name, "info");
+    }
+  };
+  return (
+    <>
+      <div className="pref-row">
+        <span className={cx("kind-icon small", !connector.enabled && "is-off")}>
+          <PixelIcon name={CONNECTOR_ICON[connector.id] ?? (connector.kind === "apple" ? "apple" : "link")} size={14} />
+        </span>
+        <span className="pref-copy">
+          <strong>{connector.name}</strong>
+          <em>
+            {connector.blurb}
+            {connector.kind === "apple" ? " Uses Apple Events." : ""}
+            {connector.id === "apify" && !needsKey ? " Every run shows a preview first and uses your Apify credits." : ""}
+            {needsKey ? " Apify isn't configured." : null}
+          </em>
+        </span>
+        <Switch label={connector.name} checked={connector.enabled && !needsKey} onChange={toggle} />
+      </div>
+    </>
+  );
+}
+
+function McpServers() {
+  const { state, settings, updateSettings, invoke, notify, native } = useDashboard();
+  const [editing, setEditing] = useState<McpServer | "new" | null>(null);
+  const [importing, setImporting] = useState(false);
+  const servers = settings.mcpServers ?? [];
+  return (
+    <div className="mcp-list">
+      {servers.map((server) => {
+        const status = state.mcpStatus?.[server.id];
+        // Status only reaches the panel on the Mac; elsewhere there's nothing to wait for.
+        const tone = !server.enabled || !native ? "is-off" : !status ? "is-pending" : status.ok ? "is-ok" : "is-error";
+        return (
+          <div className="mcp-row" key={server.id}>
+            <span className={cx("mcp-dot", tone)} aria-hidden />
+            <span className="mcp-copy">
+              <strong>{server.name}</strong>
+              <code className="mcp-cmd">{server.transport === "http" ? server.url : joinCommand([server.command, ...server.args])}</code>
+              <em className={cx(tone === "is-error" && "mcp-error")}>
+                {!server.enabled
+                  ? "Off"
+                  : !native
+                    ? "Status on your Mac"
+                  : !status
+                    ? "Connecting…"
+                    : status.ok
+                      ? `${status.tools.length} tool${status.tools.length === 1 ? "" : "s"}${status.tools.length ? ` · ${status.tools.slice(0, 3).map((tool) => tool.name).join(", ")}${status.tools.length > 3 ? "…" : ""}` : ""}`
+                      : status.error || "Couldn't connect"}
+              </em>
+            </span>
+            <Switch
+              label={`Use ${server.name}`}
+              checked={server.enabled}
+              onChange={(value) => {
+                updateSettings({ mcpServers: servers.map((item) => (item.id === server.id ? { ...item, enabled: value } : item)) });
+              }}
+            />
+            <IconButton icon="edit" label={`Edit ${server.name}`} onClick={() => setEditing(server)} />
+          </div>
+        );
+      })}
+      <div className="mcp-actions">
+        <Button variant="secondary" size="sm" icon="plus" onClick={() => setEditing("new")}>
+          Add server
+        </Button>
+        <Button variant="ghost" size="sm" icon="download" onClick={() => setImporting(true)}>
+          Paste a config
+        </Button>
+        {servers.length ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="refresh"
+            onClick={() => {
+              invoke("refreshMcp");
+              notify("Reconnecting", `${servers.length} MCP server${servers.length === 1 ? "" : "s"}`, "info");
+            }}
+          >
+            Reconnect
+          </Button>
+        ) : (
+          <span className="mcp-hint">Any MCP server works: a command okidoki starts, or a URL.</span>
+        )}
+        {servers.length && state.services?.mcp.checkedAt ? (
+          <span className="mcp-hint">
+            {state.services.mcp.connected} of {state.services.mcp.servers} answering · checked {relativeTime(state.services.mcp.checkedAt)}
+          </span>
+        ) : null}
+      </div>
+      <McpServerModal server={editing} onClose={() => setEditing(null)} />
+      <McpImportModal open={importing} onClose={() => setImporting(false)} />
+    </div>
+  );
+}
+
+function McpImportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { invoke, notify } = useDashboard();
+  const [text, setText] = useState("");
+  let found: ReturnType<typeof serversFromConfig> = [];
+  let problem = "";
+  if (text.trim()) {
+    try {
+      found = serversFromConfig(text);
+      if (!found.length) problem = "No servers in that. Paste the part with \"mcpServers\".";
+    } catch {
+      problem = "That isn't valid JSON yet.";
+    }
+  }
+  const add = () => {
+    for (const { server, secrets } of found) invoke("saveMcpServer", { server, secrets });
+    notify(found.length === 1 ? "Server added" : `${found.length} servers added`, found.map((item) => item.server.name).join(", "), "info");
+    setText("");
+    onClose();
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Paste an MCP config" subtitle="From Claude Desktop, Claude Code or Cursor. Secrets go to this Mac's key file." width={560}>
+      <TextArea value={text} onChange={setText} rows={10} placeholder={'{\n  "mcpServers": {\n    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }\n  }\n}'} />
+      <p className="form-hint">{problem || (found.length ? `Found ${found.map((item) => item.server.name).join(", ")}.` : " ")}</p>
+      <footer className="modal-actions">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!found.length} onClick={add}>
+          Add {found.length > 1 ? `${found.length} servers` : "server"}
+        </Button>
+      </footer>
+    </Modal>
+  );
+}
+
+/** How to reach okidoki from another agent: its own MCP server, over this Mac's control endpoint. */
+function UseFromAgents() {
+  const { notify } = useDashboard();
+  const command = "claude mcp add okidoki -- bun ~/Desktop/okidoki-personal/mcp/okidoki-mcp.ts";
+  return (
+    <div className="pref-group">
+      <div className="pref-row is-stack">
+        <span className="pref-copy">
+          <strong>Add okidoki to an agent</strong>
+          <em>Claude Code, Cursor and any MCP client can list and replay your skills and search the vault. Replays still ask for your okay here.</em>
+        </span>
+        <div className="pref-row-foot">
+          <code className="mcp-cmd agent-command">{command}</code>
+          <IconButton icon="copy" label="Copy" onClick={() => void copyText(command).then(() => notify("Copied", "Paste it in a shell", "info"))} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function parsePairs(text: string, separator: "=" | ":"): Record<string, string> {
+  const pairs: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const at = line.indexOf(separator);
+    if (at <= 0) continue;
+    const key = line.slice(0, at).trim();
+    if (key) pairs[key] = line.slice(at + 1).trim();
+  }
+  return pairs;
+}
+
+function McpServerModal({ server, onClose }: { server: McpServer | "new" | null; onClose: () => void }) {
+  const { state, invoke, notify } = useDashboard();
+  const existing = server && server !== "new" ? server : null;
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState<McpServer["transport"]>("stdio");
+  const [target, setTarget] = useState("");
+  const [secretText, setSecretText] = useState("");
+  const [clearSecrets, setClearSecrets] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const stored = existing ? (state.mcpSecretNames?.[existing.id] ?? []) : [];
+
+  useEffect(() => {
+    setName(existing?.name ?? "");
+    setTransport(existing?.transport ?? "stdio");
+    setTarget(existing ? (existing.transport === "http" ? existing.url : joinCommand([existing.command, ...existing.args])) : "");
+    setSecretText("");
+    setClearSecrets(false);
+    setConfirmRemove(false);
+  }, [server]);
+
+  // Pasting a README's JSON fills the whole form.
+  const onTarget = (value: string) => {
+    const parsed = value.trim().startsWith("{") ? parseServerJSON(value) : null;
+    if (!parsed) {
+      setTarget(value);
+      return;
+    }
+    if (parsed.name && !name) setName(parsed.name);
+    if (parsed.url) {
+      setTransport("http");
+      setTarget(parsed.url);
+      setSecretText(Object.entries(parsed.headers ?? {}).map(([key, val]) => `${key}: ${val}`).join("\n"));
+    } else {
+      setTransport("stdio");
+      setTarget(joinCommand([parsed.command ?? "", ...(parsed.args ?? [])]));
+      setSecretText(Object.entries(parsed.env ?? {}).map(([key, val]) => `${key}=${val}`).join("\n"));
+    }
+  };
+
+  const words = splitCommand(target.trim());
+  const valid = name.trim() && (transport === "http" ? /^https?:\/\/\S+$/.test(target.trim()) : !target.trim().startsWith("{") && words !== null && Boolean(words[0]));
+  const save = () => {
+    if (!valid || (transport === "stdio" && !words)) return;
+    const next: McpServer = {
+      id: existing?.id ?? `mcp-${Math.random().toString(16).slice(2, 10)}`,
+      name: name.trim(),
+      transport,
+      command: transport === "stdio" ? words![0] : "",
+      args: transport === "stdio" ? words!.slice(1) : [],
+      url: transport === "http" ? target.trim() : "",
+      enabled: existing?.enabled ?? true,
+    };
+    const typed = secretText.trim();
+    // Secrets go only when changed, straight to the Mac's key file; leaving the box empty keeps what's saved.
+    const secrets = typed
+      ? transport === "http"
+        ? { env: {}, headers: parsePairs(typed, ":") }
+        : { env: parsePairs(typed, "="), headers: {} }
+      : clearSecrets || !existing
+        ? { env: {}, headers: {} }
+        : undefined;
+    invoke("saveMcpServer", { server: next, ...(secrets ? { secrets } : {}) });
+    notify(existing ? "Server updated" : "Server added", `${next.name} · connecting`, "info");
+    onClose();
+  };
+
+  return (
+    <Modal
+      open={Boolean(server)}
+      onClose={onClose}
+      title={existing ? `Edit ${existing.name}` : "Add an MCP server"}
+      subtitle="okidoki lists its tools and asks before calling any of them."
+      width={560}
+    >
+      <div className="form-stack mcp-form">
+        <div className="mcp-field">
+          <span className="form-label">Name</span>
+          <TextField value={name} onChange={setName} placeholder="GitHub" autoFocus={!existing} />
+        </div>
+        <div className="mcp-field">
+          <span className="form-label">How it runs</span>
+          <Segmented
+            options={[
+              { value: "stdio", label: "Command" },
+              { value: "http", label: "URL" },
+            ]}
+            value={transport}
+            onChange={setTransport}
+          />
+        </div>
+        <div className="mcp-field">
+          <span className="form-label">{transport === "http" ? "Server URL" : "Command"}</span>
+          <TextField
+            value={target}
+            onChange={onTarget}
+            placeholder={transport === "http" ? "https://example.com/mcp" : "npx -y @modelcontextprotocol/server-github"}
+            icon={transport === "http" ? "link" : "terminal"}
+          />
+          <span className="mcp-hint">{transport === "http" ? "A streamable HTTP endpoint." : "Or paste the JSON from the server's README."}</span>
+        </div>
+        <div className="mcp-field">
+          <span className="form-label">{transport === "http" ? "Headers" : "Environment variables"}</span>
+          <TextArea
+            value={secretText}
+            onChange={setSecretText}
+            rows={3}
+            placeholder={transport === "http" ? "Authorization: Bearer …" : "GITHUB_PERSONAL_ACCESS_TOKEN=…"}
+          />
+          <span className="mcp-hint">
+            <PixelIcon name="lock" size={12} /> Saved privately on this Mac, never synced.{" "}
+            {stored.length && !clearSecrets ? (
+              <>
+                Saved now: {stored.join(", ")}. Leave empty to keep them, or{" "}
+                <button className="text-link" onClick={() => setClearSecrets(true)}>
+                  remove them
+                </button>
+                .
+              </>
+            ) : clearSecrets ? (
+              "Saved values will be removed."
+            ) : null}
+          </span>
+        </div>
+      </div>
+      <footer className="modal-actions">
+        {existing ? (
+          <Button
+            variant="ghost"
+            icon="trash"
+            className="mcp-remove"
+            onClick={() => {
+              if (!confirmRemove) {
+                setConfirmRemove(true);
+                return;
+              }
+              invoke("deleteMcpServer", { id: existing.id });
+              notify("Server removed", existing.name, "info");
+              onClose();
+            }}
+          >
+            {confirmRemove ? "Remove for good" : "Remove"}
+          </Button>
+        ) : null}
+        <span className="spacer" />
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" disabled={!valid} onClick={save}>
+          {existing ? "Save" : "Add server"}
+        </Button>
+      </footer>
+    </Modal>
   );
 }
 

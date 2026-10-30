@@ -36,13 +36,15 @@ test("the MCP server lists its tools and calls the Mac's control endpoint with t
   const names = (list?.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
   expect(names).toContain("replay_skill");
   expect(names).toContain("vault_search");
+  expect(names).toContain("ask_okidoki");
+  for (const gone of ["add_note", "search_notes", "add_reminder"]) expect(names).not.toContain(gone);
 
   const skills = await handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_skills", arguments: {} } });
   expect(JSON.stringify(skills?.result)).toContain("expense report");
   await handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "replay_skill", arguments: { skill: "expense report", values: { amount: "42" } } } });
   expect(seen.at(-1)).toEqual({ path: "/replay", auth: "Bearer secret", body: { skill: "expense report", values: { amount: "42" } } });
 
-  const missing = await handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "add_note", arguments: { body: "x" } } });
+  const missing = await handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "vault_search", arguments: { query: "x" } } });
   expect((missing?.result as { isError?: boolean }).isError).toBe(true);
   expect(await handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
 });

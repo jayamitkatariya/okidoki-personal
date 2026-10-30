@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
  * okidoki as an MCP server, over stdio. Lets Claude Code, Cursor or any MCP client replay your
- * recorded skills, search the vault, and add notes and reminders, through the okidoki app running
- * on this Mac (its control endpoint on 127.0.0.1). No dependencies.
+ * recorded skills, search the vault, and hand it requests, through the okidoki app running on
+ * this Mac (its control endpoint on 127.0.0.1). No dependencies.
  *
  *   claude mcp add okidoki -- bun /path/to/okidoki-personal/mcp/okidoki-mcp.ts
  *
@@ -65,38 +65,8 @@ export const TOOLS = [
     run: (args: Json) => call("GET", `/vault/search?q=${encodeURIComponent(String(args.query ?? ""))}`),
   },
   {
-    name: "add_note",
-    description: "Save a note to okidoki's Notes page (markdown body).",
-    inputSchema: {
-      type: "object",
-      properties: { title: { type: "string" }, body: { type: "string" }, tags: { type: "array", items: { type: "string" } } },
-      required: ["body"],
-    },
-    run: (args: Json) => call("POST", "/notes", { title: args.title ?? "", body: args.body, tags: args.tags ?? [] }),
-  },
-  {
-    name: "search_notes",
-    description: "Search the user's okidoki notes.",
-    inputSchema: { type: "object", properties: { query: { type: "string" } } },
-    run: (args: Json) => call("GET", `/notes?q=${encodeURIComponent(String(args.query ?? ""))}`),
-  },
-  {
-    name: "add_reminder",
-    description: "Set a reminder okidoki will fire on this Mac. dueAt is ISO 8601 in the user's time zone.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string" },
-        dueAt: { type: "string", description: "e.g. 2026-11-02T09:00" },
-        repeats: { type: "string", enum: ["never", "daily", "weekdays", "weekly", "monthly"] },
-      },
-      required: ["title"],
-    },
-    run: (args: Json) => call("POST", "/reminders", { title: args.title, dueAt: args.dueAt, repeats: args.repeats }),
-  },
-  {
     name: "ask_okidoki",
-    description: "Hand okidoki a request in plain English to do on this Mac (open apps, run terminal jobs, drive the screen). Anything risky waits for the user's okay.",
+    description: "Hand okidoki a request in plain English to do on this Mac (open apps, do things on the web, drive the screen). Anything risky waits for the user's okay.",
     inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
     run: (args: Json) => call("POST", "/ask", { text: args.text }),
   },

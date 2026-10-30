@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { closeMemory, memoryStatus, recall, recallTools, setEngineFactory, syncMemory, warmMemory } from "../src/memory";
-import { tools } from "../src/catalog";
+import { closeMemory, memoryStatus, recall, setEngineFactory, syncMemory, warmMemory } from "../src/memory";
 import type { MemorySyncRequest } from "../src/types";
 import { fakeEngine, type FakeEngine } from "./fixtures/memory-engine";
 
@@ -46,14 +45,14 @@ afterEach(async () => {
   setEngineFactory();
 });
 
-test("the first sync embeds notes, turns and tools; the same data again embeds and saves nothing", async () => {
+test("the first sync embeds notes and turns; the same data again embeds and saves nothing", async () => {
   const engine = fakeEngine();
   useEngines(engine);
   const first = await syncMemory(request());
   expect(first.ok).toBe(true);
-  expect(first.added).toBe(3 + tools.length);
+  expect(first.added).toBe(3);
   expect(engine.saves).toBe(1);
-  expect([...engine.docs.keys()]).toEqual(expect.arrayContaining(["memory:n1", "message:m1", "message:m2", `tool:${tools[0].id}`]));
+  expect([...engine.docs.keys()].sort()).toEqual(["memory:n1", "message:m1", "message:m2"]);
 
   const again = await syncMemory(request());
   expect(again).toMatchObject({ ok: true, added: 0, removed: 0 });
@@ -83,7 +82,7 @@ test("status counts what the index holds by kind and when it last synced", async
   expect(memoryStatus()).toMatchObject({ ready: false, documents: 0 });
   await syncMemory(request());
   const status = memoryStatus();
-  expect(status).toMatchObject({ ready: true, notes: 1, messages: 2, tools: tools.length, documents: 3 + tools.length });
+  expect(status).toMatchObject({ ready: true, notes: 1, messages: 2, documents: 3 });
   expect(Date.parse(status.lastSyncAt ?? "")).toBeGreaterThan(0);
   expect(status.error).toBeUndefined();
 });
@@ -128,16 +127,26 @@ test("a failed start reports the error, and the next sync recovers", async () =>
   expect(memoryStatus().error).toBeUndefined();
 });
 
-test("warming loads the saved index and adds the tools without dropping anything", async () => {
-  const engine = fakeEngine([{ id: "message:saved", text: "from yesterday", metadata: { type: "message", account: "acct" } }]);
+test("warming loads the saved index and drops only the tool entries older builds left in it", async () => {
+  const engine = fakeEngine([
+    { id: "message:saved", text: "from yesterday", metadata: { type: "message", account: "acct" } },
+    { id: "tool:sevenzip", text: "7-Zip", metadata: { type: "tool", account: "" } },
+  ]);
   useEngines(engine);
   await warmMemory("p", "k");
   expect(engine.docs.has("message:saved")).toBe(true);
-  expect(engine.docs.has(`tool:${tools[0].id}`)).toBe(true);
-  expect(engine.removed).toEqual([]);
+  expect(engine.removed).toEqual(["tool:sevenzip"]);
+  expect(engine.saves).toBe(1);
+
+  const clean = fakeEngine([{ id: "message:saved", text: "from yesterday", metadata: { type: "message", account: "acct" } }]);
+  await closeMemory();
+  useEngines(clean);
+  await warmMemory("p", "k");
+  expect(clean.removed).toEqual([]);
+  expect(clean.saves).toBe(0);
 });
 
-test("recall stays inside the account, and tool search only looks at tools", async () => {
+test("recall stays inside the account", async () => {
   const engine = fakeEngine();
   useEngines(engine);
   await syncMemory(
@@ -152,24 +161,13 @@ test("recall stays inside the account, and tool search only looks at tools", asy
   );
   const recalled = await recall("where does the launch video go", "acct");
   expect(recalled.map((item) => item.text).sort()).toEqual(["launch video drafts live in Movies", "my launch video goes to the discord server"]);
-  expect(engine.queries.at(-1)?.filter).toEqual({
-    $and: [
-      { field: "type", condition: { $ne: "tool" } },
-      { field: "account", condition: { $in: ["acct", ""] } },
-    ],
-  });
-
-  await recallTools("compress video");
-  expect(engine.queries.at(-1)).toMatchObject({ topK: 3, filter: { field: "type", condition: { $eq: "tool" } } });
+  expect(engine.queries.at(-1)?.filter).toEqual({ field: "account", condition: { $in: ["acct", ""] } });
 });
 
-test("recall and tool search are empty while the index is off, and work once it is on", async () => {
+test("recall is empty while the index is off, and works once it is on", async () => {
   expect(await recall("launch video", "acct")).toEqual([]);
-  expect(await recallTools("compress a video")).toEqual([]);
   useEngines(fakeEngine());
   await syncMemory(request());
   const recalled = await recall("how big was the launch video", "acct");
   expect(recalled.map((item) => item.text)).toContain("compress the launch video for discord");
-  const found = await recallTools("compress video");
-  expect(found.length).toBeGreaterThan(0);
 });

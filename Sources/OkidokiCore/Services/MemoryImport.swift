@@ -1,7 +1,7 @@
 import Foundation
 
 /// Another assistant whose memory can be brought into Okidoki. Local sources keep their notes in
-/// files on this Mac, which the job reads with the terminal; hosted ones (ChatGPT, Gemini, claude.ai)
+/// files on this Mac, which okidoki reads directly; hosted ones (ChatGPT, Gemini, claude.ai)
 /// have no files here, so the person saves an export and picks it.
 public struct MemorySource: Identifiable, Sendable, Equatable {
     public var id: String
@@ -137,17 +137,28 @@ public enum MemoryImport {
     static let fileMarker = "@@okidoki-file "
 
     /// Prints each file behind a marker line, so the parser knows where one file ends and the next begins.
-    public static func readCommand(files: [String]) -> String {
-        files.map { "printf '\\n\(fileMarker)%s\\n' \(shellQuote($0)) && cat \(shellQuote($0))" }.joined(separator: " && ")
+    /// The files as one text, each behind a marker so `parse` knows which assistant a line came from.
+    /// Read only; nothing of theirs is ever written.
+    public static func read(files: [String]) -> String {
+        files.compactMap { path in
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+            return "\n\(fileMarker)\(path)\n" + text
+        }.joined(separator: "\n")
     }
 
-    /// Reads a saved export in whatever format it was saved as. Markdown and text as they are;
-    /// PDF through Poppler; Word, RTF and HTML through macOS's own converter.
-    public static let exportCommand =
-        "case {{file}} in *.pdf) pdftotext -layout {{file}} - ;; *.txt|*.md|*.markdown) cat {{file}} ;; *) textutil -convert txt -stdout {{file}} ;; esac"
+    /// What importing would do: read memory files already on this Mac, or ask for an export file.
+    public struct Plan: Equatable, Sendable {
+        public var title: String
+        public var summary: String
+        /// Memory files on this Mac, by assistant. Empty when an export has to be chosen instead.
+        public var files: [String]
+        /// One line per assistant whose files will be read.
+        public var steps: [String]
+        public var needsExport: Bool { files.isEmpty }
+    }
 
     /// The whole plan for a request, or nil when it isn't about importing memory.
-    public static func decide(_ text: String, home: String = NSHomeDirectory(), fileManager: FileManager = .default) -> BrainDecision? {
+    public static func plan(_ text: String, home: String = NSHomeDirectory(), fileManager: FileManager = .default) -> Plan? {
         guard asked(text) else { return nil }
         let named = source(in: text)
         let local: [(source: MemorySource, files: [String])]
@@ -162,12 +173,9 @@ public enum MemoryImport {
             let count = local.reduce(0) { $0 + $1.files.count }
             let who = names.count > 2 ? names.dropLast().joined(separator: ", ") + " and " + names.last! : names.joined(separator: " and ")
             let summary = "Read the \(count == 1 ? "memory file" : "\(count) memory files") \(who) \(names.count == 1 ? "keeps" : "keep") on this Mac and add what's about you to Memory. Nothing leaves your Mac, and nothing of theirs is changed."
-            return BrainDecision(kind: .terminal, title: "import memory from \(names.count == 1 ? names[0] : "other assistants")",
-                                 answer: summary + " You can edit or forget anything afterwards on the Memory page.",
-                                 risk: .low, previewSummary: summary,
-                                 previewSteps: local.map { "read what \($0.source.name) remembers" },
-                                 commands: local.map { readCommand(files: $0.files) }, apps: [],
-                                 files: local.flatMap(\.files), builtin: builtin)
+            return Plan(title: "import memory from \(names.count == 1 ? names[0] : "other assistants")",
+                        summary: summary, files: local.flatMap(\.files),
+                        steps: local.map { "read what \($0.source.name) remembers" })
         }
 
         let name = named?.name ?? "the other assistant"
@@ -175,11 +183,8 @@ public enum MemoryImport {
         let summary = named == nil || !(named?.isLocal ?? false)
             ? "Choose the memory export you saved from \(name). I'll read it and add what's about you to Memory."
             : "\(name) hasn't saved any memory files on this Mac yet. If you have an export from it, choose the file and I'll read that instead."
-        return BrainDecision(kind: .terminal, title: "import memory from \(name)",
-                             answer: summary + "\n\n" + howTo,
-                             risk: .low, previewSummary: summary,
-                             previewSteps: ["read the export you choose"],
-                             commands: [exportCommand], apps: [], pickFile: "document", builtin: builtin)
+        return Plan(title: "import memory from \(name)", summary: summary + "\n\n" + howTo, files: [],
+                    steps: ["read the export you choose"])
     }
 
     // MARK: - Parsing

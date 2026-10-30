@@ -1,5 +1,3 @@
-import type { Tool } from "./types";
-
 export function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
 }
@@ -30,10 +28,6 @@ export function formatBytes(bytes: number | null | undefined): string {
   if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1).replace(/\.0$/, "")} GB`;
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(0)} MB`;
   return `${Math.round(bytes / 1024)} KB`;
-}
-
-export function money(value: number): string {
-  return `$${Math.round(value).toLocaleString("en-US")}`;
 }
 
 export function timeOfDay(): string {
@@ -102,86 +96,4 @@ export function scheduleLabel(routine: {
     default:
       return "When you ask";
   }
-}
-
-// Rough yearly price of the paid app each free tool stands in for. Mirrors ToolCatalog.paidAlternatives.
-const TOOL_PRICES: Record<string, number> = { mole: 39.95, ffmpeg: 79, handbrake: 79, pandoc: 49, ocrmypdf: 239.88, imagemagick: 69, ollama: 240, rclone: 59, "yt-dlp": 45, gifski: 15, sox: 35, whisper: 100, pngquant: 39, oxipng: 15, exiftool: 20, webp: 15, qpdf: 80, ghostscript: 6, czkawka: 20, sevenzip: 25, duckdb: 100, restic: 60, gh: 69, tesseract: 8, qrencode: 30, img2pdf: 10, jpegoptim: 15, croc: 120, age: 20, smartmontools: 20, topgrade: 15 };
-
-export function toolPrice(id: string): number {
-  return TOOL_PRICES[id] ?? 0;
-}
-
-// Words that say nothing about the job, so "make this video smaller" doesn't match Pandoc's "convert this to word".
-const FILLER = new Set([
-  "the", "and", "for", "this", "that", "these", "those", "with", "from", "into", "onto", "your", "mine",
-  "make", "want", "need", "can", "how", "what", "please", "help", "some", "all", "any", "out", "get", "just", "mac",
-]);
-
-// Whole words, with a trailing "s" dropped so "videos" matches "video" but "edit" doesn't match "editors".
-function singular(word: string): string {
-  return word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
-}
-
-function words(text: string): string[] {
-  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-}
-
-export function jobWords(query: string): string[] {
-  return words(query)
-    .filter((word) => word.length > 2 && !FILLER.has(word))
-    .map(singular);
-}
-
-// Letters and digits only, so "7zip", "7-zip" and "7 Zip" all read as one name.
-function compact(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-// The names a tool goes by: what's on its card, its id and the command it runs ("7-Zip", "sevenzip", "7zz").
-function toolNames(tool: Tool): string[] {
-  return [tool.name, tool.id, tool.command].map(compact).filter(Boolean);
-}
-
-// The catalog search box: plain text anywhere on the card, or any of the tool's names however it's spelled.
-export function toolMatches(tool: Tool, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")} ${tool.command} ${tool.id}`.toLowerCase();
-  const name = compact(q);
-  return hay.includes(q) || (name.length > 1 && toolNames(tool).some((each) => each.includes(name)));
-}
-
-// The catalog search box: tools matching by name or card text first, then tools that fit the described job.
-export function searchTools(tools: Tool[], query: string): Tool[] {
-  if (!query.trim()) return tools;
-  const direct = tools.filter((tool) => toolMatches(tool, query));
-  const byJob = findTools(tools, query, tools.length).filter((tool) => !direct.includes(tool));
-  return [...direct, ...byJob];
-}
-
-// Ranks the catalog for a job description: word hits first, popularity breaks ties.
-// Tools matching less than half as many words as the best one are left out, so one shared word ("open") doesn't count.
-export function findTools(tools: Tool[], query: string, limit = 3): Tool[] {
-  const wanted = jobWords(query);
-  if (!wanted.length) return [];
-  const phrase = query.trim().toLowerCase();
-  const ranked = tools.map((tool) => {
-    const hay = `${tool.name} ${tool.replaces} ${tool.blurb} ${tool.examples.join(" ")} ${tool.category}`.toLowerCase();
-    const vocab = new Set([...words(hay).map(singular), ...toolNames(tool)]);
-    const hits = wanted.filter((word) => vocab.has(word)).length;
-    const score = hits * 3 + (hay.includes(phrase) ? 8 : 0) + Math.floor((tool.popularity ?? 0) / 20);
-    return { tool, hits, score };
-  });
-  const best = Math.max(0, ...ranked.map((entry) => entry.hits));
-  return ranked
-    .filter((entry) => entry.hits > 0 && entry.hits * 2 >= best)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((entry) => entry.tool);
-}
-
-// A tool is off when its command is on the blocked list (Settings › Safety).
-export function toolBlocked(tool: Tool, blocked: string[]): boolean {
-  const command = tool.command.toLowerCase();
-  return blocked.some((item) => item.trim().toLowerCase() === command);
 }

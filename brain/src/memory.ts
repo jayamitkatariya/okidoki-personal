@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { tools } from "./catalog";
-import type { MemorySyncRequest, RecalledItem, ToolSpec } from "./types";
+import type { MemorySyncRequest, RecalledItem } from "./types";
 
 // Recall by meaning. Moss holds the person's notes, the recent conversation, recent tasks and
 // skills, embeds them in-process, and saves the index on this Mac. Documents are never pushed to
 // Moss's cloud; the project key only signs the session in. The Mac (and Convex) keep the full data;
 // the index is rebuilt from the Mac's copy on every sync. Images aren't indexed.
-// The Toolbox's free tools share the index (type "tool"), so a request can find a tool by meaning.
 
 const INDEX_NAME = "okidoki-memory";
 
@@ -237,15 +235,6 @@ export function toDocs(request: MemorySyncRequest, now: Date = new Date()): Memo
   return docs;
 }
 
-/** Every Toolbox tool, described by what it's for (not how to run it), so it matches a request's meaning. */
-export function toolIndexDocs(catalog: ToolSpec[] = tools): MemoryDoc[] {
-  return catalog.map((tool) => ({
-    id: `tool:${tool.id}`,
-    text: `${tool.name}, instead of ${tool.replaces}. ${tool.blurb} Good for requests like: ${tool.examples.join("; ")}.`,
-    metadata: { type: "tool", account: "", title: tool.name, toolId: tool.id, category: tool.category },
-  }));
-}
-
 // --- sync + recall -------------------------------------------------------------
 
 /** Embeds the docs that are new or changed since the index last saw them. Returns how many that was. */
@@ -271,7 +260,7 @@ function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> 
 export async function syncMemory(request: MemorySyncRequest): Promise<MemorySyncResult> {
   const run = async () => {
     const index = await ensureEngine(request);
-    const docs = [...toDocs(request), ...toolIndexDocs()];
+    const docs = toDocs(request);
     const wanted = new Map(docs.map((doc) => [doc.id, doc]));
     const removed = [...known.keys()].filter((id) => !wanted.has(id));
     const added = await upsert(index, docs);
@@ -327,7 +316,6 @@ export function selectRecalled(
   const picked: RecalledItem[] = [];
   for (const hit of hits) {
     if (hit.score < minScore) continue;
-    if (hit.metadata.type === "tool") continue;
     if (hit.metadata.account && accountId && hit.metadata.account !== accountId) continue;
     if (options.threadId && hit.metadata.threadId === options.threadId) continue;
     const body = normalizeText(hit.text);
@@ -347,11 +335,10 @@ export function selectRecalled(
   return picked;
 }
 
-/** Everything but the tools, from this account plus notes shared by every account. */
-export function recallFilter(accountId: string | undefined): MemoryFilter {
-  const notTools: MemoryFilter = { field: "type", condition: { $ne: "tool" } };
-  if (!accountId) return notTools;
-  return { $and: [notTools, { field: "account", condition: { $in: [accountId, ""] } }] };
+/** This account's items plus notes shared by every account; everything when there's no account. */
+export function recallFilter(accountId: string | undefined): MemoryFilter | undefined {
+  if (!accountId) return undefined;
+  return { field: "account", condition: { $in: [accountId, ""] } };
 }
 
 /** The closest items for a request, from this account plus shared memories. Never throws; [] when off. */
@@ -364,22 +351,6 @@ export async function recall(text: string, accountId: string | undefined, option
     // Some hits are dropped below (the current thread, lines the prompt already has), so ask for spares.
     const hits = await withTimeout(index.query(text, limit * 3 + (options.exclude?.length ?? 0), minScore, recallFilter(accountId)), 2000, "recall");
     return selectRecalled(hits, text, accountId, { ...options, limit, minScore });
-  } catch {
-    return [];
-  }
-}
-
-/** The Toolbox tools closest in meaning to a request, best first. Never throws; [] when the index is off. */
-export async function recallTools(text: string, limit = 3): Promise<ToolSpec[]> {
-  const index = engine;
-  if (!index || !text.trim()) return [];
-  try {
-    const hits = await withTimeout(index.query(text, limit, undefined, { field: "type", condition: { $eq: "tool" } }), 2000, "tool search");
-    return hits
-      .filter((hit) => hit.metadata.type === "tool")
-      .map((hit) => tools.find((tool) => tool.id === hit.metadata.toolId))
-      .filter((tool): tool is ToolSpec => Boolean(tool))
-      .slice(0, limit);
   } catch {
     return [];
   }
@@ -410,13 +381,12 @@ export function recallPrompt(items: RecalledItem[]): string {
 
 export interface MemoryStatus {
   ready: boolean;
-  /** Everything in the index, tools included. */
+  /** Everything in the index. */
   documents: number;
   notes: number;
   messages: number;
   runs: number;
   skills: number;
-  tools: number;
   lastSyncAt?: string;
   error?: string;
 }
@@ -431,7 +401,7 @@ export interface MemorySyncResult extends MemoryStatus {
 
 /** What the index holds right now, by kind, so the dashboard can show it. */
 export function memoryStatus(): MemoryStatus & { total: number } {
-  const counts = { memory: 0, message: 0, run: 0, skill: 0, tool: 0 };
+  const counts = { memory: 0, message: 0, run: 0, skill: 0 };
   for (const id of known.keys()) {
     const kind = id.slice(0, id.indexOf(":")) as keyof typeof counts;
     if (kind in counts) counts[kind] += 1;
@@ -444,18 +414,21 @@ export function memoryStatus(): MemoryStatus & { total: number } {
     messages: counts.message,
     runs: counts.run,
     skills: counts.skill,
-    tools: counts.tool,
     lastSyncAt: lastSyncAt || undefined,
     error: lastError || undefined,
   };
 }
 
-/** Loads the on-disk short-term index so the first question can recall it, and makes sure the tools are in it.
- * Does not drop documents. */
+/** Loads the on-disk short-term index so the first question can recall it. Drops only the tool entries
+ * older builds kept there; the Mac's own documents stay until the next sync. */
 export async function warmMemory(projectId: string, projectKey: string, cacheDir?: string): Promise<void> {
   const run = async () => {
     const index = await ensureEngine({ projectId, projectKey, cacheDir });
-    if (await upsert(index, toolIndexDocs())) await index.save();
+    const stale = [...known.keys()].filter((id) => id.startsWith("tool:"));
+    if (!stale.length) return;
+    await index.remove(stale);
+    for (const id of stale) known.delete(id);
+    await index.save();
   };
   const result = queue.then(run, run);
   queue = result.catch(() => {});

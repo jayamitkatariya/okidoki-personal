@@ -478,9 +478,9 @@ private struct NotchContent: View {
                 model.onClose?()
                 env.openDashboard(.skills)
             }
-            NotchButton(title: "Toolbox", trailingSymbol: "plus", kind: .secondary, height: 30) {
+            NotchButton(title: "Browser", symbol: "globe", kind: .secondary, height: 30) {
                 model.onClose?()
-                env.openDashboard(.toolbox)
+                env.openBrowser()
             }
         }
     }

@@ -336,13 +336,11 @@ function kindGlyph(kind: Run["kind"]): string {
     {
       answer: "spark",
       quick_action: "bolt",
-      terminal: "terminal",
-      coding: "code",
       background: "runs",
-      teach: "wand",
       watch: "eye",
       borrow: "hand",
       computer_use: "hand",
+      browser: "globe",
       routine: "clock",
       connector: "link",
     } as const

@@ -12,12 +12,12 @@ const fetch = (url: string, init?: RequestInit) => handleRequest(new Request(url
 
 test("sidecar rejects unauthenticated and browser-origin requests", async () => {
   expect((await fetch(base + "/health")).status).toBe(401);
-  expect((await fetch(base + "/execute", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runId: "untrusted", kind: "terminal", commands: ["echo forbidden"] }) })).status).toBe(401);
-  expect((await fetch(base + "/execute", { method: "POST", headers: { ...headers, origin: "https://example.com" }, body: "{}" })).status).toBe(401);
+  expect((await fetch(base + "/think", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "open figma" }) })).status).toBe(401);
+  expect((await fetch(base + "/think", { method: "POST", headers: { ...headers, origin: "https://example.com" }, body: "{}" })).status).toBe(401);
 });
 
 test("think and computer use refuse without an anthropic key", async () => {
-  const think = await fetch(base + "/think", { method: "POST", headers, body: JSON.stringify({ text: "teach me figma" }) });
+  const think = await fetch(base + "/think", { method: "POST", headers, body: JSON.stringify({ text: "how do i use figma" }) });
   expect(think.ok).toBe(true);
   const thought = await think.json() as { decision: { kind: string; answer: string }; usedModel: boolean };
   expect(thought.usedModel).toBe(false);
@@ -31,98 +31,28 @@ test("think and computer use refuse without an anthropic key", async () => {
   expect(acted.action.reason?.toLowerCase()).toContain("isn't available");
 });
 
-test("/think hands the full task to the named agent without a model or connector", async () => {
+test("/think never hands a task to a coding agent or a shell job", async () => {
   const text = "can you use hermes agent in terminal to find my bridge presentation pptx file";
   const response = await fetch(base + "/think", { method: "POST", headers, body: JSON.stringify({ text }) });
   expect(response.ok).toBe(true);
-  const thought = await response.json() as { decision: { kind: string; commands: string[]; title: string; connectorCall?: unknown }; usedModel: boolean };
+  const thought = await response.json() as { decision: { kind: string; commands?: string[] }; usedModel: boolean };
   expect(thought.usedModel).toBe(false);
-  expect(thought.decision.kind).toBe("terminal");
-  expect(thought.decision.commands).toEqual(["hermes -z '" + text + "'"]);
-  expect(thought.decision.title).toContain("find my bridge presentation");
-  expect(thought.decision.connectorCall).toBeUndefined();
+  expect(thought.decision.kind).toBe("answer");
+  expect(thought.decision.commands).toBeUndefined();
 });
 
-test("an approved plan streams output and success", async () => {
-  const result = await fetch(base + "/execute", { method: "POST", headers, body: JSON.stringify({ runId: crypto.randomUUID(), kind: "terminal", commands: ["printf okidoki"] }) });
-  expect(result.headers.get("content-type")).toBe("text/event-stream");
-  const stream = await result.text();
-  expect(stream).toContain("event: started");
-  expect(stream).toContain("event: output");
-  expect(stream).toContain("okidoki");
-  expect(stream).toContain("event: done");
-  expect(stream).toContain('"code":0');
-  expect(stream).not.toContain("event: error");
-});
-
-test("teach grounding without a key returns no marks", async () => {
-  const response = await fetch(base + "/teach/ground", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ topic: "figma", say: "press F", stepIndex: 0, stepCount: 6, space: "screen" }),
-  });
-  expect(response.ok).toBe(true);
-  const body = await response.json() as { marks: unknown[] };
-  expect(body.marks).toEqual([]);
-});
-
-test("a live teach step needs a topic and refuses without a key", async () => {
-  const missing = await fetch(base + "/teach/step", { method: "POST", headers, body: JSON.stringify({ log: [] }) });
-  expect(missing.status).toBe(400);
-  const response = await fetch(base + "/teach/step", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ topic: "auto layout", app: "Figma", outline: ["press F"], log: [], stepNumber: 1, imageWidth: 0, imageHeight: 0 }),
-  });
-  expect(response.ok).toBe(true);
-  const body = await response.json() as { step: unknown; usedModel: boolean; error?: string };
-  expect(body.step).toBeNull();
-  expect(body.usedModel).toBe(false);
-  expect(body.error?.toLowerCase()).toContain("anthropic key");
-});
-
-test("/teach/step forwards the browser tab to the tutor instead of dropping it", async () => {
-  const requests: Record<string, any>[] = [];
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = fakeAPI(requests, { previous_done: true, action: "look", say: "see the Components panel on the right" });
-  try {
-    const response = await fetch(base + "/teach/step", {
-      method: "POST",
-      headers: { ...headers, "x-anthropic-key": "test-key" },
-      body: JSON.stringify({
-        topic: "a circuit", app: "Google Chrome", outline: [], log: [], stepNumber: 1, imageWidth: 800, imageHeight: 600,
-        pageTitle: "Circuits · Tinkercad", pageURL: "https://www.tinkercad.com/things/abc",
-      }),
-    });
-    expect(response.ok).toBe(true);
-    const body = await response.json() as { step: { say: string } | null; usedModel: boolean };
-    expect(body.usedModel).toBe(true);
-    expect(body.step?.say).toContain("Components");
-    expect(requests).toHaveLength(1);
-    expect(systemText(requests[0])).toContain("The browser tab in front is Circuits · Tinkercad — https://www.tinkercad.com/things/abc.");
-  } finally {
-    globalThis.fetch = realFetch;
+test("the removed terminal, toolbox and teach routes are gone", async () => {
+  for (const [method, path] of [
+    ["POST", "/execute"], ["POST", "/pause"], ["POST", "/resume"], ["GET", "/tools"], ["GET", "/tools/find?q=zip"],
+    ["POST", "/teach/ground"], ["POST", "/teach/step"], ["POST", "/teach/refine"], ["POST", "/teach/concept/stream"], ["POST", "/teach/concept/follow"],
+  ]) {
+    const response = await fetch(base + path, { method, headers, body: method === "POST" ? JSON.stringify({ runId: "x", topic: "figma" }) : undefined });
+    expect([path, response.status]).toEqual([path, 404]);
   }
-});
-
-test("a zoomed refine needs a crop and keeps the first guess without a key", async () => {
-  const missing = await fetch(base + "/teach/refine", { method: "POST", headers, body: JSON.stringify({ describe: "frame tool" }) });
-  expect(missing.status).toBe(400);
-  const response = await fetch(base + "/teach/refine", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ cropBase64: "aGk=", cropWidth: 680, cropHeight: 460, describe: "frame tool" }),
-  });
-  expect(response.ok).toBe(true);
-  const body = await response.json() as { found: boolean };
-  expect(body.found).toBe(false);
-});
-
-test("HTTP rejects malformed commands before opening an event stream", async () => {
-  for (const body of [{}, { runId: "bad", kind: "terminal", commands: ["cat {{file}}"] }, { runId: "bad", kind: "terminal", commands: ["rm -rf /"] }]) {
-    const response = await fetch(base + "/execute", { method: "POST", headers, body: JSON.stringify(body) });
-    expect(response.status).toBe(400);
-  }
+  const health = await (await fetch(base + "/health", { headers })).json() as Record<string, unknown>;
+  expect(health.ok).toBe(true);
+  expect(health.tools).toBeUndefined();
+  expect(health.agents).toBeUndefined();
 });
 
 test("malformed connector requests are rejected before invoking a service", async () => {
@@ -157,7 +87,7 @@ test("the Apify key check uses the request token, then the environment, and neve
   }
 });
 
-test("MCP toolbox discovery, reconnect, invocation and removal work through HTTP routes", async () => {
+test("MCP discovery, reconnect, invocation and removal work through HTTP routes", async () => {
   const server = { id: "http-route-fixture", name: "Route fixture", transport: "stdio", command: process.execPath, args: [new URL("fixtures/mcp-server.ts", import.meta.url).pathname] };
   const post = (path: string, payload: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(payload) });
   try {
@@ -183,26 +113,6 @@ test("bad MCP configurations cannot close working connections or produce ambiguo
   expect((await fetch(base + "/mcp/tools", { method: "POST", headers, body: JSON.stringify({ servers: [server, server] }) })).status).toBe(400);
 });
 
-test("HTTP terminal controls pause, resume and stop the streamed job and its child", async () => {
-  const { mkdtemp, rm } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const dir = await mkdtemp(join(tmpdir(), "okidoki-http-stop-"));
-  const runId = crypto.randomUUID();
-  const post = (path: string, payload: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(payload) });
-  try {
-    const response = await post("/execute", { runId, kind: "terminal", workingDirectory: dir, commands: ["sleep 5; touch later"] });
-    expect(response.headers.get("content-type")).toBe("text/event-stream");
-    expect((await (await post("/pause", { runId })).json() as any).paused).toBe(true);
-    expect((await (await post("/resume", { runId })).json() as any).resumed).toBe(true);
-    expect((await (await post("/stop", { runId })).json() as any).stopped).toBe(true);
-    const events = await response.text();
-    expect(events).toContain("event: cancelled");
-    expect(events).not.toContain("event: done");
-    expect(await Bun.file(join(dir, "later")).exists()).toBe(false);
-  } finally { (await import("../src/executor")).stop(runId); await rm(dir, { recursive: true, force: true }); }
-});
-
 test("connector Stop works through the same dashboard control endpoint", async () => {
   const server = { id: "stop-route", name: "Stop fixture", transport: "stdio", command: process.execPath, args: [new URL("fixtures/mcp-server.ts", import.meta.url).pathname] };
   const post = (path: string, payload: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(payload) });
@@ -217,18 +127,18 @@ test("connector Stop works through the same dashboard control endpoint", async (
 test("/memory/status reports the index by kind, so the dashboard can show what Moss holds", async () => {
   const response = await fetch(base + "/memory/status", { headers });
   expect(response.ok).toBe(true);
-  const status = await response.json() as { ready: boolean; documents: number; notes: number; messages: number; tools: number; lastSyncAt?: string; error?: string };
+  const status = await response.json() as { ready: boolean; documents: number; notes: number; messages: number; runs: number; skills: number; lastSyncAt?: string; error?: string };
   // No Moss credentials in tests: the index is off, and says so without an error.
   expect(status.ready).toBe(false);
   expect(status.documents).toBe(0);
-  expect(status.notes + status.messages + status.tools).toBe(status.documents);
+  expect(status.notes + status.messages + status.runs + status.skills).toBe(status.documents);
   expect(status.lastSyncAt).toBeUndefined();
   const sync = await fetch(base + "/memory/sync", { method: "POST", headers, body: JSON.stringify({ memories: [] }) });
   expect(sync.status).toBe(400);
 });
 
 test("a body that isn't JSON, or isn't an object, is a 400 with a reason — never a stack trace", async () => {
-  for (const path of ["/stop", "/pause", "/resume", "/mcp/forget", "/apify/check"]) {
+  for (const path of ["/stop", "/mcp/forget", "/apify/check"]) {
     const broken = await fetch(`http://localhost${path}`, { method: "POST", headers, body: "{bad" });
     expect([path, broken.status]).toEqual([path, 400]);
     expect(((await broken.json()) as { error: string }).error).toContain("JSON");

@@ -1,6 +1,6 @@
 import type { AccountKind } from "./types";
 
-export type Page = "home" | "runs" | "live" | "history" | "memory" | "notes" | "reminders" | "skills" | "vault" | "terminal" | "toolbox" | "settings";
+export type Page = "home" | "browser" | "runs" | "live" | "history" | "memory" | "skills" | "vault" | "settings";
 
 export interface NavItem {
   id: Page;
@@ -20,16 +20,14 @@ export const NAV: NavGroup[] = [
     label: "workspace",
     items: [
       { id: "home", title: "Home", icon: "home" },
+      { id: "browser", title: "Browser", icon: "globe" },
+      { id: "runs", title: "Computer", icon: "screen" },
       { id: "skills", title: "Replay", icon: "record" },
-      { id: "notes", title: "Notes", icon: "note" },
-      { id: "reminders", title: "Reminders", icon: "bell" },
-      { id: "terminal", title: "Terminal", icon: "terminal" },
     ],
   },
   {
     label: "activity",
     items: [
-      { id: "runs", title: "Runs", icon: "runs" },
       { id: "live", title: "Live", icon: "eye" },
       { id: "history", title: "History", icon: "clock" },
     ],
@@ -39,7 +37,6 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "memory", title: "Memory", icon: "memory" },
       { id: "vault", title: "Vault", icon: "lock" },
-      { id: "toolbox", title: "Toolbox", icon: "grid" },
     ],
   },
 ];
@@ -52,17 +49,14 @@ export const ON_DEMAND: ReadonlySet<Page> = new Set<Page>(["live"]);
 
 export const SECTION_META: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "Home", subtitle: "What needs you, and what's moving" },
-  runs: { title: "Runs", subtitle: "Live work and action previews" },
+  browser: { title: "Browser", subtitle: "okidoki's own browser: agent runs, recordings and your pages" },
+  runs: { title: "Computer", subtitle: "Act runs on your Mac and the previews they wait on" },
   live: { title: "Live", subtitle: "Watch okidoki drive, step by step" },
   history: { title: "History", subtitle: "Threads and past requests" },
   memory: { title: "Memory", subtitle: "What okidoki knows about you" },
   skills: { title: "Replay", subtitle: "Show it once, replay it forever" },
-  toolbox: { title: "Toolbox", subtitle: "Free tools, connectors and MCP servers" },
-  settings: { title: "Settings", subtitle: "Keys, permissions, voice, safety, look" },
+  settings: { title: "Settings", subtitle: "Keys, permissions, connectors, voice, safety, look" },
   vault: { title: "Vault", subtitle: "Your documents folder and sealed logins" },
-  terminal: { title: "Terminal", subtitle: "Plain English in, reviewed commands out, plus your coding agents" },
-  notes: { title: "Notes", subtitle: "Jot it down; okidoki can find it later" },
-  reminders: { title: "Reminders", subtitle: "okidoki taps you on the shoulder, or does the chore itself" },
 };
 
 /** Routes that land on a Settings section rather than a page of their own. */

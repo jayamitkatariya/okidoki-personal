@@ -64,12 +64,6 @@ cp Resources/BrandMark.png "$APP/Contents/Resources/BrandMark.png"
 if [ -d Resources/brain ]; then
   cp -R Resources/brain "$APP/Contents/Resources/brain"
 fi
-if [ -d Resources/stage ]; then
-  mkdir -p "$APP/Contents/Resources/stage"
-  for f in stage.html stage.js parts.js labels.js expr.js three.module.js three.core.js OrbitControls.js RoomEnvironment.js THREE_LICENSE; do
-    [ -f "Resources/stage/$f" ] && cp "Resources/stage/$f" "$APP/Contents/Resources/stage/$f"
-  done
-fi
 if [ -d web/dist ]; then
   cp -R web/dist "$APP/Contents/Resources/web"
 fi

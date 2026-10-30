@@ -126,6 +126,26 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.skills = state.skills.map((skill) => (skill.id === payload.id ? { ...skill, name: (payload.name as string) || skill.name } : skill));
       break;
     }
+    case "openBrowser": {
+      // No browser window in the preview: hand back a finished stand-in run so the page has something to show.
+      state.runs = [
+        {
+          id: `run-${Math.random().toString(16).slice(2, 8)}`,
+          accountID: state.currentAccountID,
+          kind: "browser",
+          title: "opened the browser",
+          prompt: "",
+          status: "done",
+          steps: [],
+          output: "",
+          summary: "Preview stand-in",
+          createdAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+        },
+        ...state.runs,
+      ];
+      break;
+    }
     case "deleteSkill": {
       state.skills = state.skills.filter((skill) => skill.id !== payload.id);
       break;

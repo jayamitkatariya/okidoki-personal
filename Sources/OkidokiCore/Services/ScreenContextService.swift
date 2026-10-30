@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - Browser context
 
-/// Title and URL of the front browser tab, read through AppleScript, so a lesson about "this video"
+/// Title and URL of the front browser tab, read through AppleScript, so a question about "this video"
 /// knows which video and a request made on Tinkercad is answered on Tinkercad.
 public enum BrowserContext {
     public struct Page: Sendable, Equatable {
@@ -89,7 +89,7 @@ public enum ScreenContextService {
             let full = captured.full
             image = await Task.detached(priority: .userInitiated) { () -> (png: Data, width: Double, height: Double)? in
                 let size = fit.resized(width: full.width, height: full.height, longEdgeCap: longEdge)
-                guard let scaled = TeachImage.scaled(full, to: size), let png = TeachImage.png(scaled) else { return nil }
+                guard let scaled = ScreenImage.scaled(full, to: size), let png = ScreenImage.png(scaled) else { return nil }
                 return (png, Double(size.width), Double(size.height))
             }.value
         }

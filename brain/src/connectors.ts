@@ -65,7 +65,7 @@ export function checkConnectorDecision(decision: Decision, context: ConnectorsCo
   const refuse = (why: string): Decision => ({ ...decision, kind: "answer", answer: `${decision.answer ? `${decision.answer}\n\n` : ""}${why}`, connectorCall: undefined, connectorCallJSON: undefined });
   if (!call) return refuse("i meant to use a connector here, but didn't say which one.");
   if (call.connector === "apify") {
-    if (!context?.apify) return refuse("that needs Apify. turn it on in toolbox once a key is configured.");
+    if (!context?.apify) return refuse("that needs Apify. turn it on in connectors once a key is configured.");
     if (!call.actor) return refuse("i didn't pick an Apify actor for that.");
     call.input = isObject(call.input) ? call.input : {};
   } else if (call.connector === "mcp") {

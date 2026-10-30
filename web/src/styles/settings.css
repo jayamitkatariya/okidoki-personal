@@ -1,4 +1,4 @@
-/* ---------- grouped inset lists (shared by settings, keys, toolbox) ---------- */
+/* ---------- grouped inset lists (shared by settings, keys, memory) ---------- */
 
 .pref-group {
   background: var(--tile);
@@ -130,6 +130,10 @@
 .kind-icon.is-warn {
   background: var(--amber-soft);
   color: var(--amber);
+}
+.kind-icon.is-off {
+  background: var(--well-strong);
+  color: var(--faint);
 }
 
 /* row as a button (account switcher, actions) */
@@ -478,6 +482,94 @@
 .swatch.small {
   width: 18px;
   height: 18px;
+}
+
+/* MCP servers, nested under the MCP switch */
+.mcp-list {
+  margin: 0 16px 14px 56px;
+  padding: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.mcp-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--faint);
+}
+.mcp-dot.is-ok {
+  background: var(--accent-bright);
+}
+.mcp-dot.is-error {
+  background: var(--red);
+}
+.mcp-dot.is-pending {
+  background: var(--amber);
+}
+.mcp-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mcp-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.mcp-copy em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mcp-copy em.mcp-error {
+  color: var(--red);
+}
+.mcp-cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mcp-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.mcp-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.mcp-form .mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-form .form-label {
+  margin-top: 0;
+}
+.mcp-form .segmented {
+  align-self: flex-start;
+}
+.mcp-remove {
+  color: var(--red);
+}
+.agent-command {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .settings-foot {

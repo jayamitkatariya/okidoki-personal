@@ -1,18 +1,14 @@
-import { groundTeach, think } from "./llm";
-import { execute, pause, resume, stop, stopAll, validateExecution } from "./executor";
-import { tools, findTools } from "./catalog";
+import { think } from "./llm";
 import { computerAct } from "./computer";
 import { driveStep } from "./computer2";
 import type { DriveRequest } from "./types";
-import { refineTeach, teachStep } from "./teach";
-import { conceptFollowUp, conceptLesson } from "./concept";
 import { checkToken } from "./apify";
 import { closeAll, forget, reconcile, validateMcpServer } from "./mcp";
 import { mcpCatalog, runConnector, stopConnector, stopAllConnectors, validateConnectorRun } from "./connectors";
 import { closeMemory, memoryStatus, syncMemory, warmMemory } from "./memory";
 import { anthropicKey, apifyToken, mossCredentials } from "./keys";
 import { findDocument } from "./finder";
-import { CODING_AGENTS, type ComputerRequest, type ConceptFollowRequest, type ConceptRequest, type ConnectorRunRequest, type ExecuteRequest, type McpServerConfig, type MemorySyncRequest, type TeachRefineRequest, type TeachStepRequest, type ThinkRequest } from "./types";
+import type { ComputerRequest, ConnectorRunRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
@@ -39,10 +35,6 @@ async function body<T>(request: Request): Promise<T> {
   return parsed as T;
 }
 
-function installedTools(): string[] {
-  return tools.filter((tool) => Bun.which(tool.command) !== null).map((tool) => tool.id);
-}
-
 export async function handleRequest(request: Request): Promise<Response> {
   try {
     return await route(request);
@@ -66,23 +58,8 @@ async function route(request: Request): Promise<Response> {
         ok: true,
         version: "0.9.1",
         runtime: `bun ${Bun.version}`,
-        agents: CODING_AGENTS.filter((agent) => Bun.which(agent === "cursor" ? "cursor-agent" : agent) !== null),
-        tools: installedTools(),
         port,
       });
-    }
-
-    if (url.pathname === "/tools" && request.method === "GET") {
-      return json({
-        tools: tools.map((tool) => ({
-          ...tool,
-          installed: Bun.which(tool.command) !== null,
-        })),
-      });
-    }
-
-    if (url.pathname === "/tools/find" && request.method === "GET") {
-      return json({ tools: findTools(url.searchParams.get("q") ?? "") });
     }
 
     if (url.pathname === "/think" && request.method === "POST") {
@@ -109,168 +86,6 @@ async function route(request: Request): Promise<Response> {
         return json(await findDocument(typeof payload.query === "string" ? payload.query : "", key));
       } catch (error) {
         return json({ ok: false, error: error instanceof Error ? error.message : "bad request" }, 400);
-      }
-    }
-
-    if (url.pathname === "/teach/ground" && request.method === "POST") {
-      try {
-        const payload = await body<{
-          screenshotBase64?: string;
-          appName?: string;
-          topic?: string;
-          say?: string;
-          stepIndex?: number;
-          stepCount?: number;
-          space?: "window" | "screen";
-          model?: string;
-        }>(request);
-        const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await groundTeach(
-          {
-            screenshotBase64: payload.screenshotBase64,
-            appName: payload.appName,
-            topic: payload.topic || "",
-            say: payload.say || "",
-            stepIndex: payload.stepIndex ?? 0,
-            stepCount: payload.stepCount ?? 1,
-            space: payload.space === "window" ? "window" : "screen",
-          },
-          key,
-          payload.model || "claude-haiku-5-5",
-        );
-        return json(result);
-      } catch (error) {
-        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
-      }
-    }
-
-    if (url.pathname === "/teach/step" && request.method === "POST") {
-      try {
-        const payload = await body<Partial<TeachStepRequest>>(request);
-        if (!payload.topic) {
-          return json({ error: "topic required" }, 400);
-        }
-        const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await teachStep(
-          {
-            topic: payload.topic,
-            app: payload.app,
-            outline: Array.isArray(payload.outline) ? payload.outline.filter((s) => typeof s === "string").slice(0, 12) : [],
-            log: Array.isArray(payload.log) ? payload.log.slice(-14) : [],
-            stepNumber: payload.stepNumber ?? 1,
-            imageWidth: payload.imageWidth ?? 0,
-            imageHeight: payload.imageHeight ?? 0,
-            screenshotBase64: payload.screenshotBase64,
-            controls: Array.isArray(payload.controls) ? payload.controls.slice(0, 120) : [],
-            mode: payload.mode === "practice" ? "practice" : "guide",
-            known: Array.isArray(payload.known) ? payload.known.filter((k) => typeof k === "string").slice(0, 20) : [],
-            milestones: Array.isArray(payload.milestones) ? payload.milestones.filter((m) => typeof m === "string").slice(0, 6) : [],
-            language: payload.language,
-            model: payload.model,
-            pageTitle: typeof payload.pageTitle === "string" ? payload.pageTitle.slice(0, 200) : undefined,
-            pageURL: typeof payload.pageURL === "string" ? payload.pageURL.slice(0, 300) : undefined,
-            menus: Array.isArray(payload.menus) ? payload.menus.filter((m) => typeof m === "string").slice(0, 40) : [],
-            landed: payload.landed === true,
-          },
-          key,
-        );
-        return json(result);
-      } catch (error) {
-        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
-      }
-    }
-
-    // Newline-delimited JSON: an "intro" line as soon as the title and first sentence exist, then
-    // the full "lesson" (or an "error"). Lets the app start talking while the model is still drawing.
-    if (url.pathname === "/teach/concept/stream" && request.method === "POST") {
-      let payload: Partial<ConceptRequest>;
-      try {
-        payload = await body<Partial<ConceptRequest>>(request);
-      } catch (error) {
-        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
-      }
-      if (!payload.topic) return json({ error: "topic required" }, 400);
-      const key = anthropicKey(request.headers.get("x-anthropic-key"));
-      const topic = payload.topic;
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          const encoder = new TextEncoder();
-          const send = (line: unknown) => {
-            try { controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`)); } catch { /* client went away */ }
-          };
-          conceptLesson(
-            {
-              topic,
-              context: payload.context,
-              pageTitle: payload.pageTitle,
-              pageURL: payload.pageURL,
-              screenshotBase64: payload.screenshotBase64,
-              imageWidth: payload.imageWidth,
-              imageHeight: payload.imageHeight,
-              language: payload.language,
-              model: payload.model,
-            },
-            key,
-            fetch,
-            { intro: (title, intro) => send({ type: "intro", title, intro }) },
-          ).then((result) => {
-            if (result.lesson) send({ type: "lesson", lesson: result.lesson, warnings: result.warnings ?? [] });
-            else send({ type: "error", error: result.error ?? "couldn't build the lesson" });
-          }).catch((error) => {
-            send({ type: "error", error: error instanceof Error ? error.message : "couldn't build the lesson" });
-          }).finally(() => {
-            try { controller.close(); } catch { /* already closed */ }
-          });
-        },
-      });
-      return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache", ...corsHeaders } });
-    }
-
-    if (url.pathname === "/teach/concept/follow" && request.method === "POST") {
-      try {
-        const payload = await body<Partial<ConceptFollowRequest>>(request);
-        if (!payload.topic || !payload.question) {
-          return json({ error: "topic and question required" }, 400);
-        }
-        const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await conceptFollowUp(
-          {
-            topic: payload.topic,
-            question: payload.question,
-            partId: payload.partId,
-            partName: payload.partName,
-            sceneSummary: payload.sceneSummary ?? "",
-            language: payload.language,
-            model: payload.model,
-          },
-          key,
-        );
-        return json(result);
-      } catch (error) {
-        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
-      }
-    }
-
-    if (url.pathname === "/teach/refine" && request.method === "POST") {
-      try {
-        const payload = await body<Partial<TeachRefineRequest>>(request);
-        if (!payload.cropBase64 || !payload.describe) {
-          return json({ error: "crop and describe required" }, 400);
-        }
-        const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await refineTeach(
-          {
-            cropBase64: payload.cropBase64,
-            cropWidth: payload.cropWidth ?? 0,
-            cropHeight: payload.cropHeight ?? 0,
-            describe: payload.describe,
-            model: payload.model,
-          },
-          key,
-        );
-        return json(result);
-      } catch (error) {
-        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
       }
     }
 
@@ -346,52 +161,8 @@ async function route(request: Request): Promise<Response> {
       return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache", ...corsHeaders } });
     }
 
-    if (url.pathname === "/execute" && request.method === "POST") {
-      let payload: ExecuteRequest;
-      try {
-        payload = await body<ExecuteRequest>(request);
-      } catch {
-        return json({ error: "bad request" }, 400);
-      }
-      const invalid = validateExecution(payload);
-      if (invalid) return json({ error: invalid }, 400);
-
-      const stream = new ReadableStream({
-        start(controller) {
-          const encoder = new TextEncoder();
-          let closed = false;
-          const emit = (event: string, data: Record<string, unknown>) => {
-            if (closed) return;
-            try {
-              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-            } catch {
-              closed = true;
-            }
-          };
-          const finish = () => {
-            if (closed) return;
-            closed = true;
-            try { controller.close(); } catch {}
-          };
-          execute(payload, emit).finally(finish);
-          request.signal.addEventListener("abort", () => {
-            // Browser/native disconnected. Let background work continue; just stop writing.
-            closed = true;
-          });
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-          ...corsHeaders,
-        },
-      });
-    }
-
     // Connects to each MCP server and lists its tools. The Mac calls this when servers change, to show
-    // status in the Toolbox and to warm the cache so /think doesn't wait on a cold start.
+    // status in the dashboard and to warm the cache so /think doesn't wait on a cold start.
     if (url.pathname === "/mcp/tools" && request.method === "POST") {
       try {
         const { servers, reconnect } = await body<{ servers: McpServerConfig[]; reconnect?: boolean }>(request);
@@ -456,22 +227,17 @@ async function route(request: Request): Promise<Response> {
       }
     }
 
-    if (["/stop", "/pause", "/resume"].includes(url.pathname) && request.method === "POST") {
+    if (url.pathname === "/stop" && request.method === "POST") {
       const { runId } = await body<{ runId?: unknown }>(request);
       if (typeof runId !== "string" || !runId) return json({ error: "runId required" }, 400);
-      if (url.pathname === "/stop") {
-        const shellStopped = stop(runId);
-        return json({ stopped: stopConnector(runId) || shellStopped });
-      }
-      if (url.pathname === "/pause") return json({ paused: pause(runId) });
-      return json({ resumed: resume(runId) });
+      return json({ stopped: stopConnector(runId) });
     }
 
     return json({ error: "not found" }, 404);
 }
 
 if (import.meta.main) {
-  // idleTimeout defaults to 10 s and would close a slow model call or a job that's quiet for a while.
+  // idleTimeout defaults to 10 s and would close a slow model call or a stream that's quiet for a while.
   const server = Bun.serve({
     port, hostname: "127.0.0.1", idleTimeout: 0, maxRequestBodySize: 64 * 1024 * 1024, fetch: handleRequest,
     error(error) { return json({ error: error.message }, 500); },
@@ -482,7 +248,6 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  stopAll();
   stopAllConnectors();
   closeAll(); // don't leave MCP server processes behind
   void closeMemory();
@@ -493,7 +258,7 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 console.log(`okidoki brain listening on http://127.0.0.1:${server.port}`);
-console.log(`bun ${Bun.version} · ${tools.length} tools in the catalog`);
+console.log(`bun ${Bun.version}`);
 
 const moss = mossCredentials();
 if (moss) {

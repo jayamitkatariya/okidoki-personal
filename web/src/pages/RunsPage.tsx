@@ -7,13 +7,11 @@ import { Button, Chip, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
   quick_action: "bolt",
-  terminal: "terminal",
-  coding: "code",
   background: "runs",
-  teach: "wand",
   watch: "eye",
   borrow: "hand",
   computer_use: "hand",
+  browser: "globe",
   routine: "clock",
   connector: "link",
 };
@@ -21,13 +19,11 @@ const kindGlyph: Record<RunKind, string> = {
 const kindName: Record<RunKind, string> = {
   answer: "Answer",
   quick_action: "Quick action",
-  terminal: "Terminal",
-  coding: "Coding",
   background: "Background",
-  teach: "Teach",
   watch: "Watch",
   borrow: "Borrow",
   computer_use: "Computer use",
+  browser: "Browser",
   routine: "Routine",
   connector: "Connector",
 };
@@ -120,7 +116,7 @@ export function RunsPage() {
       <aside className="runs-list">
         <div className="runs-list-head">
           <div className="runs-heading">
-            <h1 className="page-title-sm">Runs</h1>
+            <h1 className="page-title-sm">Computer</h1>
             {state.runs.length ? <span className="tile-count">{state.runs.length}</span> : null}
           </div>
           <TextField value={query} onChange={setQuery} placeholder="Search runs" icon="search" className="runs-search" />
@@ -325,7 +321,6 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
         <div className="run-meta">
           <span>Started {clockLabel(run.createdAt)}</span>
           {took ? <span>{took}</span> : null}
-          {run.agent ? <span className="run-agent">{run.agent}</span> : null}
           {thread ? (
             <button
               className="run-thread"
@@ -526,7 +521,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
               }}
             />
           </header>
-          <pre ref={outputRef} className="terminal">
+          <pre ref={outputRef} className="run-output">
             {output || "Waiting for output…"}
           </pre>
         </section>
@@ -548,23 +543,17 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
                 <em>freed</em>
               </span>
             ) : null}
-            {run.kind === "teach" ? (
-              <Button variant="secondary" size="sm" icon="play" onClick={() => { invoke("ask", { text: run.prompt }); notify("Walking through it again", run.prompt); }}>
-                Walk through again
-              </Button>
-            ) : (
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="refresh"
-                onClick={() => {
-                  invoke("ask", { text: run.prompt });
-                  notify("Running it again", run.prompt);
-                }}
-              >
-                Run again
-              </Button>
-            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="refresh"
+              onClick={() => {
+                invoke("ask", { text: run.prompt });
+                notify("Running it again", run.prompt);
+              }}
+            >
+              Run again
+            </Button>
           </div>
         </section>
       ) : null}
