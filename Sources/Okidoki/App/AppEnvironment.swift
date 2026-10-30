@@ -28,6 +28,12 @@ final class AppEnvironment: ObservableObject {
     private(set) var watchHUD: WatchHUDController!
     private(set) var notch: NotchController!
     private(set) var driver: ComputerUseDriver!
+    /// okidoki's own browser window, made the first time it's needed.
+    private(set) lazy var browser = BrowserWindowController(environment: self)
+    private(set) lazy var browserDriver = BrowserDriver(environment: self)
+    private(set) lazy var browserReplayer = BrowserReplayer(environment: self)
+    /// The steps of a recording in the browser so far, while one is going.
+    var browserRecording: (() -> [SkillStep])?
     /// The macOS VM computer-use runs drive when settings say so; this Mac otherwise.
     let privateMac = PrivateMacService()
     private(set) var simOverlay: SimOverlayController!
@@ -507,15 +513,17 @@ final class AppEnvironment: ObservableObject {
         guard !reply.isEmpty else { return }
         noteSpokenInput(false)
         answerController.close(restoreApp: false)
-        guard let prior = store.run(runID), prior.status == .asked, prior.kind == .computerUse,
+        guard let prior = store.run(runID), prior.status == .asked, [.computerUse, .browser].contains(prior.kind),
               let threadID = prior.threadID else {
             if let threadID = store.run(runID)?.threadID { continueThread(threadID, text: reply) }
             return
         }
         store.appendMessage(threadID: threadID, role: .user, text: reply)
-        let run = store.createRun(kind: .computerUse, title: prior.title, prompt: reply, threadID: threadID,
+        // The browser agent starts a fresh conversation per run, so it's told the task and the answer.
+        let prompt = prior.kind == .browser ? "\(prior.prompt)\n\nYou asked: \(prior.summary)\nThey answered: \(reply)" : reply
+        let run = store.createRun(kind: prior.kind, title: prior.title, prompt: prompt, threadID: threadID,
                                   preview: prior.preview, steps: (prior.preview?.steps ?? []).map { RunStep(title: $0.text) },
-                                  status: .waiting, builtin: "computer-use")
+                                  status: .waiting, builtin: prior.kind == .browser ? "browser" : "computer-use")
         store.saveNow()
         approveRun(run.id)
     }
@@ -1079,6 +1087,7 @@ final class AppEnvironment: ObservableObject {
         if run.kind == .watch || run.kind == .connector { return }
         // A replay can't resume mid-click either; pausing hands control back, like computer use.
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "paused — control is yours"); return }
+        if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "paused — the page is yours"); return }
         if run.status == .paused {
             if pausedStarts.remove(id) != nil {
                 execute(run)
@@ -1094,8 +1103,12 @@ final class AppEnvironment: ObservableObject {
             store.updateRun(id) { $0.status = .paused }
             return
         }
-        if driver.isActive, [.computerUse, .browser].contains(run.kind) {
+        if driver.isActive, run.kind == .computerUse {
             driver.cancel(reason: "paused — control is yours")
+            return
+        }
+        if browserDriver.isActive, browserDriver.runID == id {
+            browserDriver.cancel(reason: "paused — the page is yours")
             return
         }
         store.updateRun(id) { $0.status = .paused }
@@ -1111,8 +1124,10 @@ final class AppEnvironment: ObservableObject {
         if watch.isRecording, watchRunID == id { stopWatching(); return }
         BrainClient.shared.stop(runID: id)
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "you stopped me"); return }
+        if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "you stopped me"); return }
+        if browserDriver.isActive, browserDriver.runID == id { browserDriver.cancel(reason: "you stopped me"); return }
         if ghost.model.visible, store.run(id)?.kind == .borrow { ghost.cancel() }
-        if driver.isActive, [.computerUse, .browser].contains(store.run(id)?.kind) { driver.cancel(reason: "you stopped me"); return }
+        if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "you stopped me"); return }
         store.cancelRun(id)
         toast(title: "stopped", detail: "you're in charge", kind: .info,
               undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: id)
@@ -1152,8 +1167,12 @@ final class AppEnvironment: ObservableObject {
                     failReplay(runID: run.id, reason: "that skill was deleted before the replay started")
                     return
                 }
-                replayer.begin(skill: skill, runID: run.id, times: times,
-                               values: pendingReplayValues.removeValue(forKey: run.id) ?? [])
+                let values = pendingReplayValues.removeValue(forKey: run.id) ?? []
+                if skill.runsInBrowser {
+                    browserReplayer.begin(skill: skill, runID: run.id, times: times, values: values)
+                } else {
+                    replayer.begin(skill: skill, runID: run.id, times: times, values: values)
+                }
                 return
             }
             let target = run.pickedPath ?? run.prompt
@@ -1172,6 +1191,10 @@ final class AppEnvironment: ObservableObject {
     /// Computer-use runs go to the private Mac when the setting says so. A VM that is set up but
     /// off is booted first; one that isn't set up fails the run rather than quietly driving this Mac.
     private func beginDriving(_ run: AgentRun) {
+        if run.kind == .browser {
+            browserDriver.begin(run: run)
+            return
+        }
         guard store.settings.computerTarget == "vm" else {
             driver.begin(run: run)
             return
@@ -1315,7 +1338,9 @@ final class AppEnvironment: ObservableObject {
         // it runs on to the end with the store already saying "cancelled".
         BrainClient.shared.stop(runID: id)
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "cancelled") }
-        if driver.isActive, [.computerUse, .browser].contains(store.run(id)?.kind) { driver.cancel(reason: "cancelled") }
+        if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "cancelled") }
+        if browserDriver.isActive, browserDriver.runID == id { browserDriver.cancel(reason: "cancelled") }
+        if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "cancelled") }
         store.cancelRun(id)
     }
 
@@ -2150,11 +2175,6 @@ final class AppEnvironment: ObservableObject {
     }
 
     // MARK: - Dashboard + toast
-
-    /// okidoki's own browser window. Filled in by the browser itself (Sources/Okidoki/Browser).
-    func openBrowser(url: URL? = nil) {
-        openDashboard(.browser)
-    }
 
     func openDashboard(_ section: DashboardSection, runID: String? = nil) {
         dashboardRoute = section

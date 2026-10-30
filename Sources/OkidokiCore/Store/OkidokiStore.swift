@@ -450,6 +450,14 @@ public final class OkidokiStore: ObservableObject {
         return skill
     }
 
+    /// A replay repaired some steps (a selector that works again, say): keep the fix so the next one is direct.
+    public func updateSkillSteps(_ id: String, _ steps: [SkillStep]) {
+        guard let index = skills.firstIndex(where: { $0.id == id }), skills[index].steps.count == steps.count else { return }
+        skills[index].steps = steps
+        skills[index].revision = (skills[index].revision ?? 0) + 1
+        skills[index].updatedAt = Date()
+    }
+
     /// Puts back a skill that was just deleted (undo), as a fresh edit so sync keeps it.
     public func restoreSkill(_ skill: Skill) {
         guard !skills.contains(where: { $0.id == skill.id }) else { return }

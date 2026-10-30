@@ -56,7 +56,7 @@ final class DrawingController {
         let view = DrawingView(model: model, onStroke: { [weak self] points in
             self?.finish(points: points)
         }, onTap: { [weak self] in
-            self?.env?.summon.clickedAway()
+            NSLog("OKDBG canvas tap"); self?.env?.summon.clickedAway()
         })
         panel.contentView = DrawingHostingView(rootView: view)
         panel.setFrame(screen.frame, display: false)

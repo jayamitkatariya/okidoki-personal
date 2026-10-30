@@ -9,6 +9,7 @@ import { closeMemory, memoryStatus, syncMemory, warmMemory } from "./memory";
 import { anthropicKey, apifyToken, mossCredentials } from "./keys";
 import { findDocument } from "./finder";
 import type { ComputerRequest, ConnectorRunRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
+import { browserStep, type BrowserRequest } from "./browser";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
@@ -98,6 +99,20 @@ async function route(request: Request): Promise<Response> {
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
         const result = await computerAct(payload, key);
         return json({ action: result.action, usedModel: result.usedModel, error: result.error, meta: result.meta });
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
+      }
+    }
+
+    // The browser agent: one turn of a web task in okidoki's own browser.
+    if (url.pathname === "/browser/step" && request.method === "POST") {
+      try {
+        const payload = await body<BrowserRequest>(request);
+        if (!payload.goal || !payload.runID || !payload.observation) {
+          return json({ error: "goal, runID and observation required" }, 400);
+        }
+        const key = anthropicKey(request.headers.get("x-anthropic-key"));
+        return json(await browserStep(payload, key));
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
       }

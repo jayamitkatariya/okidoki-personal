@@ -80,7 +80,8 @@ public enum ParameterFill {
         var seen = Set<String>()
         var out: [String] = []
         for step in steps where step.action == "type" {
-            for name in names(in: step.input ?? "") where seen.insert(key(name)).inserted { out.append(name) }
+            // `{{vault:site.password}}` is filled from the vault at replay time, never asked for.
+            for name in names(in: step.input ?? "") where !name.hasPrefix("vault:") && seen.insert(key(name)).inserted { out.append(name) }
         }
         return out
     }

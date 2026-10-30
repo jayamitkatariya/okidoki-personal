@@ -499,6 +499,13 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     public var frameY: Double?
     public var frameW: Double?
     public var frameH: Double?
+    /// "browser" for a step taken in okidoki's browser; nil for the Mac's own apps.
+    public var surface: String?
+    /// The page the step was taken on (browser steps).
+    public var url: String?
+    /// Ways to find the element again in the page, most specific first (browser steps). A replay
+    /// that had to fall back moves the one that worked to the front, so the next replay is direct.
+    public var selectors: [String]?
     public init(id: String = UUID().uuidString, text: String, app: String = "",
                 x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,
                 input: String? = nil, toX: Double? = nil, toY: Double? = nil, delay: Double? = nil,
@@ -526,6 +533,21 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
         guard let frameX, let frameY, let frameW, let frameH, frameW > 0, frameH > 0 else { return nil }
         return CGRect(x: frameX, y: frameY, width: frameW, height: frameH)
     }
+
+    public var isBrowser: Bool { surface == "browser" }
+
+    /// A step in okidoki's browser: navigate · click · type · select · press. `input` is the URL,
+    /// the typed text, the option or the key.
+    public static func browser(_ action: String, text: String, url: String, selectors: [String] = [],
+                               label: String? = nil, role: String? = nil, input: String? = nil,
+                               delay: Double? = nil) -> SkillStep {
+        var step = SkillStep(text: text, app: "okidoki browser", action: action, label: label,
+                             input: input, delay: delay, role: role)
+        step.surface = "browser"
+        step.url = url
+        step.selectors = selectors.isEmpty ? nil : selectors
+        return step
+    }
 }
 
 public struct Skill: Identifiable, Codable, Equatable, Sendable {
@@ -539,6 +561,8 @@ public struct Skill: Identifiable, Codable, Equatable, Sendable {
     public var runCount: Int
     /// Last change on any Mac, so sync keeps the newest copy.
     public var updatedAt: Date?
+    /// How many times a replay repaired a step and saved the fix back. Nil for skills never repaired.
+    public var revision: Int?
 
     public init(id: String = UUID().uuidString, accountID: String, name: String,
                 summary: String, steps: [SkillStep] = [], createdAt: Date = Date(),
@@ -549,6 +573,9 @@ public struct Skill: Identifiable, Codable, Equatable, Sendable {
     }
 
     public var editedAt: Date { updatedAt ?? createdAt }
+
+    /// Every step happens in okidoki's browser, so the replay never needs the mouse.
+    public var runsInBrowser: Bool { !steps.isEmpty && steps.allSatisfy(\.isBrowser) }
 }
 
 public enum RoutineCadence: String, Codable, CaseIterable, Identifiable, Sendable {

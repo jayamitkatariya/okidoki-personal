@@ -559,7 +559,7 @@ export function unsupportedField(error: string | undefined): "tool_choice" | "ou
   return undefined;
 }
 
-type ModelReply = { content?: Array<Record<string, unknown>>; usage?: unknown; stop_reason?: string };
+export type ModelReply = { content?: Array<Record<string, unknown>>; usage?: unknown; stop_reason?: string };
 
 /** Called with each tool call as soon as the model has finished writing it (streaming only). */
 export type OnToolUse = (use: ToolUse) => void;
@@ -668,7 +668,7 @@ async function readEvents(body: ReadableStream<Uint8Array>, onEvent: (type: stri
   }
 }
 
-async function callModel(
+export async function callModel(
   body: Record<string, unknown>, apiKey: string, fetchImpl: typeof fetch, deadline: number, onToolUse?: OnToolUse,
 ): Promise<{ reply?: ModelReply; status?: number; error?: string; emitted?: number }> {
   let lastError = "model unavailable";
