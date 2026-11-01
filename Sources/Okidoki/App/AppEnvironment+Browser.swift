@@ -81,11 +81,13 @@ extension AppEnvironment {
     }
 
     /// One field of a vault login, for a `{{vault:site.field}}` placeholder.
+    /// Only the two fields a login holds: a one-time code or card field recorded as `secret` must never
+    /// get the site's password typed into it.
     func vaultSecret(site: String, field: String) -> String? {
-        guard let login = vaultLogin(for: site) else { return nil }
         switch field {
-        case "username", "email", "user": return login.username
-        default: return login.password
+        case "username", "email", "user": return vaultLogin(for: site)?.username
+        case "password": return vaultLogin(for: site)?.password
+        default: return nil
         }
     }
 }

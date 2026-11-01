@@ -38,8 +38,8 @@ Skills are files you can share: the share icon on a skill saves a `.okiskill`
 
 ## Use it from Claude Code, Cursor and other agents
 
-okidoki is also an MCP server, so your coding agent can list and replay your skills, search the
-and search the vault:
+okidoki is also an MCP server, so your coding agent can list and replay your skills, ask okidoki
+for something, and search the vault:
 
 ```bash
 claude mcp add okidoki -- bun ~/path/to/okidoki-personal/mcp/okidoki-mcp.ts

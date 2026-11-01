@@ -8,6 +8,8 @@ import { Empty } from "../components/ui";
  * every time the layout moves. Leaving the page hides the browser without closing it, so a run or a
  * replay keeps going.
  */
+const OVERLAYS = ".palette, .modal, .account-pop";
+
 export function BrowserPage() {
   const slot = useRef<HTMLDivElement>(null);
 
@@ -19,6 +21,14 @@ export function BrowserPage() {
     const report = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        // The browser is a native view drawn above this page: while the ⌘K palette, a dialog or the
+        // account menu is open, step aside so it isn't hidden underneath and its clicks don't land in the page.
+        if (document.querySelector(OVERLAYS)) {
+          if (last === "hidden") return;
+          last = "hidden";
+          invoke("browserFrame", { hidden: true });
+          return;
+        }
         const r = element.getBoundingClientRect();
         const rect = { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
         const key = JSON.stringify(rect);
@@ -30,6 +40,9 @@ export function BrowserPage() {
     const observer = new ResizeObserver(report);
     observer.observe(element);
     observer.observe(document.body);
+    // Overlays come and go without resizing anything: watch for them directly.
+    const overlays = new MutationObserver(report);
+    overlays.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", report);
     // The sidebar collapsing or a banner appearing moves the slot without resizing it.
     const timer = window.setInterval(report, 400);
@@ -37,6 +50,7 @@ export function BrowserPage() {
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      overlays.disconnect();
       window.removeEventListener("resize", report);
       window.clearInterval(timer);
       invoke("browserFrame", { hidden: true });

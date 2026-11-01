@@ -43,7 +43,7 @@ fi
 
 # Replacing the bundle under a running copy gets it killed for an invalid signature. Quit it first.
 if pgrep -fq "$ROOT/$APP/Contents/MacOS/$OKIDOKI_EXEC"; then
-  echo "▸ Quitting the running $OKIDOKI_APP_NAME…"
+  echo "▸ Quitting the running ${OKIDOKI_APP_NAME}…"
   osascript -e "tell application id \"$OKIDOKI_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
   for _ in $(seq 1 20); do
     pgrep -fq "$ROOT/$APP/Contents/MacOS/$OKIDOKI_EXEC" || break

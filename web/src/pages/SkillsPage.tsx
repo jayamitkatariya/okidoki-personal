@@ -45,6 +45,9 @@ export function SkillsPage() {
   // replay × N
   const [repeatFor, setRepeatFor] = useState<Skill | null>(null);
   const [repeatCount, setRepeatCount] = useState(10);
+  // What's typed in the count field: it may be empty mid-edit, so clamping waits for a real number
+  // (clamping "" to 1 turned "backspace, then 50" into 150).
+  const [repeatDraft, setRepeatDraft] = useState<string | null>(null);
 
   // rename
   const [renaming, setRenaming] = useState<Skill | null>(null);
@@ -315,6 +318,7 @@ export function SkillsPage() {
                     onClick={() => {
                       setRepeatFor(skill);
                       setRepeatCount(10);
+                      setRepeatDraft(null);
                     }}
                   >
                     Repeat…
@@ -488,7 +492,7 @@ export function SkillsPage() {
         <div className="routine-form">
           <div className="repeat-picks">
             {REPEAT_PICKS.map((count) => (
-              <button key={count} type="button" className={cx("repeat-pick", repeatCount === count && "is-selected")} onClick={() => setRepeatCount(count)}>
+              <button key={count} type="button" className={cx("repeat-pick", repeatCount === count && "is-selected")} onClick={() => { setRepeatCount(count); setRepeatDraft(null); }}>
                 ×{count.toLocaleString("en-US")}
               </button>
             ))}
@@ -502,8 +506,14 @@ export function SkillsPage() {
                   min={1}
                   max={10000}
                   aria-label="Number of replays"
-                  value={repeatCount}
-                  onChange={(event) => setRepeatCount(clamp(Math.round(Number(event.target.value) || 1), 1, 10000))}
+                  value={repeatDraft ?? repeatCount}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    setRepeatDraft(raw);
+                    const n = Math.round(Number(raw));
+                    if (raw.trim() && Number.isFinite(n) && n >= 1) setRepeatCount(clamp(n, 1, 10000));
+                  }}
+                  onBlur={() => setRepeatDraft(null)}
                 />
               </label>
               <span className="repeat-note">

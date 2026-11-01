@@ -165,19 +165,26 @@ final class SkillReplayer {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
+            // Esc during the wait above: `try? Task.sleep` returns at once, so check before typing.
+            if Task.isCancelled { return nil }
             await EventActuator.typeText(text)
             return nil
         case "key":
             guard let combo = step.input, !combo.isEmpty else { return nil }
             // The skill's own escape goes out stamped synthetic, so the Esc monitor can tell it from the
             // user's: a real Esc stops the replay even in the instant the skill presses one.
-            let ok = combo.hasSuffix("escape") ? await EventActuator.pressKey(combo) : await offMain { AccessibilityActions.press(combo) }
+            // pressKey follows the live keyboard layout (⌘A must stay ⌘A on AZERTY, not become ⌘Q) and
+            // stamps the event synthetic; raw key codes it can't resolve go out the old way.
+            if Task.isCancelled { return nil }
+            var ok = await EventActuator.pressKey(combo)
+            if !ok, EventActuator.canPost { ok = await offMain { AccessibilityActions.press(combo) } }
             return ok ? nil : "couldn't press \(WatchRecorder.prettyCombo(combo))"
         case "scroll":
             // Scrolling somewhere near the right place is fine; it isn't worth waiting for.
             guard let point = await locate(step, patient: false).point else { return nil }
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 350_000_000)
+            if Task.isCancelled { return nil }
             let dy = step.toY ?? 0
             return await offMain { AccessibilityActions.scroll(at: point, dy: dy) } ? nil : "couldn't scroll"
         case "drag":
@@ -194,6 +201,7 @@ final class SkillReplayer {
             let to = CGPoint(x: tx + target.shift.width, y: ty + target.shift.height)
             moveGhost(to: from)
             try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return nil }
             model.clicking = true
             let ok = await offMain { AccessibilityActions.drag(from: from, to: to) }
             moveGhost(to: to)
@@ -215,6 +223,7 @@ final class SkillReplayer {
             guard let point = target.point else { return "can't find where to click" }
             moveGhost(to: point)
             try? await Task.sleep(nanoseconds: 650_000_000)
+            if Task.isCancelled { return nil }
             model.clicking = true
             let (button, count) = SkillReplayGeometry.clickShape(action)
             let ok = await offMain { AccessibilityActions.click(at: point, button: button, count: count) }

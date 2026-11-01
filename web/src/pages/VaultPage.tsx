@@ -241,6 +241,8 @@ function Credentials({ vault }: { vault: VaultState }) {
   const [remember, setRemember] = useState(() => Boolean(vault.rememberedPassphrase || rememberedPassphrase(salt)));
   const [key, setKey] = useState<CryptoKey | null>(null);
   const [draftPass, setDraftPass] = useState("");
+  // Setting the first passphrase asks for it twice: a typo would seal every login with a passphrase no one knows.
+  const [confirmPass, setConfirmPass] = useState("");
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<VaultLogin | null | "new">(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -263,6 +265,10 @@ function Credentials({ vault }: { vault: VaultState }) {
   const unlock = async () => {
     const value = draftPass;
     if (!value) return;
+    if (vault.logins.length === 0 && value !== confirmPass) {
+      notify("Passphrases don’t match", "Type the same passphrase in both fields.", "warning");
+      return;
+    }
     // With logins already there, a wrong passphrase is caught here rather than on the first reveal.
     const first = vault.logins[0];
     if (first && (await decryptSecret(await deriveVaultKey(value, salt), first.ciphertext, first.iv)) === null) {
@@ -271,6 +277,7 @@ function Credentials({ vault }: { vault: VaultState }) {
     }
     setPassphrase(value);
     setDraftPass("");
+    setConfirmPass("");
     if (remember) {
       rememberPassphrase(salt, value);
       if (native) invoke("saveVaultPassphrase", { passphrase: value });
@@ -333,11 +340,14 @@ function Credentials({ vault }: { vault: VaultState }) {
           </header>
           <div className="form-stack">
             <TextField value={draftPass} onChange={setDraftPass} type="password" icon="key" placeholder="Vault passphrase" onEnter={() => void unlock()} />
+            {vault.logins.length === 0 ? (
+              <TextField value={confirmPass} onChange={setConfirmPass} type="password" icon="key" placeholder="Same passphrase again" onEnter={() => void unlock()} />
+            ) : null}
             <div className="form-inline">
               <span className="form-label">Remember on this Mac</span>
               <Switch checked={remember} onChange={setRemember} />
             </div>
-            <Button variant="primary" disabled={!draftPass} onClick={() => void unlock()}>
+            <Button variant="primary" disabled={!draftPass || (vault.logins.length === 0 && !confirmPass)} onClick={() => void unlock()}>
               {vault.logins.length ? "Unlock" : "Set passphrase"}
             </Button>
           </div>

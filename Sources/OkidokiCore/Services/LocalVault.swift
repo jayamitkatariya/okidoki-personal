@@ -55,8 +55,8 @@ public final class LocalVault: ObservableObject {
     public static let passphraseKey = "vaultPassphrase"
 
     /// Enough for any sensible documents folder; a home folder picked by mistake stops here.
-    public static let maxFiles = 5_000
-    public static let maxDepth = 4
+    public nonisolated static let maxFiles = 5_000
+    public nonisolated static let maxDepth = 4
     public static let maxUpload = 200 * 1024 * 1024
 
     @Published public private(set) var files: [VaultFile] = []
@@ -85,6 +85,14 @@ public final class LocalVault: ObservableObject {
         if let data = try? Data(contentsOf: storeURL), let book = try? decoder.decode(Book.self, from: data) {
             salt = book.salt
             logins = book.logins
+        } else if FileManager.default.fileExists(atPath: storeURL.path) {
+            // Unreadable, not missing: keep it aside instead of overwriting it with an empty vault on the
+            // next save, so the sealed logins can still be recovered.
+            let aside = storeURL.deletingPathExtension()
+                .appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
+            try? FileManager.default.moveItem(at: storeURL, to: aside)
+            salt = UUID().uuidString
+            logins = []
         } else {
             salt = UUID().uuidString
             logins = []

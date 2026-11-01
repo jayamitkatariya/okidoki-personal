@@ -94,7 +94,9 @@ final class AppEnvironment: ObservableObject {
     /// Seconds before the next try after the memory index failed to sync; doubles up to two minutes.
     private var memoryRetryDelay: Double = 5
     /// Hash of the last memory payload the brain accepted, so an unchanged store isn't re-sent.
-    private var lastMemoryHash: Int?
+    /// The last payload the brain indexed. Compared byte for byte: Data's hashValue only covers its
+    /// length and first bytes, so a same-length edit (a renamed memory) looked unchanged.
+    private var lastMemoryHash: Data?
     private var callTimer: Timer?
     /// Lets local tools (the MCP server, scripts) list and replay skills. 127.0.0.1 only, token required.
     private var control: ControlServer?
@@ -613,14 +615,14 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Request pipeline
 
-    func askFromDashboard(_ text: String) {
+    func askFromDashboard(_ text: String, source: String = "dashboard") {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         noteSpokenInput(false)
         Task {
             await handleRequest(text: trimmed, appName: "mac", bundleID: "", threadID: nil,
                                 screenshot: nil, selection: nil, attachmentName: "",
-                                documentText: "", source: "dashboard")
+                                documentText: "", source: source)
         }
     }
 
@@ -667,7 +669,8 @@ final class AppEnvironment: ObservableObject {
         let lower = text.lowercased()
         // A circled region is the thing to summarise; only ask for a file when there's nothing attached,
         // and never for a routine: a file picker would sit open on an unattended Mac.
-        if document.isEmpty, screenshot == nil, !Self.isUnattended(source),
+        // Nor for another agent's request (MCP): a modal picker it never asked for would block the Mac.
+        if document.isEmpty, screenshot == nil, !Self.isUnattended(source), source != "control",
            (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
             if let url = await pickFile(kind: "pdf", prompt: "choose a PDF to read") {
                 document = DocumentReader.read(url: url) ?? ""
@@ -802,12 +805,22 @@ final class AppEnvironment: ObservableObject {
             await performQuickAction(decision: decision, request: request, threadID: threadID, source: source)
 
         case .routine:
+            // A routine firing must do its job, never schedule itself again.
+            if source == "routine" {
+                let run = store.createRun(kind: .routine, title: decision.title, prompt: request.text,
+                                          threadID: threadID, status: .failed)
+                store.updateRun(run.id) { $0.summary = "this routine's request reads like a schedule; edit it to say what to do each time" }
+                present(makeAnswerCard(decision: decision, request: request, threadID: threadID, run: run), source: source)
+                break
+            }
             let weekday = decision.routineWeekday ?? 6
             var hour = decision.routineHour ?? 17
             if hour < 0 || hour > 23 { hour = 17 }
             let cadence = RoutineCadence(rawValue: decision.routineCadence ?? "weekly") ?? .weekly
             let name = decision.routineName ?? decision.title
-            let routine = store.createRoutine(name: name, prompt: request.text,
+            // What to run each time, in their words ("summarize my inbox"), not the scheduling sentence.
+            let each = decision.commands.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let routine = store.createRoutine(name: name, prompt: each ?? request.text,
                                               cadence: cadence, weekday: weekday, hour: hour,
                                               minute: decision.routineMinute ?? 0)
             let run = store.createRun(kind: .routine, title: "routine · \(routine.name)",
@@ -896,6 +909,18 @@ final class AppEnvironment: ObservableObject {
     private func performQuickAction(decision: BrainDecision, request: BrainRequest,
                                     threadID: String, source: String) async {
         guard let action = decision.quickAction else {
+            let run = store.createRun(kind: .quickAction, title: decision.title, prompt: request.text,
+                                      threadID: threadID, status: .done)
+            present(makeAnswerCard(decision: decision, request: request, threadID: threadID, run: run), source: source)
+            return
+        }
+        // A single click is the borrow flow (find it, ghost cursor, click once), not something done here.
+        if action.type == "click" {
+            await prepareBorrow(decision: decision, request: request, threadID: threadID, source: source)
+            return
+        }
+        // Anything else this Mac can't perform: show the answer instead of claiming it's done.
+        guard action.type == "event" || action.type == "move_event" else {
             let run = store.createRun(kind: .quickAction, title: decision.title, prompt: request.text,
                                       threadID: threadID, status: .done)
             present(makeAnswerCard(decision: decision, request: request, threadID: threadID, run: run), source: source)
@@ -1113,7 +1138,7 @@ final class AppEnvironment: ObservableObject {
                   undoLabel: nil, onUndo: nil, editLabel: "settings", onEdit: { [weak self] in self?.openDashboard(.settings) }, runID: id)
             return
         }
-        if let blocked = SafetyPolicy.blocked(commands: run.preview?.commands ?? [], settings: store.settings) {
+        if let blocked = SafetyPolicy.blocked(commands: (run.preview?.commands ?? []) + (run.preview?.apps ?? []), settings: store.settings) {
             store.finishRun(id, status: .failed, summary: blocked)
             return
         }
@@ -1233,7 +1258,7 @@ final class AppEnvironment: ObservableObject {
             store.saveNow()
             return
         }
-        if let blocked = SafetyPolicy.blocked(commands: run.preview?.commands ?? [], settings: store.settings) {
+        if let blocked = SafetyPolicy.blocked(commands: (run.preview?.commands ?? []) + (run.preview?.apps ?? []), settings: store.settings) {
             store.finishRun(run.id, status: .failed, summary: blocked)
             store.saveNow()
             return
@@ -1582,7 +1607,7 @@ final class AppEnvironment: ObservableObject {
     private func chatContext() -> ChatCommands.Context {
         ChatCommands.Context(skills: store.activeSkills,
                              recording: watch.isRecording,
-                             replaying: replayer.isActive,
+                             replaying: replayer.isActive || browserReplayer.isActive,
                              hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil,
                              records: SkillRecords.load())
     }
@@ -1680,7 +1705,8 @@ final class AppEnvironment: ObservableObject {
 
         case .stopReplay:
             summon.hideInput()
-            replayer.cancel(reason: "you said stop")
+            if replayer.isActive { replayer.cancel(reason: "you said stop") }
+            if browserReplayer.isActive { browserReplayer.cancel(reason: "you said stop") }
 
         case .deleteSkill(let id):
             guard let skill = store.skill(id) else { return }
@@ -1722,11 +1748,11 @@ final class AppEnvironment: ObservableObject {
 
         // MARK: Records and the vault
 
-        case .replayRecords(let id, let recordIDs, let values):
+        case .replayRecords(let id, let recordIDs, let values, let times):
             guard let skill = store.skill(id) else { return reply("hm", "that skill isn't here anymore.") }
             let records = SkillRecords.load()
             let picked = recordIDs.compactMap { rid in records.first { $0.id == rid } }
-            let passes = picked.isEmpty ? [values] : picked.map { $0.fillValues.merging(values) { _, typed in typed } }
+            let passes = picked.isEmpty ? Array(repeating: values, count: max(1, times)) : picked.map { $0.fillValues.merging(values) { _, typed in typed } }
             startReplayFromChat(skill, times: 1, threadID: thread.id, source: source, values: passes)
 
         case .addToVault(let query, let url, let folder):
@@ -1742,13 +1768,18 @@ final class AppEnvironment: ObservableObject {
 
     /// A replay asked for in the chat starts straight away, like any other job asked for there:
     /// the same approval rules apply (always-ask apps still ask), nothing extra.
-    func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String, values: [[String: String]] = []) {
-        if replayer.isActive { replayer.cancel(reason: "replaying \(skill.name) instead") }
+    /// Returns false when nothing started (a recording is in progress, or another tool asked while a replay runs).
+    @discardableResult
+    func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String, values: [[String: String]] = []) -> Bool {
         if watch.isRecording {
             toast(title: "still recording", detail: "save or discard the recording first", kind: .warning,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-            return
+            return false
         }
+        // Another agent must never cut off the user's own replay; the user asking for a new one may.
+        if source == "control", replayer.isActive || browserReplayer.isActive { return false }
+        if replayer.isActive { replayer.cancel(reason: "replaying \(skill.name) instead") }
+        if browserReplayer.isActive { browserReplayer.cancel(reason: "replaying \(skill.name) instead") }
         let passes = max(1, min(times, 10_000))
         let run = makeReplayRun(skill, times: passes, threadID: threadID, values: values)
         let refs = values.compactMap { $0["ref"] }
@@ -1757,6 +1788,7 @@ final class AppEnvironment: ObservableObject {
                             text: "replaying “\(skill.name)” \(count) — \(skill.steps.count) steps. esc stops me.", runID: run.id)
         let decision = BrainDecision(kind: .borrow, title: "replay · \(skill.name)", answer: "", risk: run.preview?.risk ?? .medium)
         startOrAsk(run, decision: decision, threadID: threadID, source: source)
+        return true
     }
 
     func finishReplay(runID: String, passes: Int) {
@@ -2219,8 +2251,9 @@ final class AppEnvironment: ObservableObject {
             memories: index.memories, threads: index.threads, runs: index.runs, skills: index.skills)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .sortedKeys  // stable bytes, so an unchanged index isn't re-sent
         guard let data = try? encoder.encode(payload) else { return }
-        let hash = data.hashValue
+        let hash = data
         guard hash != lastMemoryHash else { return }
         let result = await BrainClient.shared.memorySync(payload)
         if let result { memoryIndex = result.status }

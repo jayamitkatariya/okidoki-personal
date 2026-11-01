@@ -82,6 +82,18 @@ final class ChatCommandsTests: XCTestCase {
         XCTAssertNil(parse("delete the old files"))
     }
 
+    func testConversationIsNotASkillCommand() {
+        let submit = Skill(id: "s4", accountID: "a", name: "submit invoice", summary: "")
+        let context = ChatCommands.Context(skills: skills + [submit], recording: false, replaying: false, hasReplayed: false)
+        XCTAssertNil(ChatCommands.parse("forget it", context: context))
+        XCTAssertNil(ChatCommands.parse("forget my password", context: context))
+        XCTAssertNil(ChatCommands.parse("rename the file to report.pdf", context: context))
+        XCTAssertNil(parse("redo the email in a friendlier tone"))
+        XCTAssertNil(parse("repeat the last answer"))
+        XCTAssertEqual(parse("forget invoice flow"), .deleteSkill(skillID: "s1"))
+        XCTAssertEqual(parse("repeat invoice flow"), .replay(skillID: "s1", times: 1))
+    }
+
     // MARK: - Waiting
 
     func testWhatsWaiting() {

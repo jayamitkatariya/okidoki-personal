@@ -44,6 +44,7 @@ public enum BrowserSteps {
         let what = label.map { "“\($0)”" } ?? "the field"
         switch action {
         case "click": return "click \(label.map { "“\($0)”" } ?? "it")"
+        case "hover": return "point at \(label.map { "“\($0)”" } ?? "it")"
         case "type":
             let text = input ?? ""
             if text.hasPrefix("{{vault:") { return "fill \(what) from your vault" }

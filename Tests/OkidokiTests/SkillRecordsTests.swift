@@ -69,6 +69,8 @@ final class RecordCommandTests: XCTestCase {
     func testOverridesRideAlong() {
         XCTAssertEqual(parse("file the entry for MTS-4471 with value=150000"),
                        .replayRecords(skillID: "ace", recordIDs: ["MTS-4471"], values: ["value": "150000"]))
+        XCTAssertEqual(parse("replay file ACE entry 3 times with hts=8471.30.0100"),
+                       .replayRecords(skillID: "ace", recordIDs: [], values: ["hts": "8471.30.0100"], times: 3))
         XCTAssertEqual(parse("replay file ace entry with ref=TEST-1 hts=8517.13.0000"),
                        .replayRecords(skillID: "ace", recordIDs: [], values: ["ref": "TEST-1", "hts": "8517.13.0000"]))
     }

@@ -92,7 +92,11 @@ final class GhostCursorController {
     init(environment: AppEnvironment) { self.env = environment }
 
     func begin(target: String, runID: String) {
-        guard !model.visible else { return }
+        // Already clicking something: fail this run rather than leave it "running" forever.
+        guard !model.visible else {
+            env?.store.finishRun(runID, status: .failed, summary: "already clicking something; ask again in a moment")
+            return
+        }
         self.runID = runID
         cancelled = false
         session += 1

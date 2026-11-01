@@ -16,6 +16,40 @@ extension BrainClient {
             return nil
         }
     }
+
+    /// The same turn, streamed: `onAction` runs each action the moment the model has written it (while
+    /// it writes the next) and returns false once the run is over, which stops listening. Returns the
+    /// actions that didn't stream (nil when the brain didn't answer) and how many did.
+    func browserStepStream(_ body: [String: Any], onAction: ([String: Any]) async -> Bool)
+        async -> (rest: [[String: Any]]?, received: Int, stopped: Bool) {
+        var request = drivingRequest(path: "browser/step/stream", timeout: 70)
+        var received = 0
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return (nil, 0, false) }
+            for try await line in bytes.lines {
+                guard let data = line.data(using: .utf8),
+                      let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                switch item["type"] as? String {
+                case "action":
+                    guard let action = item["action"] as? [String: Any] else { continue }
+                    received += 1
+                    if !(await onAction(action)) {
+                        bytes.task.cancel()
+                        return ([], received, true)
+                    }
+                case "end":
+                    return (item["actions"] as? [[String: Any]] ?? [], received, false)
+                default:
+                    continue
+                }
+            }
+        } catch {
+            return (received > 0 ? [] : nil, received, false)
+        }
+        return (received > 0 ? [] : nil, received, false)
+    }
 }
 
 /// Web tasks in okidoki's browser. The agent reads the page as text, acts on elements by number, and
@@ -72,6 +106,8 @@ final class BrowserDriver {
             let page = await browser.snapshot()
             var observation: [String: Any] = ["url": page.url, "title": page.title, "elements": page.elements, "text": page.text]
             if !page.downloads.isEmpty { observation["downloads"] = page.downloads }
+            if !page.dialogs.isEmpty { observation["dialogs"] = page.dialogs }
+            if let loadError = page.loadError { observation["loadError"] = loadError }
             // A blank or unreadable page gets a look even if the model didn't ask.
             if lookNext || (page.count == 0 && !page.url.isEmpty && !page.url.hasPrefix("about:")),
                let shot = await browser.screenshot() {
@@ -82,40 +118,53 @@ final class BrowserDriver {
                 "runID": run.id, "goal": run.prompt, "step": step, "observation": observation,
                 "results": results, "logins": logins, "settings": ["claudeModel": env.store.settings.claudeModel],
             ]
-            guard let actions = await BrainClient.shared.browserStep(body) else {
-                if Task.isCancelled { return }
-                finish(run, success: false, summary: "the brain didn't answer, so i stopped. try again in a moment.")
-                return
-            }
-            if Task.isCancelled { return }
             results = []
             var halted = false
-            for action in actions {
-                if Task.isCancelled { return }
-                if halted { results.append(["ok": false, "detail": "not run: an earlier action failed"]); continue }
+            var ended = false
+            // One action of this turn. False once the run is over (finished, asked, or stopped).
+            let handle: ([String: Any]) async -> Bool = { action in
+                if Task.isCancelled { ended = true; return false }
+                if halted { results.append(["ok": false, "detail": "not run: an earlier action failed"]); return true }
                 let type = action["type"] as? String ?? ""
                 switch type {
                 case "finish":
-                    if let extracted { log(run.id, "data:\n" + Self.json(extracted)) }
-                    finish(run, success: action["success"] as? Bool ?? false, summary: action["summary"] as? String ?? "done")
-                    return
+                    if let extracted { self.log(run.id, "data:\n" + Self.json(extracted)) }
+                    self.finish(run, success: action["success"] as? Bool ?? false, summary: action["summary"] as? String ?? "done")
+                    ended = true
+                    return false
                 case "ask":
-                    ask(run, question: action["question"] as? String ?? "what should i do next?")
-                    return
+                    self.ask(run, question: action["question"] as? String ?? "what should i do next?")
+                    ended = true
+                    return false
                 case "screenshot":
                     lookNext = true
                     results.append(["ok": true])
                 case "extract":
                     extracted = action["data"]
                     results.append(["ok": true])
+                case "wait":
+                    let seconds = min(10, max(1, (action["seconds"] as? NSNumber)?.doubleValue ?? 2))
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    await browser.settle(limit: 4)
+                    results.append(["ok": true])
                 default:
-                    let outcome = await perform(type, action, browser: browser, url: page.url)
+                    let outcome = await self.perform(type, action, browser: browser, url: page.url)
                     results.append(outcome.ok ? ["ok": true] : ["ok": false, "detail": outcome.detail ?? "didn't work"])
                     if outcome.ok, let line = outcome.line { browser.updateWork(line) }
-                    log(run.id, outcome.ok ? "→ \(outcome.line ?? type)" : "✗ \(type): \(outcome.detail ?? "didn't work")")
+                    self.log(run.id, outcome.ok ? "→ \(outcome.line ?? type)" : "✗ \(type): \(outcome.detail ?? "didn't work")")
                     if !outcome.ok { halted = true }
                 }
+                return true
             }
+            // Streamed: the first action starts while the model is still writing the rest of the turn.
+            let turn = await BrainClient.shared.browserStepStream(body, onAction: handle)
+            if ended || Task.isCancelled { return }
+            guard let rest = turn.rest else {
+                finish(run, success: false, summary: "the brain didn't answer, so i stopped. try again in a moment.")
+                return
+            }
+            for action in rest where !(await handle(action)) { return }
+            if ended || Task.isCancelled { return }
         }
         finish(run, success: false, summary: "that took more than \(Self.maxTurns) turns, so i stopped. it may be most of the way there.")
     }
@@ -155,7 +204,7 @@ final class BrowserDriver {
             let result = await browser.fillLogin(username: login.username, password: login.password)
             if result.ok { learned.append(BrowserSteps.login(site: login.site, url: url, delay: gap)) }
             return Outcome(ok: result.ok, detail: result.detail, line: "signing in to \(login.site)")
-        case "click", "type", "select", "press", "scroll":
+        case "click", "hover", "type", "select", "press", "scroll":
             var payload: [String: Any] = ["action": type]
             if let ref = action["ref"] as? Int { payload["ref"] = ref }
             if let text = action["text"] as? String { payload["text"] = text }
@@ -166,8 +215,10 @@ final class BrowserDriver {
             let result = await browser.act(payload)
             guard result.ok else { return Outcome(ok: false, detail: result.detail) }
             if ["click", "press"].contains(type) || payload["submit"] as? Bool == true {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                await browser.settle(limit: 6)
+                // Whatever the action set off (a new page, results arriving) gets its moment, no longer.
+                await browser.settle(limit: 6, fresh: true)
+            } else if type == "hover" {
+                await browser.settle(limit: 1.5, fresh: true)
             }
             // Scrolling isn't part of the skill: a replay finds elements wherever they are.
             guard type != "scroll" else { return Outcome(ok: true, line: "scrolling") }
@@ -180,6 +231,10 @@ final class BrowserDriver {
             if type == "type", payload["submit"] as? Bool == true {
                 learned.append(.browser("press", text: BrowserSteps.line("press", label: nil, input: "Enter"), url: url,
                                         selectors: result.selectors, input: "Enter", delay: 0.2))
+            }
+            // Typed now from the task, not the vault; the saved skill fills it from the vault next time.
+            if type == "type", result.role == "password" {
+                return Outcome(ok: true, line: "type the password in \(result.label.map { "“\($0)”" } ?? "the field")")
             }
             return Outcome(ok: true, line: BrowserSteps.line(type, label: result.label, input: input))
         default:
@@ -341,7 +396,9 @@ final class BrowserReplayer {
                     let here = BrowserSteps.host(of: browser.webView.url?.absoluteString ?? "")
                     guard BrowserSteps.sameSite(here, ref.site) else { return .failed("the page is \(here), not \(ref.site), so the secret wasn't typed") }
                     guard let secret = env.vaultSecret(site: ref.site, field: ref.field) else {
-                        return .failed("no unlocked vault login for \(ref.site)")
+                        let known = ["username", "email", "user", "password"].contains(ref.field)
+                        return .failed(known ? "no unlocked vault login for \(ref.site)"
+                                             : "this field needs a code or card number only you have; type it, then replay again")
                     }
                     input = secret
                 } else {
@@ -350,6 +407,7 @@ final class BrowserReplayer {
             }
             var payload: [String: Any] = ["action": action, "selectors": step.selectors ?? []]
             if action == "type" { payload["text"] = input ?? "" }
+            if action == "type", let kind = Self.secretKind(step) { payload["secret"] = kind }
             if action == "select" { payload["value"] = input ?? "" }
             if action == "press" { payload["key"] = input ?? "Enter" }
             // Pages that build themselves after load: give the element a moment to appear.
@@ -368,8 +426,9 @@ final class BrowserReplayer {
                 result = rescued
             }
             if ["click", "press"].contains(action) {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                await browser.settle(limit: 6)
+                await browser.settle(limit: 6, fresh: true)
+            } else if action == "hover" {
+                await browser.settle(limit: 1.5, fresh: true)
             }
             // A later selector found it, or the brain did: put what works first for next time.
             if result.matched > 0 || result.matched == -2 {
@@ -384,6 +443,13 @@ final class BrowserReplayer {
         var out: [String] = []
         for selector in found + old where !out.contains(selector) { out.append(selector) }
         return Array(out.prefix(10))
+    }
+
+    /// Which vault field a typing step fills, so the page can refuse to put it anywhere else: a shared
+    /// skill must not be able to type the password into a search box or a comment on the same site.
+    static func secretKind(_ step: SkillStep) -> String? {
+        guard let ref = BrowserSteps.vaultReference(in: step.input ?? "") else { return nil }
+        return ref.field == "password" ? "password" : "username"
     }
 
     /// One step, by the brain: it's told what the step was and picks the element on today's page.
@@ -415,6 +481,7 @@ final class BrowserReplayer {
         env.store.updateRun(runID) { $0.output += ($0.output.isEmpty ? "" : "\n") + "→ rescued by the model: element \(ref)" }
         var payload: [String: Any] = ["action": step.action ?? "click", "ref": ref]
         if step.action == "type" { payload["text"] = input ?? "" }
+        if step.action == "type", let kind = Self.secretKind(step) { payload["secret"] = kind }
         if step.action == "select" { payload["value"] = input ?? "" }
         if step.action == "press" { payload["key"] = input ?? "Enter" }
         var result = await browser.act(payload)

@@ -21,28 +21,43 @@ final class ControlServer {
     static var infoURL: URL { AppPaths.support("control.json") }
 
     func start() {
+        // A control.json left by a crash names a dead port and token; local tools would get 401s.
+        try? FileManager.default.removeItem(at: Self.infoURL)
         let wanted = UInt16(ProcessInfo.processInfo.environment["OKIDOKI_CONTROL_PORT"] ?? "") ?? Self.defaultPort
-        for candidate in [wanted, 0] {
-            guard let port = NWEndpoint.Port(rawValue: candidate) else { continue }
-            let parameters = NWParameters.tcp
-            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
-            parameters.allowLocalEndpointReuse = true
-            guard let listener = try? NWListener(using: parameters) else { continue }
-            listener.newConnectionHandler = { [weak self] connection in
-                Task { @MainActor in self?.accept(connection) }
-            }
-            listener.stateUpdateHandler = { [weak self] state in
-                guard case .ready = state else { return }
-                Task { @MainActor in
-                    guard let self, let bound = self.listener?.port?.rawValue else { return }
-                    self.port = bound
-                    self.writeInfo()
-                }
-            }
-            listener.start(queue: .main)
-            self.listener = listener
+        listen(on: wanted)
+    }
+
+    /// Binding failures (the port is taken) arrive later as `.failed`, not as a throw: retry on any free port.
+    private func listen(on candidate: UInt16) {
+        guard let port = NWEndpoint.Port(rawValue: candidate) else { return }
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
+        guard let listener = try? NWListener(using: parameters) else {
+            if candidate != 0 { listen(on: 0) }
             return
         }
+        listener.newConnectionHandler = { [weak self] connection in
+            Task { @MainActor in self?.accept(connection) }
+        }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            Task { @MainActor in
+                guard let self, let listener, listener === self.listener else { return }
+                switch state {
+                case .ready:
+                    guard let bound = listener.port?.rawValue else { return }
+                    self.port = bound
+                    self.writeInfo()
+                case .failed:
+                    listener.cancel()
+                    self.listener = nil
+                    if candidate != 0 { self.listen(on: 0) }
+                default:
+                    break
+                }
+            }
+        }
+        listener.start(queue: .main)
+        self.listener = listener
     }
 
     func stop() {
@@ -146,8 +161,10 @@ final class ControlServer {
             let times = max(1, min(request.body["times"] as? Int ?? 1, 100))
             let values = (request.body["values"] as? [String: Any] ?? [:]).compactMapValues { "\($0)" }
             let thread = env.store.threadForContext(app: "mac", topic: "skills", text: "replay \(skill.name)")
-            env.startReplayFromChat(skill, times: times, threadID: thread.id, source: "control",
-                                    values: values.isEmpty ? [] : Array(repeating: values, count: times))
+            guard env.startReplayFromChat(skill, times: times, threadID: thread.id, source: "control",
+                                          values: values.isEmpty ? [] : Array(repeating: values, count: times)) else {
+                return (409, ["error": "okidoki is busy recording or replaying; try again when it's done"])
+            }
             return (200, ["ok": true, "skill": skill.name, "times": times,
                           "note": "started; okidoki may ask for an okay in the notch first"])
         case ("GET", "/vault/search"):
@@ -159,7 +176,7 @@ final class ControlServer {
         case ("POST", "/ask"):
             let text = (request.body["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return (400, ["error": "nothing to ask"]) }
-            env.askFromDashboard(text)
+            env.askFromDashboard(text, source: "control")
             return (200, ["ok": true, "note": "okidoki is on it; anything risky waits for an okay in the notch"])
         default:
             return (404, ["error": "no such route"])

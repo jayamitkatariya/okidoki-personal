@@ -117,8 +117,9 @@ public final class OkidokiStore: ObservableObject {
         self.settings = state.settings
         self.threads = state.threads
         self.memories = memories
-        // Only this Mac's own runs were cut off by its restart; another Mac's are still its business.
-        self.runs = runs.map { $0.origin == device ? $0.recoveredAfterRestart() : $0 }
+        // Everything is local now: any run left mid-flight was cut off by the restart, including runs
+        // from a state file restored onto a new Mac (its origin is the old Mac's id).
+        self.runs = runs.map { $0.recoveredAfterRestart() }
         self.skills = state.skills
         self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)

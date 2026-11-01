@@ -149,3 +149,18 @@ test("a body that isn't JSON, or isn't an object, is a 400 with a reason — nev
     expect([path, missing.status]).toEqual([path, path === "/apify/check" ? 200 : 400]);
   }
 });
+
+test("/browser/step/stream ends with the finished turn as one NDJSON line", async () => {
+  const observation = { url: "https://example.com/", title: "Example", elements: "", text: "" };
+  const bad = await fetch(base + "/browser/step/stream", { method: "POST", headers, body: JSON.stringify({ goal: "x" }) });
+  expect(bad.status).toBe(400);
+  const response = await fetch(base + "/browser/step/stream", {
+    method: "POST", headers, body: JSON.stringify({ runID: "r-stream", goal: "find the weather", step: 0, observation }),
+  });
+  expect(response.headers.get("content-type")).toContain("application/x-ndjson");
+  const lines = (await response.text()).trim().split("\n").map((line) => JSON.parse(line));
+  // No key: nothing streams, and the end line carries the finish that says why.
+  expect(lines).toHaveLength(1);
+  expect(lines[0].type).toBe("end");
+  expect(lines[0].actions[0]).toMatchObject({ type: "finish", success: false });
+});

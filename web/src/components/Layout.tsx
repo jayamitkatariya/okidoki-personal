@@ -134,7 +134,7 @@ export function AppShell({
     if (!pageAvailable(page, account.kind)) setPage("home");
   }, [page, account.kind, setPage]);
 
-  const waiting = state.runs.filter((run) => run.status === "waiting" || run.status === "previewing").length;
+  const waiting = state.runs.filter((run) => run.status === "waiting" || run.status === "previewing" || run.status === "asked").length;
   const live = state.runs.filter((run) => run.status === "running" || run.status === "paused").length;
   const [status, tone] = state.inCall
     ? ["Quiet during your call", "is-quiet"]

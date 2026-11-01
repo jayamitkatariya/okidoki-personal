@@ -83,10 +83,13 @@ public final class BrainService {
 
         var messages: [[String: Any]] = []
         if let threadID = request.threadID, let thread = store.thread(threadID) {
-            for message in thread.messages.suffix(10) {
-                let role = message.role == .assistant ? "assistant" : "user"
-                messages.append(["role": role, "content": message.text])
+            // Same rules as the brain's historyMessages: only real user/assistant turns with text (an
+            // empty turn is a 400), and the conversation must open with the user.
+            for message in thread.messages.suffix(10) where message.role == .user || message.role == .assistant {
+                guard !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                messages.append(["role": message.role == .assistant ? "assistant" : "user", "content": message.text])
             }
+            while messages.first?["role"] as? String == "assistant" { messages.removeFirst() }
         }
         // The thread already holds this request as its last user turn; either way the final user
         // message must carry the screenshot, not just the words.

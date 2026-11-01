@@ -17,8 +17,11 @@ public enum SkillFrames {
         AppPaths.support("frames", isDirectory: true)
     }()
 
+    /// Step ids come from skill files people share: keep only safe characters, so an id like
+    /// "../../Pictures/x" can't point a save or a delete outside the frames folder.
     public static func url(for stepID: String) -> URL {
-        directory.appendingPathComponent("\(stepID).png")
+        let safe = String(stepID.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" })
+        return directory.appendingPathComponent("\(safe.isEmpty ? "step" : safe).png")
     }
 
     public static func has(_ stepID: String) -> Bool {

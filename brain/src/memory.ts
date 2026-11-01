@@ -387,6 +387,7 @@ export interface MemoryStatus {
   messages: number;
   runs: number;
   skills: number;
+  tools: number;
   lastSyncAt?: string;
   error?: string;
 }
@@ -414,6 +415,8 @@ export function memoryStatus(): MemoryStatus & { total: number } {
     messages: counts.message,
     runs: counts.run,
     skills: counts.skill,
+    // The Mac's MemoryIndexStatus requires this key; without it the whole status fails to decode.
+    tools: 0,
     lastSyncAt: lastSyncAt || undefined,
     error: lastError || undefined,
   };

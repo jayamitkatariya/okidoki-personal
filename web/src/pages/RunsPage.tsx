@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, clockLabel, copyText, formatBytes, relativeTime } from "../lib";
 import type { Run, RunKind, RunStatus } from "../types";
-import { Button, Chip, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
+import { Button, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
 
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
@@ -83,6 +83,16 @@ export function RunsPage() {
 
   // the selection always comes from the visible list, so the highlighted row and the detail agree
   const current = runs.find((run) => run.id === selected) ?? runs[0] ?? null;
+  useEffect(() => {
+    if (!selected && runs[0]) setSelected(runs[0].id);
+  }, [selected, runs]);
+  // the run the Redirect modal was opened for, fixed when it opens
+  const [redirectID, setRedirectID] = useState<string | null>(null);
+  const closeRedirect = () => {
+    setRedirectOpen(false);
+    setRedirectText("");
+    setRedirectID(null);
+  };
 
   useEffect(() => {
     const focusRun = (id: string) => {
@@ -163,10 +173,17 @@ export function RunsPage() {
           <RunDetail
             key={current.id}
             run={current}
-            onRedirect={() => setRedirectOpen(true)}
+            onRedirect={() => {
+              setRedirectID(current.id);
+              setRedirectOpen(true);
+            }}
             onShare={() => {
-              invoke("shareRun", { id: current.id });
-              notify("Sharing…", "A link lands on your clipboard in a moment", "info");
+              const text = [current.title, current.prompt && current.prompt !== current.title ? current.prompt : "", current.summary, current.output]
+                .filter((part) => part && part.trim())
+                .join("\n\n");
+              void copyText(text).then((ok) =>
+                ok ? notify("Copied", "The run’s summary is on your clipboard") : notify("Couldn’t copy", "The clipboard isn’t available", "info"),
+              );
             }}
           />
         ) : (
@@ -180,24 +197,26 @@ export function RunsPage() {
 
       <Modal
         open={redirectOpen}
-        onClose={() => setRedirectOpen(false)}
+        onClose={closeRedirect}
         title="Redirect this run"
         subtitle="I’ll stop here and follow your note instead. The thread stays together."
       >
         <TextArea value={redirectText} onChange={setRedirectText} placeholder="Actually, do it this way…" rows={4} />
         <footer className="modal-actions">
-          <Button variant="ghost" onClick={() => setRedirectOpen(false)}>
+          <Button variant="ghost" onClick={closeRedirect}>
             Cancel
           </Button>
           <Button
             variant="primary"
+            // an empty note would stop the run and send nothing in its place
+            disabled={!redirectText.trim()}
             onClick={() => {
-              if (current) {
-                invoke("redirectRun", { id: current.id, text: redirectText });
-                notify("Redirected", current.title, "info");
+              const target = state.runs.find((run) => run.id === redirectID);
+              if (target && redirectText.trim()) {
+                invoke("redirectRun", { id: target.id, text: redirectText.trim() });
+                notify("Redirected", target.title, "info");
               }
-              setRedirectOpen(false);
-              setRedirectText("");
+              closeRedirect();
             }}
           >
             Redirect
@@ -276,7 +295,6 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
             {kindName[run.kind] ?? run.kind}
           </span>
           <StatusBadge status={run.status} />
-          {thread?.app === "space" ? <Chip tone="green">space job</Chip> : null}
           <span className="spacer" />
           <div className="run-tools">
             {live ? (
@@ -541,17 +559,24 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
                 <em>freed</em>
               </span>
             ) : null}
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="refresh"
-              onClick={() => {
-                invoke("ask", { text: run.prompt });
-                notify("Running it again", run.prompt);
-              }}
-            >
-              Run again
-            </Button>
+            {run.kind !== "routine" && (run.prompt.trim() || (run.builtin === "skill" && run.pickedPath)) ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="refresh"
+                onClick={() => {
+                  if (run.builtin === "skill" && run.pickedPath) {
+                    invoke("replaySkill", { id: run.pickedPath });
+                    notify("Replaying it again", run.title);
+                  } else {
+                    invoke("ask", { text: run.prompt });
+                    notify("Running it again", run.prompt);
+                  }
+                }}
+              >
+                Run again
+              </Button>
+            ) : null}
           </div>
         </section>
       ) : null}

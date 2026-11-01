@@ -769,6 +769,13 @@ public enum EventActuator {
     /// The left button is held down by `mouseButton(down:)`, so moves are drags.
     nonisolated(unsafe) static var leftButtonHeld = false
 
+    /// Lets go of a button the model pressed with mouse_down and never released (Esc, a failed run):
+    /// otherwise the user's next move drags whatever is under the pointer, and every later glide drags too.
+    public static func releaseHeldButton() async {
+        if leftButtonHeld { await mouseButton(down: false) }
+        leftButtonHeld = false
+    }
+
     /// Presses or releases the left button where the pointer is, for drags the model builds step by step.
     public static func mouseButton(down: Bool) async {
         guard canPost else { return }

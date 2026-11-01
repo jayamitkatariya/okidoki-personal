@@ -113,8 +113,8 @@ public final class RoutineScheduler {
     private func tick() {
         guard let store else { return }
         let now = Date()
-        // A routine synced from another Mac runs there, not here as well.
-        for routine in store.activeRoutines where routine.enabled && store.isFromThisMac(routine) {
+        // Everything is local (no sync): a state file restored onto a new Mac keeps its routines running.
+        for routine in store.activeRoutines where routine.enabled {
             guard let next = routine.nextRunAt else { continue }
             let key = routine.id + "-" + String(Int(next.timeIntervalSince1970 / 60))
             if next <= now, !fired.contains(key) {

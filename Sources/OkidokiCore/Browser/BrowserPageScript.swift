@@ -22,14 +22,43 @@ public enum BrowserPageScript {
       const MAX_ELEMENTS = 250;
       let refs = new Map();
 
+      // When the page's structure or text last changed. Watched from the very start, so `settle` can
+      // return at once on a page that's already still instead of always waiting out a quiet window.
+      // Attribute changes are left out: animations flip classes and styles all the time.
+      let lastChange = performance.now();
+      new MutationObserver(() => { lastChange = performance.now(); })
+        .observe(document, { subtree: true, childList: true, characterData: true });
+      // When the page finished loading. Some pages never go still (ads, live tickers, feeds filling in):
+      // past this point a short grace is enough, rather than waiting for a quiet that never comes.
+      let completeAt = document.readyState === 'complete' ? performance.now() : 0;
+      document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') completeAt = performance.now(); });
+      const LOADED_GRACE = 500;
+
       const clean = (s, n = 80) => (s || '').replace(/\s+/g, ' ').trim().slice(0, n);
       const quote = (s) => s.replace(/"/g, "'");
+
+      /** Every match in the document, in open shadow roots and in same-origin frames. */
+      function deepAll(selector, root = document, out = []) {
+        out.push(...root.querySelectorAll(selector));
+        for (const host of root.querySelectorAll('*')) {
+          if (host.shadowRoot) deepAll(selector, host.shadowRoot, out);
+          if (host.tagName === 'IFRAME' || host.tagName === 'FRAME') {
+            let inner = null;
+            try { inner = host.contentDocument; } catch {}
+            if (inner && inner.documentElement) deepAll(selector, inner, out);
+          }
+        }
+        return out;
+      }
+
+      const viewOf = (el) => el.ownerDocument?.defaultView || window;
 
       function visible(el) {
         if (!el.isConnected) return false;
         const r = el.getBoundingClientRect();
         if (r.width < 2 || r.height < 2) return false;
-        const st = getComputedStyle(el);
+        if (el.checkVisibility) return el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+        const st = viewOf(el).getComputedStyle(el);
         return st.visibility !== 'hidden' && st.display !== 'none' && Number(st.opacity) > 0.05;
       }
 
@@ -58,11 +87,12 @@ public enum BrowserPageScript {
         if (aria) return clean(aria);
         const by = el.getAttribute('aria-labelledby');
         if (by) {
-          const text = by.split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ');
+          const root = el.getRootNode?.() || document;
+          const text = by.split(/\s+/).map(id => (root.getElementById?.(id) || document.getElementById(id))?.innerText || '').join(' ');
           if (clean(text)) return clean(text);
         }
         if (el.id) {
-          const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+          const label = (el.getRootNode?.() || document).querySelector?.(`label[for="${CSS.escape(el.id)}"]`);
           if (label && clean(label.innerText)) return clean(label.innerText);
         }
         const wrapping = el.closest('label');
@@ -130,13 +160,13 @@ public enum BrowserPageScript {
           const pair = (s) => { const i = s.indexOf('|'); return [s.slice(0, i), s.slice(i + 1)]; };
           if (selector.startsWith('role=')) {
             const [r, label] = pair(selector.slice(5));
-            return [...document.querySelectorAll(INTERACTIVE)].filter(el => role(el) === r && labelFor(el) === label);
+            return deepAll(INTERACTIVE).filter(el => role(el) === r && labelFor(el) === label);
           }
           if (selector.startsWith('text=')) {
             const [tag, text] = pair(selector.slice(5));
-            return [...document.querySelectorAll(tag)].filter(el => clean(el.innerText, 60) === text);
+            return deepAll(tag).filter(el => clean(el.innerText, 60) === text);
           }
-          return [...document.querySelectorAll(selector)];
+          return deepAll(selector);
         } catch { return []; }
       }
 
@@ -159,13 +189,15 @@ public enum BrowserPageScript {
         const lines = [];
         const seen = new Set();
         const below = innerHeight * 2.5;
-        for (const el of document.querySelectorAll(INTERACTIVE)) {
+        for (const el of deepAll(INTERACTIVE)) {
           if (lines.length >= MAX_ELEMENTS) break;
-          if (seen.has(el) || !visible(el)) continue;
-          // A link wrapping a button, a label wrapping its input: the inner one is what acts.
-          if (el.closest('a[href],button') && el.closest('a[href],button') !== el && !['input', 'select', 'textarea'].includes(el.tagName.toLowerCase())) continue;
+          if (seen.has(el)) continue;
+          // Cheap geometry first: most of a long page is far off screen, and style checks cost more.
           const r = el.getBoundingClientRect();
           if (r.bottom < -innerHeight || r.top > below) continue;
+          if (!visible(el)) continue;
+          // A link wrapping a button, a label wrapping its input: the inner one is what acts.
+          if (el.closest('a[href],button') && el.closest('a[href],button') !== el && !['input', 'select', 'textarea'].includes(el.tagName.toLowerCase())) continue;
           seen.add(el);
           const n = refs.size + 1;
           refs.set(n, el);
@@ -180,8 +212,12 @@ public enum BrowserPageScript {
         setter ? setter.call(el, value) : (el.value = value);
       };
 
+      const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, Space: 32, ' ': 32,
+        ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, PageUp: 33, PageDown: 34, Home: 36, End: 35 };
+
       function key(el, name) {
-        const init = { key: name, code: name === 'Enter' ? 'Enter' : name, keyCode: name === 'Enter' ? 13 : 0, which: name === 'Enter' ? 13 : 0, bubbles: true, cancelable: true };
+        const code = KEY_CODES[name] ?? (name.length === 1 ? name.toUpperCase().charCodeAt(0) : 0);
+        const init = { key: name === 'Space' ? ' ' : name, code: name.length === 1 ? `Key${name.toUpperCase()}` : name, keyCode: code, which: code, bubbles: true, cancelable: true, composed: true };
         // A page whose own Enter handler submits the form: notice, so it isn't submitted twice.
         let submitted = false;
         const form = el.form;
@@ -195,12 +231,47 @@ public enum BrowserPageScript {
         if (go && !submitted && name === 'Enter' && form) {
           try { form.requestSubmit(); } catch { form.submit(); }
         }
+        // Synthetic Tab doesn't move focus by itself either: move it to the next field.
+        if (go && name === 'Tab') {
+          const order = deepAll('a[href],button,input:not([type=hidden]),select,textarea,[tabindex]:not([tabindex="-1"])').filter(visible);
+          const next = order[order.indexOf(el) + 1];
+          next?.focus?.();
+        }
+      }
+
+      /** The element under the middle of the window that scrolls: inner panes (a mail list, a chat) included. */
+      function scroller() {
+        let node = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+        while (node && node !== document.body && node !== document.documentElement) {
+          const st = getComputedStyle(node);
+          if (/(auto|scroll|overlay)/.test(st.overflowY) && node.scrollHeight > node.clientHeight + 4) return node;
+          node = node.parentElement || node.getRootNode?.().host || null;
+        }
+        return null;
+      }
+
+      function scrollPage(direction) {
+        const sign = direction === 'up' ? -1 : 1;
+        const page = document.scrollingElement || document.documentElement;
+        const canPage = page.scrollHeight > innerHeight + 4;
+        const pane = scroller();
+        // The window when it scrolls; otherwise the pane the page lives in.
+        if (pane && (!canPage || pane.clientHeight > innerHeight * 0.5)) pane.scrollBy({ top: sign * 0.8 * pane.clientHeight });
+        else scrollBy({ top: sign * 0.8 * innerHeight });
+      }
+
+      function hover(el) {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        const at = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, view: viewOf(el) };
+        for (const type of ['pointerover', 'pointerenter', 'pointermove']) el.dispatchEvent(new PointerEvent(type, at));
+        for (const type of ['mouseover', 'mouseenter', 'mousemove']) el.dispatchEvent(new MouseEvent(type, at));
       }
 
       function click(el) {
         el.scrollIntoView({ block: 'center', inline: 'center' });
         const r = el.getBoundingClientRect();
-        const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, view: window };
+        const at = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, view: viewOf(el), button: 0, buttons: 1 };
         el.dispatchEvent(new PointerEvent('pointerdown', at));
         el.dispatchEvent(new MouseEvent('mousedown', at));
         el.focus?.();
@@ -213,8 +284,10 @@ public enum BrowserPageScript {
         el.scrollIntoView({ block: 'center' });
         el.focus();
         if (el.isContentEditable) {
-          document.execCommand('selectAll');
-          document.execCommand('insertText', false, text);
+          // The editor's own document: a rich editor inside a frame (TinyMCE, CKEditor) has its own.
+          const doc = el.ownerDocument || document;
+          doc.execCommand('selectAll');
+          doc.execCommand('insertText', false, text);
         } else {
           nativeValue(el, text);
           el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
@@ -252,10 +325,19 @@ public enum BrowserPageScript {
         try {
           switch (a.action) {
             case 'click': click(el); break;
-            case 'type': type(el, a.text ?? '', a.submit); break;
+            case 'hover': hover(el); break;
+            case 'type': {
+              // Vault secrets only go where they belong: the password into a password field, the
+              // username into an ordinary text field. Anything else (a search box, a comment) is refused.
+              const isPassword = el && (el.getAttribute('type') || '').toLowerCase() === 'password';
+              if (a.secret === 'password' && !isPassword) return { ok: false, detail: 'that field isn\'t a password field, so the password wasn\'t typed' };
+              if (a.secret === 'username' && (isPassword || !el || !/^(input)$/i.test(el.tagName))) return { ok: false, detail: 'that field isn\'t a sign-in field, so the username wasn\'t typed' };
+              type(el, a.text ?? '', a.submit);
+              break;
+            }
             case 'select': { const note = select(el, a.value ?? ''); if (note) return { ok: true, detail: note, selectors: selectorsFor(el), matched }; break; }
             case 'press': key(el || document.activeElement || document.body, a.key || 'Enter'); break;
-            case 'scroll': scrollBy({ top: (a.direction === 'up' ? -0.8 : 0.8) * innerHeight }); break;
+            case 'scroll': scrollPage(a.direction); break;
             case 'locate': break;
             default: return { ok: false, detail: `unknown action ${a.action}` };
           }
@@ -267,7 +349,7 @@ public enum BrowserPageScript {
 
       /** Puts a vault login into the page's username and password fields. */
       function fillLogin(username, password) {
-        const fields = [...document.querySelectorAll('input')].filter(visible);
+        const fields = deepAll('input').filter(visible);
         const pass = fields.find(f => f.type === 'password');
         const user = fields.find(f => /email|user|login|account|phone/i.test(`${f.type} ${f.name} ${f.id} ${f.autocomplete} ${f.placeholder}`) && f.type !== 'password')
           || (pass ? fields[fields.indexOf(pass) - 1] : null);
@@ -277,19 +359,23 @@ public enum BrowserPageScript {
         return { ok: true, detail: pass ? 'filled' : 'filled the username; the password comes on the next page' };
       }
 
-      /** Resolves once the page has stopped changing for `quietMs`, or after `maxMs` either way. */
-      function settle(quietMs = 350, maxMs = 6000) {
+      /**
+       * Resolves once the document is parsed and hasn't changed for `quietMs`, or after `maxMs` either way.
+       * `fresh` (right after an action) measures quiet from now, so a reply the action set off still gets
+       * its moment; otherwise a page that's already been still returns at once. Images, ads and trackers
+       * still loading don't hold it up: the page is readable long before they finish.
+       */
+      function settle(quietMs = 250, maxMs = 6000, fresh = false) {
         return new Promise(resolve => {
-          const started = Date.now();
-          let last = Date.now();
-          const observer = new MutationObserver(() => { last = Date.now(); });
-          observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+          const started = performance.now();
           const tick = () => {
-            const now = Date.now();
-            if ((document.readyState === 'complete' && now - last >= quietMs) || now - started >= maxMs) {
-              observer.disconnect();
-              resolve(now - started);
-            } else setTimeout(tick, 60);
+            const now = performance.now();
+            const since = fresh ? Math.max(lastChange, started) : lastChange;
+            const quiet = document.readyState !== 'loading' && now - since >= quietMs;
+            const loaded = completeAt > 0 && now - (fresh ? Math.max(completeAt, started) : completeAt) >= LOADED_GRACE;
+            if (quiet || loaded || now - started >= maxMs) {
+              resolve(Math.round(now - started));
+            } else setTimeout(tick, 40);
           };
           tick();
         });
@@ -299,7 +385,9 @@ public enum BrowserPageScript {
       let recording = false;
       const typed = new WeakMap();
       const post = (step) => { try { window.webkit.messageHandlers.okidokiRecord.postMessage(step); } catch {} };
-      const target = (e) => e.target?.closest?.(INTERACTIVE) || e.target;
+      // The element itself, not the shadow host the event was retargeted to.
+      const origin = (e) => (e.composedPath?.()[0]) || e.target;
+      const target = (e) => { const t = origin(e); return t?.closest?.(INTERACTIVE) || t; };
       const step = (el, action, extra = {}) => ({
         action, url: location.href, title: document.title, selectors: selectorsFor(el),
         label: labelFor(el), role: role(el), tag: el.tagName.toLowerCase(), ...extra,
@@ -336,13 +424,14 @@ public enum BrowserPageScript {
       }, true);
       addEventListener('keydown', e => {
         if (!recording || !e.isTrusted) return;
-        if (e.key === 'Enter' && e.target && 'value' in e.target && e.target.tagName !== 'TEXTAREA') {
-          flushTyping(e.target);
-          post(step(e.target, 'press', { key: 'Enter' }));
+        const el = origin(e);
+        if (e.key === 'Enter' && el && 'value' in el && el.tagName !== 'TEXTAREA') {
+          flushTyping(el);
+          post(step(el, 'press', { key: 'Enter' }));
           enterAt = Date.now();
         }
       }, true);
-      addEventListener('blur', e => { if (recording && e.isTrusted) flushTyping(e.target); }, true);
+      addEventListener('blur', e => { if (recording && e.isTrusted) flushTyping(origin(e)); }, true);
       // A click elsewhere ends typing in a rich editor, which has no change event.
       addEventListener('pointerdown', e => {
         if (!recording || !e.isTrusted) return;

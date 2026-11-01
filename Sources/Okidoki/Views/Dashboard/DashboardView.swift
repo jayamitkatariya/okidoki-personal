@@ -559,17 +559,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Bridge actions
 
-    /// Actions that drive a run. A run synced from another Mac is that Mac's to drive.
-    private static let runControls: Set<String> = ["approveRun", "allowAlways", "denyRun", "stopRun", "pauseRun", "redirectRun"]
-
     private func handle(type: String, payload: [String: Any]) {
         guard let env else { return }
-        if Self.runControls.contains(type), let id = payload["id"] as? String,
-           let run = env.store.run(id), !env.store.isFromThisMac(run) {
-            env.toast(title: "this task belongs to another Mac", detail: "it ran there; open okidoki on that Mac to act on it",
-                      kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: id)
-            return
-        }
         switch type {
         case "ready", "getState":
             // The page's listeners are live once it says so — usually before didFinish fires.

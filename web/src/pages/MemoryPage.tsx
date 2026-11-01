@@ -331,7 +331,7 @@ function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix:
   }
   const items = memory.notes + memory.messages;
   return (
-    <span className="memory-index is-on" title={`${memory.notes} notes · ${memory.messages} recent turns · ${memory.tools} tools`}>
+    <span className="memory-index is-on" title={`${memory.notes} memories · ${memory.messages} recent turns`}>
       <i />
       Moss · {items} item{items === 1 ? "" : "s"} indexed{memory.lastSyncAt ? ` · ${relativeTime(memory.lastSyncAt)}` : ""}
     </span>

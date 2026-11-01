@@ -471,10 +471,10 @@ export function SettingsPage() {
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={!profileDirty}
+                  disabled={!profileDirty || !name.trim()}
                   onClick={() => {
-                    invoke("updateAccount", { name, email, kind: account.kind });
-                    notify("Profile saved", name);
+                    invoke("updateAccount", { name: name.trim(), email: email.trim(), kind: account.kind });
+                    notify("Profile saved", name.trim());
                   }}
                 >
                   Save profile
@@ -577,10 +577,10 @@ function memoryLabel(services: ServicesState | null | undefined): string {
 function memoryDetail(services: ServicesState | null | undefined): string {
   if (!services) return "Moss, searched by meaning for every request.";
   const memory = services.memory;
-  if (!memory.configured) return "Add a Moss key to search threads and notes by meaning. Right now only exact text matches.";
+  if (!memory.configured) return "Add a Moss key to search threads and memories by meaning. Right now only exact text matches.";
   if (memory.error) return memory.error;
   if (!memory.ready) return "Moss is loading the index on this Mac.";
-  const parts = [`${memory.notes} note${memory.notes === 1 ? "" : "s"}`, `${memory.messages} recent turn${memory.messages === 1 ? "" : "s"}`, `${memory.tools} tools`];
+  const parts = [`${memory.notes} ${memory.notes === 1 ? "memory" : "memories"}`, `${memory.messages} recent turn${memory.messages === 1 ? "" : "s"}`];
   return `${parts.join(" · ")}${memory.lastSyncAt ? ` · synced ${relativeTime(memory.lastSyncAt)}` : ""}`;
 }
 

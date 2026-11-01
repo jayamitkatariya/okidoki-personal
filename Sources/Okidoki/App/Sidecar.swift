@@ -135,7 +135,13 @@ final class BrainSidecar: ObservableObject {
     func stop() {
         intentionalStop = true
         (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        process?.terminate()
+        if let old = process {
+            old.terminate()
+            // A hung JS loop never runs its SIGTERM handler and keeps the port: make sure it goes.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                if old.isRunning { kill(old.processIdentifier, SIGKILL) }
+            }
+        }
         process = nil
         status = .idle
         healthTimer?.invalidate()
@@ -146,8 +152,17 @@ final class BrainSidecar: ObservableObject {
     }
 
     func restart() {
+        let old = process
         stop()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.start() }
+        // Start the new brain only once the old one has let go of the port (shutdown takes up to ~1s,
+        // and a hung one is killed after 2s); otherwise the new one dies on EADDRINUSE.
+        Task { @MainActor [weak self] in
+            for _ in 0..<30 where old?.isRunning == true {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            self?.start()
+        }
     }
 
     /// A brain that died on its own comes back by itself, a little slower each time. One that was
@@ -181,6 +196,19 @@ final class BrainSidecar: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 220_000_000)
+        }
+        // A cold first launch (Gatekeeper scanning bun, a slow disk) can take longer: keep waiting
+        // while our process is alive rather than leave a healthy brain marked offline for good.
+        for _ in 0..<40 where process?.isRunning == true {
+            if await health() {
+                status = .ready
+                adopted = false
+                readySince = Date()
+                healthMisses = 0
+                startHealthWatch()
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         if status == .starting { status = .failed("no answer on :\(port)") }
     }
@@ -276,7 +304,7 @@ final class BrainSidecar: ObservableObject {
         let candidates = [
             cwd.appendingPathComponent("brain/dist/server.js"),
             cwd.appendingPathComponent("../brain/dist/server.js"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/okidoki/brain/dist/server.js"),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/okidoki-personal/brain/dist/server.js"),
         ]
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
         #else

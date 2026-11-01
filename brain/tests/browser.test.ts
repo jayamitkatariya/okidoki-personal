@@ -7,8 +7,13 @@ function fakeAPI(replies: Array<Record<string, unknown>>) {
   const sent: Sent[] = [];
   const impl = (async (_url: string | URL | Request, init?: RequestInit) => {
     sent.push({ body: JSON.parse(String(init?.body)) });
-    const next = replies.shift();
+    const next = replies.shift() as any;
     if (!next) throw new Error("no reply queued");
+    if (next.__status) return new Response(JSON.stringify(next), { status: next.__status });
+    if (next.__sse) {
+      const text = (next.__sse as Array<[string, unknown]>).map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+      return new Response(text, { headers: { "content-type": "text/event-stream" } });
+    }
     return Response.json(next);
   }) as unknown as typeof fetch;
   return { impl, sent };
@@ -56,9 +61,12 @@ test("the next turn answers every tool call before the new page", async () => {
   const second = await browserStep(request(1, { results: [{ ok: true }, { ok: false, detail: "element 2 is gone" }] }), "key", api.impl);
   expect(second.actions).toEqual([{ type: "finish", success: true, summary: "18°C and sunny" }]);
   const turn = api.sent[1].body.messages.at(-1).content;
-  expect(turn[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1", is_error: false });
+  expect(turn).toHaveLength(2);
+  expect(turn[0]).toMatchObject({ type: "tool_result", tool_use_id: "t1", is_error: false, content: "ok" });
   expect(turn[1]).toMatchObject({ type: "tool_result", tool_use_id: "t2", is_error: true });
-  expect(turn.at(-1).text).toContain("element 2 is gone");
+  // The new page rides inside the last result, where context editing can clear it later.
+  expect(turn[1].content[0]).toEqual({ type: "text", text: "failed: element 2 is gone" });
+  expect(turn[1].content.at(-1).text).toContain("URL: https://www.google.com/");
 });
 
 test("a malformed call doesn't shift the results of the calls after it", async () => {
@@ -74,7 +82,55 @@ test("a malformed call doesn't shift the results of the calls after it", async (
   await browserStep(request(1, { results: [{ ok: false, detail: "element 2 is gone" }] }), "key", api.impl);
   const turn = api.sent[1].body.messages.at(-1).content;
   expect(turn[0]).toMatchObject({ tool_use_id: "bad", is_error: true });
-  expect(turn[1]).toMatchObject({ tool_use_id: "good", is_error: true, content: "failed: element 2 is gone" });
+  expect(turn[1]).toMatchObject({ tool_use_id: "good", is_error: true });
+  expect(turn[1].content[0].text).toBe("failed: element 2 is gone");
+});
+
+test("turns ask for low effort and clear old pages server-side, never by editing history", async () => {
+  const api = fakeAPI([
+    reply([{ type: "tool_use", id: "t1", name: "click", input: { ref: 2 } }]),
+    reply([{ type: "tool_use", id: "t2", name: "click", input: { ref: 1 } }]),
+    reply([{ type: "tool_use", id: "t3", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  await browserStep(request(0), "key", api.impl);
+  await browserStep(request(1, { results: [{ ok: true }] }), "key", api.impl);
+  await browserStep(request(2, { results: [{ ok: true }] }), "key", api.impl);
+  const [first, second, third] = api.sent.map((s) => s.body);
+  expect(first.output_config).toEqual({ effort: "low" });
+  expect(first.context_management.edits[0].type).toBe("clear_tool_uses_20250919");
+  // Append-only: each request starts with the previous one's messages, byte for byte.
+  expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+  expect(third.messages.slice(0, second.messages.length)).toEqual(second.messages);
+});
+
+test("a model that turns down effort is asked again without it", async () => {
+  const api = fakeAPI([
+    { __status: 400, error: "output_config.effort is not supported" },
+    reply([{ type: "tool_use", id: "t1", name: "back", input: {} }]),
+  ]);
+  const response = await browserStep(request(0), "key", api.impl);
+  expect(response.actions).toEqual([{ type: "back" }]);
+  expect(api.sent[1].body.output_config).toBeUndefined();
+});
+
+test("a streamed turn hands over each action as it's written", async () => {
+  const events: Array<[string, Record<string, unknown>]> = [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "t1", name: "type", input: {} } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"ref": 1, "text": "lisbon", "submit": true}' } }],
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    ["content_block_start", { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t2", name: "teleport", input: {} } }],
+    ["content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } }],
+    ["content_block_stop", { type: "content_block_stop", index: 1 }],
+    ["message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 30 } }],
+    ["message_stop", { type: "message_stop" }],
+  ];
+  const api = fakeAPI([{ __sse: events }]);
+  const streamed: unknown[] = [];
+  const response = await browserStep(request(0), "key", api.impl, 55_000, (action) => streamed.push(action));
+  expect(api.sent[0].body.stream).toBe(true);
+  expect(streamed).toEqual([{ type: "type", ref: 1, text: "lisbon", submit: true }]);
+  expect(response.actions).toEqual(streamed);
 });
 
 test("a reply without tool calls ends the run instead of hanging", async () => {
@@ -102,4 +158,35 @@ test("unknown or malformed tool calls are dropped", () => {
   expect(mapBrowserTool("click", { ref: "two" })).toBeUndefined();
   expect(mapBrowserTool("teleport", {})).toBeUndefined();
   expect(mapBrowserTool("scroll", { direction: "sideways" })).toEqual({ type: "scroll", direction: "down" });
+  expect(mapBrowserTool("hover", { ref: 3 })).toEqual({ type: "hover", ref: 3 });
+  expect(mapBrowserTool("wait", { seconds: 60 })).toEqual({ type: "wait", seconds: 10 });
+});
+
+test("dialogs and load errors reach the model", async () => {
+  const api = fakeAPI([reply([{ type: "tool_use", id: "t1", name: "back", input: {} }])]);
+  await browserStep(request(0, { observation: { ...page, dialogs: ["confirm “Delete this?” → OK"], loadError: "no internet connection" } }), "key", api.impl);
+  const text = api.sent[0].body.messages[0].content.at(-1).text as string;
+  expect(text).toContain("Dialogs: confirm “Delete this?” → OK");
+  expect(text).toContain("Load error: no internet connection");
+});
+
+test("without context editing, a long run sends only the latest pages but keeps the task", async () => {
+  const big = { ...page, text: "x".repeat(11_000), elements: "y".repeat(80_000) };
+  const back = () => reply([{ type: "tool_use", id: `t${Math.random()}`, name: "back", input: {} }]);
+  const api = fakeAPI([
+    { __status: 400, error: "context_management: Extra inputs are not permitted" },
+    ...Array.from({ length: 8 }, back),
+  ]);
+  for (let step = 0; step < 8; step++) {
+    await browserStep(request(step, { observation: big, results: step ? [{ ok: true }] : undefined }), "key", api.impl);
+  }
+  const last = api.sent.at(-1)!.body;
+  expect(last.context_management).toBeUndefined();
+  const text = JSON.stringify(last.messages);
+  expect(text).toContain("Task: find the weather in Lisbon");
+  expect(text).toContain("(an earlier page, cleared)");
+  // Every tool call still has its result, so the request stays valid.
+  const results = last.messages.filter((m: any) => m.role === "user").flatMap((m: any) => m.content).filter((b: any) => b.type === "tool_result");
+  expect(results.length).toBe(7);
+  expect(text.length).toBeLessThan(500_000);
 });

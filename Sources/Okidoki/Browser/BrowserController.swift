@@ -19,6 +19,10 @@ final class BrowserModel: ObservableObject {
     @Published var status: String?
     /// A vault login exists for the page's site.
     @Published var hasLogin = false
+    /// Why the last load failed (offline, a bad address), shown over the page with a way to try again.
+    @Published var loadError: String?
+    /// Bumped by ⌘L to put the cursor in the address bar.
+    @Published var focusAddress = 0
 }
 
 /// okidoki's own browser: one page shown on the dashboard's Browser page, its own saved logins (a
@@ -29,7 +33,7 @@ final class BrowserModel: ObservableObject {
 /// DOM rather than with the mouse, so the person can keep using the rest of the Mac meanwhile.
 @MainActor
 final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
-                               WKScriptMessageHandler, WKDownloadDelegate {
+                               WKScriptMessageHandler, WKDownloadDelegate, NSWindowDelegate {
     /// One profile for every launch; WebKit keeps its cookies and storage under this id.
     private static let profileID = UUID(uuidString: "6B1D9E2A-0C55-4E1F-9A0B-0D0E1D0C1B1E")!
 
@@ -50,6 +54,20 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// Where each download in flight is being saved, so its name is known when it finishes.
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
     private var lastRecordedAt: Date?
+    /// A navigation has started and its new page hasn't appeared yet: the old page is about to go.
+    private var navigating = false
+    /// The navigation `navigating` is about. Callbacks for an older one (the previous page's images
+    /// being cancelled) must not end the wait for this one.
+    private var currentNavigation: WKNavigation?
+    /// The address a failed load was for, so "Try again" can go back to it.
+    private var failedURL: URL?
+    /// Dialogs the page raised while the agent or a replay had it, for the agent's next look.
+    private var dialogNotes: [String] = []
+    /// Windows a page opened on purpose (a "Sign in with Google" popup), each with its own page.
+    private var popups: [ObjectIdentifier: NSWindow] = [:]
+    private var shortcutMonitor: Any?
+    /// The agent or a replay has the page (dialogs are answered for it, not shown).
+    private var working: Bool { model.status != nil }
 
     init(environment: AppEnvironment) {
         self.env = environment
@@ -66,15 +84,16 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         controller.add(self, contentWorld: world, name: BrowserPageScript.recordHandler)
         configuration.userContentController = controller
         configuration.preferences.isElementFullscreenEnabled = true
+        // Safari's own user agent, kept in step with this macOS, so sites serve their full desktop page.
+        configuration.applicationNameForUserAgent = Self.safariName
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.allowsMagnification = true
-        // A desktop Safari user agent, so sites don't serve a stripped-down page to an unknown browser.
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
         self.webView = webView
+        installShortcuts()
 
         observations = [
             webView.observe(\.url) { [weak self] view, _ in Task { @MainActor in self?.urlChanged(view.url) } },
@@ -90,6 +109,41 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
 
     private var window: NSWindow? { webView.window }
 
+    /// "Version/27.0 Safari/605.1.15" on macOS 27: Safari's version follows the OS from 26 on.
+    private static var safariName: String {
+        let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        return "Version/\(major >= 26 ? "\(major).0" : "18.0") Safari/605.1.15"
+    }
+
+    /// The browser is on screen in front of the person (not just loaded behind another page).
+    private var showing: Bool { env?.browserFrame != nil && !view.isHidden && window?.isKeyWindow == true }
+
+    /// ⌘L address, ⌘R reload, ⌘[ ⌘] back and forward, ⌘+ ⌘- ⌘0 zoom, while the browser is showing.
+    private func installShortcuts() {
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window === self.window, self.showing else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags == .command || flags == [.command, .shift] else { return event }
+            switch event.charactersIgnoringModifiers {
+            case "l": self.model.focusAddress += 1
+            case "r": self.webView.reload()
+            case "[": self.webView.goBack()
+            case "]": self.webView.goForward()
+            case "=", "+": self.webView.pageZoom = min(3, self.webView.pageZoom + 0.1)
+            case "-": self.webView.pageZoom = max(0.5, self.webView.pageZoom - 0.1)
+            case "0": self.webView.pageZoom = 1
+            default: return event
+            }
+            return nil
+        }
+    }
+
+    /// Loads the address the last failed load was for.
+    func retryFailedLoad() {
+        model.loadError = nil
+        if let failedURL { load(failedURL) } else { webView.reload() }
+    }
+
     /// The Browser page, with the dashboard in front.
     func show(url: URL? = nil) {
         env?.openDashboard(.browser)
@@ -103,7 +157,20 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     }
 
     func load(_ url: URL) {
-        webView.load(URLRequest(url: url))
+        load(URLRequest(url: url))
+    }
+
+    /// The whole request, so a form posted to a new window keeps its method and body.
+    private func load(_ request: URLRequest) {
+        // Marked before WebKit says so, so a settle that starts right away waits for the new page.
+        navigating = true
+        currentNavigation = webView.load(request)
+    }
+
+    private func navigationEnded(_ navigation: WKNavigation?) {
+        guard currentNavigation == nil || navigation === currentNavigation else { return }
+        navigating = false
+        currentNavigation = nil
     }
 
     func go(typed: String) {
@@ -130,12 +197,16 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         let raw = await call("return window.__okidoki ? window.__okidoki.snapshot() : null") as? [String: Any]
         let downloads = finishedDownloads
         finishedDownloads = []
+        let dialogs = dialogNotes
+        dialogNotes = []
         return BrowserSnapshot(url: raw?["url"] as? String ?? webView.url?.absoluteString ?? "",
                                title: raw?["title"] as? String ?? webView.title ?? "",
                                elements: raw?["elements"] as? String ?? "",
                                text: raw?["text"] as? String ?? "",
                                count: raw?["count"] as? Int ?? 0,
-                               downloads: downloads)
+                               downloads: downloads,
+                               dialogs: dialogs,
+                               loadError: model.loadError)
     }
 
     /// One action on the page. `action` is the page script's: click · type · select · press · scroll · locate.
@@ -150,25 +221,72 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
                                 role: raw?["role"] as? String)
     }
 
-    /// Waits for the page to load and stop changing, up to `limit` seconds.
-    func settle(limit: Double = 8) async {
+    /// Waits until the page is readable and has stopped changing, up to `limit` seconds: a navigation's
+    /// new page has appeared and been parsed, and nothing has changed for a moment. It doesn't wait for
+    /// every image and tracker to finish, which is most of a heavy page's load time. `fresh` is for right
+    /// after an action: the quiet moment is measured from now, so whatever the action set off can start.
+    func settle(limit: Double = 8, fresh: Bool = false) async {
         let deadline = Date().addingTimeInterval(limit)
-        while webView.isLoading, Date() < deadline { try? await Task.sleep(nanoseconds: 60_000_000) }
-        let left = Int(max(0.3, deadline.timeIntervalSinceNow) * 1000)
-        _ = await call("return window.__okidoki ? await window.__okidoki.settle(350, ms) : 0", ["ms": left])
+        var measureFromNow = fresh
+        var replaced = false
+        repeat {
+            // The old page is still there until the new one commits; reading it now would be stale.
+            // WebKit not loading anything for a while means there's no new page coming (a jump within
+            // the same page, a load that was dropped), so stop waiting for one.
+            var idle = 0
+            while navigating, Date() < deadline {
+                idle = webView.isLoading ? 0 : idle + 1
+                if idle >= 10 { navigating = false; currentNavigation = nil; break }
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            }
+            let left = Int(max(0.2, deadline.timeIntervalSinceNow) * 1000)
+            // Its own deadline too: a page replaced mid-wait may never answer.
+            let waited = await settleCall(ms: left, fresh: measureFromNow, within: Double(left) / 1000 + 1)
+            measureFromNow = false
+            // A navigation began or committed mid-wait: the page waited on is gone, so settle the new one.
+            replaced = waited == Self.settleReplaced
+            // The page script isn't in yet (the new document is only just starting): give it a beat.
+            if waited == nil || waited == -1, Date() < deadline { try? await Task.sleep(nanoseconds: 50_000_000) }
+            // An action that set off a navigation while we waited: wait for that page instead.
+        } while (navigating || replaced) && Date() < deadline
+    }
+
+    private static let settleReplaced = -2
+    /// Ends the settle in flight when its page is being replaced: the old page never answers it.
+    private var interruptSettle: (() -> Void)?
+
+    /// The page script's settle, given up on after `seconds` if the page never answers, and at once
+    /// (with `settleReplaced`) if a navigation starts or commits meanwhile.
+    private func settleCall(ms: Int, fresh: Bool, within seconds: Double) async -> Int? {
+        final class Once { var done = false }
+        let once = Once()
+        defer { interruptSettle = nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Int?, Never>) in
+            interruptSettle = {
+                if !once.done { once.done = true; continuation.resume(returning: Self.settleReplaced) }
+            }
+            Task { @MainActor in
+                let waited = await self.call("return window.__okidoki ? await window.__okidoki.settle(250, ms, fresh) : -1",
+                                             ["ms": ms, "fresh": fresh]) as? Int
+                if !once.done { once.done = true; continuation.resume(returning: waited) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if !once.done { once.done = true; continuation.resume(returning: nil) }
+            }
+        }
     }
 
     /// Navigates and waits for the page.
     func navigate(_ url: URL) async {
         load(url)
-        try? await Task.sleep(nanoseconds: 150_000_000)
         await settle()
     }
 
     func goBack() async {
         guard webView.canGoBack else { return }
-        webView.goBack()
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        navigating = true
+        currentNavigation = webView.goBack()
         await settle()
     }
 
@@ -183,9 +301,10 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     func screenshot() async -> Data? {
         let config = WKSnapshotConfiguration()
         config.snapshotWidth = 1024
+        // Straight from the bitmap: going through TIFF first costs a full extra encode and decode.
         guard let image = try? await webView.takeSnapshot(configuration: config),
-              let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
-        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7])
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.7])
     }
 
     /// Where an element is on screen (Quartz points, top-left origin), for scripted clicks that
@@ -217,6 +336,8 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
 
     /// Shows a line in the toolbar while the agent or a replay has the page; esc hands it back.
     func beginWork(_ line: String) {
+        // Dialogs from before this task aren't this task's to hear about.
+        if model.status == nil { dialogNotes = [] }
         model.status = line
         guard escMonitor == nil else { return }
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -272,16 +393,163 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
 
     // MARK: - Navigation
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // A page loaded mid-recording keeps recording.
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        navigating = true
+        currentNavigation = navigation
+        interruptSettle?()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        navigationEnded(navigation)
+        interruptSettle?()
+        model.loadError = nil
+        failedURL = nil
+        // A new page mid-recording keeps recording from its first moment, not once every image is in.
         if model.recording { Task { _ = await call("return window.__okidoki?.record(true)") } }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        navigationEnded(navigation)
+        if model.recording { Task { _ = await call("return window.__okidoki?.record(true)") } }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView else { return }
+        navigationEnded(navigation)
+        loadFailed(error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView else { return }
+        navigationEnded(navigation)
+        loadFailed(error)
+    }
+
+    private func loadFailed(_ error: Error) {
+        let nsError = error as NSError
+        // Not failures: a load replaced by another, and one that became a download.
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+        if nsError.domain == "WebKitErrorDomain", [102, 204].contains(nsError.code) { return }
+        failedURL = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url
+        model.loadError = nsError.localizedDescription
+    }
+
+    /// The page's process crashed or was reclaimed: bring it back rather than leave a blank page.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        navigating = true
+        currentNavigation = webView.reload()
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // One page: links that want a new window open here instead.
-        if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
+        // A sized window is a popup the page needs to talk back to (a "Sign in with Google" window):
+        // it gets a real window. Plain new-tab links open here instead, in the one page.
+        if windowFeatures.width != nil || windowFeatures.height != nil {
+            return openPopup(configuration: configuration, features: windowFeatures)
+        }
+        // A link in a popup that wants a new tab stays in the popup, so the page waiting on it keeps its place.
+        if navigationAction.targetFrame == nil {
+            if webView === self.webView { load(navigationAction.request) } else { webView.load(navigationAction.request) }
+        }
         return nil
+    }
+
+    private func openPopup(configuration: WKWebViewConfiguration, features: WKWindowFeatures) -> WKWebView {
+        let size = NSSize(width: CGFloat(features.width?.doubleValue ?? 520), height: CGFloat(features.height?.doubleValue ?? 640))
+        let popup = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: configuration)
+        popup.uiDelegate = self
+        popup.navigationDelegate = self
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.contentView = popup
+        window.title = "okidoki"
+        if let parent = self.window {
+            let frame = parent.frame
+            window.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2))
+        } else {
+            window.center()
+        }
+        window.makeKeyAndOrderFront(nil)
+        popups[ObjectIdentifier(popup)] = window
+        return popup
+    }
+
+    /// The page closed its popup (sign-in done): close its window.
+    func webViewDidClose(_ webView: WKWebView) {
+        guard let window = popups[ObjectIdentifier(webView)] else { return }
+        window.close()
+    }
+
+    /// A popup's window is closing, by the page or by the person: let its page go, so the page that
+    /// opened it sees it closed (a sign-in that was cancelled stops waiting).
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let key = popups.first(where: { $0.value === window })?.key else { return }
+        popups[key] = nil
+        if let popup = window.contentView as? WKWebView {
+            popup.stopLoading()
+            popup.uiDelegate = nil
+            popup.navigationDelegate = nil
+        }
+        window.delegate = nil
+        window.contentView = nil
+    }
+
+    // MARK: - Dialogs and file pickers
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo) async {
+        if working { dialogNotes.append("alert “\(Self.short(message))”"); return }
+        _ = await ask(message, buttons: ["OK"], on: webView)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        // The person already approved the task the agent is doing; the agent hears what was confirmed.
+        if working { dialogNotes.append("confirm “\(Self.short(message))” → OK"); return true }
+        return await ask(message, buttons: ["OK", "Cancel"], on: webView) == .alertFirstButtonReturn
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
+        if working { dialogNotes.append("prompt “\(Self.short(prompt))” → “\(defaultText ?? "")”"); return defaultText ?? "" }
+        let field = NSTextField(string: defaultText ?? "")
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        return await ask(prompt, buttons: ["OK", "Cancel"], on: webView, accessory: field) == .alertFirstButtonReturn ? field.stringValue : nil
+    }
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
+        if working { dialogNotes.append("a file picker opened; nothing was chosen"); return nil }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = true
+        panel.directoryURL = env?.vault.folderURL
+        guard let host = webView.window else { return panel.runModal() == .OK ? panel.urls : nil }
+        return await panel.beginSheetModal(for: host) == .OK ? panel.urls : nil
+    }
+
+    private func ask(_ message: String, buttons: [String], on webView: WKWebView, accessory: NSView? = nil) async -> NSApplication.ModalResponse {
+        let alert = NSAlert()
+        alert.messageText = BrowserSteps.host(of: webView.url?.absoluteString ?? "").isEmpty
+            ? "This page says" : "\(BrowserSteps.host(of: webView.url?.absoluteString ?? "")) says"
+        alert.informativeText = message
+        for title in buttons { alert.addButton(withTitle: title) }
+        alert.accessoryView = accessory
+        guard let host = webView.window else { return alert.runModal() }
+        return await alert.beginSheetModal(for: host)
+    }
+
+    private static func short(_ text: String) -> String {
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        return flat.count > 160 ? String(flat.prefix(160)) + "…" : flat
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -346,6 +614,8 @@ struct BrowserSnapshot {
     var text: String
     var count: Int
     var downloads: [String]
+    var dialogs: [String] = []
+    var loadError: String?
 }
 
 struct BrowserActResult {
@@ -421,6 +691,18 @@ private struct BrowserView: View {
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
             ZStack(alignment: .top) {
                 BrowserWebView(webView: webView)
+                if let error = model.loadError {
+                    VStack(spacing: 10) {
+                        Text("This page didn’t load").font(.okBody(15, .semibold))
+                        Text(error).font(.okBody(12)).foregroundStyle(theme.secondary)
+                            .multilineTextAlignment(.center).frame(maxWidth: 360)
+                        Button("Try again") { controller?.retryFailedLoad() }
+                            .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(theme.card)
+                }
                 if model.loading {
                     GeometryReader { geo in
                         Rectangle().fill(OKBrand.green).frame(width: geo.size.width * model.progress, height: 2)
@@ -430,6 +712,7 @@ private struct BrowserView: View {
             }
         }
         .onChange(of: model.address) { _, value in if !addressFocused { typed = value } }
+        .onChange(of: model.focusAddress) { _, _ in addressFocused = true }
         .animation(OKMotion.quick, value: model.status)
     }
 }

@@ -63,7 +63,8 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
   const { state, settings, account, invoke, updateSettings, notify } = useDashboard();
   const needsCount = () => waiting.length;
   const runs = state.runs ?? [];
-  const waiting = runs.filter((run) => run.status === "waiting" || run.status === "previewing");
+  // "asked" is a run paused on a question only the user can answer: it needs them as much as an approval does.
+  const waiting = runs.filter((run) => run.status === "waiting" || run.status === "previewing" || run.status === "asked");
   const live = runs.filter((run) => run.status === "running" || run.status === "paused");
   const recent = useMemo(
     () =>
@@ -195,16 +196,22 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                     <Button variant="ghost" size="sm" onClick={() => openRun(run.id)}>
                       Review
                     </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={() => {
-                        invoke("approveRun", { id: run.id });
-                        notify("Approved", run.title);
-                      }}
-                    >
-                      {run.kind === "borrow" ? "Allow once" : "Approve"}
-                    </Button>
+                    {run.status === "asked" ? (
+                      <Button variant="primary" size="sm" onClick={() => openRun(run.id)}>
+                        Answer
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => {
+                          invoke("approveRun", { id: run.id });
+                          notify("Approved", run.title);
+                        }}
+                      >
+                        {run.kind === "borrow" ? "Allow once" : "Approve"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}

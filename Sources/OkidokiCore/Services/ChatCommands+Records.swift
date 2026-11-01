@@ -42,9 +42,11 @@ extension ChatCommands {
             if !records.isEmpty, let token = recordLikeToken(request, records: records) {
                 return .unknownRecord(query: token.uppercased())
             }
-            guard !overrides.isEmpty, playVerbs.contains(verb) || verb == "replay",
-                  let skill = bestSkill(query, in: skills, threshold: 0.5) else { return nil }
-            return .replayRecords(skillID: skill.id, recordIDs: [], values: overrides)
+            guard !overrides.isEmpty, playVerbs.contains(verb) || verb == "replay" else { return nil }
+            // "replay x 3 times with city=Lisbon": the count isn't part of the skill's name.
+            let (untimed, times) = splitTimes(request)
+            guard let skill = bestSkill(skillQuery(untimed, verb: verb, records: []), in: skills, threshold: 0.5) else { return nil }
+            return .replayRecords(skillID: skill.id, recordIDs: [], values: overrides, times: times)
         }
 
         let chosenRecords = picked.compactMap { id in records.first { $0.id == id } }

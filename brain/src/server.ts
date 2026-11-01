@@ -16,6 +16,14 @@ const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 const token = process.env.OKIDOKI_BRAIN_TOKEN || crypto.randomUUID();
 const corsHeaders: Record<string, string> = {};
 
+/** A fetch whose calls stop when `signal` fires: the Mac dropped the request, or pressed Esc. */
+function fetchUntil(signal: AbortSignal): typeof fetch {
+  return ((input, init) => fetch(input, {
+    ...init,
+    signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+  })) as typeof fetch;
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -69,11 +77,7 @@ async function route(request: Request): Promise<Response> {
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
         // The Mac drops the connection when the user backs out of the question; the model call
         // stops with it instead of finishing an answer nobody will see.
-        const fetchUntilGone = ((input, init) => fetch(input, {
-          ...init,
-          signal: init?.signal ? AbortSignal.any([init.signal, request.signal]) : request.signal,
-        })) as typeof fetch;
-        const result = await think(payload, key, fetchUntilGone);
+        const result = await think(payload, key, fetchUntil(request.signal));
         return json(result);
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
@@ -97,7 +101,7 @@ async function route(request: Request): Promise<Response> {
           return json({ error: "goal required" }, 400);
         }
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        const result = await computerAct(payload, key);
+        const result = await computerAct(payload, key, fetchUntil(request.signal));
         return json({ action: result.action, usedModel: result.usedModel, error: result.error, meta: result.meta });
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
@@ -112,10 +116,60 @@ async function route(request: Request): Promise<Response> {
           return json({ error: "goal, runID and observation required" }, 400);
         }
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        return json(await browserStep(payload, key));
+        return json(await browserStep(payload, key, fetchUntil(request.signal)));
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
       }
+    }
+
+    // The same browser turn, streamed as newline-delimited JSON: one {type:"action"} line the moment each
+    // action is written, so the Mac starts on the first while the model writes the rest, then {type:"end"}
+    // with anything not yet sent.
+    if (url.pathname === "/browser/step/stream" && request.method === "POST") {
+      let payload: BrowserRequest;
+      try {
+        payload = await body<BrowserRequest>(request);
+      } catch {
+        return json({ error: "bad request" }, 400);
+      }
+      if (!payload.goal || !payload.runID || !payload.observation) {
+        return json({ error: "goal, runID and observation required" }, 400);
+      }
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      const gone = new AbortController();
+      const stopModel = fetchUntil(AbortSignal.any([request.signal, gone.signal]));
+      const stream = new ReadableStream({
+        cancel() {
+          gone.abort();
+        },
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let closed = false;
+          const send = (line: Record<string, unknown>) => {
+            if (closed) return;
+            try {
+              controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+            } catch {
+              closed = true;
+            }
+          };
+          let sent = 0;
+          try {
+            const out = await browserStep(payload, key, stopModel, 55_000, (action) => {
+              sent += 1;
+              send({ type: "action", action });
+            });
+            // Streamed actions come out in the same order as the reply's, so the rest is what's left.
+            send({ type: "end", actions: out.actions.slice(sent), meta: out.meta, error: out.error });
+          } catch (error) {
+            send({ type: "end", actions: [], error: error instanceof Error ? error.message : "model unavailable" });
+          } finally {
+            closed = true;
+            try { controller.close(); } catch {}
+          }
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache", ...corsHeaders } });
     }
 
     // Driving protocol v2: the computer use toolset, batches, one conversation per run.
@@ -126,7 +180,7 @@ async function route(request: Request): Promise<Response> {
           return json({ error: "goal, runID and observation required" }, 400);
         }
         const key = anthropicKey(request.headers.get("x-anthropic-key"));
-        return json(await driveStep(payload, key));
+        return json(await driveStep(payload, key, fetchUntil(request.signal)));
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "bad request" }, 400);
       }
@@ -145,7 +199,14 @@ async function route(request: Request): Promise<Response> {
         return json({ error: "goal, runID and observation required" }, 400);
       }
       const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      // Esc on the Mac cancels the stream: stop the model call too, instead of paying for a turn
+      // nobody will run and committing it into the session.
+      const gone = new AbortController();
+      const stopModel = fetchUntil(AbortSignal.any([request.signal, gone.signal]));
       const stream = new ReadableStream({
+        cancel() {
+          gone.abort();
+        },
         async start(controller) {
           const encoder = new TextEncoder();
           let closed = false;
@@ -159,7 +220,7 @@ async function route(request: Request): Promise<Response> {
           };
           const sent = new Set<string>();
           try {
-            const out = await driveStep(payload, key, fetch, 55_000, (action) => {
+            const out = await driveStep(payload, key, stopModel, 55_000, (action) => {
               if (action.id) sent.add(action.id);
               send({ type: "action", action });
             });

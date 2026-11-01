@@ -978,6 +978,7 @@ final class ComputerUseDriver {
     }
 
     private func cleanupPanels() {
+        Task { await EventActuator.releaseHeldButton() }
         restoreOwnWindows()
         model.visible = false
         panel?.orderOut(nil)

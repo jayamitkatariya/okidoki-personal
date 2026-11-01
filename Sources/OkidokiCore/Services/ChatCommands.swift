@@ -27,7 +27,8 @@ public enum ChatCommand: Equatable, Sendable {
 
     /// "file the entry for INV-4471": one pass per record, `{{placeholders}}` filled from it; `values`
     /// are key=value overrides typed with the request (and all there is when no record is named).
-    case replayRecords(skillID: String, recordIDs: [String], values: [String: String])
+    /// `times` repeats the overrides-only pass ("replay x 3 times with city=Lisbon").
+    case replayRecords(skillID: String, recordIDs: [String], values: [String: String], times: Int = 1)
     /// A record id in the usual shape that isn't in the records file.
     case unknownRecord(query: String)
     /// "add the W-9 to the vault": fetch the document (a link, or a web search) and file it in the
@@ -139,7 +140,9 @@ public enum ChatCommands {
         guard let split = parts.range(of: " (to|as) ", options: .regularExpression) else { return nil }
         let query = String(parts[..<split.lowerBound]).replacingOccurrences(of: " skill$", with: "", options: .regularExpression)
         let name = cleanName(String(parts[split.upperBound...]))
-        guard !name.isEmpty, let best = bestMatch(query, in: skills), best.score >= 0.6 else { return nil }
+        // Without the word "skill" ("rename the file to report.pdf") only an exact skill name counts.
+        let named = t.contains("skill")
+        guard !name.isEmpty, let best = bestMatch(query, in: skills), best.score >= (named ? 0.6 : 0.99) else { return nil }
         return .renameSkill(skillID: best.skill.id, name: name)
     }
 
@@ -150,21 +153,24 @@ public enum ChatCommands {
         let query = body
             .replacingOccurrences(of: "^(delete|remove|forget|drop) (the |my )?(skill )?", with: "", options: .regularExpression)
             .replacingOccurrences(of: " skill$", with: "", options: .regularExpression)
-        guard let best = bestMatch(query, in: skills), best.score >= 0.75 else { return nil }
+        // "forget it" / "forget my password" are conversation: without the word "skill", only an exact name deletes.
+        let named = body.contains("skill")
+        guard let best = bestMatch(query, in: skills), best.score >= (named ? 0.75 : 0.99) else { return nil }
         return .deleteSkill(skillID: best.skill.id)
     }
 
     // MARK: - Replay
 
     /// Verbs that only ever mean "replay the skill": a miss still answers, so the user learns what exists.
-    private static let strictVerbs = ["replay", "rerun", "re-run", "repeat", "redo", "play back", "playback"]
+    private static let strictVerbs = ["replay", "rerun", "re-run", "play back", "playback"]
     /// Everyday verbs: they only count when a skill clearly matches, otherwise the request goes to the brain.
-    private static let looseVerbs = ["run", "play", "do", "perform", "execute", "trigger"]
+    /// "redo" and "repeat" are here too: "redo the email in a friendlier tone" is a request, not a replay.
+    private static let looseVerbs = ["run", "play", "do", "perform", "execute", "trigger", "repeat", "redo"]
 
     /// Ways of saying "the last skill" that name a replay outright.
     private static let replayLastPhrases: Set<String> = ["replay", "replay it", "replay that", "replay again", "replay last", "replay the last one", "replay the last skill"]
     /// Ways that only mean a replay once one has happened; otherwise "again" is just conversation.
-    private static let againPhrases: Set<String> = ["again", "do it again", "run it again", "play it again", "one more time", "once more", "same again", "do that again", "run that again", "go again"]
+    private static let againPhrases: Set<String> = ["again", "do it again", "run it again", "play it again", "one more time", "once more", "same again", "do that again", "run that again", "go again", "repeat", "redo", "repeat it", "redo it"]
 
     private static func replayCommand(_ t: String, skills: [Skill], hasReplayed: Bool) -> ChatCommand? {
         let (body, times) = splitTimes(t)
@@ -254,7 +260,9 @@ public enum ChatCommands {
         let n = normalize(name)
         guard !n.isEmpty, !query.isEmpty else { return 0 }
         if n == query { return 1 }
-        if n.contains(query) || query.contains(n) {
+        // Whole words only, so "it" doesn't match "submit invoice".
+        let paddedName = " \(n) ", paddedQuery = " \(query) "
+        if min(n.count, query.count) >= 3, paddedName.contains(paddedQuery) || paddedQuery.contains(paddedName) {
             let overlap = Double(min(n.count, query.count)) / Double(max(n.count, query.count))
             return 0.8 + overlap * 0.15
         }
