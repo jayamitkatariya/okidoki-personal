@@ -294,3 +294,26 @@ test("tab and memory tools map to actions", () => {
   expect(mapBrowserTool("close_tab", { tab: "x" })).toBeUndefined();
   expect(mapBrowserTool("remember", { fact: " shoe size UK 9 " })).toEqual({ type: "remember", fact: "shoe size UK 9" });
 });
+
+test("a finish the Mac didn't run (halted after a page change) keeps the conversation", async () => {
+  const api = fakeAPI([
+    reply([
+      { type: "tool_use", id: "t1", name: "click", input: { ref: 2 } },
+      { type: "tool_use", id: "t2", name: "finish", input: { success: true, summary: "ordered" } },
+    ]),
+    reply([{ type: "tool_use", id: "t3", name: "finish", input: { success: true, summary: "ordered" } }]),
+  ]);
+  await browserStep(request(0), "key", api.impl);
+  await browserStep(request(1, { results: [{ ok: true }, { ok: false, detail: "not run: the page may have changed" }] }), "key", api.impl);
+  const second = api.sent[1].body.messages;
+  expect(second.length).toBe(3);
+  expect(second.at(-1).content[1]).toMatchObject({ tool_use_id: "t2", is_error: true });
+});
+
+test("a lost session recaps from the Mac's own log", async () => {
+  const api = fakeAPI([reply([{ type: "tool_use", id: "t1", name: "click", input: { ref: 2 } }])]);
+  await browserStep(request(4, { progress: ["→ opening amazon.com", "→ click “Add to cart”"] }), "key", api.impl);
+  const text = JSON.stringify(api.sent[0].body.messages);
+  expect(text).toContain("click “Add to cart”");
+  expect(text).toContain("partway through");
+});

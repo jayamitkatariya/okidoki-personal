@@ -136,9 +136,12 @@ public enum BrowserPasswordImport {
         }
         let profileFolders = names.filter { $0 == "Default" || $0.hasPrefix("Profile ") }
         for folder in profileFolders.sorted(by: { profileOrder($0) < profileOrder($1) }) {
-            let file = root.appendingPathComponent(folder).appendingPathComponent("Login Data")
-            guard fileManager.fileExists(atPath: file.path) else { continue }
-            found.append(Profile(folder: folder, name: displayNames[folder] ?? folder, loginData: file))
+            // Chrome keeps passwords saved to the Google account in a file of their own beside the local ones.
+            for file in ["Login Data", "Login Data For Account"] {
+                let url = root.appendingPathComponent(folder).appendingPathComponent(file)
+                guard fileManager.fileExists(atPath: url.path) else { continue }
+                found.append(Profile(folder: folder, name: displayNames[folder] ?? folder, loginData: url))
+            }
         }
         return found
     }
@@ -181,7 +184,7 @@ public enum BrowserPasswordImport {
                 for profile in profiles {
                     if let count = try? withCopy(of: profile.loginData, { try countLogins(in: $0) }) { total += count } else { known = false }
                 }
-                return DetectedBrowser(id: browser.id, name: browser.name, profiles: profiles.map(\.name),
+                return DetectedBrowser(id: browser.id, name: browser.name, profiles: profiles.map(\.name).reduce(into: []) { if !$0.contains($1) { $0.append($1) } },
                                        logins: known ? total : (total > 0 ? total : nil), error: nil)
             } catch {
                 return DetectedBrowser(id: browser.id, name: browser.name, profiles: [], logins: nil,
@@ -309,7 +312,7 @@ public enum BrowserPasswordImport {
         defer { try? fm.removeItem(at: folder) }
         let copy = folder.appendingPathComponent("Login Data")
         try fm.copyItem(at: file, to: copy)
-        for suffix in ["-wal", "-journal"] {
+        for suffix in ["-wal", "-shm", "-journal"] {
             let side = URL(fileURLWithPath: file.path + suffix)
             if fm.fileExists(atPath: side.path) { try? fm.copyItem(at: side, to: URL(fileURLWithPath: copy.path + suffix)) }
         }

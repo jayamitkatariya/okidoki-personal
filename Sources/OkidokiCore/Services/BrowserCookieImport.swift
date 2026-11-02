@@ -110,7 +110,8 @@ public enum BrowserCookieImport {
     /// site, which WebKit keeps differently) and values that won't open are skipped.
     public static func readCookies(at file: URL, key: Data, now: Date = Date()) throws -> (cookies: [ImportedCookie], skipped: Int) {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(file.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+        // Read-write on the private copy: a WAL-mode database can't be read on a read-only connection.
+        guard sqlite3_open_v2(file.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
             sqlite3_close(db)
             throw BrowserPasswordImport.Failure("couldn't open the cookie database")
         }

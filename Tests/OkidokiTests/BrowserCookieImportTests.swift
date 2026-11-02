@@ -95,4 +95,16 @@ final class BrowserCookieImportTests: XCTestCase {
         XCTAssertEqual(files.map(\.file.lastPathComponent), ["Cookies", "Cookies"])
         XCTAssertEqual(files.count, 2)
     }
+
+    func testChromeAccountPasswordsAreFoundBesideLocalOnes() throws {
+        let support = FileManager.default.temporaryDirectory.appendingPathComponent("support-\(UUID().uuidString)")
+        let browser = ChromiumBrowser(id: "x", name: "X", folder: "X", keychainServices: [])
+        for file in ["Login Data", "Login Data For Account"] {
+            let path = support.appendingPathComponent("X/Default/\(file)")
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: path.path, contents: Data())
+        }
+        let profiles = try XCTUnwrap(BrowserPasswordImport.profiles(of: browser, support: support))
+        XCTAssertEqual(profiles.map(\.loginData.lastPathComponent), ["Login Data", "Login Data For Account"])
+    }
 }

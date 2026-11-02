@@ -384,6 +384,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     func tabForRun(runID: String, threadID: String?, preferred: UUID? = nil) -> BrowserTab {
         if let owned = model.tabs.first(where: { $0.ownerRunID == runID }) { return owned }
         if let preferred = tab(preferred), preferred.ownerRunID == nil { return preferred }
+        if let threadID, let ended = tab(threadTabs[threadID]), ended.ownerRunID == nil { return ended }
         if let threadID, let previous = model.tabs.last(where: { $0.threadID == threadID && $0.ownerRunID == nil }) { return previous }
         // A blank tab in front is free to use; a page the person has open stays theirs.
         let front = activeTab
@@ -442,7 +443,9 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     private func installEscape() {
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.keyCode == 53, event.window === self.window,
-                  let tab = self.model.active, tab.working, let stop = tab.onEscape else { return event }
+                  let tab = self.model.active, tab.working, let stop = tab.onEscape,
+                  // Typing in the address bar: esc there just dismisses it.
+                  !(self.window?.firstResponder is NSTextView) else { return event }
             stop()
             return nil
         }
@@ -552,6 +555,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     }
 
     func updateWork(_ line: String, in tab: BrowserTab) { if tab.status != nil { tab.status = line } }
+
+    /// The tab each conversation's last run ended in, where its follow-ups carry on.
+    private var threadTabs: [String: UUID] = [:]
+
+    func noteThreadTab(_ threadID: String, _ tab: BrowserTab) {
+        threadTabs[threadID] = tab.id
+        tab.threadID = threadID
+    }
 
     /// The run is done with every tab it had.
     func endWork(runID: String) {
@@ -712,8 +723,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             window.close()
             return
         }
-        // Only a tab a page opened may close itself, as in other browsers.
-        if let tab = tab(for: webView), tab.openedBy != nil { closeTab(tab) }
+        // Only a tab a page opened may close itself, as in other browsers. A run working there isn't
+        // stopped: it carries on in another of its tabs.
+        if let tab = tab(for: webView), tab.openedBy != nil {
+            tab.ownerRunID = nil
+            tab.status = nil
+            tab.onEscape = nil
+            closeTab(tab)
+        }
     }
 
     /// A popup's window is closing, by the page or by the person: let its page go, so the page that

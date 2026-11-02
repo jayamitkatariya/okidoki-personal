@@ -41,6 +41,8 @@ export type BrowserRequest = {
   context?: Array<{ role: string; text: string }>;
   /** What okidoki knows about the person (sizes, address, preferences), one fact per line. */
   memory?: string[];
+  /** The Mac's own log of what the run did so far, for a session that had to start again. */
+  progress?: string[];
   settings?: { claudeModel?: string };
 };
 
@@ -424,7 +426,8 @@ export async function browserStep(
   recordResults(session, request);
 
   const model = drivingModel(request.settings?.claudeModel);
-  let messages = [...session.messages, userTurn(session, request, lost ? session.recap : undefined)];
+  const recap = () => (session.recap.length ? session.recap : (request.progress ?? []));
+  let messages = [...session.messages, userTurn(session, request, lost ? recap() : undefined)];
   const started = Date.now();
   // Actions go to the Mac as they're written, up to a finish or a question: those wait for the whole
   // reply, so a give-up can still be talked out of (below) without the Mac having acted on it.
@@ -457,7 +460,7 @@ export async function browserStep(
   if (!result.reply && streamed === 0 && conversationBroken(result.error) && session.messages.length > 0) {
     session.messages = [];
     session.pendingIds = [];
-    messages = [userTurn(session, request, session.recap)];
+    messages = [userTurn(session, request, recap())];
     result = await ask(messages);
   }
   // When a run would give up or ask, it's asked (up to twice, a few turns apart) whether it really
@@ -525,6 +528,7 @@ export async function browserStep(
   const response: BrowserResponse = { actions, meta: { model, modelMs: Date.now() - started, usage: readUsage(reply.usage) } };
   session.lastStep = request.step;
   session.lastResponse = response;
-  if (actions.some((action) => action.type === "finish")) sessions.delete(request.runID);
+  // The session stays until it idles out: the Mac may not run a finish planned after a click that changed
+  // the page, and the run then carries on with its history intact.
   return response;
 }

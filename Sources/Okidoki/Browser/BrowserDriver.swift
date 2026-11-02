@@ -162,6 +162,16 @@ final class BrowserAgentRun {
         var step = 0
         while step < Self.maxTurns {
             if Task.isCancelled { return }
+            // The page closed the tab the agent was in (a sign-in or payment tab that's done): carry on
+            // in the tab that opened it, or another of the run's own.
+            if !browser.model.tabs.contains(where: { $0 === tab }) {
+                let closed = tab
+                let next = browser.tab(closed.openedBy).flatMap { $0.ownerRunID == nil || $0.ownerRunID == run.id ? $0 : nil }
+                    ?? browser.tabs(ownedBy: run.id).last
+                    ?? browser.openTab(activate: false)
+                if next.ownerRunID != run.id { claim(next) }
+                tab = next
+            }
             await tab.settle(limit: 6)
             let page = await tab.snapshot()
             var observation: [String: Any] = ["url": page.url, "title": page.title, "elements": page.elements, "text": page.text]
@@ -183,6 +193,11 @@ final class BrowserAgentRun {
             ]
             if !context.isEmpty { body["context"] = context }
             if !memory.isEmpty { body["memory"] = memory }
+            // What the run did, in case the brain lost its side of the conversation.
+            if step > 0, let output = env.store.run(run.id)?.output {
+                let done = output.split(separator: "\n").filter { $0.hasPrefix("→") || $0.hasPrefix("✗") }.suffix(30).map(String.init)
+                if !done.isEmpty { body["progress"] = done }
+            }
             var turnResults: [[String: Any]] = []
             var haltReason: String?
             var ended = false
@@ -395,7 +410,7 @@ final class BrowserAgentRun {
         task = nil
         env.browser.endWork(runID: run.id)
         // The tab it ended in is where a follow-up in this conversation carries on.
-        if let threadID = run.threadID { tab.threadID = threadID }
+        if let threadID = run.threadID { env.browser.noteThreadTab(threadID, tab) }
         env.store.finishRun(run.id, status: success ? .done : .failed, summary: summary)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: summary, runID: run.id) }
         env.browserRunFinished(run, success: success, summary: summary, learned: success ? learned : [])
@@ -409,7 +424,7 @@ final class BrowserAgentRun {
         env.browser.endWork(runID: run.id)
         if let threadID = run.threadID {
             env.browserLearnedBeforeQuestion[threadID] = learned
-            tab.threadID = threadID
+            env.browser.noteThreadTab(threadID, tab)
         }
         env.store.finishRun(run.id, status: .asked, summary: question)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: question, runID: run.id) }
