@@ -311,6 +311,24 @@ public final class LocalVault: ObservableObject {
         persist()
     }
 
+    /// Many logins at once (an import), written to disk once.
+    public func saveLogins(_ batch: [VaultLogin]) {
+        guard !batch.isEmpty else { return }
+        let now = Date()
+        for login in batch {
+            var next = login
+            next.updatedAt = now
+            if let index = logins.firstIndex(where: { $0.id == login.id }) {
+                next.createdAt = logins[index].createdAt
+                next.lastUsedAt = logins[index].lastUsedAt
+                logins[index] = next
+            } else {
+                logins.insert(next, at: 0)
+            }
+        }
+        persist()
+    }
+
     public func deleteLogin(id: String) {
         logins.removeAll { $0.id == id }
         persist()

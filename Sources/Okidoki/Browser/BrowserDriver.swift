@@ -19,15 +19,17 @@ extension BrainClient {
 
     /// The same turn, streamed: `onAction` runs each action the moment the model has written it (while
     /// it writes the next) and returns false once the run is over, which stops listening. Returns the
-    /// actions that didn't stream (nil when the brain didn't answer) and how many did.
+    /// actions that didn't stream (nil when the brain didn't answer), how many did, and the brain's error.
     func browserStepStream(_ body: [String: Any], onAction: ([String: Any]) async -> Bool)
-        async -> (rest: [[String: Any]]?, received: Int, stopped: Bool) {
+        async -> (rest: [[String: Any]]?, received: Int, stopped: Bool, error: String?) {
         var request = drivingRequest(path: "browser/step/stream", timeout: 70)
         var received = 0
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (bytes, response) = try await URLSession.shared.bytes(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return (nil, 0, false) }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return (nil, 0, false, "the brain answered \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+            }
             for try await line in bytes.lines {
                 guard let data = line.data(using: .utf8),
                       let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
@@ -37,122 +39,208 @@ extension BrainClient {
                     received += 1
                     if !(await onAction(action)) {
                         bytes.task.cancel()
-                        return ([], received, true)
+                        return ([], received, true, nil)
                     }
                 case "end":
-                    return (item["actions"] as? [[String: Any]] ?? [], received, false)
+                    return (item["actions"] as? [[String: Any]] ?? [], received, false, item["error"] as? String)
                 default:
                     continue
                 }
             }
         } catch {
-            return (received > 0 ? [] : nil, received, false)
+            return (received > 0 ? [] : nil, received, false, error.localizedDescription)
         }
-        return (received > 0 ? [] : nil, received, false)
+        return (received > 0 ? [] : nil, received, false, nil)
     }
 }
 
-/// Web tasks in okidoki's browser. The agent reads the page as text, acts on elements by number, and
-/// every action that works is kept as a skill step (with the selectors to find its element again),
-/// so a finished run can be saved and replayed with no model at all.
+/// Web tasks in okidoki's browser. Each run works in tabs of its own, so several can go at once and the
+/// person keeps the tab they're in. This hands out the runs and answers for all of them.
 @MainActor
 final class BrowserDriver {
     private weak var env: AppEnvironment?
-    private var task: Task<Void, Never>?
-    private(set) var runID: String?
-    var isActive: Bool { task != nil }
-    /// What worked, in order: the skill this run would become.
-    private(set) var learned: [SkillStep] = []
-    static let maxTurns = 40
+    private var runs: [String: BrowserAgentRun] = [:]
+    var isActive: Bool { !runs.isEmpty }
+    func isRunning(_ runID: String) -> Bool { runs[runID] != nil }
 
     init(environment: AppEnvironment) { self.env = environment }
 
     func begin(run: AgentRun) {
-        guard let env, task == nil, !env.browserReplayer.isActive else {
-            env?.store.finishRun(run.id, status: .failed, summary: "the browser is busy with another task — let it finish or stop it first")
-            return
-        }
+        guard let env, runs[run.id] == nil else { return }
+        let agent = BrowserAgentRun(environment: env, run: run) { [weak self] id in self?.runs[id] = nil }
+        runs[run.id] = agent
+        agent.start()
+    }
+
+    func cancel(runID: String, reason: String) {
+        runs[runID]?.cancel(reason: reason)
+    }
+
+    func cancelAll(reason: String) {
+        for agent in runs.values { agent.cancel(reason: reason) }
+    }
+}
+
+/// One web task. The agent reads the page as text, acts on elements by number, and every action that
+/// works is kept as a skill step (with the selectors to find its element again), so a finished run can
+/// be saved and replayed with no model at all.
+@MainActor
+final class BrowserAgentRun {
+    private weak var env: AppEnvironment?
+    private let run: AgentRun
+    private let ended: (String) -> Void
+    private var task: Task<Void, Never>?
+    /// The tab the agent is working in now; it may open and move between others.
+    private var tab: BrowserTab
+    /// What worked, in order: the skill this run would become.
+    private(set) var learned: [SkillStep] = []
+    static let maxTurns = 80
+    /// Times in a row the brain didn't answer before the run gives up.
+    static let maxMisses = 3
+
+    init(environment: AppEnvironment, run: AgentRun, ended: @escaping (String) -> Void) {
+        self.env = environment
+        self.run = run
+        self.ended = ended
+        self.tab = environment.browser.tabForRun(runID: run.id, threadID: run.threadID,
+                                                 preferred: environment.browserRunTabs.removeValue(forKey: run.id))
+    }
+
+    func start() {
+        guard let env else { return }
         let browser = env.browser
-        runID = run.id
         // A run that continues after the person answered a question keeps what the first part learned.
         learned = run.threadID.flatMap { env.browserLearnedBeforeQuestion.removeValue(forKey: $0) } ?? []
         browser.showQuietly()
-        browser.beginWork("browsing · \(run.title)")
-        browser.onEscape = { [weak self] in self?.cancel(reason: "you stopped me") }
+        browser.beginWork("browsing · \(run.title)", in: tab, runID: run.id, threadID: run.threadID) { [weak self] in
+            self?.cancel(reason: "you stopped me")
+        }
+        // The person watches the work, unless they're recording in the tab in front.
+        if browser.activeTab !== tab, !browser.model.recording { browser.select(tab) }
         task = Task { [weak self] in
-            await self?.drive(run: run, browser: browser)
+            await self?.drive()
         }
     }
 
     func cancel(reason: String) {
-        guard let runID, let env else { return }
+        guard let env else { return }
         task?.cancel()
         task = nil
-        env.browser.endWork()
-        env.store.finishRun(runID, status: .cancelled, summary: reason)
+        env.browser.endWork(runID: run.id)
+        env.store.finishRun(run.id, status: .cancelled, summary: reason)
         env.store.saveNow()
-        self.runID = nil
+        ended(run.id)
     }
 
-    private func drive(run: AgentRun, browser: BrowserController) async {
+    /// The run's tabs for the agent, the one it's in marked.
+    private func tabList() -> String {
+        guard let env else { return "" }
+        let mine = env.browser.tabs(ownedBy: run.id)
+        guard mine.count > 1 else { return "" }
+        return mine.map { "[\($0.number)]\($0 === tab ? " *" : "") \($0.label) — \($0.address)" }.joined(separator: "\n")
+    }
+
+    /// The conversation before this run, for a follow-up to make sense of.
+    private func conversation() -> [[String: String]] {
+        guard let env, let threadID = run.threadID, let thread = env.store.thread(threadID) else { return [] }
+        var messages = thread.messages.filter { $0.runID != run.id }
+        // The request that started this run is the task itself, not context.
+        if let last = messages.last, last.role == .user, run.prompt.hasPrefix(last.text) { messages.removeLast() }
+        return messages.suffix(12).map { ["role": $0.role.rawValue, "text": $0.text] }
+    }
+
+    private func drive() async {
         guard let env else { return }
+        let browser = env.browser
         var results: [[String: Any]] = []
         var lookNext = false
         var extracted: Any?
+        var misses = 0
         let logins = env.vault.logins.map { BrowserSteps.host(of: $0.site).isEmpty ? $0.site : BrowserSteps.host(of: $0.site) }
-        for step in 0..<Self.maxTurns {
+        let context = conversation()
+        let memory = env.store.memoryLines(limit: 40)
+        var step = 0
+        while step < Self.maxTurns {
             if Task.isCancelled { return }
-            await browser.settle(limit: 6)
-            let page = await browser.snapshot()
+            // The page closed the tab the agent was in (a sign-in or payment tab that's done): carry on
+            // in the tab that opened it, or another of the run's own.
+            if !browser.model.tabs.contains(where: { $0 === tab }) {
+                let closed = tab
+                let next = browser.tab(closed.openedBy).flatMap { $0.ownerRunID == nil || $0.ownerRunID == run.id ? $0 : nil }
+                    ?? browser.tabs(ownedBy: run.id).last
+                    ?? browser.openTab(activate: false)
+                if next.ownerRunID != run.id { claim(next) }
+                tab = next
+            }
+            await tab.settle(limit: 6)
+            let page = await tab.snapshot()
             var observation: [String: Any] = ["url": page.url, "title": page.title, "elements": page.elements, "text": page.text]
             if !page.downloads.isEmpty { observation["downloads"] = page.downloads }
             if !page.dialogs.isEmpty { observation["dialogs"] = page.dialogs }
             if let loadError = page.loadError { observation["loadError"] = loadError }
             if page.more > 0 { observation["more"] = page.more }
+            let tabs = tabList()
+            if !tabs.isEmpty { observation["tabs"] = tabs }
             // A blank or unreadable page gets a look even if the model didn't ask.
             if lookNext || (page.count == 0 && !page.url.isEmpty && !page.url.hasPrefix("about:")),
-               let shot = await browser.screenshot() {
+               let shot = await tab.screenshot() {
                 observation["screenshotBase64"] = shot.base64EncodedString()
             }
             lookNext = false
-            let body: [String: Any] = [
+            var body: [String: Any] = [
                 "runID": run.id, "goal": run.prompt, "step": step, "observation": observation,
                 "results": results, "logins": logins, "settings": ["claudeModel": env.store.settings.claudeModel],
             ]
-            results = []
+            if !context.isEmpty { body["context"] = context }
+            if !memory.isEmpty { body["memory"] = memory }
+            // What the run did, in case the brain lost its side of the conversation.
+            if step > 0, let output = env.store.run(run.id)?.output {
+                let done = output.split(separator: "\n").filter { $0.hasPrefix("→") || $0.hasPrefix("✗") }.suffix(30).map(String.init)
+                if !done.isEmpty { body["progress"] = done }
+            }
+            var turnResults: [[String: Any]] = []
             var haltReason: String?
             var ended = false
             // One action of this turn. False once the run is over (finished, asked, or stopped).
             let handle: ([String: Any]) async -> Bool = { action in
                 if Task.isCancelled { ended = true; return false }
-                if let haltReason { results.append(["ok": false, "detail": haltReason]); return true }
+                if let haltReason { turnResults.append(["ok": false, "detail": haltReason]); return true }
                 let type = action["type"] as? String ?? ""
                 switch type {
                 case "finish":
-                    if let extracted { self.log(run.id, "data:\n" + Self.json(extracted)) }
-                    self.finish(run, success: action["success"] as? Bool ?? false, summary: action["summary"] as? String ?? "done")
+                    if let extracted { self.log("data:\n" + BrowserAgentRun.json(extracted)) }
+                    self.finish(success: action["success"] as? Bool ?? false, summary: action["summary"] as? String ?? "done")
                     ended = true
                     return false
                 case "ask":
-                    self.ask(run, question: action["question"] as? String ?? "what should i do next?")
+                    self.ask(question: action["question"] as? String ?? "what should i do next?")
                     ended = true
                     return false
                 case "screenshot":
                     lookNext = true
-                    results.append(["ok": true])
+                    turnResults.append(["ok": true])
                 case "extract":
                     extracted = action["data"]
-                    results.append(["ok": true])
+                    turnResults.append(["ok": true])
+                case "remember":
+                    let fact = action["fact"] as? String ?? ""
+                    if BrainService.isDurableFact(fact) {
+                        // Nil here means it was already known: that's fine too.
+                        if env.store.addMemory(fact, section: .aboutYou, source: "browser") != nil { self.log("→ remembered: \(fact)") }
+                        turnResults.append(["ok": true])
+                    } else {
+                        turnResults.append(["ok": false, "detail": "not kept: only lasting facts about the user"])
+                    }
                 case "wait":
                     let seconds = min(10, max(1, (action["seconds"] as? NSNumber)?.doubleValue ?? 2))
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    await browser.settle(limit: 4)
-                    results.append(["ok": true])
+                    await self.tab.settle(limit: 4)
+                    turnResults.append(["ok": true])
                 default:
-                    let outcome = await self.perform(type, action, browser: browser, url: page.url)
-                    results.append(outcome.ok ? ["ok": true] : ["ok": false, "detail": outcome.detail ?? "didn't work"])
-                    if outcome.ok, let line = outcome.line { browser.updateWork(line) }
-                    self.log(run.id, outcome.ok ? "→ \(outcome.line ?? type)" : "✗ \(type): \(outcome.detail ?? "didn't work")")
+                    let outcome = await self.perform(type, action, url: page.url)
+                    turnResults.append(outcome.ok ? ["ok": true] : ["ok": false, "detail": outcome.detail ?? "didn't work"])
+                    if outcome.ok, let line = outcome.line { browser.updateWork(line, in: self.tab) }
+                    self.log(outcome.ok ? "→ \(outcome.line ?? type)" : "✗ \(type): \(outcome.detail ?? "didn't work")")
                     if !outcome.ok { haltReason = "not run: an earlier action failed" }
                     // A click can change what's on the page (or quietly not do what was expected, like an
                     // unavailable size): what was planned after it is checked against a fresh look first.
@@ -163,14 +251,24 @@ final class BrowserDriver {
             // Streamed: the first action starts while the model is still writing the rest of the turn.
             let turn = await BrainClient.shared.browserStepStream(body, onAction: handle)
             if ended || Task.isCancelled { return }
-            guard let rest = turn.rest else {
-                finish(run, success: false, summary: "the brain didn't answer, so i stopped. try again in a moment.")
-                return
+            guard let rest = turn.rest, turn.received > 0 || !rest.isEmpty || turn.error == nil else {
+                // Nothing came back: ask again with the same page and results, a few times, before giving up.
+                misses += 1
+                if misses >= Self.maxMisses {
+                    finish(success: false, summary: "the model stopped answering (\(turn.error ?? "no reply")), so i stopped. say “try again” and i'll pick it up from here.")
+                    return
+                }
+                log("… the model didn't answer, asking again")
+                try? await Task.sleep(nanoseconds: UInt64(misses) * 1_500_000_000)
+                continue
             }
+            misses = 0
             for action in rest where !(await handle(action)) { return }
             if ended || Task.isCancelled { return }
+            results = turnResults
+            step += 1
         }
-        finish(run, success: false, summary: "that took more than \(Self.maxTurns) turns, so i stopped. it may be most of the way there.")
+        finish(success: false, summary: "that took more than \(Self.maxTurns) turns, so i stopped. it may be most of the way there — say “keep going” to carry on.")
     }
 
     /// `changedPage`: the page may now be different from what the model saw, so the rest of its turn
@@ -178,28 +276,62 @@ final class BrowserDriver {
     private struct Outcome { var ok: Bool; var detail: String?; var line: String?; var changedPage = false }
 
     /// The run's step log, as the Live page and history show it.
-    private func log(_ runID: String, _ line: String) {
-        env?.store.updateRun(runID) { run in run.output += (run.output.isEmpty ? "" : "\n") + line }
+    private func log(_ line: String) {
+        env?.store.updateRun(run.id) { run in run.output += (run.output.isEmpty ? "" : "\n") + line }
     }
 
-    private func perform(_ type: String, _ action: [String: Any], browser: BrowserController, url: String) async -> Outcome {
+    private func perform(_ type: String, _ action: [String: Any], url: String) async -> Outcome {
         guard let env else { return Outcome(ok: false) }
+        let browser = env.browser
         let gap = 0.6
         switch type {
         case "navigate":
             guard let raw = action["url"] as? String, let target = BrowserSteps.addressURL(raw) else { return Outcome(ok: false, detail: "not a URL") }
-            await browser.navigate(target)
+            await tab.navigate(target)
             learned.append(BrowserSteps.navigate(target.absoluteString, delay: gap))
             return Outcome(ok: true, line: "opening \(BrowserSteps.displayURL(target.absoluteString))", changedPage: true)
         case "back":
-            await browser.goBack()
+            await tab.goBack()
             // Back undoes the wrong turn: the step that led away isn't part of the skill.
             if !learned.isEmpty { learned.removeLast() }
             return Outcome(ok: true, line: "going back", changedPage: true)
+        case "new_tab":
+            let target = (action["url"] as? String).flatMap { BrowserSteps.addressURL($0) }
+            let watching = browser.model.activeID == tab.id
+            let opened = browser.openTab(activate: watching, openedBy: tab)
+            claim(opened)
+            tab = opened
+            if let target {
+                await opened.navigate(target)
+                learned.append(BrowserSteps.navigate(target.absoluteString, delay: gap))
+            }
+            return Outcome(ok: true, line: "new tab\(target.map { " · \(BrowserSteps.displayURL($0.absoluteString))" } ?? "")", changedPage: true)
+        case "switch_tab":
+            guard let number = (action["tab"] as? NSNumber)?.intValue, let other = browser.tab(number: number),
+                  other.ownerRunID == run.id else { return Outcome(ok: false, detail: "no such tab of yours") }
+            if browser.model.activeID == tab.id { browser.select(other) }
+            tab = other
+            if let address = other.webView.url?.absoluteString { learned.append(BrowserSteps.navigate(address, delay: gap)) }
+            return Outcome(ok: true, line: "switching to \(other.label)", changedPage: true)
+        case "close_tab":
+            guard let number = (action["tab"] as? NSNumber)?.intValue, let other = browser.tab(number: number),
+                  other.ownerRunID == run.id else { return Outcome(ok: false, detail: "no such tab of yours") }
+            let mine = browser.tabs(ownedBy: run.id)
+            guard mine.count > 1 else { return Outcome(ok: false, detail: "that's your only tab") }
+            let wasCurrent = other === tab
+            other.ownerRunID = nil
+            other.status = nil
+            other.onEscape = nil
+            if wasCurrent, let next = mine.last(where: { $0 !== other }) {
+                if browser.model.activeID == other.id { browser.select(next) }
+                tab = next
+            }
+            browser.closeTab(other)
+            return Outcome(ok: true, line: "closing a tab", changedPage: wasCurrent)
         case "fill_login":
             // Only ever the login for the page's own site, whatever site the model names: a page that
             // talks the model into "filling the bank login" here gets nothing.
-            let here = BrowserSteps.host(of: browser.webView.url?.absoluteString ?? url)
+            let here = BrowserSteps.host(of: tab.webView.url?.absoluteString ?? url)
             let named = action["site"] as? String ?? here
             guard !here.isEmpty, BrowserSteps.sameSite(here, named) else {
                 return Outcome(ok: false, detail: "this page is \(here.isEmpty ? "not a website" : here), not \(named); logins are only filled on their own site")
@@ -207,7 +339,7 @@ final class BrowserDriver {
             guard let login = env.vaultLogin(for: here) else {
                 return Outcome(ok: false, detail: "no saved login for \(here), or the vault is locked on this Mac (turn on “remember on this Mac” in Vault)")
             }
-            let result = await browser.fillLogin(username: login.username, password: login.password)
+            let result = await tab.fillLogin(username: login.username, password: login.password)
             if result.ok { learned.append(BrowserSteps.login(site: login.site, url: url, delay: gap)) }
             return Outcome(ok: result.ok, detail: result.detail, line: "signing in to \(login.site)")
         case "click", "hover", "type", "select", "press", "scroll":
@@ -218,18 +350,28 @@ final class BrowserDriver {
             if let value = action["value"] as? String { payload["value"] = value }
             if let key = action["key"] as? String { payload["key"] = key }
             if let direction = action["direction"] as? String { payload["direction"] = direction }
-            let addressBefore = browser.webView.url
-            let result = await browser.act(payload)
+            let addressBefore = tab.webView.url
+            let acting = tab
+            let started = Date()
+            let result = await acting.act(payload)
             guard result.ok else { return Outcome(ok: false, detail: result.detail) }
             // A choice in a dropdown can load a page too (a shop's size picker).
             if ["click", "press", "select"].contains(type) || payload["submit"] as? Bool == true {
                 // Whatever the action set off (a new page, results arriving) gets its moment, no longer.
-                await browser.settle(limit: 6, fresh: true)
+                await acting.settle(limit: 6, fresh: true)
             } else if type == "hover" {
-                await browser.settle(limit: 1.5, fresh: true)
+                await acting.settle(limit: 1.5, fresh: true)
+            }
+            // A link that opened in a new tab: the agent follows it there.
+            var movedTab = false
+            if type == "click" || type == "press",
+               let opened = browser.model.tabs.last(where: { $0.openedBy == acting.id && $0.createdAt >= started && $0.ownerRunID == run.id }) {
+                tab = opened
+                movedTab = true
+                await opened.settle(limit: 6)
             }
             let formControl = ["checkbox", "radio", "switch", "textbox", "searchbox", "combobox", "select"].contains(result.role ?? "")
-            let changedPage = browser.webView.url != addressBefore
+            let changedPage = movedTab || acting.webView.url != addressBefore
                 || (type == "click" && !formControl) || type == "press" || payload["submit"] as? Bool == true
             // Scrolling isn't part of the skill: a replay finds elements wherever they are.
             guard type != "scroll" else { return Outcome(ok: true, line: "scrolling") }
@@ -243,37 +385,52 @@ final class BrowserDriver {
                 learned.append(.browser("press", text: BrowserSteps.line("press", label: nil, input: "Enter"), url: url,
                                         selectors: result.selectors, input: "Enter", delay: 0.2))
             }
+            if movedTab, let address = tab.webView.url?.absoluteString { learned.append(BrowserSteps.navigate(address, delay: gap)) }
             // Typed now from the task, not the vault; the saved skill fills it from the vault next time.
             if type == "type", result.role == "password" {
                 return Outcome(ok: true, line: "type the password in \(result.label.map { "“\($0)”" } ?? "the field")", changedPage: changedPage)
             }
-            return Outcome(ok: true, line: BrowserSteps.line(type, label: result.label, input: input), changedPage: changedPage)
+            let line = BrowserSteps.line(type, label: result.label, input: input) + (movedTab ? " · opened a new tab" : "")
+            return Outcome(ok: true, line: line, changedPage: changedPage)
         default:
             return Outcome(ok: false, detail: "unknown action \(type)")
         }
     }
 
-    private func finish(_ run: AgentRun, success: Bool, summary: String) {
+    /// A tab the agent opened is its own, with the same line and esc as the rest of its work.
+    private func claim(_ opened: BrowserTab) {
+        guard let env else { return }
+        env.browser.beginWork(tab.status ?? "browsing · \(run.title)", in: opened, runID: run.id, threadID: run.threadID) { [weak self] in
+            self?.cancel(reason: "you stopped me")
+        }
+    }
+
+    private func finish(success: Bool, summary: String) {
         guard let env else { return }
         task = nil
-        runID = nil
-        env.browser.endWork()
+        env.browser.endWork(runID: run.id)
+        // The tab it ended in is where a follow-up in this conversation carries on.
+        if let threadID = run.threadID { env.browser.noteThreadTab(threadID, tab) }
         env.store.finishRun(run.id, status: success ? .done : .failed, summary: summary)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: summary, runID: run.id) }
         env.browserRunFinished(run, success: success, summary: summary, learned: success ? learned : [])
         env.store.saveNow()
+        ended(run.id)
     }
 
-    private func ask(_ run: AgentRun, question: String) {
+    private func ask(question: String) {
         guard let env else { return }
         task = nil
-        runID = nil
-        env.browser.endWork()
-        if let threadID = run.threadID { env.browserLearnedBeforeQuestion[threadID] = learned }
+        env.browser.endWork(runID: run.id)
+        if let threadID = run.threadID {
+            env.browserLearnedBeforeQuestion[threadID] = learned
+            env.browser.noteThreadTab(threadID, tab)
+        }
         env.store.finishRun(run.id, status: .asked, summary: question)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: question, runID: run.id) }
         env.presentDriveQuestion(runID: run.id, question: question)
         env.store.saveNow()
+        ended(run.id)
     }
 
     static func json(_ value: Any) -> String {
@@ -294,12 +451,14 @@ final class BrowserReplayer {
     private var task: Task<Void, Never>?
     private(set) var runID: String?
     var isActive: Bool { task != nil }
+    /// The tab the replay runs in.
+    private var tab: BrowserTab?
 
     init(environment: AppEnvironment) { self.env = environment }
 
     func begin(skill: Skill, runID: String, times: Int, values: [[String: String]]) {
-        guard let env, task == nil, !env.browserDriver.isActive else {
-            env?.failReplay(runID: runID, reason: "the browser is busy — let the current task finish or stop it first")
+        guard let env, task == nil else {
+            env?.failReplay(runID: runID, reason: "another replay is running in the browser — let it finish or stop it first")
             return
         }
         let builtins = ParameterFill.builtins()
@@ -314,9 +473,13 @@ final class BrowserReplayer {
         }
         self.runID = runID
         let browser = env.browser
+        let tab = browser.tabForRun(runID: runID, threadID: nil)
+        self.tab = tab
         browser.showQuietly()
-        browser.beginWork("replaying “\(skill.name)”")
-        browser.onEscape = { [weak self] in self?.cancel(reason: "you stopped me") }
+        browser.beginWork("replaying “\(skill.name)”", in: tab, runID: runID, threadID: nil) { [weak self] in
+            self?.cancel(reason: "you stopped me")
+        }
+        if browser.activeTab !== tab, !browser.model.recording { browser.select(tab) }
         let passes = values.isEmpty ? max(1, times) : values.count
         task = Task { [weak self] in
             guard let self else { return }
@@ -329,7 +492,7 @@ final class BrowserReplayer {
                     let step = healed[index]
                     if Task.isCancelled { return }
                     self.mark(index, .running, total: skill.steps.count, pass: pass, of: passes, text: ParameterFill.fill(step.text, values: given).text)
-                    let outcome = await self.perform(step, values: given, browser: browser, pass: pass)
+                    let outcome = await self.perform(step, values: given, tab: tab, pass: pass)
                     // Stopped while that step was in flight: the run is already marked cancelled.
                     if Task.isCancelled || self.runID != runID { return }
                     switch outcome {
@@ -365,8 +528,9 @@ final class BrowserReplayer {
 
     private func end() {
         task = nil
+        if let runID { env?.browser.endWork(runID: runID) }
         runID = nil
-        env?.browser.endWork()
+        tab = nil
     }
 
     private func mark(_ index: Int, _ status: RunStatus, total: Int, pass: Int, of passes: Int, text: String) {
@@ -377,12 +541,12 @@ final class BrowserReplayer {
             run.steps[index].status = status
             if passes > 1 { run.summary = "pass \(pass) of \(passes)" }
         }
-        if status == .running { env.browser.updateWork("\(passes > 1 ? "\(pass)/\(passes) · " : "")step \(index + 1)/\(total) · \(text)") }
+        if status == .running, let tab { env.browser.updateWork("\(passes > 1 ? "\(pass)/\(passes) · " : "")step \(index + 1)/\(total) · \(text)", in: tab) }
     }
 
     private enum StepOutcome { case done, healed([String]), failed(String) }
 
-    private func perform(_ step: SkillStep, values: [String: String], browser: BrowserController, pass: Int) async -> StepOutcome {
+    private func perform(_ step: SkillStep, values: [String: String], tab browser: BrowserTab, pass: Int) async -> StepOutcome {
         guard let env else { return .failed("okidoki quit") }
         let action = step.action ?? "click"
         switch action {
@@ -431,7 +595,7 @@ final class BrowserReplayer {
             }
             if !result.ok {
                 // None of the saved ways find it: the brain looks at the page for this one step.
-                guard let rescued = await rescue(step, input: input, browser: browser, pass: pass) else {
+                guard let rescued = await rescue(step, input: input, tab: browser, pass: pass) else {
                     return .failed(result.detail ?? "couldn't find it")
                 }
                 result = rescued
@@ -464,7 +628,7 @@ final class BrowserReplayer {
     }
 
     /// One step, by the brain: it's told what the step was and picks the element on today's page.
-    private func rescue(_ step: SkillStep, input: String?, browser: BrowserController, pass: Int) async -> BrowserActResult? {
+    private func rescue(_ step: SkillStep, input: String?, tab browser: BrowserTab, pass: Int) async -> BrowserActResult? {
         guard let env, env.hasKey("anthropic"), let runID else { return nil }
         let page = await browser.snapshot()
         let action = step.action ?? "click"

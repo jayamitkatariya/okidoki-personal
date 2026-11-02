@@ -146,6 +146,38 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       ];
       break;
     }
+    case "vaultImportSources": {
+      if (state.vaultImport) state.vaultImport = { ...state.vaultImport, scanned: true, scanning: false };
+      break;
+    }
+    case "vaultImportBrowser":
+    case "vaultImportCSV": {
+      // No Keychain or files in the preview: report a stand-in result so the flow can be explored.
+      if (!state.vaultImport) return false;
+      const browser = state.vaultImport.sources.find((source) => source.id === payload.browser);
+      const csv = type === "vaultImportCSV";
+      state.vaultImport = {
+        ...state.vaultImport,
+        busy: null,
+        last: { source: csv ? "Passwords.csv" : (browser?.name ?? "browser"), imported: csv ? 12 : (browser?.logins ?? 0), updated: 0, skipped: 2, errors: [], finishedAt: new Date().toISOString() },
+        csvToTrash: csv ? "Passwords.csv" : state.vaultImport.csvToTrash,
+      };
+      break;
+    }
+    case "vaultImportCookies": {
+      if (!state.vaultImport) return false;
+      const browser = state.vaultImport.sources.find((source) => source.id === payload.browser);
+      state.vaultImport = {
+        ...state.vaultImport,
+        cookiesBusy: null,
+        lastCookies: { source: browser?.name ?? "browser", cookies: 840, sites: 61, skipped: 12, errors: [], finishedAt: new Date().toISOString() },
+      };
+      break;
+    }
+    case "vaultImportTrashCSV": {
+      if (state.vaultImport) state.vaultImport = { ...state.vaultImport, csvToTrash: null };
+      break;
+    }
     case "deleteSkill": {
       state.skills = state.skills.filter((skill) => skill.id !== payload.id);
       break;

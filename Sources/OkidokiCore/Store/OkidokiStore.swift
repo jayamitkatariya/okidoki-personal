@@ -353,7 +353,7 @@ public final class OkidokiStore: ObservableObject {
 
     /// Sources that mean the model wrote the memory itself. Anything the person typed, answered
     /// in onboarding or imported from another assistant is theirs to keep.
-    private static let modelSources: Set<String> = ["said", "followup", "dashboard", "routine", "repair"]
+    private static let modelSources: Set<String> = ["said", "followup", "dashboard", "routine", "repair", "browser"]
 
     /// Memories the model saved before `isDurableFact` existed — notes about the clipboard, a
     /// screenshot or its own limits — were fed back with every request and kept the model stuck on

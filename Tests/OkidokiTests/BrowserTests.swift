@@ -64,6 +64,26 @@ final class BrowserStepsTests: XCTestCase {
         XCTAssertEqual(BrowserSteps.addressURL("https://a.b/c?d=1")?.absoluteString, "https://a.b/c?d=1")
         XCTAssertEqual(BrowserSteps.addressURL("weather lisbon")?.host, "www.google.com")
         XCTAssertEqual(BrowserSteps.displayURL("https://www.google.com/travel/flights?q=1"), "google.com/travel/flights")
+        XCTAssertEqual(BrowserSteps.addressURL("localhost:3000")?.absoluteString, "http://localhost:3000")
+        XCTAssertEqual(BrowserSteps.addressURL("node.js")?.host, "node.js")
+        // A sentence with a dot in it isn't an address.
+        XCTAssertEqual(BrowserSteps.addressURL("what is 2.5 x 4")?.host, "www.google.com")
+    }
+
+    func testAddressBarTellsSitesSearchesAndTasksApart() {
+        for address in ["github.com", "news.ycombinator.com/item?id=1", "https://a.b/c", "localhost:8080", "192.168.1.1", "amazon.co.uk"] {
+            XCTAssertTrue(BrowserSteps.looksLikeAddress(address), address)
+            XCTAssertFalse(BrowserSteps.looksLikeTask(address), address)
+        }
+        for search in ["weather lisbon", "how to tie a tie", "best pizza near me", "is it going to rain tomorrow", "openai", "puma boots", "2.5 kg in lbs"] {
+            XCTAssertFalse(BrowserSteps.looksLikeAddress(search), search)
+            XCTAssertFalse(BrowserSteps.looksLikeTask(search), search)
+        }
+        for task in ["book a table for two at 8 tonight", "find me cheap flights to goa next weekend", "add blue puma boots size 9 to my cart",
+                     "please check my amazon orders", "compare prices of the iphone 17 on amazon and flipkart",
+                     "Order a large margherita from dominos", "can you sign me up for the newsletter", "renew my library books for me"] {
+            XCTAssertTrue(BrowserSteps.looksLikeTask(task), task)
+        }
     }
 
     func testBrowserOnlySkills() {

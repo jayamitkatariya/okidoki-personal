@@ -8,6 +8,43 @@ extension AppEnvironment {
         browser.show(url: url)
     }
 
+    /// A task typed into a tab's address bar: the agent does it in that tab, in the conversation that
+    /// tab last belonged to, so "now the cheapest one" typed after a search follows on from it.
+    func startBrowserTask(_ text: String, in tab: BrowserTab) {
+        let goal = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !goal.isEmpty else { return }
+        guard hasKey("anthropic") else {
+            toast(title: "add your anthropic key first", detail: "Settings › Keys — then ask again", kind: .warning,
+                  undoLabel: nil, onUndo: nil, editLabel: "keys", onEdit: { [weak self] in self?.openDashboard(.keys) }, runID: nil)
+            return
+        }
+        if let owner = tab.ownerRunID, browserDriver.isRunning(owner) {
+            toast(title: "okidoki is still working in this tab", detail: "press esc to stop it, or ask in a new tab (⌘T)", kind: .info,
+                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: owner)
+            return
+        }
+        // A tab with no conversation yet starts its own: tasks in other tabs aren't this one's context.
+        let thread = tab.threadID.flatMap { store.thread($0) }
+            ?? store.createThread(title: String(goal.prefix(60)), app: "okidoki browser", topic: inferTopic(goal))
+        // A question the agent asked in this conversation: this is the answer, and the run picks up where it was.
+        if let asked = store.runs.first(where: { $0.threadID == thread.id && $0.kind == .browser }), asked.status == .asked {
+            browserRunTabs[asked.id] = tab.id
+            answerDriveQuestion(runID: asked.id, text: goal)
+            return
+        }
+        store.appendMessage(threadID: thread.id, role: .user, text: goal)
+        let preview = ActionPreview(summary: String(goal.prefix(80)), risk: .medium,
+                                    steps: [PreviewStep("read the page"), PreviewStep("work through it"), PreviewStep("report back")],
+                                    commands: [], apps: ["okidoki browser"], files: [])
+        let run = store.createRun(kind: .browser, title: String(goal.prefix(54)), prompt: goal, threadID: thread.id, preview: preview,
+                                  steps: preview.steps.map { RunStep(title: $0.text) }, status: .waiting, builtin: "browser")
+        browserRunTabs[run.id] = tab.id
+        tab.threadID = thread.id
+        store.saveNow()
+        let decision = BrainDecision(kind: .browser, title: run.title, answer: "", risk: .medium)
+        startOrAsk(run, decision: decision, threadID: thread.id, source: "browser")
+    }
+
     // MARK: - Recording a skill in the browser
 
     func startBrowserRecording() {
