@@ -23,8 +23,9 @@ extension AppEnvironment {
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: owner)
             return
         }
+        // A tab with no conversation yet starts its own: tasks in other tabs aren't this one's context.
         let thread = tab.threadID.flatMap { store.thread($0) }
-            ?? store.threadForContext(app: "okidoki browser", topic: inferTopic(goal), text: goal)
+            ?? store.createThread(title: String(goal.prefix(60)), app: "okidoki browser", topic: inferTopic(goal))
         // A question the agent asked in this conversation: this is the answer, and the run picks up where it was.
         if let asked = store.runs.first(where: { $0.threadID == thread.id && $0.kind == .browser }), asked.status == .asked {
             browserRunTabs[asked.id] = tab.id
