@@ -815,9 +815,18 @@ final class AppEnvironment: ObservableObject {
             decision.kind = .browser
             decision.previewSummary = decision.previewSummary.isEmpty ? request.text : decision.previewSummary
         }
+        var saved: [String] = []
         for fact in decision.memory where BrainService.isDurableFact(fact) {
-            store.addMemory(fact, section: fact.lowercased().hasPrefix("right now") ? .rightNow : .aboutYou,
-                            source: source == "summon" ? "said" : source)
+            if let item = store.addMemory(fact, section: fact.lowercased().hasPrefix("right now") ? .rightNow : .aboutYou,
+                                          source: source == "summon" ? "said" : source) { saved.append(item.text) }
+        }
+        // The confirmation lists what was actually kept, never what the model meant to keep.
+        if decision.kind == .memory {
+            let known = decision.memory.filter { fact in store.memories.contains { $0.text.lowercased() == fact.lowercased() } }
+            decision.answer = saved.isEmpty && known.isEmpty
+                ? "I couldn't find a lasting fact to keep there. Try \"remember that …\" with the detail itself."
+                : "Noted. I'll remember:\n" + (saved.isEmpty ? known : saved).map { "· \($0)" }.joined(separator: "\n")
+            decision.previewSummary = (saved.isEmpty ? known : saved).joined(separator: " · ")
         }
         switch decision.kind {
         case .answer:

@@ -825,6 +825,13 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         case scene
     }
 
+    /// A list, or a single string the model sent where a list belonged (one item, or one per line).
+    private static func list(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> [String] {
+        if let items = try? c.decode([String].self, forKey: key) { return items }
+        guard let text = try? c.decode(String.self, forKey: key) else { return [] }
+        return text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .answer
@@ -833,18 +840,18 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         speak = (try? c.decode(String.self, forKey: .speak)) ?? ""
         risk = (try? c.decode(RiskLevel.self, forKey: .risk)) ?? .low
         previewSummary = (try? c.decode(String.self, forKey: .previewSummary)) ?? ""
-        previewSteps = (try? c.decode([String].self, forKey: .previewSteps)) ?? []
-        commands = (try? c.decode([String].self, forKey: .commands)) ?? []
-        apps = (try? c.decode([String].self, forKey: .apps)) ?? []
-        files = (try? c.decode([String].self, forKey: .files)) ?? []
-        memory = (try? c.decode([String].self, forKey: .memory)) ?? []
+        previewSteps = Self.list(c, .previewSteps)
+        commands = Self.list(c, .commands)
+        apps = Self.list(c, .apps)
+        files = Self.list(c, .files)
+        memory = Self.list(c, .memory)
         routineName = try? c.decodeIfPresent(String.self, forKey: .routineName)
         routineCadence = try? c.decodeIfPresent(String.self, forKey: .routineCadence)
         routineWeekday = try? c.decodeIfPresent(Int.self, forKey: .routineWeekday)
         routineHour = try? c.decodeIfPresent(Int.self, forKey: .routineHour)
         routineMinute = try? c.decodeIfPresent(Int.self, forKey: .routineMinute)
         clarification = try? c.decodeIfPresent(String.self, forKey: .clarification)
-        actions = (try? c.decode([String].self, forKey: .actions)) ?? []
+        actions = Self.list(c, .actions)
         quickAction = try? c.decodeIfPresent(QuickActionPayload.self, forKey: .quickAction)
         pickFile = try? c.decodeIfPresent(String.self, forKey: .pickFile)
         builtin = try? c.decodeIfPresent(String.self, forKey: .builtin)

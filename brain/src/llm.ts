@@ -42,7 +42,7 @@ const responseTool = {
         type: "array",
         items: { type: "string" },
         description:
-          "durable facts about the person worth keeping for months: preferences, people, projects, setup. Never notes about the clipboard, a screenshot, this one request, or your own limits. Usually empty.",
+          "durable facts about the person worth keeping for months: preferences, people, projects, setup — a list, one fact per item (two facts → two items). Never notes about the clipboard, a screenshot, this one request, or your own limits. Usually empty.",
       },
       routine_name: { type: "string" },
       routine_cadence: { type: "string", enum: ["hourly", "daily", "weekdays", "weekly", "manual"] },
@@ -125,10 +125,35 @@ export function normalize(input: Record<string, unknown>): Decision {
     const action = mapped.quickAction as Record<string, unknown>;
     if (typeof action.body !== "string") action.body = "";
   }
+  // The model sometimes sends a list field as one string ("memory": "Favourite city is Lisbon"); the Mac
+  // decodes lists strictly and dropped those, so "remember …" said noted and saved nothing.
+  for (const field of LIST_FIELDS) {
+    if (field in mapped) mapped[field] = asList(mapped[field]);
+  }
   if (Array.isArray(mapped.memory)) {
     mapped.memory = mapped.memory.filter((fact): fact is string => typeof fact === "string" && isDurableFact(fact));
   }
   return mapped as unknown as Decision;
+}
+
+const LIST_FIELDS = ["memory", "previewSteps", "commands", "apps", "files", "actions"];
+
+/** A list of strings from whatever the model sent: a list, a JSON list in a string, or lines/bullets in one string. */
+export function asList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
+  if (typeof value !== "string") return [];
+  const text = value.trim();
+  if (!text) return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return asList(parsed);
+    } catch {}
+  }
+  return text
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*•·]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
 }
 
 // Facts about the clipboard, a screenshot or the assistant's own limits aren't about the person.
@@ -176,7 +201,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     `- a single click in the current app → borrow, with a clear preview`,
     `- "watch me" → watch`,
     `- live web data, or a job one of their connected services (below) can do → connector, with connector_call and a preview`,
-    `- a durable fact → memory`,
+    `- a durable fact → memory. Put every fact they told you into the memory list, one item each: "remember X and Y" is two items, and your answer only says you saved what is in the list.`,
     `- a recurring job → routine`,
     `Never ask them to choose between explaining and doing, and leave clarification empty. If they want to understand something ("how do I", "explain"), answer. If they want it done for them ("make me a…", "export this", "send it", "book it"), use browser or computer_use and start.`,
     ``,

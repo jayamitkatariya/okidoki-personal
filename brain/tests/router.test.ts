@@ -41,3 +41,14 @@ test("reminders, notes and terminal jobs are no longer local routes", () => {
     .map((text) => route(text, { clipboardText: "call mom" }).kind);
   for (const kind of kinds) expect(["quick_action", "terminal", "coding", "teach"]).not.toContain(kind);
 });
+
+import { asList, normalize as normalizeDecision } from "../src/llm";
+
+test("list fields the model sends as one string still arrive as lists", () => {
+  expect(normalizeDecision({ kind: "memory", title: "t", answer: "a", memory: "Favourite city is Lisbon" }).memory).toEqual(["Favourite city is Lisbon"]);
+  expect(asList("- one\n- two")).toEqual(["one", "two"]);
+  expect(asList('["a","b"]')).toEqual(["a", "b"]);
+  expect(asList(["x", 3, " "])).toEqual(["x"]);
+  expect(asList(undefined)).toEqual([]);
+  expect(normalizeDecision({ kind: "computer_use", title: "t", answer: "", apps: "Notes" }).apps).toEqual(["Notes"]);
+});
