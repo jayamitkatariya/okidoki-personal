@@ -67,8 +67,8 @@ function customTools(remote: boolean): unknown[] {
     },
     {
       name: "open_url",
-      description: "Open an http(s), file or mailto URL in its default app. The Mac waits for the page to load before the next screenshot.",
-      input_schema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+      description: "Open an http(s), file or mailto URL. Name the app when the task uses a particular browser (\"Google Chrome\"); without one, a web link opens in the browser in front, else the default app. The Mac waits for the page to load before the next screenshot.",
+      input_schema: { type: "object", properties: { url: { type: "string" }, app: { type: "string", description: "the app to open it in, e.g. Google Chrome; empty for the browser in front" } }, required: ["url"] },
     },
   );
   if (!remote) {
@@ -174,6 +174,7 @@ export function systemPromptV2(request: DriveRequest): string {
     `- After every batch the Mac waits until the screen settles and pages finish loading, then sends a fresh screenshot with the results. Don't call screenshot or wait just to look or to let something load.`,
     `- Check the results and the new screenshot before going on. A result that is an error or says nothing changed means that action did not work: try another way (another control, a shortcut, a script) instead of repeating it.`,
     `- type writes into whatever has keyboard focus, so click the field first. To replace text: click the field, super+a, then type. Long text is pasted for you.`,
+    `- Saving a file: set the format first (a plain .txt in TextEdit: Format › Make Plain Text, super+shift+t). In the Save dialog the extension can be hidden, so type the name without an extension the format already adds (bt-notes, not bt-notes.txt), pick the folder, press Return, then read the saved name in the title bar. Never rename files afterwards in Terminal or Finder to fix a name.`,
     `- If a pop-up, banner or overlay (cookie notice, sign-up or donation prompt, tooltip) covers what the task needs, close it with its close button or Escape — never accept, subscribe, sign in or pay to get rid of it.`,
     `- Coordinates are pixels in the latest screenshot, origin top-left. The screenshot is the whole display at one pixel per point.`,
     ``,
@@ -379,7 +380,7 @@ export function mapToolUse(use: ToolUse): DriveAction {
     case "open_app":
       return { ...base, type: "open_app", app: String(input.name ?? "") };
     case "open_url":
-      return { ...base, type: "open_url", text: String(input.url ?? "") };
+      return { ...base, type: "open_url", text: String(input.url ?? ""), ...(typeof input.app === "string" && input.app.trim() ? { app: input.app.trim() } : {}) };
     case "click_element": {
       const clicks = typeof input.clicks === "number" ? input.clicks : 1;
       return {

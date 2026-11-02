@@ -430,3 +430,10 @@ test("a retried step after a dropped stream gets the committed turn back, not a 
   expect(calls).toBe(1);
   expect(again.actions).toEqual(first.actions);
 });
+
+test("open_url can name the browser to open the link in", () => {
+  const inChrome = mapToolUse({ id: "u1", name: "open_url", input: { url: "https://wikipedia.org", app: "Google Chrome" } } as any);
+  expect(inChrome).toMatchObject({ type: "open_url", text: "https://wikipedia.org", app: "Google Chrome" });
+  const anyBrowser = mapToolUse({ id: "u2", name: "open_url", input: { url: "https://wikipedia.org", app: " " } } as any);
+  expect(anyBrowser.app).toBeUndefined();
+});

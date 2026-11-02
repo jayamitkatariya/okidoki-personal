@@ -2155,7 +2155,8 @@ public final class ComputerUseService {
         case "activate":
             return await activateApp(named: action.app ?? action.text ?? "")
         case "open_url":
-            return openURL(action.text ?? action.app ?? "")
+            // Older actions carried the address in `app`; with `text` set, `app` is the browser to use.
+            return await openURL(action.text ?? action.app ?? "", in: action.text != nil ? action.app : nil)
         case "script", "shell", "applescript", "jxa":
             let language = action.lang ?? (action.type == "shell" ? "shell"
                                             : action.type == "jxa" ? "javascript"
@@ -2242,14 +2243,39 @@ public final class ComputerUseService {
         await EventActuator.sleep(150)
     }
 
-    private func openURL(_ raw: String) -> String {
+    /// Opens a link in the app named, else in the browser in front (the one the task is using), else the
+    /// default. A Chrome task once had its links land in another browser and couldn't find them.
+    private func openURL(_ raw: String, in appName: String? = nil) async -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
               ["http", "https", "file", "mailto"].contains(scheme) else {
             return "need an http, https, or file url"
         }
-        NSWorkspace.shared.open(url)
-        return "opened \(trimmed)"
+        var appURL: URL?
+        let named = appName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !named.isEmpty {
+            if let running = runningMatch(named: named) {
+                appURL = NSRunningApplication(processIdentifier: running.pid)?.bundleURL
+            } else {
+                appURL = await Task.detached(priority: .userInitiated) { AppResolver.resolve(name: named) }.value?.url
+            }
+        } else if ["http", "https"].contains(scheme), let front = frontmost(), front.pid != getpid(),
+                  WebPage.isBrowser(bundleID: front.bundleID) {
+            appURL = NSRunningApplication(processIdentifier: front.pid)?.bundleURL
+        }
+        guard let appURL else {
+            if !named.isEmpty { return "no app called \(named) on this Mac; nothing opened" }
+            NSWorkspace.shared.open(url)
+            return "opened \(trimmed)"
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        do {
+            _ = try await NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config)
+        } catch {
+            return "couldn't open it in \(AppResolver.displayName(of: appURL)): \(error.localizedDescription)"
+        }
+        return "opened \(trimmed) in \(AppResolver.displayName(of: appURL))"
     }
 
     /// Quartz point for a click. An accessibility label that agrees with the image coordinate
@@ -2343,6 +2369,14 @@ public final class ComputerUseService {
             guard !text.isEmpty else { return "nothing to type" }
             if EventActuator.secureInputActive {
                 return "a password field has the keyboard — i don't type secrets. ask the user to fill it in, then continue"
+            }
+            // A document body (TextEdit, Notes, a page's text area) autocorrects and capitalises keystrokes:
+            // "hello" became "Hello". Pasted text lands exactly as written. One-line fields keep real
+            // keystrokes, which search boxes and autocomplete listen for.
+            if let pid = frontmost()?.pid, pid != getpid(),
+               await Task.detached(priority: .userInitiated, operation: { AXSearch.focusedInput(pid: pid)?.role }).value == "AXTextArea" {
+                await EventActuator.pasteText(text)
+                return "pasted \(text.count) characters"
             }
             await EventActuator.typeText(text)
             return text.count > EventActuator.pasteThreshold
