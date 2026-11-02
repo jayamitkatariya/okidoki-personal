@@ -193,9 +193,22 @@ export function HomePage({ go }: { go: (page: Page) => void }) {
                     <p>{run.preview?.summary || run.prompt}</p>
                   </div>
                   <div className="needs-actions">
-                    <Button variant="ghost" size="sm" onClick={() => openRun(run.id)}>
-                      Review
-                    </Button>
+                    {run.status === "asked" ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          invoke("stopRun", { id: run.id });
+                          notify("Dismissed", run.title);
+                        }}
+                      >
+                        Dismiss
+                      </Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" onClick={() => openRun(run.id)}>
+                        Review
+                      </Button>
+                    )}
                     {run.status === "asked" ? (
                       <Button variant="primary" size="sm" onClick={() => openRun(run.id)}>
                         Answer

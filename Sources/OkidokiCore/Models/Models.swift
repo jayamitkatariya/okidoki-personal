@@ -442,6 +442,9 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     /// The Mac that ran it (`DeviceIdentity`). Only that Mac executes, stops or recovers it;
     /// elsewhere it's history synced from that Mac.
     public var origin: String?
+    /// The user's reply to the question an `asked` run paused on. Set when they answer (or carry on in the
+    /// same conversation), which also moves the run to done so it stops waiting on them.
+    public var answer: String?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,

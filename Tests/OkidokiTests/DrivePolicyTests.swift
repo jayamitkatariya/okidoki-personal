@@ -67,6 +67,59 @@ final class DrivePolicyTests: XCTestCase {
         XCTAssertEqual(store.run(ok.id)?.steps.map(\.status), [.done, .done])
     }
 
+    func testAnsweringAQuestionTakesItOffNeedsYourAttention() {
+        let store = freshStore()
+        let thread = store.createThread(title: "cart", app: "okidoki browser", topic: "shopping")
+        let asked = store.createRun(kind: .browser, title: "cart", prompt: "add studs", threadID: thread.id,
+                                    steps: [RunStep(title: "search"), RunStep(title: "pick")], status: .running)
+        store.finishRun(asked.id, status: .asked, summary: "which size?")
+        XCTAssertEqual(store.run(asked.id)?.status, .asked)
+
+        // The follow-up starts a new run in the same conversation: the question is answered.
+        let next = store.createRun(kind: .browser, title: "cart", prompt: "size 10", threadID: thread.id, status: .waiting)
+        let answered = store.run(asked.id)
+        XCTAssertEqual(answered?.status, .done, "an answered question must not keep waiting on you")
+        XCTAssertEqual(answered?.answer, "size 10")
+        XCTAssertEqual(answered?.summary, "which size?", "the question stays readable in history")
+        XCTAssertFalse(answered?.steps.contains { $0.status == .asked } ?? true)
+        XCTAssertEqual(store.run(next.id)?.status, .waiting)
+
+        // A question in another conversation is untouched.
+        let other = store.createRun(kind: .computerUse, title: "x", prompt: "y", threadID: "elsewhere", status: .running)
+        store.finishRun(other.id, status: .asked, summary: "which file?")
+        _ = store.createRun(kind: .computerUse, title: "z", prompt: "w", threadID: thread.id, status: .waiting)
+        XCTAssertEqual(store.run(other.id)?.status, .asked)
+    }
+
+    func testQuestionsAnsweredBeforeTheFixAreClearedOnLaunch() {
+        let old = Date(timeIntervalSinceNow: -600)
+        let asked = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "p", threadID: "th", status: .asked,
+                             steps: [RunStep(title: "s", status: .asked)], summary: "which?", createdAt: old)
+        let followUp = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "this one", threadID: "th", status: .done)
+        let lonely = AgentRun(accountID: "a", kind: .computerUse, title: "t", prompt: "p", threadID: "other", status: .asked)
+        let fixed = OkidokiStore.answeringSupersededQuestions([followUp, asked, lonely])
+        XCTAssertEqual(fixed[1].status, .done)
+        XCTAssertEqual(fixed[1].answer, "this one")
+        XCTAssertEqual(fixed[1].steps.map(\.status), [.done])
+        XCTAssertEqual(fixed[2].status, .asked, "an unanswered question still waits")
+
+        // Given up on: the same task started over in a new conversation.
+        let abandoned = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "Add blue Puma studs",
+                                 threadID: "one", status: .asked, summary: "which size?", createdAt: old)
+        let retry = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "add blue  puma studs", threadID: "two", status: .done)
+        XCTAssertEqual(OkidokiStore.answeringSupersededQuestions([retry, abandoned])[1].status, .cancelled)
+    }
+
+    func testStartingTheSameTaskOverDropsItsOldQuestion() {
+        let store = freshStore()
+        let asked = store.createRun(kind: .browser, title: "studs", prompt: "add puma studs", threadID: "one", status: .running)
+        store.finishRun(asked.id, status: .asked, summary: "which size?")
+        _ = store.createRun(kind: .browser, title: "other", prompt: "something else", threadID: "two", status: .waiting)
+        XCTAssertEqual(store.run(asked.id)?.status, .asked, "a different task leaves the question alone")
+        _ = store.createRun(kind: .browser, title: "studs", prompt: "Add Puma studs", threadID: "three", status: .waiting)
+        XCTAssertEqual(store.run(asked.id)?.status, .cancelled)
+    }
+
     func testAnAskedOrStoppedRunLeavesNoStepRunning() {
         let store = freshStore()
         let plan = { [RunStep(title: "search"), RunStep(title: "pick"), RunStep(title: "add to cart")] }

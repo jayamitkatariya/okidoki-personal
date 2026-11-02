@@ -631,6 +631,7 @@ final class AppEnvironment: ObservableObject {
             return
         }
         store.appendMessage(threadID: threadID, role: .user, text: reply)
+        store.markAnswered(prior.id, reply: reply)
         // The browser agent starts a fresh conversation per run, so it's told the task and the answer.
         let prompt = prior.kind == .browser ? "\(prior.prompt)\n\nYou asked: \(prior.summary)\nThey answered: \(reply)" : reply
         let run = store.createRun(kind: prior.kind, title: prior.title, prompt: prompt, threadID: threadID,
@@ -1264,6 +1265,12 @@ final class AppEnvironment: ObservableObject {
     }
 
     func stopRun(_ id: String) {
+        // A question nobody answered isn't running: dismissing it must not stop whatever is running now.
+        if store.run(id)?.status == .asked {
+            store.cancelRun(id)
+            store.saveNow()
+            return
+        }
         pendingStarts[id]?.cancel()
         pendingStarts[id] = nil
         pausedStarts.remove(id)

@@ -260,6 +260,16 @@ function AskedReply({ run }: { run: Run }) {
         <Button variant="primary" size="sm" icon="arrow" onClick={send} disabled={!text.trim()}>
           Reply
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            invoke("stopRun", { id: run.id });
+            notify("Dismissed", run.title);
+          }}
+        >
+          Dismiss
+        </Button>
       </div>
     </section>
   );

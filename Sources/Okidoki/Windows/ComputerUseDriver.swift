@@ -688,7 +688,7 @@ final class ComputerUseDriver {
         guard let prior, let ended = prior.endedAt, Date().timeIntervalSince(ended) < 2 * 3600 else { return nil }
         let steps = prior.output.split(separator: "\n").map(String.init).filter { $0.hasPrefix("→") }.suffix(8)
         var previous: [String: Any] = ["goal": prior.prompt, "summary": prior.summary, "steps": Array(steps)]
-        if prior.status == .asked { previous["asked"] = true }
+        if prior.status == .asked || prior.answer != nil { previous["asked"] = true }
         return previous
     }
 

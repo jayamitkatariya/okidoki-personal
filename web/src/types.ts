@@ -170,6 +170,8 @@ export interface Run {
   freedBytes?: number | null;
   builtin?: string | null;
   pickedPath?: string | null;
+  /** The user's reply when the run had paused on a question. */
+  answer?: string | null;
 }
 
 export interface Message {
