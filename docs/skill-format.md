@@ -53,3 +53,88 @@ For each step, replay tries these in order and stops at the first that works:
 3. Search the app for the same label.
 4. Match the recorded picture against the screen.
 5. Ask the model to do that one step.
+
+Browser steps (`"surface": "browser"`) use `url` and `selectors` instead of points and pictures. A replay
+that had to fall back to a later selector moves the one that worked to the front.
+
+## Version 2: smart replay
+
+Version 2 adds what lets one skill do the same job for different people, invoices or rows, on a
+page that has changed since. Every field is optional. A skill that uses none of them is still written
+as version 1, and version 1 files replay exactly as before.
+
+```json
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "file a return",
+  "skill": {
+    "intent": "file an income tax return for a person on Acme Filing",
+    "itemNoun": "person",
+    "inputs": [
+      { "name": "pan", "description": "the person's PAN", "kind": "text", "pattern": "[A-Z]{5}[0-9]{4}[A-Z]",
+        "source": "document", "hint": "Form 16, top of page 1" },
+      { "name": "income", "description": "gross salary for the year", "kind": "money", "format": "plain",
+        "source": "document", "hint": "Form 16 Part B" },
+      { "name": "deductions", "description": "each deduction claimed", "kind": "list", "fields": ["section", "amount"],
+        "required": false }
+    ]
+  },
+  "steps": [
+    { "text": "type “{{pan}}” in “PAN”", "action": "type", "input": "{{pan}}",
+      "anchor": { "path": "/form.html", "landmark": "Your details" } },
+    { "text": "tick “I sold shares”", "action": "click", "when": "{{gains}}" },
+    { "text": "click “Add deduction”", "action": "click", "repeatOver": "deductions", "repeatLength": 3 },
+    { "text": "choose “{{item.section}}”", "action": "select", "input": "{{item.section}}" },
+    { "text": "type “{{item.amount}}”", "action": "type", "input": "{{item.amount}}" },
+    { "text": "click “Submit return”", "action": "click", "irreversible": true,
+      "expect": { "urlContains": "done" } },
+    { "text": "read the reference number", "action": "read", "capture": "reference" }
+  ]
+}
+```
+
+### Skill fields (under `skill`)
+
+| field | meaning |
+|---|---|
+| `inputs` | the values each pass needs; see below |
+| `intent` | one line on what it achieves, used to pick the skill from an everyday request |
+| `itemNoun` | what one pass is for: `person`, `invoice`, `row` |
+| `alwaysConfirm` | always pause before irreversible steps (money, deletion) |
+| `interrupts` | popups this skill learned to clear: `whenText` / `whenElement` → `clickLabel` / `clickSelector` / `key` |
+| `template`, `outline`, `startURL`, `startApp`, `tags` | a library template: the agent follows `outline` the first time, and that run becomes the user's own skill |
+
+### Inputs
+
+`kind` is `text`, `number`, `money`, `date`, `choice`, `list` or `file`.
+- `format` sets how the value is typed: money `plain` / `grouped` / `indian`, a date pattern such as `dd/MM/yyyy`, or text `upper` / `lower`.
+- `pattern` is a regular expression the value must match before it's typed.
+- `source` and `hint` say where to find the value, usually a document in the vault.
+- `sensitive` values never reach logs.
+- A `list` holds JSON entries with the named `fields`.
+
+### Step fields
+
+| field | meaning |
+|---|---|
+| `when` | run only when it holds: `{{x}}` (has a value that isn't 0/no/none), `{{x}} == old`, `!=`, `!`, `&&`, `\|\|` |
+| `repeatOver`, `repeatLength` | this step and the next `repeatLength − 1` run once per entry of the list input; `{{item.field}}` inside |
+| `mode: "think"`, `maxTurns` | a bounded sub-goal the model does with the pass's values; the last resort |
+| `anchor` | where the step happens (`path`, `title`, `landmark`, `app`, `window`), for spotting popups and re-syncing |
+| `expect` | checked right after the step, with no model (`urlContains`, `textContains`, `elementPresent`, `elementGone`, `windowTitleContains`, `labelPresent`, `focusedRole`) |
+| `capture` | read a value off the screen into this input (a reference number) |
+| `irreversible` | submits, pays, sends or deletes; the only place smart replay may pause |
+| `observedAfter` | the screen right after the step when it was learned |
+
+### Smart replay order
+
+For each pass, smart replay works in this order:
+1. Values are bound before anything is touched, from the request, a record or spreadsheet row, or the person's documents in the vault.
+2. Conditions are applied and loops are unrolled.
+3. Each step runs in this order:
+   1. It checks the anchor. A popup is cleared by a known handler. A page that's already further along, or not there yet, makes the replay jump to the step that fits.
+   2. The step is done the version 1 way.
+   3. Typed values are read back and compared.
+   4. `expect` is checked.
+   5. Only when one of these fails does the model help with that step. If it can't, the agent finishes the job from where the replay is, and its fix can be saved into the skill.

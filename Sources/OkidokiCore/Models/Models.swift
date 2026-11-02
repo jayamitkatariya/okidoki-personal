@@ -525,6 +525,33 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     /// Ways to find the element again in the page, most specific first (browser steps). A replay
     /// that had to fall back moves the one that worked to the front, so the next replay is direct.
     public var selectors: [String]?
+
+    // v2: hybrid replay. All optional; a v1 step leaves them nil and replays as before.
+    /// Do the step only when this holds for the pass's values: `{{has_gains}}`, `{{regime}} == old`,
+    /// `!{{x}}`, joined with `&&` / `||`. Evaluated in code, never by the model.
+    public var when: String?
+    /// The first step of a loop: this step and the next `repeatLength - 1` run once per entry of the
+    /// list input named here, with `{{item.field}}` filled from the entry.
+    public var repeatOver: String?
+    public var repeatLength: Int?
+    /// "think": a bounded sub-goal the model does with this pass's values (`text` is the goal), for the
+    /// rare stretch that can't be a loop or a condition. Nil is a plain deterministic step.
+    public var mode: String?
+    public var maxTurns: Int?
+    /// Checked right after the step, locally.
+    public var expect: StepExpectation?
+    /// The place this step happens, for noticing popups and re-syncing.
+    public var anchor: StepAnchor?
+    /// Read a value off the screen after the step into this input (a reference number), for later
+    /// steps and the run's receipt.
+    public var capture: String?
+    /// Submits, pays, sends or deletes: the replay may pause here when it's unsure about the values.
+    public var irreversible: Bool?
+    /// The screen right after the step when it was learned.
+    public var observedAfter: StepObservation?
+    /// How often replays needed help with this step; shows which steps are fragile.
+    public var heals: Int?
+
     public init(id: String = UUID().uuidString, text: String, app: String = "",
                 x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,
                 input: String? = nil, toX: Double? = nil, toY: Double? = nil, delay: Double? = nil,
@@ -582,6 +609,29 @@ public struct Skill: Identifiable, Codable, Equatable, Sendable {
     public var updatedAt: Date?
     /// How many times a replay repaired a step and saved the fix back. Nil for skills never repaired.
     public var revision: Int?
+
+    // v2: hybrid replay and the library. All optional.
+    /// The values each pass needs.
+    public var inputs: [SkillInput]?
+    /// One line on what it achieves ("file an income tax return for a person"), for picking it from a request.
+    public var intent: String?
+    /// What one pass is for: "person", "invoice", "row".
+    public var itemNoun: String?
+    /// A library template: `outline` guides the agent's first run, which then becomes a learned skill.
+    public var template: Bool?
+    /// Learned from a template's first run.
+    public var learned: Bool?
+    /// The template it came from.
+    public var templateID: String?
+    /// Always pause before irreversible steps (money, deletion), sure or not.
+    public var alwaysConfirm: Bool?
+    public var interrupts: [InterruptHandler]?
+    /// Template: the steps in words, and where to start.
+    public var outline: [String]?
+    public var startURL: String?
+    public var startApp: String?
+    /// Library filters: browser · mac · work · personal …
+    public var tags: [String]?
 
     public init(id: String = UUID().uuidString, accountID: String, name: String,
                 summary: String, steps: [SkillStep] = [], createdAt: Date = Date(),
