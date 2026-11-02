@@ -319,6 +319,25 @@ final class AppEnvironment: ObservableObject {
         switch parts.first ?? "" {
         case "open": browser.show(url: BrowserSteps.addressURL(arg))
         case "record": startBrowserRecording()
+        // The address bar's “Ask okidoki”, in the tab in front (or tab N: `ask 2 <task>`).
+        case "ask":
+            let words = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            if let number = words.first.flatMap(Int.init), let tab = browser.tab(number: number), words.count > 1 {
+                startBrowserTask(words[1], in: tab)
+            } else {
+                browser.show()
+                startBrowserTask(arg, in: browser.activeTab)
+            }
+        case "newtab": browser.openTab(url: BrowserSteps.addressURL(arg), activate: true)
+        case "tab": if let number = Int(arg), let tab = browser.tab(number: number) { browser.select(tab) }
+        case "tabs":
+            let list = browser.model.tabs.map { tab -> [String: Any] in
+                ["number": tab.number, "title": tab.label, "url": tab.address, "active": tab.id == browser.model.activeID,
+                 "owner": tab.ownerRunID ?? "", "status": tab.status ?? "", "thread": tab.threadID ?? ""]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: ["result": list, "url": ""]) {
+                try? data.write(to: AppPaths.support("dev-browser.json"))
+            }
         case "save":
             if let steps = browserRecording?() { browser.stopRecording(); browserRecording = nil
                 saveBrowserSkill(name: arg.isEmpty ? "recorded flow" : arg, steps: BrowserRecordingCleanup.tidy(steps), source: "watch me") }
