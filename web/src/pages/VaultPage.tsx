@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { copyText, cx, formatBytes, relativeTime } from "../lib";
 import type { Page } from "../nav";
-import type { VaultFile, VaultLogin, VaultState } from "../types";
+import type { VaultFile, VaultImportState, VaultLogin, VaultState } from "../types";
+import { browserDetail, importSummary } from "../vaultImport";
 import { decryptSecret, deriveVaultKey, encryptSecret, rememberPassphrase, rememberedPassphrase, VAULT_KEY_VERSION } from "../vaultCrypto";
 import { Button, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
@@ -247,6 +248,7 @@ function Credentials({ vault }: { vault: VaultState }) {
   const [editing, setEditing] = useState<VaultLogin | null | "new">(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -366,6 +368,9 @@ function Credentials({ vault }: { vault: VaultState }) {
         <Button size="sm" variant="ghost" icon="lock" onClick={lock}>
           Lock
         </Button>
+        <Button size="sm" variant="secondary" icon="download" onClick={() => setImporting(true)}>
+          Import
+        </Button>
         <Button size="sm" variant="primary" icon="plus" onClick={() => setEditing("new")}>
           Add login
         </Button>
@@ -419,13 +424,111 @@ function Credentials({ vault }: { vault: VaultState }) {
         </div>
       ) : (
         <Empty icon="key" title="No logins yet">
-          Add the accounts you use for chores — the billing portal, the bank, the utility site — so a replay can sign in when it needs to and you stop hunting for passwords.
+          Add the accounts you use for chores — the billing portal, the bank, the utility site — so a replay can sign in when it needs to and you stop hunting for passwords. Or bring them over from your browser with Import.
         </Empty>
       )}
 
       <LoginModal editing={editing} vaultKey={key} onClose={() => setEditing(null)} />
+      <ImportModal open={importing} passphrase={passphrase} onClose={() => setImporting(false)} />
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
+  );
+}
+
+const EMPTY_IMPORT: VaultImportState = { sources: [], scanned: false, scanning: false };
+
+/** Passwords from other browsers or an export file. The Mac reads them and seals each one with the passphrase the vault is unlocked with. */
+function ImportModal({ open, passphrase, onClose }: { open: boolean; passphrase: string; onClose: () => void }) {
+  const { state, invoke } = useDashboard();
+  const status = state.vaultImport ?? EMPTY_IMPORT;
+  const busy = status.busy ?? null;
+
+  useEffect(() => {
+    if (open) invoke("vaultImportSources");
+  }, [open, invoke]);
+
+  const csvReport = status.last && /\.csv$/i.test(status.last.source) ? status.last : null;
+
+  return (
+    <Modal open={open} onClose={onClose} title="Import passwords" subtitle="From your other browsers, or a file you exported. Each password is sealed with your vault passphrase as it comes in." width={520}>
+      <div className="pref-group">
+        {status.sources.map((browser) => {
+          const report = status.last?.source === browser.name ? status.last : null;
+          const done = Boolean(report && report.imported + report.updated > 0);
+          return (
+            <div className="pref-row vault-row" key={browser.id}>
+              <span className="kind-icon">
+                <PixelIcon name={done ? "check" : "globe"} size={15} />
+              </span>
+              <span className="pref-copy">
+                <strong>{browser.name}</strong>
+                <em>{browserDetail(browser, report)}</em>
+              </span>
+              <span className="pref-control vault-row-tools">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={busy === browser.id ? "spinner" : "download"}
+                  disabled={Boolean(busy) || Boolean(browser.error) || browser.logins === 0}
+                  onClick={() => invoke("vaultImportBrowser", { browser: browser.id, passphrase })}
+                >
+                  {busy === browser.id ? "Importing…" : done ? "Again" : "Import"}
+                </Button>
+              </span>
+            </div>
+          );
+        })}
+        {!status.sources.length ? (
+          <div className="pref-row vault-row">
+            <span className="kind-icon">
+              <PixelIcon name="globe" size={15} />
+            </span>
+            <span className="pref-copy">
+              <strong>{status.scanned ? "No browsers found" : "Looking for browsers…"}</strong>
+              <em>Chrome, Arc, Dia, Brave, Edge and other Chromium browsers show up here.</em>
+            </span>
+          </div>
+        ) : null}
+        <div className="pref-row vault-row">
+          <span className="kind-icon">
+            <PixelIcon name="note" size={15} />
+          </span>
+          <span className="pref-copy">
+            <strong>From a CSV file</strong>
+            <em>{csvReport ? importSummary(csvReport) : "Safari, the Passwords app, Firefox, 1Password, Bitwarden or any Chromium browser’s export."}</em>
+          </span>
+          <span className="pref-control vault-row-tools">
+            <Button size="sm" variant="secondary" icon={busy === "csv" ? "spinner" : "folder"} disabled={Boolean(busy)} onClick={() => invoke("vaultImportCSV", { passphrase })}>
+              {busy === "csv" ? "Importing…" : "Choose file…"}
+            </Button>
+          </span>
+        </div>
+      </div>
+
+      {status.csvToTrash ? (
+        <div className="vault-filter">
+          <span className="vault-unlocked">
+            <PixelIcon name="trash" size={13} /> {status.csvToTrash} still has your passwords in plain text.
+          </span>
+          <span className="spacer" />
+          <Button size="sm" variant="ghost" onClick={() => invoke("vaultImportTrashCSV", { trash: false })}>
+            Keep it
+          </Button>
+          <Button size="sm" variant="secondary" icon="trash" onClick={() => invoke("vaultImportTrashCSV", { trash: true })}>
+            Move to Trash
+          </Button>
+        </div>
+      ) : null}
+
+      <p className="form-hint">Passwords app: File › Export All Passwords to File. Safari: File › Export › Passwords.</p>
+      <p className="form-hint">Firefox: open about:logins, then ⋯ › Export Passwords. Delete the file once it’s imported.</p>
+
+      <footer className="modal-actions">
+        <Button variant="primary" onClick={onClose}>
+          Done
+        </Button>
+      </footer>
+    </Modal>
   );
 }
 

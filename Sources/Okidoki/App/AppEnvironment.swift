@@ -70,6 +70,10 @@ final class AppEnvironment: ObservableObject {
     /// Requests in flight; a routine finishing must not mark a summon request idle.
     private var busyCount = 0 { didSet { isBusy = busyCount > 0 } }
     @Published var suspendSummonForTour = false
+    /// Browsers to bring passwords in from, and how the last import went.
+    @Published var vaultImport = VaultImportStatus()
+    /// A CSV export just imported; it holds passwords in the clear, so okidoki offers to trash it.
+    var vaultImportCSV: URL?
 
     private var summonAppName = "mac"
     private var summonBundleID = ""
@@ -1430,7 +1434,26 @@ final class AppEnvironment: ObservableObject {
 
     /// The memory files that were read become memories. Only additions: nothing already remembered is
     /// touched, and the other assistant's files aren't either. Everything lands on the Memory page to edit or forget.
-    private func finishMemoryImport(_ run: AgentRun, output: String) {
+    /// Onboarding's "bring your memory": reads one assistant's files on this Mac straight away, no card.
+    /// The number of memories added, or nil when that assistant has nothing here.
+    @discardableResult
+    func importMemory(sourceID: String) -> Int? {
+        guard let source = MemoryImport.source(id: sourceID), source.isLocal else { return nil }
+        let files = MemoryImport.files(for: source)
+        guard !files.isEmpty else { return nil }
+        let prompt = "import my memory from \(source.name)"
+        let thread = store.threadForContext(app: "mac", topic: "memory", text: prompt)
+        let run = store.createRun(kind: .quickAction, title: "import memory from \(source.name)", prompt: prompt, threadID: thread.id,
+                                  steps: [RunStep(title: "read what \(source.name) remembers")],
+                                  status: .waiting, builtin: MemoryImport.builtin)
+        store.startRun(run.id)
+        let added = finishMemoryImport(run, output: MemoryImport.read(files: files), speakResult: false)
+        store.saveNow()
+        return added
+    }
+
+    @discardableResult
+    private func finishMemoryImport(_ run: AgentRun, output: String, speakResult: Bool = true) -> Int {
         let found = MemoryImport.parse(output)
         let asked = MemoryImport.source(in: run.prompt)
         var added = 0
@@ -1453,7 +1476,8 @@ final class AppEnvironment: ObservableObject {
         toast(title: added > 0 ? "\(added) remembered" : "nothing new", detail: summary, kind: added > 0 ? .success : .info,
               undoLabel: nil, onUndo: nil, editLabel: "memory", onEdit: { [weak self] in self?.openDashboard(.memory) },
               runID: run.id)
-        speak(added > 0 ? "Done. I remembered \(added) things." : summary)
+        if speakResult { speak(added > 0 ? "Done. I remembered \(added) things." : summary) }
+        return added
     }
 
     private func fail(_ id: String, _ error: Error) {

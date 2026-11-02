@@ -19,6 +19,14 @@ struct OnboardingView: View {
     @State private var anthropicKey = ""
     @State private var keyCheck: String?
     @State private var checkingKey = false
+    // "Bring your stuff": the vault passphrase typed here (kept only for this window unless remembered).
+    @State private var vaultPass = ""
+    @State private var vaultPassAgain = ""
+    @State private var rememberVault = true
+    @State private var sessionVaultPass = ""
+    @State private var vaultPassNote: String?
+    @State private var memorySources: [MemorySource] = []
+    @State private var memoryAdded: [String: Int] = [:]
 
     var body: some View {
         ZStack {
@@ -51,6 +59,10 @@ struct OnboardingView: View {
         .onChange(of: step) { _, newValue in
             env.suspendSummonForTour = newValue == .tour
             if newValue == .access { refreshPermissions() }
+            if newValue == .bring {
+                env.refreshVaultImportSources()
+                memorySources = MemoryImport.available().map(\.source)
+            }
         }
     }
 
@@ -127,6 +139,7 @@ struct OnboardingView: View {
         case .workspace: workspaceStep
         case .brain: brainStep
         case .about: aboutStep
+        case .bring: bringStep
         case .tour: tourStep
         case .done: doneStep
         }
@@ -326,6 +339,216 @@ struct OnboardingView: View {
             }
             .padding(.top, 12)
         }
+    }
+
+    // MARK: - Bring your stuff
+
+    /// The passphrase imports are sealed with: remembered on this Mac, or typed in this window.
+    private var importPassphrase: String {
+        _ = env.keysVersion
+        if !sessionVaultPass.isEmpty { return sessionVaultPass }
+        return KeyStore.get(LocalVault.passphraseKey) ?? ""
+    }
+
+    private var bringStep: some View {
+        let status = env.vaultImport
+        let ready = !importPassphrase.isEmpty
+        return VStack(alignment: .leading, spacing: 0) {
+            title("Bring your stuff")
+            subtitle("Optional. Passwords from your browsers go into the vault, sealed on this Mac. What other assistants know about you goes into Memory.")
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    fieldLabel("Passwords").padding(.top, 20)
+                    if !ready { vaultPassphraseBox }
+                    VStack(spacing: 0) {
+                        if status.sources.isEmpty {
+                            HStack(spacing: 12) {
+                                iconTile("globe", active: false)
+                                Text(status.scanned ? "No browsers with saved passwords found." : "Looking for browsers…")
+                                    .font(.okBody(12.5)).foregroundStyle(OKBrand.faint)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(height: 52)
+                        }
+                        ForEach(Array(status.sources.enumerated()), id: \.element.id) { index, browser in
+                            if index > 0 { divider }
+                            browserRow(browser, status: status, ready: ready)
+                        }
+                        divider
+                        HStack(spacing: 12) {
+                            iconTile("doc.text", active: false)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("From a CSV file").font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+                                Text(csvDetail(status)).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            if status.csvToTrash != nil {
+                                Button("Trash CSV") { env.finishVaultImportCSV(trash: true) }
+                                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                            } else {
+                                Button(status.busy == "csv" ? "Importing…" : "Choose…") { env.importPasswordCSV(passphrase: importPassphrase) }
+                                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                                    .disabled(!ready || status.busy != nil)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                    }
+                    .groupBox()
+
+                    fieldLabel("Memory").padding(.top, 20)
+                    VStack(spacing: 0) {
+                        if memorySources.isEmpty {
+                            HStack(spacing: 12) {
+                                iconTile("brain", active: false)
+                                Text("No other assistants' notes on this Mac. You can import an export later from Memory.")
+                                    .font(.okBody(12.5)).foregroundStyle(OKBrand.faint)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                        }
+                        ForEach(Array(memorySources.enumerated()), id: \.element.id) { index, source in
+                            if index > 0 { divider }
+                            memoryRow(source)
+                        }
+                    }
+                    .groupBox()
+                }
+            }
+            .frame(maxHeight: 380)
+        }
+    }
+
+    private var vaultPassphraseBox: some View {
+        let setting = env.vault.logins.isEmpty
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(setting ? "Pick a vault passphrase first. Passwords are sealed with it before they're saved."
+                         : "Unlock your vault so imported passwords are sealed with the same passphrase.")
+                .font(.okBody(12.5)).foregroundStyle(OKBrand.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            passField(setting ? "Vault passphrase" : "Your vault passphrase", text: $vaultPass)
+            if setting { passField("Same passphrase again", text: $vaultPassAgain) }
+            HStack {
+                Toggle("Remember on this Mac", isOn: $rememberVault)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(OKBrand.greenInk)
+                    .font(.okBody(12.5))
+                Spacer()
+                Button(setting ? "Set passphrase" : "Unlock") { useVaultPassphrase() }
+                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                    .disabled(vaultPass.isEmpty || (setting && vaultPassAgain.isEmpty))
+            }
+            if let vaultPassNote {
+                Text(vaultPassNote).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+            }
+        }
+        .padding(.bottom, 12)
+    }
+
+    private func passField(_ placeholder: String, text: Binding<String>) -> some View {
+        SecureField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(.okBody(14))
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
+            .onSubmit { useVaultPassphrase() }
+    }
+
+    /// Same rules as the Vault page: a new passphrase is typed twice; an existing one must open the logins.
+    private func useVaultPassphrase() {
+        let value = vaultPass
+        guard !value.isEmpty else { return }
+        if env.vault.logins.isEmpty {
+            guard value == vaultPassAgain else { vaultPassNote = "Those don't match. Type the same passphrase in both fields."; return }
+        } else {
+            guard let key = VaultCrypto.key(passphrase: value, vaultID: env.vault.salt),
+                  BrowserPasswordImport.keyOpensVault(key, logins: env.vault.logins) else {
+                vaultPassNote = "That isn't the passphrase your vault logins are sealed with."
+                return
+            }
+        }
+        if rememberVault {
+            KeyStore.set(value, for: LocalVault.passphraseKey)
+            env.keysVersion += 1
+        }
+        sessionVaultPass = value
+        vaultPass = ""
+        vaultPassAgain = ""
+        vaultPassNote = nil
+    }
+
+    private func browserRow(_ browser: DetectedBrowser, status: VaultImportStatus, ready: Bool) -> some View {
+        let report = status.last?.source == browser.name ? status.last : nil
+        let done = report.map { $0.imported + $0.updated > 0 } ?? false
+        let detail: String
+        if let error = browser.error {
+            detail = error
+        } else if let report {
+            detail = report.errors.isEmpty ? report.summary : "\(report.summary) · \(report.errors[0])"
+        } else {
+            let count = browser.logins.map { "\($0) saved \($0 == 1 ? "password" : "passwords")" } ?? "Saved passwords"
+            detail = browser.profiles.count > 1 ? "\(count) · \(browser.profiles.count) profiles" : count
+        }
+        return HStack(spacing: 12) {
+            iconTile(done ? "checkmark" : "key", active: done)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(browser.name).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+                Text(detail).font(.okBody(12)).foregroundStyle(done ? OKBrand.greenInk : OKBrand.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if done {
+                statusPill("Imported")
+            } else {
+                Button(status.busy == browser.id ? "Importing…" : "Import") {
+                    env.importBrowserPasswords(id: browser.id, passphrase: importPassphrase)
+                }
+                .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                .disabled(!ready || status.busy != nil || browser.error != nil || browser.logins == 0)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+
+    private func csvDetail(_ status: VaultImportStatus) -> String {
+        if let name = status.csvToTrash {
+            let summary = status.last.map { "\($0.summary) · " } ?? ""
+            return "\(summary)\(name) still has your passwords in plain text — move it to the Trash."
+        }
+        if status.busy == nil, let last = status.last, last.source.lowercased().hasSuffix(".csv") {
+            return last.errors.first ?? last.summary
+        }
+        return "Passwords app: File › Export All Passwords to File. Firefox: about:logins › ⋯ › Export Passwords."
+    }
+
+    private func memoryRow(_ source: MemorySource) -> some View {
+        let added = memoryAdded[source.id]
+        return HStack(spacing: 12) {
+            iconTile(added != nil ? "checkmark" : "brain", active: added != nil)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(source.name).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+                Text(added.map { $0 == 0 ? "Nothing new to remember." : "\($0) \($0 == 1 ? "memory" : "memories") added." } ?? source.blurb)
+                    .font(.okBody(12)).foregroundStyle(added != nil ? OKBrand.greenInk : OKBrand.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if added != nil {
+                statusPill("Imported")
+            } else {
+                Button("Import") { memoryAdded[source.id] = env.importMemory(sourceID: source.id) ?? 0 }
+                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
     }
 
     private var tourStep: some View {
@@ -614,7 +837,7 @@ private struct OnboardingCanvas: View {
 }
 
 enum OnboardStep: Int, CaseIterable {
-    case welcome, access, workspace, brain, about, tour, done
+    case welcome, access, workspace, brain, about, bring, tour, done
 }
 
 struct TourCanvas: View {

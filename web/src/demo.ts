@@ -412,4 +412,16 @@ export const demoState: NativeState = {
     salt: "preview",
     rememberedPassphrase: "",
   },
+  vaultImport: {
+    sources: [
+      { id: "chrome", name: "Google Chrome", profiles: ["Default", "Work"], logins: 148 },
+      { id: "arc", name: "Arc", profiles: ["Default"], logins: 37 },
+      { id: "dia", name: "Dia", profiles: ["Default"], logins: 0 },
+    ],
+    scanned: true,
+    scanning: false,
+    busy: null,
+    last: null,
+    csvToTrash: null,
+  },
 };
