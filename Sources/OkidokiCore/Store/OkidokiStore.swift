@@ -463,6 +463,13 @@ public final class OkidokiStore: ObservableObject {
         stamped(&runs[index])
     }
 
+    /// One more model call for the run (an agent turn, a replay rescue, a bind). Counted, never shown
+    /// as a step; the replay eval reads it to compare the agent, classic replay and hybrid replay.
+    public func countModelCall(_ id: String, by count: Int = 1) {
+        guard count > 0, let index = runs.firstIndex(where: { $0.id == id }) else { return }
+        runs[index].modelCalls = (runs[index].modelCalls ?? 0) + count
+    }
+
     public func startRun(_ id: String) {
         updateRun(id) { run in
             run.status = .running

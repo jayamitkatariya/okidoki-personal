@@ -387,6 +387,7 @@ final class SkillReplayer {
             let screen = target.screen()
             let box = shot?.box ?? ScreenBox(x: 0, y: 0, width: Double(screen?.frame.width ?? 1), height: Double(screen?.frame.height ?? 1))
             let context = await target.context(box: box, imageWidth: shot?.imageWidth ?? box.width, imageHeight: shot?.imageHeight ?? box.height)
+            if let runID { env.store.countModelCall(runID) }
             guard let act = await BrainClient.shared.computer(goal: goal, step: turn, appName: context.appName,
                                                               windowTitle: context.windowTitle, screen: box,
                                                               imageWidth: shot?.imageWidth ?? 0, imageHeight: shot?.imageHeight ?? 0,

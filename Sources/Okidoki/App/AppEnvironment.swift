@@ -303,11 +303,16 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    private func devBrowse(goal: String) {
+    /// A goal starting with "[fresh] " gets its own conversation, so scripted runs of the same task
+    /// don't see each other (the agent would rightly ask before filing the same return twice).
+    private func devBrowse(goal raw: String) {
+        let fresh = raw.hasPrefix("[fresh] ")
+        let goal = fresh ? String(raw.dropFirst("[fresh] ".count)) : raw
         let preview = ActionPreview(summary: String(goal.prefix(54)), risk: .medium,
                                     steps: [PreviewStep("open the site"), PreviewStep("read the page and work through it"), PreviewStep("report back")],
                                     commands: [], apps: ["okidoki browser"], files: [])
-        let thread = store.threadForContext(app: "okidoki browser", topic: inferTopic(goal), text: goal)
+        let thread = fresh ? store.createThread(title: String(goal.prefix(40)), app: "okidoki browser", topic: inferTopic(goal))
+                           : store.threadForContext(app: "okidoki browser", topic: inferTopic(goal), text: goal)
         store.appendMessage(threadID: thread.id, role: .user, text: goal)
         let run = store.createRun(kind: .browser, title: String(goal.prefix(54)), prompt: goal, threadID: thread.id, preview: preview,
                                   steps: preview.steps.map { RunStep(title: $0.text) }, status: .waiting, builtin: "browser")
@@ -355,6 +360,19 @@ final class AppEnvironment: ObservableObject {
                 let run = makeReplayRun(skill, times: 1, threadID: nil)
                 approveRun(run.id)
             }
+        // For scripts/replay-eval.py: `hybrid on|off` flips smart replay; `replayjson {"skill": name,
+        // "values": [{…}, …]}` replays once per values object, the way records do.
+        case "hybrid":
+            store.settings.hybridReplay = arg == "on"
+            store.saveNow()
+        case "replayjson":
+            guard let data = arg.data(using: .utf8),
+                  let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let name = body["skill"] as? String,
+                  let skill = store.activeSkills.first(where: { $0.name == name }) else { break }
+            let values = (body["values"] as? [[String: Any]] ?? []).map { $0.compactMapValues { "\($0)" } }
+            let run = makeReplayRun(skill, times: 1, threadID: nil, values: values)
+            approveRun(run.id)
         // A person's input, through the real event system: `click <css selector>`, `type <text>`, `key <combo>`.
         case "click":
             Task { @MainActor in

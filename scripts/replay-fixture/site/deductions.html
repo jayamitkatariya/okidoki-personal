@@ -1,0 +1,29 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Deductions</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body><h1>Deductions</h1><p>Add one row for each deduction you claim. Leave it empty if you have none.</p>
+<table id="rows"></table>
+<button type="button"></button><br>
+<button id="next" type="button"></button>
+<script>
+const add = document.querySelectorAll("button")[0], next = document.querySelectorAll("button")[1];
+add.id = id("add-row"); add.textContent = L("Add deduction", "+ New row");
+next.id = id("to-review"); next.textContent = L("Continue", "Review");
+let n = 0;
+add.onclick = () => {
+  n += 1;
+  const row = document.createElement("tr");
+  row.innerHTML = `<td><label for="${id("section-" + n)}">Section ${n}</label><select id="${id("section-" + n)}" class="section">
+      <option value="">Choose…</option><option>80C</option><option>80D</option><option>80G</option><option>24B</option></select></td>
+    <td><label for="${id("amount-" + n)}">Amount ${n} (₹)</label><input id="${id("amount-" + n)}" class="amount" inputmode="numeric"></td>`;
+  $("#rows").appendChild(row);
+  moneyMask(row.querySelector(".amount"));
+};
+next.onclick = () => {
+  const rows = [...document.querySelectorAll("#rows tr")].map((tr) => ({
+    section: tr.querySelector(".section").value, amount: digits(tr.querySelector(".amount").value) }))
+    .filter((r) => r.section && r.amount);
+  save({ deductions: rows });
+  location.href = "review.html";
+};
+banner();
+</script></body></html>

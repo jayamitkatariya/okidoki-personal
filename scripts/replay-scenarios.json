@@ -1,0 +1,17 @@
+{
+  "_comment": "Scenarios for scripts/replay-eval.py, against scripts/replay-fixture (a filing site). Each item is one person's return. `learn` teaches the skill once with the full agent; the other scenarios replay it. Checks read what the fixture actually received.",
+  "site": "http://127.0.0.1:8777/login.html",
+  "skill": "acme filing",
+  "learnItem": "Asha",
+  "items": {
+    "Asha":   {"name": "Asha Rao",     "pan": "ABCPR1234K", "income": "1250000", "regime": "new", "gains": "",       "deductions": []},
+    "Bharat": {"name": "Bharat Mehta", "pan": "BHMPM5678L", "income": "980000",  "regime": "old", "gains": "",       "deductions": [{"section": "80C", "amount": "150000"}, {"section": "80D", "amount": "25000"}]},
+    "Chandra":{"name": "Chandra Iyer", "pan": "CHIPI4321Q", "income": "2140000", "regime": "new", "gains": "310000", "deductions": []},
+    "Divya":  {"name": "Divya Shah",   "pan": "DVSPS8777Z", "income": "760000",  "regime": "old", "gains": "",       "deductions": [{"section": "80C", "amount": "90000"}, {"section": "80G", "amount": "12000"}, {"section": "24B", "amount": "200000"}]}
+  },
+  "scenarios": [
+    {"id": "same-data", "items": ["Asha"],                     "drift": false, "why": "the skill's own data, page unchanged: replay should be instant and need no model"},
+    {"id": "new-data",  "items": ["Bharat", "Chandra", "Divya"], "drift": false, "why": "other people: different values, an optional section, 2–3 deduction rows"},
+    {"id": "drift",     "items": ["Bharat"],                   "drift": true,  "why": "renamed buttons, new ids, reordered fields, a cookie banner and a survey popup"}
+  ]
+}

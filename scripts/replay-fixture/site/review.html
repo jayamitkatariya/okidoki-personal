@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Review</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body><h1>Review your return</h1><div id="summary"></div><button id="submit" type="button"></button>
+<script>
+const s = state();
+$("#summary").innerHTML = `<p><b>${s.name || ""}</b> · ${s.pan || ""}</p><p>Income ₹${s.income || 0} · ${s.regime || ""} regime</p>
+  <p>Capital gains: ${s.gains ? "₹" + s.gains : "none"}</p><p>Deductions: ${(s.deductions || []).map((d) => d.section + " ₹" + d.amount).join(", ") || "none"}</p>`;
+$("#submit").id = id("submit");
+$("#" + id("submit")).textContent = L("Submit return", "File now");
+$("#" + id("submit")).onclick = async () => {
+  const res = await fetch("/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(state()) });
+  const { ref } = await res.json();
+  sessionStorage.setItem("ref", ref);
+  location.href = "done.html";
+};
+banner();
+</script></body></html>

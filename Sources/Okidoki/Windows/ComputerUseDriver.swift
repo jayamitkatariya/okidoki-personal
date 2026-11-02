@@ -187,6 +187,7 @@ final class ComputerUseDriver {
                 }
             }
             if env.sidecar.status.isReady {
+                env.store.countModelCall(run.id)
                 let turn = await BrainClient.shared.computerTurn(goal: run.prompt, step: step,
                                                                  appName: context.appName,
                                                                  windowTitle: context.windowTitle,
@@ -631,6 +632,7 @@ final class ComputerUseDriver {
             for attempt in 0..<2 where !ended && handled == 0 && envelope == nil && env.sidecar.status.isReady {
                 if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
                 guard session == self.session, !cancelled else { return }
+                if let runID { env.store.countModelCall(runID) }
                 if streaming {
                     let streamed = await BrainClient.shared.computerV2Stream(body) { act in
                         if firstActionMs == nil { firstActionMs = brainClock.ms }

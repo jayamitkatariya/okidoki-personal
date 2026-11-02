@@ -132,6 +132,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// brain knows what's on screen before it decides how to help. Never stored.
     public var screenContext: Bool = true
 
+    /// Hybrid replay: skills fill their values from your documents, check every step, pick themselves
+    /// for everyday requests and hand off to the agent when the screen changed. Off runs replay exactly
+    /// as before, so the two can be compared on the same build.
+    public var hybridReplay: Bool = false
+
     /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Mac's key file, not here.
     public var mcpServers: [MCPServer] = []
 
@@ -147,6 +152,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case onboardingComplete, tourComplete, showedWelcome
         case claudeModel, mcpServers, drivePace, computerTarget
         case screenContext, summonMode, vaultFolder
+        case hybridReplay
     }
 
     public init(from decoder: Decoder) throws {
@@ -195,6 +201,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         summonMode = Self.summonModes.contains(mode) ? mode : "auto"
         vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
         screenContext = bool(.screenContext, true)
+        hybridReplay = bool(.hybridReplay, false)
     }
 }
 
@@ -445,6 +452,9 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     /// The user's reply to the question an `asked` run paused on. Set when they answer (or carry on in the
     /// same conversation), which also moves the run to done so it stops waiting on them.
     public var answer: String?
+    /// Model calls this run made (agent turns, replay rescues, binds). Nil on runs that made none
+    /// or were saved before it was counted; the replay eval compares it across modes.
+    public var modelCalls: Int?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,

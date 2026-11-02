@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Filed</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body><h1>Return filed</h1><p>Your reference number is <strong id="ref"></strong>. Keep it for your records.</p>
+<p><a href="login.html">File another return</a></p>
+<script>$("#ref").textContent = sessionStorage.getItem("ref") || "";</script></body></html>

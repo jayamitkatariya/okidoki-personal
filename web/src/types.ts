@@ -58,6 +58,8 @@ export interface Settings {
   summonMode?: "auto" | "act" | "browser" | "chat";
   /** The vault folder on disk. Missing on older builds. */
   vaultFolder?: string;
+  /** Hybrid replay: skills bind values from documents, check steps, pick themselves, and hand off to the agent. */
+  hybridReplay?: boolean;
 }
 
 export type PrivateMacPhase = "unsupported" | "notSetUp" | "downloading" | "installing" | "stopped" | "starting" | "running" | "stopping" | "failed";

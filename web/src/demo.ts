@@ -181,6 +181,7 @@ export const demoState: NativeState = {
     spendingLimit: 25,
     hideInScreenshots: true,
     screenContext: true,
+    hybridReplay: false,
     appleCalendar: true,
     automationGranted: true,
     inputMonitoringGranted: true,

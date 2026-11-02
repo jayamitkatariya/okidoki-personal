@@ -302,6 +302,9 @@ export function SettingsPage() {
               <PrefRow title="See the screen" detail="Send the front window, browser tab and a small screenshot with each request, so okidoki knows what it's about. Never stored.">
                 <Switch label="See the screen" checked={settings.screenContext ?? true} onChange={(value) => updateSettings({ screenContext: value })} />
               </PrefRow>
+              <PrefRow title="Smart replay" detail="Skills fill in what changes from your documents, check each step, run themselves when a request matches, and hand off to the agent if the screen changed. Off replays exactly as recorded.">
+                <Switch label="Smart replay" checked={settings.hybridReplay ?? false} onChange={(value) => updateSettings({ hybridReplay: value })} />
+              </PrefRow>
               <PrefRow title="Spending limit" detail="Per task, for tools that cost money">
                 <Slider min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
               </PrefRow>

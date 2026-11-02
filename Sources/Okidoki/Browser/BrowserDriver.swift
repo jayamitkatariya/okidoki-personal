@@ -249,6 +249,7 @@ final class BrowserAgentRun {
                 return true
             }
             // Streamed: the first action starts while the model is still writing the rest of the turn.
+            env.store.countModelCall(run.id)
             let turn = await BrainClient.shared.browserStepStream(body, onAction: handle)
             if ended || Task.isCancelled { return }
             guard let rest = turn.rest, turn.received > 0 || !rest.isEmpty || turn.error == nil else {
@@ -646,6 +647,7 @@ final class BrowserReplayer {
             "observation": ["url": page.url, "title": page.title, "elements": page.elements, "text": String(page.text.prefix(3000))],
             "settings": ["claudeModel": env.store.settings.claudeModel],
         ]
+        env.store.countModelCall(runID)
         let actions = await BrainClient.shared.browserStep(body)
         let pick = actions?.first { ($0["ref"] as? NSNumber) != nil }
         guard let ref = (pick?["ref"] as? NSNumber)?.intValue else {
