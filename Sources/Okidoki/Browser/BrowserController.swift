@@ -971,6 +971,19 @@ final class BrowserGlowModel: ObservableObject {
 /// the page stays readable. It breathes slowly and brightens for a moment on each action.
 private struct BrowserWorkGlow: View {
     @ObservedObject var model: BrowserGlowModel
+
+    // Only there while someone works: hidden, its endless breathing would still redraw every frame.
+    var body: some View {
+        ZStack {
+            if model.active { BrowserWorkGlowLight(model: model).transition(.opacity) }
+        }
+        .animation(.easeOut(duration: 0.5), value: model.active)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct BrowserWorkGlowLight: View {
+    @ObservedObject var model: BrowserGlowModel
     @State private var breathing = false
     @State private var flare = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1007,8 +1020,6 @@ private struct BrowserWorkGlow: View {
         }
         .compositingGroup()
         .opacity(flare ? 1 : (breathing ? 0.85 : 0.55))
-        .opacity(model.active ? 1 : 0)
-        .animation(.easeOut(duration: 0.5), value: model.active)
         .allowsHitTesting(false)
         .onAppear {
             guard !reduceMotion else { breathing = true; return }

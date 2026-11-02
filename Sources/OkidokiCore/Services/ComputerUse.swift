@@ -1059,7 +1059,9 @@ public enum AXSearch {
 
     /// Actionable controls inside `visible` with their elements. One batched attribute read per element.
     public static func snapshot(pid: pid_t, visible: CGRect, limit: Int = 150, budget: TimeInterval = 1.4) -> [Entry] {
-        guard AXIsProcessTrusted() else { return [] }
+        // Never okidoki's own windows: in-process, each attribute runs SwiftUI's accessibility off the main
+        // thread with no messaging timeout, and one walk pinned a core for 90 s mid-run.
+        guard AXIsProcessTrusted(), pid != getpid() else { return [] }
         enableTree(pid: pid)
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 1.0) // a hung app must not stall the overlay for the 6 s default
