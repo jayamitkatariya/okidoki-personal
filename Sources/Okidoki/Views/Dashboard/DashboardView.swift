@@ -119,6 +119,8 @@ struct DashboardPayload: Encodable {
     var privateMac: DashboardPrivateMacPayload
     /// The vault folder's files and the sealed logins.
     var vault: DashboardVaultPayload
+    /// Browsers to import passwords from, and how the last import went.
+    var vaultImport: VaultImportStatus
 }
 
 struct DashboardVaultPayload: Encodable {
@@ -548,7 +550,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 folders: env.vault.folders,
                 logins: env.vault.logins,
                 salt: env.vault.salt,
-                rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? "")
+                rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? ""),
+            vaultImport: env.vaultImport
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -752,6 +755,15 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let raw = payload["login"] as? [String: Any], let login = VaultLogin(panel: raw) { env.vault.saveLogin(login) }
         case "vaultDeleteLogin":
             if let id = payload["id"] as? String { env.vault.deleteLogin(id: id) }
+        case "vaultImportSources":
+            env.refreshVaultImportSources()
+        case "vaultImportBrowser":
+            // The passphrase the panel unlocked with; the remembered one is used when it's left out.
+            if let id = payload["browser"] as? String { env.importBrowserPasswords(id: id, passphrase: payload["passphrase"] as? String) }
+        case "vaultImportCSV":
+            env.importPasswordCSV(passphrase: payload["passphrase"] as? String)
+        case "vaultImportTrashCSV":
+            env.finishVaultImportCSV(trash: payload["trash"] as? Bool ?? true)
         case "vaultTouchLogin":
             if let id = payload["id"] as? String { env.vault.touchLogin(id: id) }
         case "connectApple":

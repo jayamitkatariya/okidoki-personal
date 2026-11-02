@@ -342,6 +342,39 @@ export interface NativeState {
   privateMac?: PrivateMacState | null;
   /** The vault folder and sealed logins. Missing in the browser preview. */
   vault?: VaultState | null;
+  /** Browsers to import passwords from, and the last import. Missing in older builds. */
+  vaultImport?: VaultImportState | null;
+}
+
+/** A Chromium-family browser found on this Mac. Counts only, never a secret. */
+export interface DetectedBrowser {
+  id: string;
+  name: string;
+  profiles: string[];
+  /** Saved logins across its profiles; missing when they couldn't be counted. */
+  logins?: number | null;
+  /** Why it can't be read (macOS blocked the folder, …). */
+  error?: string | null;
+}
+
+export interface VaultImportReport {
+  source: string;
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+  finishedAt: string;
+}
+
+export interface VaultImportState {
+  sources: DetectedBrowser[];
+  scanned: boolean;
+  scanning: boolean;
+  /** Browser id being imported, or "csv". */
+  busy?: string | null;
+  last?: VaultImportReport | null;
+  /** An imported CSV still on disk with passwords in the clear. */
+  csvToTrash?: string | null;
 }
 
 /** A document in the vault folder. `id` is its path inside the folder. */
