@@ -100,9 +100,57 @@ public enum BrowserSteps {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         if let url = URL(string: text), let scheme = url.scheme, ["http", "https", "file", "about"].contains(scheme) { return url }
-        if !text.contains(" "), text.contains("."), let url = URL(string: "https://" + text), url.host != nil { return url }
+        if looksLikeAddress(text), let url = URL(string: (text.hasPrefix("localhost") ? "http://" : "https://") + text), url.host != nil { return url }
+        return searchURL(text)
+    }
+
+    /// A Google search for `text`.
+    public static func searchURL(_ text: String) -> URL? {
         var search = URLComponents(string: "https://www.google.com/search")!
-        search.queryItems = [URLQueryItem(name: "q", value: text)]
+        search.queryItems = [URLQueryItem(name: "q", value: text.trimmingCharacters(in: .whitespacesAndNewlines))]
         return search.url
+    }
+
+    /// A web address rather than words: "https://…", "github.com/x", "localhost:3000", "10.0.0.1".
+    public static func looksLikeAddress(_ typed: String) -> Bool {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.contains(" ") else { return false }
+        if let scheme = URL(string: text)?.scheme, ["http", "https", "file", "about"].contains(scheme.lowercased()), text.contains(":") { return true }
+        if text.lowercased().hasPrefix("localhost") { return true }
+        let host = text.split(separator: "/", maxSplits: 1).first.map(String.init) ?? text
+        let bare = host.split(separator: ":").first.map(String.init) ?? host
+        let parts = bare.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 2, parts.allSatisfy({ !$0.isEmpty }) else { return false }
+        // The last part is a real top-level domain (letters, 2+) or this is an IP address.
+        let tld = String(parts.last!)
+        if parts.count == 4, parts.allSatisfy({ Int($0).map { (0...255).contains($0) } ?? false }) { return true }
+        return tld.count >= 2 && tld.allSatisfy { $0.isLetter } && URL(string: "https://" + text)?.host != nil
+    }
+
+    /// Words that read as something to get done ("book a table for two at 8", "find me cheap flights
+    /// to Goa") rather than something to look up ("weather lisbon", "how to tie a tie"). Return in the
+    /// address bar hands the first to the agent and searches for the second; both are always offered.
+    public static func looksLikeTask(_ typed: String) -> Bool {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !text.isEmpty, !looksLikeAddress(text) else { return false }
+        let words = text.split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init)
+        guard let first = words.first else { return false }
+        let opener = ["please ", "can you ", "could you ", "would you ", "i want to ", "i need to ", "i'd like to ", "help me ", "go to ", "okidoki "]
+        if opener.contains(where: { text.hasPrefix($0) }) { return true }
+        if text.contains(" for me") || text.contains(" and then ") { return true }
+        // A question is something to look up, however it's worded.
+        let questions = ["how", "what", "why", "when", "where", "who", "which", "is", "are", "does", "do", "can", "should", "will"]
+        if questions.contains(first) || text.hasSuffix("?") { return false }
+        guard words.count >= 3 else { return false }
+        let verbs: Set<String> = [
+            "book", "buy", "order", "reserve", "purchase", "shop", "pay", "renew", "cancel", "subscribe", "unsubscribe",
+            "find", "compare", "research", "gather", "collect", "extract", "scrape", "list", "summarize", "summarise",
+            "fill", "sign", "log", "register", "apply", "submit", "add", "remove", "delete", "update", "change", "set",
+            "send", "email", "message", "reply", "post", "tweet", "share", "follow", "like", "comment", "rsvp", "invite",
+            "check", "track", "download", "upload", "save", "open", "get", "make", "create", "write", "draft", "plan",
+            "schedule", "translate", "watch", "play", "read", "show", "tell", "look", "search", "browse", "go", "navigate",
+            "visit", "fetch", "grab", "download", "export", "import", "request", "claim", "redeem", "return", "refund",
+        ]
+        return verbs.contains(first)
     }
 }

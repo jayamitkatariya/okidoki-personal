@@ -227,3 +227,70 @@ test("a give-up that offers the user a choice becomes a question", () => {
   expect(mapBrowserTool("finish", { success: false, summary: "the site is down." })).toEqual({ type: "finish", success: false, summary: "the site is down." });
   expect(mapBrowserTool("finish", { success: true, summary: "Added it. Want anything else?" })).toMatchObject({ type: "finish", success: true });
 });
+
+test("a session lost mid-run starts again with the task and a recap, not a bare page", async () => {
+  const api = fakeAPI([
+    reply([{ type: "tool_use", id: "t1", name: "click", input: { ref: 2 } }]),
+    reply([{ type: "tool_use", id: "t2", name: "finish", input: { success: true, summary: "done" } }]),
+  ]);
+  await browserStep(request(0), "key", api.impl);
+  resetBrowserSessions();
+  await browserStep(request(1, { results: [{ ok: true }] }), "key", api.impl);
+  const text = JSON.stringify(api.sent[1].body.messages);
+  expect(text).toContain("Task: find the weather in Lisbon");
+});
+
+test("follow-ups carry the conversation, memory and tabs on the first turn", async () => {
+  const api = fakeAPI([reply([{ type: "tool_use", id: "t1", name: "click", input: { ref: 2 } }])]);
+  await browserStep(request(0, {
+    goal: "add the cheapest one to the cart",
+    context: [{ role: "user", text: "find blue puma football boots" }, { role: "assistant", text: "found three, from £40" }],
+    memory: ["shoe size UK 9"],
+    observation: { ...page, tabs: "[1] * Puma boots — https://puma.com\n[2] Cart — https://puma.com/cart" },
+  }), "key", api.impl);
+  const text = api.sent[0].body.messages[0].content.at(-1).text as string;
+  expect(text).toContain("Earlier in this conversation:");
+  expect(text).toContain("User: find blue puma football boots");
+  expect(text).toContain("- shoe size UK 9");
+  expect(text).toContain("[2] Cart");
+  expect(text.indexOf("Earlier in this conversation")).toBeLessThan(text.indexOf("Task: add the cheapest"));
+});
+
+test("a reply with only words is told to act instead of ending the run", async () => {
+  const api = fakeAPI([
+    { content: [{ type: "text", text: "Let me look at the results." }], stop_reason: "end_turn", usage: {} },
+    reply([{ type: "tool_use", id: "t1", name: "click", input: { ref: 2 } }]),
+  ]);
+  const response = await browserStep(request(0), "key", api.impl);
+  expect(response.actions).toEqual([{ type: "click", ref: 2 }]);
+  expect(api.sent).toHaveLength(2);
+});
+
+test("a refused history restarts the conversation with a recap instead of failing", async () => {
+  const api = fakeAPI([
+    reply([{ type: "tool_use", id: "t1", name: "navigate", input: { url: "https://example.com" } }]),
+    { __status: 400, error: { message: "messages.1.content.0: invalid thinking signature" } },
+    reply([{ type: "tool_use", id: "t2", name: "finish", input: { success: true, summary: "ok" } }]),
+  ]);
+  await browserStep(request(0), "key", api.impl);
+  const second = await browserStep(request(1, { results: [{ ok: true }] }), "key", api.impl);
+  expect(second.actions[0]).toMatchObject({ type: "finish", success: true });
+  const retry = JSON.stringify(api.sent[2].body.messages);
+  expect(api.sent[2].body.messages).toHaveLength(1);
+  expect(retry).toContain("opened https://example.com");
+  expect(retry).toContain("Task: find the weather in Lisbon");
+});
+
+test("no answer from the model leaves the run open for the Mac to ask again", async () => {
+  const api = fakeAPI([{ __status: 400, error: { message: "something else" } }]);
+  const response = await browserStep(request(0), "key", api.impl);
+  expect(response.actions).toEqual([]);
+  expect(response.error).toBeTruthy();
+});
+
+test("tab and memory tools map to actions", () => {
+  expect(mapBrowserTool("new_tab", { url: "https://a.com" })).toEqual({ type: "new_tab", url: "https://a.com" });
+  expect(mapBrowserTool("switch_tab", { tab: 2 })).toEqual({ type: "switch_tab", tab: 2 });
+  expect(mapBrowserTool("close_tab", { tab: "x" })).toBeUndefined();
+  expect(mapBrowserTool("remember", { fact: " shoe size UK 9 " })).toEqual({ type: "remember", fact: "shoe size UK 9" });
+});

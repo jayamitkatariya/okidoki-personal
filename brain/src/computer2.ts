@@ -712,7 +712,7 @@ export async function callModel(
 }
 
 /** A 400 that comes from the conversation itself (a stale thinking block, a broken prefix), not the step. */
-function conversationBroken(error: string | undefined): boolean {
+export function conversationBroken(error: string | undefined): boolean {
   return Boolean(error && /model 400/.test(error) && /(thinking|signature|prefix|tool_use|tool_result|toolset_name)/i.test(error));
 }
 

@@ -20,3 +20,4 @@ node_modules/
 # OS and editor noise
 .DS_Store
 *.log
+.claude/worktrees/

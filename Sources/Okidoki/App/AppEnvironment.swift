@@ -38,6 +38,8 @@ final class AppEnvironment: ObservableObject {
     var browserLearnedBeforeQuestion: [String: [SkillStep]] = [:]
     /// The last browser run that worked, with what it learned, until it's saved or replaced.
     var lastBrowserRun: (title: String, steps: [SkillStep])?
+    /// The tab a browser run was asked from (typed in that tab's address bar), until the run starts there.
+    var browserRunTabs: [String: UUID] = [:]
     /// The macOS VM computer-use runs drive when settings say so; this Mac otherwise.
     let privateMac = PrivateMacService()
     private(set) var simOverlay: SimOverlayController!
@@ -282,7 +284,7 @@ final class AppEnvironment: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if self.driver.isActive { self.driver.cancel(reason: "stopped by the test script") }
-                if self.browserDriver.isActive { self.browserDriver.cancel(reason: "stopped by the test script") }
+                if self.browserDriver.isActive { self.browserDriver.cancelAll(reason: "stopped by the test script") }
                 if self.browserReplayer.isActive { self.browserReplayer.cancel(reason: "stopped by the test script") }
             }
         }
@@ -298,7 +300,6 @@ final class AppEnvironment: ObservableObject {
     }
 
     private func devBrowse(goal: String) {
-        guard !browserDriver.isActive else { return }
         let preview = ActionPreview(summary: String(goal.prefix(54)), risk: .medium,
                                     steps: [PreviewStep("open the site"), PreviewStep("read the page and work through it"), PreviewStep("report back")],
                                     commands: [], apps: ["okidoki browser"], files: [])
@@ -612,6 +613,8 @@ final class AppEnvironment: ObservableObject {
         let run = store.createRun(kind: prior.kind, title: prior.title, prompt: prompt, threadID: threadID,
                                   preview: prior.preview, steps: (prior.preview?.steps ?? []).map { RunStep(title: $0.text) },
                                   status: .waiting, builtin: prior.kind == .browser ? "browser" : "computer-use")
+        // The answer carries on in the tab the question was asked from.
+        if let tab = browserRunTabs.removeValue(forKey: prior.id) { browserRunTabs[run.id] = tab }
         store.saveNow()
         approveRun(run.id)
     }
@@ -780,6 +783,14 @@ final class AppEnvironment: ObservableObject {
         default:
             break
         }
+        // A follow-up to a web task ("now add the cheapest to the cart") carries on in the browser, in the
+        // same tab, unless the person picked Act or it names a Mac app to drive.
+        if request.mode != "act", decision.kind == .computerUse,
+           decision.apps.allSatisfy({ Self.browserApps.contains($0.lowercased()) }),
+           store.runs.first(where: { $0.threadID == threadID && $0.kind != .answer })?.kind == .browser {
+            decision.kind = .browser
+            decision.previewSummary = decision.previewSummary.isEmpty ? request.text : decision.previewSummary
+        }
         for fact in decision.memory where BrainService.isDurableFact(fact) {
             store.addMemory(fact, section: fact.lowercased().hasPrefix("right now") ? .rightNow : .aboutYou,
                             source: source == "summon" ? "said" : source)
@@ -866,6 +877,10 @@ final class AppEnvironment: ObservableObject {
             await prepareConnector(decision: decision, request: request, threadID: threadID, source: source)
         }
     }
+
+    /// Apps a web task may name that okidoki's own browser stands in for.
+    static let browserApps: Set<String> = ["", "safari", "google chrome", "chrome", "arc", "dia", "firefox", "brave", "brave browser",
+                                           "microsoft edge", "edge", "browser", "okidoki browser", "web", "the web"]
 
     /// What an unattended Mac can't give: the kinds that take the screen and wait for a person.
     static func needsSomeoneHere(_ kind: BrainDecision.Kind) -> String? {
@@ -1218,8 +1233,8 @@ final class AppEnvironment: ObservableObject {
             driver.cancel(reason: "paused — control is yours")
             return
         }
-        if browserDriver.isActive, browserDriver.runID == id {
-            browserDriver.cancel(reason: "paused — the page is yours")
+        if browserDriver.isRunning(id) {
+            browserDriver.cancel(runID: id, reason: "paused — the page is yours")
             return
         }
         store.updateRun(id) { $0.status = .paused }
@@ -1236,7 +1251,7 @@ final class AppEnvironment: ObservableObject {
         BrainClient.shared.stop(runID: id)
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "you stopped me"); return }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "you stopped me"); return }
-        if browserDriver.isActive, browserDriver.runID == id { browserDriver.cancel(reason: "you stopped me"); return }
+        if browserDriver.isRunning(id) { browserDriver.cancel(runID: id, reason: "you stopped me"); return }
         if ghost.model.visible, store.run(id)?.kind == .borrow { ghost.cancel() }
         if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "you stopped me"); return }
         store.cancelRun(id)
@@ -1450,7 +1465,7 @@ final class AppEnvironment: ObservableObject {
         BrainClient.shared.stop(runID: id)
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "cancelled") }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "cancelled") }
-        if browserDriver.isActive, browserDriver.runID == id { browserDriver.cancel(reason: "cancelled") }
+        if browserDriver.isRunning(id) { browserDriver.cancel(runID: id, reason: "cancelled") }
         if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "cancelled") }
         store.cancelRun(id)
     }
@@ -2375,7 +2390,7 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Helpers
 
-    private func inferTopic(_ text: String) -> String {
+    func inferTopic(_ text: String) -> String {
         let lower = text.lowercased()
         let topics = ["figma", "git", "swift", "xcode", "keynote", "screenshot", "space", "calendar", "video", "python", "react"]
         for topic in topics where lower.contains(topic) { return topic }
