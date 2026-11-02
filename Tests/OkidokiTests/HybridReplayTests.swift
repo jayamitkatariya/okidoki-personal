@@ -204,4 +204,26 @@ final class HybridReplayTests: XCTestCase {
         let decoded = try SkillBundle.decode(SkillBundle.make(from: template).encoded())
         XCTAssertEqual(decoded.skill?.outline?.count, 2)
     }
+
+    func testGivenEmptyIsAnAnswerAndAbsentIsMissing() {
+        let inputs = [SkillInput(name: "pan"), SkillInput(name: "gains", kind: "money"), SkillInput(name: "rows", kind: "list", required: false)]
+        let given = SkillBinder.finish(label: "Asha", values: ["pan": "ABCPR1234K", "gains": "", "rows": "[]"], inputs: inputs, optionalByUse: ["gains"])
+        XCTAssertEqual(given.missing, [])
+        XCTAssertEqual(given.doubts, [:])
+        let absent = SkillBinder.finish(label: "Asha", values: ["gains": ""], inputs: inputs)
+        XCTAssertEqual(absent.missing, ["pan"])
+        XCTAssertEqual(absent.doubts["gains"], "it's empty")
+    }
+
+    func testBinderMatchesGivenNamesLoosely() {
+        let inputs = [SkillInput(name: "full_name"), SkillInput(name: "annual_income"), SkillInput(name: "tax_regime", kind: "choice", choices: ["New regime", "Old regime"])]
+        let (matched, leftover) = SkillBinder.match(["name": "Asha Rao", "income": "1250000", "regime": "new", "ref": "Asha", "colour": "red"], to: inputs)
+        XCTAssertEqual(matched, ["full_name": "Asha Rao", "annual_income": "1250000", "tax_regime": "new"])
+        XCTAssertEqual(leftover, ["colour": "red"])
+        XCTAssertEqual(SkillBinder.choice("new", in: inputs[2].choices), "New regime")
+        XCTAssertEqual(SkillBinder.folder(for: "Neha", in: ["family/Neha", "family/Jay"]), "family/Neha")
+        XCTAssertEqual(SkillBinder.folder(for: "Neha Shah", in: ["Neha"]), "Neha")
+        XCTAssertNil(SkillBinder.folder(for: "Amit", in: ["Neha"]))
+        XCTAssertEqual(SkillBinder.csvRows("name,amount\n\"Rao, Asha\",\"1,000\"\n").first, ["name": "Rao, Asha", "amount": "1,000"])
+    }
 }

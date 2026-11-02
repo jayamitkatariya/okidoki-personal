@@ -94,6 +94,9 @@ final class BrowserAgentRun {
     private var tab: BrowserTab
     /// What worked, in order: the skill this run would become.
     private(set) var learned: [SkillStep] = []
+    /// Some text from each page the run went through, for smart replay's compiler: what the run
+    /// didn't use (an optional section, an empty table) is only visible here.
+    private var pageTexts: [String: String] = [:]
     static let maxTurns = 80
     /// Times in a row the brain didn't answer before the run gives up.
     static let maxMisses = 3
@@ -174,6 +177,7 @@ final class BrowserAgentRun {
             }
             await tab.settle(limit: 6)
             let page = await tab.snapshot()
+            await noteObservation(text: page.text)
             var observation: [String: Any] = ["url": page.url, "title": page.title, "elements": page.elements, "text": page.text]
             if !page.downloads.isEmpty { observation["downloads"] = page.downloads }
             if !page.dialogs.isEmpty { observation["dialogs"] = page.dialogs }
@@ -208,6 +212,7 @@ final class BrowserAgentRun {
                 let type = action["type"] as? String ?? ""
                 switch type {
                 case "finish":
+                    await self.noteObservation(text: nil)
                     if let extracted { self.log("data:\n" + BrowserAgentRun.json(extracted)) }
                     self.finish(success: action["success"] as? Bool ?? false, summary: action["summary"] as? String ?? "done")
                     ended = true
@@ -275,6 +280,21 @@ final class BrowserAgentRun {
     /// `changedPage`: the page may now be different from what the model saw, so the rest of its turn
     /// (planned against the old page) waits for a fresh look.
     private struct Outcome { var ok: Bool; var detail: String?; var line: String?; var changedPage = false }
+
+    /// What the page is now, written onto the learned steps that led here (the compiler turns it into
+    /// anchors and checks), and the page's text kept once.
+    private func noteObservation(text: String?) async {
+        let pending = learned.indices.filter { learned[$0].observedAfter == nil }
+        let url = tab.webView.url?.absoluteString ?? ""
+        guard !pending.isEmpty || (!url.isEmpty && pageTexts[url] == nil) else { return }
+        let seen = await tab.stepObservation()
+        for index in pending { learned[index].observedAfter = seen }
+        if !url.isEmpty, pageTexts[url] == nil {
+            var body = text ?? ""
+            if text == nil { body = await tab.pageText() }
+            pageTexts[url] = String(body.prefix(2000))
+        }
+    }
 
     /// The run's step log, as the Live page and history show it.
     private func log(_ line: String) {
@@ -414,6 +434,7 @@ final class BrowserAgentRun {
         if let threadID = run.threadID { env.browser.noteThreadTab(threadID, tab) }
         env.store.finishRun(run.id, status: success ? .done : .failed, summary: summary)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: summary, runID: run.id) }
+        env.learnedPages[run.id] = pageTexts
         env.browserRunFinished(run, success: success, summary: summary, learned: success ? learned : [])
         env.store.saveNow()
         ended(run.id)
@@ -630,7 +651,13 @@ final class BrowserReplayer {
 
     /// One step, by the brain: it's told what the step was and picks the element on today's page.
     private func rescue(_ step: SkillStep, input: String?, tab browser: BrowserTab, pass: Int) async -> BrowserActResult? {
-        guard let env, env.hasKey("anthropic"), let runID else { return nil }
+        guard let runID else { return nil }
+        return await rescueStep(step, input: input, tab: browser, runID: runID, pass: pass)
+    }
+
+    /// The same rescue for any replay's run (smart replay uses it too).
+    func rescueStep(_ step: SkillStep, input: String?, tab browser: BrowserTab, runID: String, pass: Int) async -> BrowserActResult? {
+        guard let env, env.hasKey("anthropic") else { return nil }
         let page = await browser.snapshot()
         let action = step.action ?? "click"
         let what = step.label.map { "the element labelled “\($0)”" } ?? "the element"

@@ -75,12 +75,14 @@ extension AppEnvironment {
 
     /// A finished browser run. One that worked can be kept as a skill that replays without the model.
     func browserRunFinished(_ run: AgentRun, success: Bool, summary: String, learned: [SkillStep]) {
-        lastBrowserRun = success && !learned.isEmpty ? (run.title, learned) : nil
+        let source = LearnedBrowserRun(title: run.title, goal: run.prompt, summary: summary, steps: learned,
+                                       pages: learnedPages.removeValue(forKey: run.id) ?? [:])
+        lastBrowserRun = success && !learned.isEmpty ? source : nil
         var actions: [CardAction] = []
         if success, learned.contains(where: { $0.action != "navigate" }) {
             actions.append(CardAction(title: "save as skill", kind: .primary, glyph: "wand") { [weak self] in
                 self?.answerController.close(restoreApp: false)
-                self?.saveBrowserSkill(name: run.title, steps: learned, source: "act")
+                self?.saveBrowserSkill(name: run.title, steps: learned, source: "act", learnedFrom: source)
             })
         }
         actions.append(CardAction(title: "show browser", kind: .secondary, glyph: "globe") { [weak self] in
@@ -93,12 +95,19 @@ extension AppEnvironment {
         speak(success ? "Done." : summary)
     }
 
-    func saveBrowserSkill(name: String, steps: [SkillStep], source: String) {
+    func saveBrowserSkill(name: String, steps: [SkillStep], source: String, learnedFrom: LearnedBrowserRun? = nil) {
         let actions = steps.filter { $0.action != "navigate" }.count
         let site = steps.compactMap { $0.url.map(BrowserSteps.host(of:)) }.first { !$0.isEmpty } ?? "the web"
         let skill = store.createSkill(name: name, summary: "\(actions) \(actions == 1 ? "step" : "steps") on \(site), in okidoki's browser",
                                       steps: steps, source: source)
         store.saveNow()
+        // Smart replay: the skill is saved as recorded right away, then generalized in the background.
+        // If that doesn't work out it simply stays as recorded.
+        if store.settings.hybridReplay {
+            let run = learnedFrom ?? LearnedBrowserRun(title: name, goal: name, summary: "", steps: steps, pages: [:])
+            Task { @MainActor [weak self] in await self?.generalize(skillID: skill.id, from: run) }
+            return
+        }
         toast(title: "saved as a skill", detail: "\(skill.name) · replays in seconds, no model", kind: .success,
               undoLabel: "replay", onUndo: { [weak self] in self?.replaySkill(skill, times: 1) },
               editLabel: "open", onEdit: { [weak self] in self?.openDashboard(.skills) }, runID: nil)

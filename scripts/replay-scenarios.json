@@ -2,6 +2,7 @@
   "_comment": "Scenarios for scripts/replay-eval.py, against scripts/replay-fixture (a filing site). Each item is one person's return. `learn` teaches the skill once with the full agent; the other scenarios replay it. Checks read what the fixture actually received.",
   "site": "http://127.0.0.1:8777/login.html",
   "skill": "acme filing",
+  "smartSkill": "acme filing smart",
   "learnItem": "Asha",
   "items": {
     "Asha":   {"name": "Asha Rao",     "pan": "ABCPR1234K", "income": "1250000", "regime": "new", "gains": "",       "deductions": []},

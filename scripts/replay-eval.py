@@ -81,6 +81,8 @@ def wait_run(before_ids, match, timeout):
     run = None
     while time.time() < deadline:
         time.sleep(1.0)
+        # Smart replay's "check before submitting" card, answered the way a person who agrees would.
+        browser("gate carry")
         runs = [r for r in load_state().get("runs", []) if r.get("id") not in before_ids and match(r)]
         if runs:
             run = runs[-1]
@@ -125,8 +127,12 @@ def check(item, submissions):
     return (not wrong), ("ok · " + got.get("ref", "")) if not wrong else "; ".join(wrong)
 
 
+def find_skill(name):
+    return next((s for s in load_state().get("skills", []) if s.get("name") == name and not s.get("deletedAt")), None)
+
+
 def skill_exists(name):
-    return any(s.get("name") == name and not s.get("deletedAt") for s in load_state().get("skills", []))
+    return find_skill(name) is not None
 
 
 def learn(spec, timeout):
@@ -139,13 +145,32 @@ def learn(spec, timeout):
     run, error = wait_run(before, lambda r: r.get("prompt") == goal, timeout)
     if error or not run or run.get("status") != "done":
         sys.exit(f"couldn't teach the skill: {error or (run or {}).get('summary')}")
+    # The same run kept twice: as recorded (classic replay) and generalized (smart replay).
+    browser("hybrid off")
+    time.sleep(0.4)
     browser(f"keep {spec['skill']}")
     for _ in range(20):
         time.sleep(0.5)
         if skill_exists(spec["skill"]):
-            print(f"learned “{spec['skill']}” in {seconds(run)}s, {run.get('modelCalls') or 0} model calls")
-            return
-    sys.exit("the run finished but the skill wasn't saved")
+            break
+    else:
+        sys.exit("the run finished but the skill wasn't saved")
+    print(f"learned “{spec['skill']}” in {seconds(run)}s, {run.get('modelCalls') or 0} model calls")
+    browser("hybrid on")
+    time.sleep(0.4)
+    browser(f"keep {spec['smartSkill']}")
+    started = time.time()
+    while time.time() - started < 200:
+        time.sleep(1)
+        smart = find_skill(spec["smartSkill"])
+        if smart and smart.get("inputs"):
+            names = [i["name"] for i in smart["inputs"]]
+            thinks = sum(1 for s in smart["steps"] if s.get("mode") == "think")
+            print(f"compiled “{spec['smartSkill']}” in {round(time.time() - started, 1)}s: inputs {names}, {thinks} think steps")
+            break
+    else:
+        print("warning: the smart skill wasn't generalized; hybrid replays it as recorded")
+    browser("hybrid off")
 
 
 def run_mode(spec, scenario, mode, timeout):
@@ -168,8 +193,13 @@ def run_mode(spec, scenario, mode, timeout):
     else:
         browser("hybrid on" if mode == "hybrid" else "hybrid off")
         time.sleep(0.5)
-        values = [{k: v for k, v in item.items() if k != "deductions"} for item in items]
-        browser("replayjson " + json.dumps({"skill": spec["skill"], "values": values}))
+        if mode == "hybrid":
+            # Lists travel as JSON, like any value.
+            values = [{**{k: v for k, v in item.items() if k != "deductions"}, "deductions": json.dumps(item["deductions"])} for item in items]
+        else:
+            values = [{k: v for k, v in item.items() if k != "deductions"} for item in items]
+        skill = spec["smartSkill"] if mode == "hybrid" else spec["skill"]
+        browser("replayjson " + json.dumps({"skill": skill, "values": values}))
         run, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
         runs.append(run)
         if error:
@@ -182,8 +212,9 @@ def run_mode(spec, scenario, mode, timeout):
         "scenario": scenario["id"], "mode": mode, "passed": passed, "total": len(items),
         "seconds": wall, "runSeconds": [seconds(r) for r in runs if r],
         "modelCalls": sum((r or {}).get("modelCalls") or 0 for r in runs),
+        "pauses": sum((r or {}).get("output", "").count("paused before") for r in runs),
         "items": [{"item": ref, "ok": ok, "detail": detail} for ref, ok, detail in results],
-        "runs": [{"id": r.get("id"), "status": r.get("status"), "summary": r.get("summary")} for r in runs if r],
+        "runs": [{"id": r.get("id"), "status": r.get("status"), "summary": r.get("summary"), "log": (r.get("output") or "")[-1500:]} for r in runs if r],
         "notes": notes,
     }
 
@@ -219,7 +250,12 @@ def main():
     proc = start_fixture()
     try:
         modes = [m.strip() for m in args.modes.split(",") if m.strip()]
-        if args.relearn or (set(modes) - {"agent"} and not skill_exists(spec["skill"])):
+        if args.relearn:
+            for name in (spec["skill"], spec["smartSkill"]):
+                if skill_exists(name):
+                    browser(f"forget {name}")
+            time.sleep(1)
+        if set(modes) - {"agent"} and not (skill_exists(spec["skill"]) and skill_exists(spec["smartSkill"])):
             learn(spec, args.timeout)
         wanted = {s.strip() for s in args.only.split(",") if s.strip()}
         rows = []

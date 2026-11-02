@@ -539,6 +539,16 @@ public final class OkidokiStore: ObservableObject {
         skills[index].updatedAt = Date()
     }
 
+    /// The whole skill rewritten (smart replay generalized it, or a run patched its steps). Same id, so
+    /// history and counts carry over.
+    public func replaceSkill(_ skill: Skill) {
+        guard let index = skills.firstIndex(where: { $0.id == skill.id }) else { return }
+        var skill = skill
+        skill.revision = (skills[index].revision ?? 0) + 1
+        skill.updatedAt = Date()
+        skills[index] = skill
+    }
+
     /// Puts back a skill that was just deleted (undo), as a fresh edit so sync keeps it.
     public func restoreSkill(_ skill: Skill) {
         guard !skills.contains(where: { $0.id == skill.id }) else { return }

@@ -484,7 +484,41 @@ public enum BrowserPageScript {
         if (active && active.isContentEditable && !active.contains(e.target)) flushTyping(active);
       }, true);
 
+      // Smart replay's quick looks: no refs, nothing clicked unless asked.
+      /** Up to six visible headings (dialog titles first), for knowing which page or step this is. */
+      function headings() {
+        const out = [];
+        for (const el of deepAll('dialog[open] h1, dialog[open] h2, [role=dialog] h2, h1, h2, h3, legend, [role=heading]')) {
+          if (!visible(el)) continue;
+          const text = clean(el.innerText, 80);
+          if (text && !out.includes(text)) out.push(text);
+          if (out.length >= 6) break;
+        }
+        return out;
+      }
+      /** What the element a step's selectors find holds now: a field's value, a dropdown's chosen text, a box's tick. */
+      function valueOf(selectors) {
+        const hit = find(selectors || []);
+        if (!hit) return null;
+        const el = hit.el;
+        if (el.tagName === 'SELECT') { const o = el.options[el.selectedIndex]; return { value: el.value, text: o ? clean(o.text, 200) : '' }; }
+        if (el.type === 'checkbox' || el.type === 'radio') return { value: el.checked ? 'on' : '', text: el.checked ? 'checked' : '' };
+        if (el.isContentEditable) return { value: el.innerText, text: el.innerText };
+        return { value: el.value ?? '', text: el.value ?? '' };
+      }
+      function present(selector) { return candidates(selector).some(visible); }
+      /** Clicks the visible button or link whose label or text is exactly `label` (a popup's "Accept all"). */
+      function clickText(label) {
+        const want = (label || '').trim().toLowerCase();
+        const el = deepAll('button, a, [role=button], input[type=button], input[type=submit]')
+          .find(e => visible(e) && [labelFor(e), clean(e.innerText || e.value || '', 80)].some(t => (t || '').trim().toLowerCase() === want));
+        if (!el) return false;
+        el.click();
+        return true;
+      }
+
       window.__okidoki = {
+        headings, valueOf, present, clickText,
         snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
         fillLogin, settle, pageText,
         record: (on) => { recording = !!on; return recording; },

@@ -10,6 +10,7 @@ import { anthropicKey, apifyToken, mossCredentials } from "./keys";
 import { findDocument } from "./finder";
 import type { ComputerRequest, ConnectorRunRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
 import { browserStep, type BrowserRequest } from "./browser";
+import { compileSkill, resolveValues, routeRequest, type CompileRequest, type ResolveRequest, type RouteRequest } from "./skillcompile";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
@@ -92,6 +93,24 @@ async function route(request: Request): Promise<Response> {
       } catch (error) {
         return json({ ok: false, error: error instanceof Error ? error.message : "bad request" }, 400);
       }
+    }
+
+    // Smart replay: generalize a run into a skill, fill one item's values from its documents, or pick
+    // the skill an everyday request means. Each is one model call, made up front, never per step.
+    if (url.pathname === "/skill/compile" && request.method === "POST") {
+      const payload = await body<CompileRequest>(request);
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      return json(await compileSkill(payload, key, fetchUntil(request.signal)));
+    }
+    if (url.pathname === "/skill/resolve" && request.method === "POST") {
+      const payload = await body<ResolveRequest>(request);
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      return json(await resolveValues(payload, key, fetchUntil(request.signal)));
+    }
+    if (url.pathname === "/skill/route" && request.method === "POST") {
+      const payload = await body<RouteRequest>(request);
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      return json(await routeRequest(payload, key, fetchUntil(request.signal)));
     }
 
     if (url.pathname === "/computer" && request.method === "POST") {
