@@ -119,7 +119,7 @@ public final class OkidokiStore: ObservableObject {
         self.memories = memories
         // Everything is local now: any run left mid-flight was cut off by the restart, including runs
         // from a state file restored onto a new Mac (its origin is the old Mac's id).
-        self.runs = Self.answeringSupersededQuestions(runs.map { $0.recoveredAfterRestart() })
+        self.runs = Self.clearingSupersededQuestions(runs.map { $0.recoveredAfterRestart() })
         self.skills = state.skills
         self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)
@@ -384,14 +384,15 @@ public final class OkidokiStore: ObservableObject {
                            threadID: threadID, status: status, preview: preview, steps: steps,
                            createdAt: now,
                            builtin: builtin, pickedPath: pickedPath, updatedAt: now, origin: deviceID)
-        // Carrying on in a conversation answers the question it paused on, and starting the same task over
-        // somewhere else gives up on it: either way that run stops waiting on you.
+        // A new task in the same conversation, or the same task started over elsewhere, means they moved on
+        // from the question: it stops waiting on them. It isn't their answer (that comes through
+        // `markAnswered`), so nothing tells the agent it was.
         if [.computerUse, .browser].contains(kind) {
             for asked in runs where asked.status == .asked {
                 if let threadID, asked.threadID == threadID {
-                    markAnswered(asked.id, reply: prompt)
+                    markSuperseded(asked.id, sameTask: false)
                 } else if asked.kind == kind, Self.sameTask(asked.prompt, prompt) {
-                    markSuperseded(asked.id)
+                    markSuperseded(asked.id, sameTask: true)
                 }
             }
         }
@@ -399,19 +400,17 @@ public final class OkidokiStore: ObservableObject {
         return run
     }
 
-    /// Questions saved before answers were tracked: a later computer or browser run in the same conversation
-    /// carried on from them, so they no longer wait on the user.
-    static func answeringSupersededQuestions(_ runs: [AgentRun]) -> [AgentRun] {
+    /// Questions left waiting by older builds: a later computer or browser task in the same conversation, or
+    /// the same task started over, means the user moved on, so they no longer wait on them.
+    static func clearingSupersededQuestions(_ runs: [AgentRun]) -> [AgentRun] {
         runs.map { run in
             guard run.status == .asked else { return run }
             let later = runs.filter { $0.id != run.id && [.computerUse, .browser].contains($0.kind) && $0.createdAt > run.createdAt }
             var run = run
-            if let thread = run.threadID, let next = later.filter({ $0.threadID == thread }).min(by: { $0.createdAt < $1.createdAt }) {
-                run.status = .done
-                run.answer = next.prompt
-                for index in run.steps.indices where run.steps[index].status == .asked { run.steps[index].status = .done }
+            if let thread = run.threadID, later.contains(where: { $0.threadID == thread }) {
+                Self.supersede(&run, sameTask: false)
             } else if later.contains(where: { $0.kind == run.kind && sameTask($0.prompt, run.prompt) }) {
-                Self.supersede(&run)
+                Self.supersede(&run, sameTask: true)
             } else {
                 return run
             }
@@ -426,18 +425,19 @@ public final class OkidokiStore: ObservableObject {
         return !norm(a).isEmpty && norm(a) == norm(b)
     }
 
-    private static func supersede(_ run: inout AgentRun) {
+    private static func supersede(_ run: inout AgentRun, sameTask: Bool) {
         run.status = .cancelled
-        run.summary = "you started this again, so this question was dropped: \(run.summary)"
+        run.summary = (sameTask ? "you started this again, so this question was dropped: " : "you moved on, so this question was dropped: ")
+            + run.summary
         for index in run.steps.indices where run.steps[index].status == .asked { run.steps[index].status = .cancelled }
     }
 
-    /// A question left behind when the same task was started over.
-    public func markSuperseded(_ id: String) {
+    /// A question left behind: they moved on in the conversation, or started the same task over.
+    public func markSuperseded(_ id: String, sameTask: Bool) {
         updateRun(id) { run in
             guard run.status == .asked else { return }
             run.endedAt = run.endedAt ?? Date()
-            Self.supersede(&run)
+            Self.supersede(&run, sameTask: sameTask)
         }
     }
 

@@ -75,13 +75,20 @@ final class DrivePolicyTests: XCTestCase {
         store.finishRun(asked.id, status: .asked, summary: "which size?")
         XCTAssertEqual(store.run(asked.id)?.status, .asked)
 
-        // The follow-up starts a new run in the same conversation: the question is answered.
-        let next = store.createRun(kind: .browser, title: "cart", prompt: "size 10", threadID: thread.id, status: .waiting)
+        // Answered through the reply box: done, with their answer.
+        store.markAnswered(asked.id, reply: "size 10")
         let answered = store.run(asked.id)
         XCTAssertEqual(answered?.status, .done, "an answered question must not keep waiting on you")
         XCTAssertEqual(answered?.answer, "size 10")
         XCTAssertEqual(answered?.summary, "which size?", "the question stays readable in history")
         XCTAssertFalse(answered?.steps.contains { $0.status == .asked } ?? true)
+
+        // A different task in the same conversation: they moved on, which is not an answer.
+        let second = store.createRun(kind: .browser, title: "cart", prompt: "add studs", threadID: thread.id, status: .running)
+        store.finishRun(second.id, status: .asked, summary: "which colour?")
+        let next = store.createRun(kind: .computerUse, title: "settings", prompt: "open the appearance pane", threadID: thread.id, status: .waiting)
+        XCTAssertEqual(store.run(second.id)?.status, .cancelled)
+        XCTAssertNil(store.run(second.id)?.answer, "an unrelated task must not be recorded as the answer")
         XCTAssertEqual(store.run(next.id)?.status, .waiting)
 
         // A question in another conversation is untouched.
@@ -97,17 +104,17 @@ final class DrivePolicyTests: XCTestCase {
                              steps: [RunStep(title: "s", status: .asked)], summary: "which?", createdAt: old)
         let followUp = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "this one", threadID: "th", status: .done)
         let lonely = AgentRun(accountID: "a", kind: .computerUse, title: "t", prompt: "p", threadID: "other", status: .asked)
-        let fixed = OkidokiStore.answeringSupersededQuestions([followUp, asked, lonely])
-        XCTAssertEqual(fixed[1].status, .done)
-        XCTAssertEqual(fixed[1].answer, "this one")
-        XCTAssertEqual(fixed[1].steps.map(\.status), [.done])
+        let fixed = OkidokiStore.clearingSupersededQuestions([followUp, asked, lonely])
+        XCTAssertEqual(fixed[1].status, .cancelled)
+        XCTAssertNil(fixed[1].answer)
+        XCTAssertEqual(fixed[1].steps.map(\.status), [.cancelled])
         XCTAssertEqual(fixed[2].status, .asked, "an unanswered question still waits")
 
         // Given up on: the same task started over in a new conversation.
         let abandoned = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "Add blue Puma studs",
                                  threadID: "one", status: .asked, summary: "which size?", createdAt: old)
         let retry = AgentRun(accountID: "a", kind: .browser, title: "t", prompt: "add blue  puma studs", threadID: "two", status: .done)
-        XCTAssertEqual(OkidokiStore.answeringSupersededQuestions([retry, abandoned])[1].status, .cancelled)
+        XCTAssertEqual(OkidokiStore.clearingSupersededQuestions([retry, abandoned])[1].status, .cancelled)
     }
 
     func testStartingTheSameTaskOverDropsItsOldQuestion() {

@@ -344,10 +344,18 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         }
     }
 
+    /// The glow follows the tab in front: on while someone works there.
+    private func refreshGlow(pulse: Bool = false) {
+        let active = model.active?.working ?? false
+        if stack.glow.active != active { stack.glow.active = active }
+        if pulse, active { stack.glow.pulse += 1 }
+    }
+
     func select(_ tab: BrowserTab) {
         guard model.tabs.contains(where: { $0.id == tab.id }) else { return }
         model.activeID = tab.id
         stack.bringToFront(tab.webView)
+        refreshGlow()
         if tab.isBlank { model.focusAddress += 1 }
     }
 
@@ -552,9 +560,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         if let threadID { tab.threadID = threadID }
         tab.onEscape = onEscape
         objectChanged()
+        refreshGlow()
     }
 
-    func updateWork(_ line: String, in tab: BrowserTab) { if tab.status != nil { tab.status = line } }
+    func updateWork(_ line: String, in tab: BrowserTab) {
+        guard tab.status != nil else { return }
+        tab.status = line
+        if tab.id == model.activeID { refreshGlow(pulse: true) }
+    }
 
     /// The tab each conversation's last run ended in, where its follow-ups carry on.
     private var threadTabs: [String: UUID] = [:]
@@ -572,6 +585,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             tab.onEscape = nil
         }
         objectChanged()
+        refreshGlow()
     }
 
     /// The strip shows who's working where; tabs are classes, so the list itself has to say it changed.
@@ -690,6 +704,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             tab.threadID = source.threadID
             tab.onEscape = source.onEscape
             tab.status = source.status
+            refreshGlow()
         }
         tab.navigating = true
         return tab.webView
@@ -905,22 +920,123 @@ enum BrowserAddressChoice: Equatable {
 /// being removed or hidden, so WebKit keeps running them at full speed for an agent working there.
 final class TabStackView: NSView {
     override var isFlipped: Bool { true }
+    /// The glow while the agent works in the tab in front: always the top layer, never in the way of a click.
+    let glow = BrowserGlowModel()
+    private lazy var glowView: NSView = {
+        let view = PassThroughHostingView(rootView: BrowserWorkGlow(model: glow))
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
+        return view
+    }()
 
     func add(_ webView: WKWebView) {
         webView.frame = bounds
         webView.autoresizingMask = [.width, .height]
         addSubview(webView, positioned: .below, relativeTo: nil)
+        keepGlowOnTop()
     }
 
     func bringToFront(_ webView: WKWebView?) {
         guard let webView, webView.superview === self else { return }
         addSubview(webView, positioned: .above, relativeTo: nil)
         for page in subviews { page.isHidden = false }
+        keepGlowOnTop()
+    }
+
+    private func keepGlowOnTop() {
+        addSubview(glowView, positioned: .above, relativeTo: nil)
     }
 
     override func layout() {
         super.layout()
         for page in subviews { page.frame = bounds }
+    }
+}
+
+/// A hosting view that clicks, scrolls and hovers go straight through.
+private final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+@MainActor
+final class BrowserGlowModel: ObservableObject {
+    /// Someone is working in the tab in front.
+    @Published var active = false
+    /// Bumped on each action, for a brief brightening.
+    @Published var pulse = 0
+}
+
+/// The computer-use glow, brought inside the page: the same violet → pink → orange light around the
+/// edges, plus a fine grid of translucent dots in those colours that fades out toward the middle, so
+/// the page stays readable. It breathes slowly and brightens for a moment on each action.
+private struct BrowserWorkGlow: View {
+    @ObservedObject var model: BrowserGlowModel
+    @State private var breathing = false
+    @State private var flare = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let colors = [
+        Color(hex: 0x6D3BF5), Color(hex: 0x9B2EC6), Color(hex: 0xE0339A),
+        Color(hex: 0xFF9147), Color(hex: 0xE0339A), Color(hex: 0x9B2EC6), Color(hex: 0x6D3BF5),
+    ]
+    private static let gradient = AngularGradient(colors: colors, center: .center)
+
+    var body: some View {
+        ZStack {
+            // The dots: a grid masked to the edges, tinted by the gradient.
+            Rectangle()
+                .fill(Self.gradient)
+                .mask(dots)
+                .mask(
+                    Rectangle().strokeBorder(Color.white, lineWidth: 64).blur(radius: 26)
+                )
+                .opacity(0.42)
+            // The light: a soft haze that bleeds in from the frame, a little denser at the edge.
+            Rectangle()
+                .strokeBorder(Self.gradient, lineWidth: 14)
+                .blur(radius: 18)
+                .opacity(0.34)
+            Rectangle()
+                .strokeBorder(Self.gradient, lineWidth: 3)
+                .blur(radius: 5)
+                .opacity(0.55)
+            Rectangle()
+                .strokeBorder(Color.white, lineWidth: 1.5)
+                .blur(radius: 4)
+                .opacity(0.16)
+        }
+        .compositingGroup()
+        .opacity(flare ? 1 : (breathing ? 0.85 : 0.55))
+        .opacity(model.active ? 1 : 0)
+        .animation(.easeOut(duration: 0.5), value: model.active)
+        .allowsHitTesting(false)
+        .onAppear {
+            guard !reduceMotion else { breathing = true; return }
+            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { breathing = true }
+        }
+        .onChange(of: model.pulse) { _, _ in
+            guard model.active, !reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.18)) { flare = true }
+            withAnimation(.easeIn(duration: 0.7).delay(0.18)) { flare = false }
+        }
+    }
+
+    /// Small round dots on an even grid, drawn once.
+    private var dots: some View {
+        Canvas { context, size in
+            let spacing: CGFloat = 13, radius: CGFloat = 0.9
+            var path = Path()
+            var y = spacing / 2
+            while y < size.height {
+                var x = spacing / 2
+                while x < size.width {
+                    path.addEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+                    x += spacing
+                }
+                y += spacing
+            }
+            context.fill(path, with: .color(.white))
+        }
     }
 }
 

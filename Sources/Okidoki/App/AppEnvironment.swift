@@ -664,6 +664,12 @@ final class AppEnvironment: ObservableObject {
     func continueThread(_ threadID: String, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Typed into a conversation whose last task paused on a question: that's the answer.
+        if let last = store.runs.first(where: { $0.threadID == threadID && [.computerUse, .browser].contains($0.kind) }),
+           last.status == .asked {
+            answerDriveQuestion(runID: last.id, text: trimmed)
+            return
+        }
         noteSpokenInput(false)
         Task {
             await handleRequest(text: trimmed, appName: "mac", bundleID: "", threadID: threadID,
