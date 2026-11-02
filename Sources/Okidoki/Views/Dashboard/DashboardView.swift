@@ -762,6 +762,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["browser"] as? String { env.importBrowserPasswords(id: id, passphrase: payload["passphrase"] as? String) }
         case "vaultImportCSV":
             env.importPasswordCSV(passphrase: payload["passphrase"] as? String)
+        case "vaultImportCookies":
+            if let id = payload["browser"] as? String { env.importBrowserCookies(id: id) }
         case "vaultImportTrashCSV":
             env.finishVaultImportCSV(trash: payload["trash"] as? Bool ?? true)
         case "vaultTouchLogin":

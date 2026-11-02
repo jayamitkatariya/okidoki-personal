@@ -164,6 +164,16 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       };
       break;
     }
+    case "vaultImportCookies": {
+      if (!state.vaultImport) return false;
+      const browser = state.vaultImport.sources.find((source) => source.id === payload.browser);
+      state.vaultImport = {
+        ...state.vaultImport,
+        cookiesBusy: null,
+        lastCookies: { source: browser?.name ?? "browser", cookies: 840, sites: 61, skipped: 12, errors: [], finishedAt: new Date().toISOString() },
+      };
+      break;
+    }
     case "vaultImportTrashCSV": {
       if (state.vaultImport) state.vaultImport = { ...state.vaultImport, csvToTrash: null };
       break;

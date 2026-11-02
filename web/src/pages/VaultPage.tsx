@@ -3,7 +3,7 @@ import { useDashboard } from "../store";
 import { copyText, cx, formatBytes, relativeTime } from "../lib";
 import type { Page } from "../nav";
 import type { VaultFile, VaultImportState, VaultLogin, VaultState } from "../types";
-import { browserDetail, importSummary } from "../vaultImport";
+import { browserDetail, cookieSummary, importSummary } from "../vaultImport";
 import { decryptSecret, deriveVaultKey, encryptSecret, rememberPassphrase, rememberedPassphrase, VAULT_KEY_VERSION } from "../vaultCrypto";
 import { Button, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
@@ -450,11 +450,13 @@ function ImportModal({ open, passphrase, onClose }: { open: boolean; passphrase:
   const csvReport = status.last && /\.csv$/i.test(status.last.source) ? status.last : null;
 
   return (
-    <Modal open={open} onClose={onClose} title="Import passwords" subtitle="From your other browsers, or a file you exported. Each password is sealed with your vault passphrase as it comes in." width={520}>
+    <Modal open={open} onClose={onClose} title="Import from your browsers" subtitle="Passwords are sealed with your vault passphrase as they come in. Sign-ins keep you logged in to your sites in okidoki's browser." width={520}>
       <div className="pref-group">
         {status.sources.map((browser) => {
           const report = status.last?.source === browser.name ? status.last : null;
           const done = Boolean(report && report.imported + report.updated > 0);
+          const signins = status.lastCookies?.source === browser.name ? status.lastCookies : null;
+          const cookieBusy = status.cookiesBusy === browser.id;
           return (
             <div className="pref-row vault-row" key={browser.id}>
               <span className="kind-icon">
@@ -463,8 +465,19 @@ function ImportModal({ open, passphrase, onClose }: { open: boolean; passphrase:
               <span className="pref-copy">
                 <strong>{browser.name}</strong>
                 <em>{browserDetail(browser, report)}</em>
+                {signins ? <em>{cookieSummary(signins)}</em> : null}
               </span>
               <span className="pref-control vault-row-tools">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={cookieBusy ? "spinner" : "user"}
+                  disabled={Boolean(status.cookiesBusy) || Boolean(browser.error)}
+                  title="Bring this browser's sign-ins into okidoki's browser, so sites (and the agent) are already signed in"
+                  onClick={() => invoke("vaultImportCookies", { browser: browser.id })}
+                >
+                  {cookieBusy ? "Signing in…" : signins && signins.cookies > 0 ? "Sign-ins again" : "Sign-ins"}
+                </Button>
                 <Button
                   size="sm"
                   variant="secondary"

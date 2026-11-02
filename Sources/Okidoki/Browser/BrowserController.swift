@@ -491,6 +491,19 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         tab.hasLogin = !site.isEmpty && env?.vault.logins.contains { BrowserSteps.sameSite($0.site, site) } == true
     }
 
+    // MARK: - Sign-ins from other browsers
+
+    /// Puts cookies into okidoki's profile, shared by every tab.
+    func importCookies(_ cookies: [HTTPCookie]) async {
+        let store = dataStore.httpCookieStore
+        for cookie in cookies { await store.setCookie(cookie) }
+    }
+
+    /// Reloads the pages nobody is working in, so they pick up new sign-ins.
+    func reloadIdleTabs() {
+        for tab in model.tabs where !tab.isBlank && !tab.working && tab.ownerRunID == nil { tab.webView.reload() }
+    }
+
     // MARK: - For scripts/dev-browser.sh
 
     /// Runs one of the page script's functions in the tab in front.

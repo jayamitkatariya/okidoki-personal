@@ -355,7 +355,7 @@ struct OnboardingView: View {
         let ready = !importPassphrase.isEmpty
         return VStack(alignment: .leading, spacing: 0) {
             title("Bring your stuff")
-            subtitle("Optional. Passwords from your browsers go into the vault, sealed on this Mac. What other assistants know about you goes into Memory.")
+            subtitle("Optional. Passwords from your browsers go into the vault, sealed on this Mac; Sign-ins keep you logged in to your sites in okidoki's browser. What other assistants know about you goes into Memory.")
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
                     fieldLabel("Passwords").padding(.top, 20)
@@ -488,7 +488,12 @@ struct OnboardingView: View {
         let report = status.last?.source == browser.name ? status.last : nil
         let done = report.map { $0.imported + $0.updated > 0 } ?? false
         let detail: String
+        let signins = status.lastCookies?.source == browser.name ? status.lastCookies : nil
         if let error = browser.error {
+            detail = error
+        } else if let signins, signins.cookies > 0 {
+            detail = (report.map { "\($0.summary) · " } ?? "") + "signed in to \(signins.sites) \(signins.sites == 1 ? "site" : "sites")"
+        } else if let signins, let error = signins.errors.first {
             detail = error
         } else if let report {
             detail = report.errors.isEmpty ? report.summary : "\(report.summary) · \(report.errors[0])"
@@ -504,6 +509,14 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
+            if signins.map({ $0.cookies > 0 }) != true {
+                Button(status.cookiesBusy == browser.id ? "Signing in…" : "Sign-ins") {
+                    env.importBrowserCookies(id: browser.id)
+                }
+                .buttonStyle(OKButtonStyle(kind: .ghost, compact: true))
+                .disabled(status.cookiesBusy != nil || browser.error != nil)
+                .help("Stay signed in to your sites in okidoki's browser")
+            }
             if done {
                 statusPill("Imported")
             } else {

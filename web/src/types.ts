@@ -375,6 +375,19 @@ export interface VaultImportState {
   last?: VaultImportReport | null;
   /** An imported CSV still on disk with passwords in the clear. */
   csvToTrash?: string | null;
+  /** Browser id whose sign-ins (cookies) are being brought over. */
+  cookiesBusy?: string | null;
+  lastCookies?: CookieImportReport | null;
+}
+
+/** Sign-ins brought into okidoki's browser from another browser. Counts only. */
+export interface CookieImportReport {
+  source: string;
+  cookies: number;
+  sites: number;
+  skipped: number;
+  errors: string[];
+  finishedAt: string;
 }
 
 /** A document in the vault folder. `id` is its path inside the folder. */

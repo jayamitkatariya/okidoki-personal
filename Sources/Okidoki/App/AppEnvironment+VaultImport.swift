@@ -15,6 +15,19 @@ struct VaultImportStatus: Encodable, Equatable {
     var last: VaultImportReport?
     /// The name of a CSV that was imported and still sits on disk with passwords in the clear.
     var csvToTrash: String?
+    /// The browser whose sign-ins are being brought over; nil when idle.
+    var cookiesBusy: String?
+    var lastCookies: CookieImportReport?
+}
+
+/// What bringing sign-ins over did. Counts only.
+struct CookieImportReport: Encodable, Equatable {
+    var source: String
+    var cookies = 0
+    var sites = 0
+    var skipped = 0
+    var errors: [String] = []
+    var finishedAt = Date()
 }
 
 /// Bringing saved passwords into the vault from other browsers or a CSV export. Each password is
@@ -165,5 +178,47 @@ extension AppEnvironment {
               undoLabel: trashCSV ? "trash the CSV" : nil,
               onUndo: trashCSV ? { [weak self] in self?.finishVaultImportCSV(trash: true) } : nil,
               editLabel: "vault", onEdit: { [weak self] in self?.openDashboard(.vault) }, runID: nil)
+    }
+
+    // MARK: - Sign-ins (cookies)
+
+    /// Brings a browser's sign-ins into okidoki's browser: its cookies, opened with the same Keychain key
+    /// as its passwords (macOS asks first), go straight into okidoki's own profile and nowhere else.
+    func importBrowserCookies(id: String) {
+        guard vaultImport.cookiesBusy == nil, let source = BrowserPasswordImport.browser(id: id) else { return }
+        vaultImport.cookiesBusy = id
+        Task.detached(priority: .userInitiated) {
+            let outcome: Result<(cookies: [ImportedCookie], skipped: Int, errors: [String]), Error> = Result { try BrowserCookieImport.read(source) }
+            await MainActor.run { [weak self] in
+                Task { @MainActor in await self?.finishCookieImport(source.name, outcome) }
+            }
+        }
+    }
+
+    private func finishCookieImport(_ source: String, _ outcome: Result<(cookies: [ImportedCookie], skipped: Int, errors: [String]), Error>) async {
+        var report = CookieImportReport(source: source)
+        switch outcome {
+        case .failure(let error):
+            report.errors = [(error as? BrowserPasswordImport.Failure)?.reason ?? error.localizedDescription]
+        case .success(let read):
+            let cookies = read.cookies.compactMap { cookie in cookie.httpCookie().map { (cookie.site, $0) } }
+            await browser.importCookies(cookies.map(\.1))
+            report.cookies = cookies.count
+            report.sites = Set(cookies.map(\.0)).count
+            report.skipped = read.skipped + (read.cookies.count - cookies.count)
+            report.errors = read.errors
+        }
+        report.finishedAt = Date()
+        vaultImport.cookiesBusy = nil
+        vaultImport.lastCookies = report
+        if report.cookies == 0 {
+            toast(title: "couldn't bring sign-ins from \(source)", detail: report.errors.first ?? "it had none to bring", kind: .warning,
+                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            return
+        }
+        browser.reloadIdleTabs()
+        toast(title: "signed in to \(report.sites) \(report.sites == 1 ? "site" : "sites")",
+              detail: "\(source)'s sign-ins are in okidoki's browser" + (report.errors.isEmpty ? "" : " · \(report.errors.count) profile couldn't be read"),
+              kind: .success, undoLabel: nil, onUndo: nil, editLabel: "browser", onEdit: { [weak self] in self?.openBrowser() }, runID: nil)
     }
 }

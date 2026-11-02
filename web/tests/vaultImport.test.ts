@@ -53,3 +53,12 @@ describe("password import", () => {
     expect(snapshots.at(-1)?.vaultImport?.csvToTrash).toBeNull();
   });
 });
+
+describe("sign-ins", () => {
+  test("summarise what came over, or why nothing did", () => {
+    const { cookieSummary } = require("../src/vaultImport");
+    expect(cookieSummary({ source: "Dia", cookies: 300, sites: 1, skipped: 0, errors: [], finishedAt: "" })).toBe("Signed in to 1 site in okidoki's browser");
+    expect(cookieSummary({ source: "Dia", cookies: 0, sites: 0, skipped: 0, errors: ["Keychain access to Dia's key was declined"], finishedAt: "" }))
+      .toBe("Keychain access to Dia's key was declined");
+  });
+});

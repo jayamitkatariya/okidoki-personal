@@ -266,6 +266,16 @@ public enum BrowserPasswordImport {
         return String(data: plain, encoding: .utf8)
     }
 
+    /// The same, as bytes: a cookie's value carries a binary prefix before its text.
+    public static func decryptChromiumData(_ value: Data, key: Data) -> Data? {
+        guard value.count > 3, value.prefix(3) == Data("v10".utf8) else { return nil }
+        return aesCBC(CCOperation(kCCDecrypt), Data(value.dropFirst(3)), key: key)
+    }
+
+    public static func encryptChromiumData(_ plain: Data, key: Data) -> Data? {
+        aesCBC(CCOperation(kCCEncrypt), plain, key: key).map { Data("v10".utf8) + $0 }
+    }
+
     /// The other direction, for tests that build a synthetic "Login Data".
     public static func encryptChromium(_ secret: String, key: Data) -> Data? {
         aesCBC(CCOperation(kCCEncrypt), Data(secret.utf8), key: key).map { Data("v10".utf8) + $0 }
