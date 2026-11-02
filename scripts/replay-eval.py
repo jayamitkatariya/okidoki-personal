@@ -118,7 +118,9 @@ def check(item, submissions):
     got = mine[-1]
     wrong = []
     for key in ["name", "pan", "income", "regime", "gains"]:
-        if str(got.get(key, "")) != str(item[key]):
+        # A name as the document writes it ("BHARAT MEHTA") is still the right name.
+        same = str(got.get(key, "")).lower() == str(item[key]).lower() if key == "name" else str(got.get(key, "")) == str(item[key])
+        if not same:
             wrong.append(f"{key} {got.get(key)!r}≠{item[key]!r}")
     want = sorted((d["section"], d["amount"]) for d in item["deductions"])
     have = sorted((d.get("section"), d.get("amount")) for d in got.get("deductions", []))
@@ -173,6 +175,39 @@ def learn(spec, timeout):
     browser("hybrid off")
 
 
+def vault_root():
+    folder = load_state().get("settings", {}).get("vaultFolder") or str(Path.home() / "Desktop/Okidoki Vault")
+    return Path(folder) / "replay-eval"
+
+
+def write_documents(spec, names):
+    """Each person's documents into their own vault folder: text PDFs, and scans as image-only PDFs."""
+    from PIL import Image, ImageDraw, ImageFont
+    root = vault_root()
+    for name in names:
+        folder = root / name
+        folder.mkdir(parents=True, exist_ok=True)
+        for doc in spec["documents"].get(name, []):
+            target = folder / doc["file"]
+            if doc.get("scan"):
+                image = Image.new("RGB", (1240, 1754), "white")
+                draw = ImageDraw.Draw(image)
+                try:
+                    font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Courier New.ttf", 30)
+                except Exception:
+                    font = ImageFont.load_default()
+                for n, line in enumerate(doc["text"].splitlines()):
+                    draw.text((80, 120 + n * 52), line, fill="black", font=font)
+                image.save(target, "PDF", resolution=150)
+            else:
+                text_file = folder / (doc["file"] + ".txt")
+                text_file.write_text(doc["text"])
+                with open(target, "wb") as out:
+                    subprocess.run(["cupsfilter", str(text_file)], stdout=out, stderr=subprocess.DEVNULL)
+                text_file.unlink()
+    time.sleep(2.5)  # the vault notices new files through FSEvents
+
+
 def run_mode(spec, scenario, mode, timeout):
     items = [spec["items"][name] | {"ref": name} for name in scenario["items"]]
     fixture("/config", {"drift": scenario["drift"], "banner": False})
@@ -193,7 +228,10 @@ def run_mode(spec, scenario, mode, timeout):
     else:
         browser("hybrid on" if mode == "hybrid" else "hybrid off")
         time.sleep(0.5)
-        if mode == "hybrid":
+        if scenario.get("fromDocuments"):
+            # Only who it's for: everything else has to come from their documents.
+            values = [{"ref": item["ref"]} for item in items]
+        elif mode == "hybrid":
             # Lists travel as JSON, like any value.
             values = [{**{k: v for k, v in item.items() if k != "deductions"}, "deductions": json.dumps(item["deductions"])} for item in items]
         else:
@@ -262,7 +300,11 @@ def main():
         for scenario in spec["scenarios"]:
             if wanted and scenario["id"] not in wanted:
                 continue
+            if scenario.get("fromDocuments"):
+                write_documents(spec, scenario["items"])
             for mode in modes:
+                if scenario.get("modes") and mode not in scenario["modes"]:
+                    continue
                 print(f"· {scenario['id']} · {mode} …", flush=True)
                 rows.append(run_mode(spec, scenario, mode, args.timeout))
         out = ROOT / "build/replay"
@@ -276,6 +318,9 @@ def main():
         print(f"\nreport: {out / (args.label + '.json')}")
     finally:
         browser("hybrid off")
+        import shutil
+        if vault_root().exists():
+            shutil.rmtree(vault_root())
         if proc:
             proc.terminate()
 

@@ -296,7 +296,7 @@ export async function resolveValues(request: ResolveRequest, key: string | undef
     `Inputs to fill:\n${JSON.stringify(request.inputs.map((i) => ({ name: i.name, description: i.description, kind: i.kind, fields: i.fields, choices: i.choices, hint: i.hint, required: i.required ?? true })), null, 1)}`,
     docs ? `Documents:\n${docs}` : "No documents were found for this item.",
   ].filter(Boolean).join("\n\n");
-  const result = await forcedTool<Record<string, ResolvedValue>>({ key, model, system: RESOLVE_SYSTEM, user, tool, maxTokens: 16000, timeoutMs: 90_000, fetchImpl, effort: "medium" });
+  const result = await forcedTool<Record<string, ResolvedValue>>({ key, model, system: RESOLVE_SYSTEM, user, tool, maxTokens: 16000, timeoutMs: 90_000, fetchImpl, effort: "low" });
   if (!result.ok) return result;
   const values: Record<string, ResolvedValue> = {};
   for (const input of request.inputs) {

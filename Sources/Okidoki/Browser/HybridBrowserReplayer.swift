@@ -65,6 +65,7 @@ final class HybridBrowserReplayer {
                 if bound.count > 1 { run.summary = "\(bound.count) to do" }
             }
             var healed = skill.steps
+            var promotions: [Int: [SkillStep]] = [:]
             var outcomes: [(label: String, ok: Bool, note: String)] = []
             let limit = max(1, min(3, bound.count))
             var tabs: [BrowserTab] = [first]
@@ -87,6 +88,7 @@ final class HybridBrowserReplayer {
                 for (n, tab) in tabs.enumerated() where n < bound.count { launch(n, on: tab); next = n + 1 }
                 for await (index, result) in group {
                     if Task.isCancelled || self.runID != runID { group.cancelAll(); return }
+                    for (source, steps) in result.promotions where promotions[source] == nil { promotions[source] = steps }
                     for (source, selectors) in result.healed where healed.indices.contains(source) {
                         healed[source].selectors = selectors
                         healed[source].heals = (healed[source].heals ?? 0) + 1
@@ -113,7 +115,18 @@ final class HybridBrowserReplayer {
                 }
             }
             if Task.isCancelled || self.runID != runID { return }
-            if healed != skill.steps { env.store.updateSkillSteps(skill.id, healed) }
+            if !promotions.isEmpty, var current = env.store.skill(skill.id) {
+                // What the model worked out becomes plain steps: the next replay of these parts needs no model.
+                var steps = healed
+                for (source, plain) in promotions.sorted(by: { $0.key > $1.key }) {
+                    env.replayLog(runID, "→ learned “\(skill.steps[source].text.prefix(60))…” as \(plain.count) plain steps")
+                    steps = SkillPromoter.replacing(steps, at: source, with: plain)
+                }
+                current.steps = SkillCompiler.deriveChecks(steps)
+                env.store.replaceSkill(current)
+            } else if healed != skill.steps {
+                env.store.updateSkillSteps(skill.id, healed)
+            }
             for tab in tabs.dropFirst() { env.browser.endWork(runID: runID); env.browser.closeTab(tab) }
             self.end()
             let done = outcomes.filter(\.ok).count
@@ -166,6 +179,8 @@ final class HybridBrowserReplayer {
         var tab: BrowserTab
         /// Recorded step index → selectors that work now.
         var healed: [Int: [String]] = [:]
+        /// Think step index → the plain steps that did it on this pass.
+        var promotions: [Int: [SkillStep]] = [:]
         var skipped = false
         /// The person said stop at the gate: no more passes.
         var stop = false
@@ -270,6 +285,12 @@ final class HybridBrowserReplayer {
                 }
             case .thought:
                 rescues += 1
+            case .learned(let actions):
+                rescues += 1
+                if result.promotions[planned.source] == nil,
+                   let plain = SkillPromoter.promote(step, actions: actions, values: values, inputs: skill.inputs ?? []) {
+                    result.promotions[planned.source] = plain
+                }
             case .doubt(let why):
                 doubts.helped.append(why)
             case .failed(let why), .lost(let why):
@@ -291,6 +312,8 @@ final class HybridBrowserReplayer {
         case healed([String])
         case captured(String, String)
         case thought
+        /// A think step that worked, with what it did, so it can become plain steps.
+        case learned([SkillPromoter.Action])
         /// Done, but its result couldn't be confirmed.
         case doubt(String)
         case failed(String)
@@ -322,8 +345,11 @@ final class HybridBrowserReplayer {
         case "think":
             let goal = describeGoal(step.text, values: scoped, inputs: inputs)
             env.replayLog(runID, "→ \(item.label): working out “\(ParameterFill.fill(step.text, values: scoped).text)”")
-            let (ok, summary) = await think(goal: goal, tab: tab, maxTurns: step.maxTurns ?? 14, tag: step.id)
-            return ok ? .thought : .lost(summary.isEmpty ? "couldn't do “\(step.text)”" : summary)
+            let result = await thinkTouching(goal: goal, tab: tab, maxTurns: step.maxTurns ?? 14, tag: step.id)
+            guard result.ok else { return .lost(result.summary.isEmpty ? "couldn't do “\(step.text)”" : result.summary) }
+            return .learned(result.touched.map {
+                SkillPromoter.Action(action: $0.action, selectors: $0.selectors, label: $0.label, role: $0.role, input: $0.input, url: $0.url)
+            })
         case "read":
             guard let name = step.capture else { return .done }
             if let value = await read(step, inputs: inputs, tab: tab) { return .captured(name, value) }
@@ -350,7 +376,10 @@ final class HybridBrowserReplayer {
                 typed = filled
             }
         }
-        var payload: [String: Any] = ["action": action, "selectors": step.selectors ?? []]
+        // Loop rows find their own element: `#amount-{{item.index}}` → `#amount-2`.
+        let templated = (step.selectors ?? []).contains { $0.contains("{{") }
+        let selectors = (step.selectors ?? []).map { $0.contains("{{") ? ParameterFill.fill($0, values: scoped).text : $0 }
+        var payload: [String: Any] = ["action": action, "selectors": selectors]
         if action == "type" { payload["text"] = input ?? "" }
         if action == "type", let kind = BrowserReplayer.secretKind(step) { payload["secret"] = kind }
         if action == "select" { payload["value"] = input ?? "" }
@@ -385,7 +414,7 @@ final class HybridBrowserReplayer {
                 if !selectors.isEmpty { result.selectors = selectors; result.matched = -2 }
             }
         }
-        if result.matched > 0 || result.matched == -2 { healedSelectors = BrowserReplayer.reordered(step.selectors ?? [], found: result.selectors) }
+        if !templated, result.matched > 0 || result.matched == -2 { healedSelectors = BrowserReplayer.reordered(step.selectors ?? [], found: result.selectors) }
         if ["click", "press"].contains(action) {
             await tab.settle(limit: 6, fresh: true)
         } else if action == "hover" {
@@ -549,7 +578,7 @@ final class HybridBrowserReplayer {
 
     /// A bounded run of the browser agent on this tab: the part of a pass that no recording covers.
     /// What a think run touched, in order: its successful page actions with the element's selectors.
-    struct Touched { var action: String; var selectors: [String]; var label: String? }
+    struct Touched { var action: String; var selectors: [String]; var label: String?; var role: String?; var input: String?; var url: String? }
 
     func think(goal: String, tab: BrowserTab, maxTurns: Int, tag: String) async -> (ok: Bool, summary: String) {
         let result = await thinkTouching(goal: goal, tab: tab, maxTurns: maxTurns, tag: tag)
@@ -604,7 +633,11 @@ final class HybridBrowserReplayer {
                     let before = tab.webView.url
                     let done = await tab.act(payload)
                     results.append(done.ok ? ["ok": true] : ["ok": false, "detail": done.detail ?? "didn't work"])
-                    if done.ok, type != "scroll" { touched.append(Touched(action: type, selectors: done.selectors, label: done.label)) }
+                    if done.ok, type != "scroll" {
+                        let typed = (payload["text"] ?? payload["value"] ?? (type == "press" ? payload["key"] : nil)) as? String
+                        touched.append(Touched(action: type, selectors: done.selectors, label: done.label, role: done.role,
+                                               input: typed, url: before?.absoluteString))
+                    }
                     env.replayLog(runID, done.ok ? "→ " + BrowserSteps.line(type, label: done.label, input: payload["text"] as? String ?? payload["value"] as? String)
                                               : "✗ \(type): \(done.detail ?? "didn't work")")
                     if ["click", "press", "select"].contains(type) { await tab.settle(limit: 4, fresh: true) }

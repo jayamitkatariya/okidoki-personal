@@ -5,14 +5,127 @@
   "smartSkill": "acme filing smart",
   "learnItem": "Asha",
   "items": {
-    "Asha":   {"name": "Asha Rao",     "pan": "ABCPR1234K", "income": "1250000", "regime": "new", "gains": "",       "deductions": []},
-    "Bharat": {"name": "Bharat Mehta", "pan": "BHMPM5678L", "income": "980000",  "regime": "old", "gains": "",       "deductions": [{"section": "80C", "amount": "150000"}, {"section": "80D", "amount": "25000"}]},
-    "Chandra":{"name": "Chandra Iyer", "pan": "CHIPI4321Q", "income": "2140000", "regime": "new", "gains": "310000", "deductions": []},
-    "Divya":  {"name": "Divya Shah",   "pan": "DVSPS8777Z", "income": "760000",  "regime": "old", "gains": "",       "deductions": [{"section": "80C", "amount": "90000"}, {"section": "80G", "amount": "12000"}, {"section": "24B", "amount": "200000"}]}
+    "Asha": {
+      "name": "Asha Rao",
+      "pan": "ABCPR1234K",
+      "income": "1250000",
+      "regime": "new",
+      "gains": "",
+      "deductions": []
+    },
+    "Bharat": {
+      "name": "Bharat Mehta",
+      "pan": "BHMPM5678L",
+      "income": "980000",
+      "regime": "old",
+      "gains": "",
+      "deductions": [
+        {
+          "section": "80C",
+          "amount": "150000"
+        },
+        {
+          "section": "80D",
+          "amount": "25000"
+        }
+      ]
+    },
+    "Chandra": {
+      "name": "Chandra Iyer",
+      "pan": "CHIPI4321Q",
+      "income": "2140000",
+      "regime": "new",
+      "gains": "310000",
+      "deductions": []
+    },
+    "Divya": {
+      "name": "Divya Shah",
+      "pan": "DVSPS8765Z",
+      "income": "760000",
+      "regime": "old",
+      "gains": "",
+      "deductions": [
+        {
+          "section": "80C",
+          "amount": "90000"
+        },
+        {
+          "section": "80G",
+          "amount": "12000"
+        },
+        {
+          "section": "24B",
+          "amount": "200000"
+        }
+      ]
+    }
   },
   "scenarios": [
-    {"id": "same-data", "items": ["Asha"],                     "drift": false, "why": "the skill's own data, page unchanged: replay should be instant and need no model"},
-    {"id": "new-data",  "items": ["Bharat", "Chandra", "Divya"], "drift": false, "why": "other people: different values, an optional section, 2–3 deduction rows"},
-    {"id": "drift",     "items": ["Bharat"],                   "drift": true,  "why": "renamed buttons, new ids, reordered fields, a cookie banner and a survey popup"}
-  ]
+    {
+      "id": "same-data",
+      "items": [
+        "Asha"
+      ],
+      "drift": false,
+      "why": "the skill's own data, page unchanged: replay should be instant and need no model"
+    },
+    {
+      "id": "new-data",
+      "items": [
+        "Bharat",
+        "Chandra",
+        "Divya"
+      ],
+      "drift": false,
+      "why": "other people: different values, an optional section, 2–3 deduction rows"
+    },
+    {
+      "id": "drift",
+      "items": [
+        "Bharat"
+      ],
+      "drift": true,
+      "why": "renamed buttons, new ids, reordered fields, a cookie banner and a survey popup"
+    },
+    {
+      "id": "documents",
+      "items": [
+        "Bharat",
+        "Chandra",
+        "Divya"
+      ],
+      "drift": false,
+      "fromDocuments": true,
+      "modes": [
+        "hybrid"
+      ],
+      "why": "only names are given: every value comes from each person's vault folder (one capital gains statement is a scan)"
+    }
+  ],
+  "documents": {
+    "_comment": "Written into <vault>/replay-eval/<item>/ for the documents scenario and removed afterwards. scan: rendered as an image-only PDF, so only OCR can read it.",
+    "Bharat": [
+      {
+        "file": "Form16-FY2025-26.pdf",
+        "text": "FORM NO. 16\nCertificate under section 203 of the Income-tax Act, 1961\nPART A\nName and address of the Employee: BHARAT MEHTA, 14 Lake Road, Pune\nPAN of the Employee: BHMPM5678L\nAssessment Year: 2026-27\nPART B\n1. Gross Salary (a) Salary as per provisions contained in section 17(1): 9,80,000\nEmployee opted for taxation under section 115BAC: NO (old regime)\n10. Deductions under Chapter VI-A\n(a) Deduction in respect of life insurance premia, PPF etc. under section 80C: 1,50,000\n(b) Deduction in respect of health insurance premia under section 80D: 25,000\n"
+      }
+    ],
+    "Chandra": [
+      {
+        "file": "Form16.pdf",
+        "text": "FORM NO. 16\nPART A\nEmployee: CHANDRA IYER\nPAN: CHIPI4321Q\nPART B\nGross Salary: Rs. 21,40,000\nWhether opting out of taxation u/s 115BAC: NO (new regime applies)\nDeductions under Chapter VI-A: Nil\n"
+      },
+      {
+        "file": "Capital-gains-statement.pdf",
+        "scan": true,
+        "text": "BROKER CAPITAL GAINS STATEMENT FY 2025-26\nClient: Chandra Iyer   PAN CHIPI4321Q\nShort term gains (equity): 1,10,000\nLong term gains (equity): 2,00,000\nTotal capital gains: 3,10,000"
+      }
+    ],
+    "Divya": [
+      {
+        "file": "form16_divya.pdf",
+        "text": "FORM 16 - PART B\nName of employee: Divya Shah    PAN: DVSPS8765Z\nGross salary u/s 17(1): 7,60,000\nRegime: Old (opted out of 115BAC)\nChapter VI-A deductions:\n  Section 80C (PPF, ELSS): 90,000\n  Section 80G (donations): 12,000\nInterest on housing loan u/s 24(b): 2,00,000\n"
+      }
+    ]
+  }
 }
