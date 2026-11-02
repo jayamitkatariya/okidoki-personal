@@ -1,0 +1,63 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Add a calendar event",
+  "summary": "Creates an event in Google Calendar, with guests if you name them.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "create an event in Google Calendar",
+    "itemNoun": "event",
+    "startURL": "https://calendar.google.com",
+    "tags": [
+      "browser",
+      "work",
+      "personal"
+    ],
+    "inputs": [
+      {
+        "name": "title",
+        "description": "event title",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "date",
+        "description": "the day",
+        "kind": "date",
+        "format": "yyyy-MM-dd",
+        "source": "request"
+      },
+      {
+        "name": "start_time",
+        "description": "start time",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "duration",
+        "description": "how long",
+        "kind": "text",
+        "source": "request",
+        "required": false
+      },
+      {
+        "name": "guests",
+        "description": "guest emails, comma separated",
+        "kind": "text",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open Google Calendar",
+      "Click Create",
+      "Type {{title}} as the title",
+      "Set the date {{date}} and start time {{start_time}}, end after {{duration}} (an hour if not given)",
+      "Add guests {{guests}} if given",
+      "Save"
+    ],
+    "template": true
+  }
+}

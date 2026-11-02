@@ -549,6 +549,18 @@ public final class OkidokiStore: ObservableObject {
         skills[index] = skill
     }
 
+    /// A library template added to the person's skills. Adding the same one twice keeps the first.
+    @discardableResult
+    public func installTemplate(_ entry: SkillLibrary.Entry) -> Skill {
+        let source = SkillLibrary.source(for: entry.id)
+        if let existing = skills.first(where: { $0.accountID == currentAccountID && ($0.source == source || $0.templateID == source) }) {
+            return existing
+        }
+        let skill = SkillLibrary.skill(from: entry, accountID: currentAccountID)
+        skills.insert(skill, at: 0)
+        return skill
+    }
+
     /// Puts back a skill that was just deleted (undo), as a fresh edit so sync keeps it.
     public func restoreSkill(_ skill: Skill) {
         guard !skills.contains(where: { $0.id == skill.id }) else { return }

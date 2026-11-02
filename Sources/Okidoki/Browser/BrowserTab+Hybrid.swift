@@ -14,6 +14,10 @@ extension BrowserTab {
         return (raw["value"] as? String ?? "", raw["text"] as? String ?? "")
     }
 
+    func options(of selectors: [String]) async -> [String]? {
+        await call("return window.__okidoki ? window.__okidoki.optionsOf(s) : null", ["s": selectors]) as? [String]
+    }
+
     func isPresent(_ selector: String) async -> Bool {
         await call("return window.__okidoki ? window.__okidoki.present(s) : false", ["s": selector]) as? Bool ?? false
     }

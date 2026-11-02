@@ -377,13 +377,19 @@ final class HybridBrowserReplayer {
             }
         }
         // Loop rows find their own element: `#amount-{{item.index}}` → `#amount-2`.
-        let templated = (step.selectors ?? []).contains { $0.contains("{{") }
+        let templated = (step.selectors ?? []).contains { $0.contains("{{") } || (step.label ?? "").contains("{{")
         let selectors = (step.selectors ?? []).map { $0.contains("{{") ? ParameterFill.fill($0, values: scoped).text : $0 }
         var payload: [String: Any] = ["action": action, "selectors": selectors]
         if action == "type" { payload["text"] = input ?? "" }
         if action == "type", let kind = BrowserReplayer.secretKind(step) { payload["secret"] = kind }
         if action == "select" { payload["value"] = input ?? "" }
         if action == "press" { payload["key"] = input ?? "Enter" }
+        // A value written differently from the dropdown's option ("24(b)" for "24B"): pick the option it means.
+        if action == "select", let wanted = input, let options = await tab.options(of: selectors), !options.isEmpty {
+            let picked = SkillBinder.choice(wanted, in: options)
+            payload["value"] = picked
+            if typed != nil { typed = picked }
+        }
 
         var result = await tab.act(payload)
         // A page that builds itself after load: look again every 150ms, then clear popups. On the right
@@ -407,7 +413,8 @@ final class HybridBrowserReplayer {
                 }
             }
             if !result.ok {
-                guard let (fixed, selectors) = await rescueByPurpose(step, typed: payload["secret"] == nil ? input : nil, tab: tab) else {
+                guard let (fixed, selectors) = await rescueByPurpose(step, typed: payload["secret"] == nil ? (payload["value"] as? String ?? input) : nil,
+                                                                     row: planned.iteration.map { $0 + 1 }, values: scoped, tab: tab) else {
                     return .lost("\(step.label.map { "“\($0)”" } ?? "the element") isn't on the page")
                 }
                 result = fixed
@@ -479,17 +486,18 @@ final class HybridBrowserReplayer {
 
     /// One step by the model, told what the step is for: the label it had, the page it was on, and
     /// where it should lead. Returns the act result and the selectors of the element it used.
-    private func rescueByPurpose(_ step: SkillStep, typed: String?, tab: BrowserTab) async -> (BrowserActResult, [String])? {
+    private func rescueByPurpose(_ step: SkillStep, typed: String?, row: Int? = nil, values: [String: String] = [:], tab: BrowserTab) async -> (BrowserActResult, [String])? {
         guard let env, env.hasKey("anthropic") else { return nil }
         let action = step.action ?? "click"
         var goal = "One step of a recorded task, on the current page: \(action) the element that does what "
-            + (step.label.map { "“\($0)”" } ?? "the recorded \(step.role ?? "control")") + " did when it was recorded"
+            + (step.label.map { "“\(ParameterFill.fill($0, values: values).text)”" } ?? "the recorded \(step.role ?? "control")") + " did when it was recorded"
         if let role = step.role { goal += " (a \(role))" }
         if let typed, action == "type" { goal += ", typing “\(typed)”" }
         if let typed, action == "select" { goal += ", choosing “\(typed)”" }
         goal += "."
         if let next = step.expect?.urlContains { goal += " It should lead to a page whose address contains “\(next)”." }
         if let landmark = step.anchor?.landmark { goal += " It's on the page headed “\(landmark)”." }
+        if let row { goal += " This is entry \(row) of a list: use the control that belongs to entry \(row) (its label or row number is \(row)), not another row's." }
         goal += " Its label may have changed; pick the element with the same purpose. Close a popup first if one is in the way."
             + " Do only this one step, then finish with success true; if nothing on the page does this, finish with success false."
         let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 3, tag: "fix-\(step.id)")

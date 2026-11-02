@@ -1,0 +1,40 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Track a package",
+  "summary": "Looks up a tracking number on the carrier's site and reads the latest status.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "track a parcel by its tracking number and report status and delivery date",
+    "itemNoun": "package",
+    "tags": [
+      "browser",
+      "personal",
+      "shopping"
+    ],
+    "inputs": [
+      {
+        "name": "tracking_number",
+        "description": "the tracking number",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "carrier",
+        "description": "the carrier (UPS, FedEx, USPS, DHL…), empty to find out",
+        "kind": "text",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open the tracking page of {{carrier}} (search the number to find the carrier if not given)",
+      "Enter {{tracking_number}}",
+      "Read the latest status, location and expected delivery date"
+    ],
+    "template": true,
+    "startURL": "https://www.google.com"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Rename files in Finder",
+  "summary": "Renames every file in a folder to a pattern, in Finder.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "batch-rename the files in a Finder folder",
+    "itemNoun": "folder",
+    "startApp": "Finder",
+    "tags": [
+      "mac",
+      "personal"
+    ],
+    "inputs": [
+      {
+        "name": "folder",
+        "description": "the folder",
+        "kind": "file",
+        "source": "request"
+      },
+      {
+        "name": "pattern",
+        "description": "the new name pattern, e.g. Invoice 001",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open {{folder}} in Finder",
+      "Select all files (Command-A)",
+      "Choose Rename from the right-click menu",
+      "Pick Format and set it to match {{pattern}}",
+      "Click Rename"
+    ],
+    "template": true
+  }
+}

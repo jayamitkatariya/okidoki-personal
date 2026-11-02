@@ -247,6 +247,13 @@ export interface Watching {
   replaying: boolean;
 }
 
+export interface SkillInput {
+  name: string;
+  description: string;
+  kind: string;
+  source?: string;
+}
+
 export interface Skill {
   id: string;
   accountID: string;
@@ -256,6 +263,29 @@ export interface Skill {
   createdAt: string;
   source: string;
   runCount: number;
+  /** Smart replay: the values each pass needs. */
+  inputs?: SkillInput[];
+  intent?: string;
+  itemNoun?: string;
+  /** A library template: the first run follows `outline`, then it's a learned skill. */
+  template?: boolean;
+  learned?: boolean;
+  outline?: string[];
+  alwaysConfirm?: boolean;
+}
+
+/** A ready-made skill in the library. */
+export interface LibraryEntry {
+  id: string;
+  name: string;
+  summary: string;
+  intent: string;
+  surface: "browser" | "mac";
+  tags: string[];
+  inputs: string[];
+  confirms: boolean;
+  added: boolean;
+  learned: boolean;
 }
 
 export type Cadence = "hourly" | "daily" | "weekdays" | "weekly" | "manual";
@@ -325,6 +355,8 @@ export interface NativeState {
   memorySources?: MemorySource[];
   skills: Skill[];
   routines: Routine[];
+  /** The skill library. Missing on older builds. */
+  library?: LibraryEntry[];
   connectors: Connector[];
   keys: Record<string, boolean>;
   permissions: Record<string, string>;

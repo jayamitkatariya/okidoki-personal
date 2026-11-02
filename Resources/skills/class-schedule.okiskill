@@ -1,0 +1,41 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Check my class schedule",
+  "summary": "Signs in to your school portal and reads this term's classes, times and rooms.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "sign in to a school or university portal and read the class schedule for a term",
+    "itemNoun": "term",
+    "tags": [
+      "browser",
+      "personal",
+      "school"
+    ],
+    "inputs": [
+      {
+        "name": "portal_url",
+        "description": "the portal's address",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "term",
+        "description": "which term or semester",
+        "kind": "text",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open {{portal_url}}",
+      "Sign in with your vault login",
+      "Open the schedule, timetable or registered classes page",
+      "Pick the term {{term}} if there's a choice",
+      "Read every class: course, days, times, room, instructor"
+    ],
+    "template": true
+  }
+}

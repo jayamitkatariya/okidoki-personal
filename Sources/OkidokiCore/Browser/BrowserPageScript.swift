@@ -507,6 +507,12 @@ public enum BrowserPageScript {
         return { value: el.value ?? '', text: el.value ?? '' };
       }
       function present(selector) { return candidates(selector).some(visible); }
+      /** A dropdown's option texts, for matching a value written another way ("24(b)" → "24B"). */
+      function optionsOf(selectors) {
+        const hit = find(selectors || []);
+        if (!hit || hit.el.tagName !== 'SELECT') return null;
+        return [...hit.el.options].map(o => clean(o.text, 120)).filter(Boolean);
+      }
       /** Clicks the visible button or link whose label or text is exactly `label` (a popup's "Accept all"). */
       function clickText(label) {
         const want = (label || '').trim().toLowerCase();
@@ -518,7 +524,7 @@ public enum BrowserPageScript {
       }
 
       window.__okidoki = {
-        headings, valueOf, present, clickText,
+        headings, valueOf, present, clickText, optionsOf,
         snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
         fillLogin, settle, pageText,
         record: (on) => { recording = !!on; return recording; },

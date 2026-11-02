@@ -1,0 +1,39 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Add a row in Numbers",
+  "summary": "Opens a spreadsheet in Numbers and adds a row of values at the bottom of the table.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "open a Numbers spreadsheet and append a row of values",
+    "itemNoun": "row",
+    "startApp": "Numbers",
+    "tags": [
+      "mac",
+      "work"
+    ],
+    "inputs": [
+      {
+        "name": "file",
+        "description": "the spreadsheet's name",
+        "kind": "file",
+        "source": "request"
+      },
+      {
+        "name": "values",
+        "description": "the row's values, left to right",
+        "kind": "text",
+        "source": "record"
+      }
+    ],
+    "outline": [
+      "Open {{file}} in Numbers",
+      "Click the first empty row under the table",
+      "Type each of {{values}}, pressing Tab between them",
+      "Press Return, then Command-S"
+    ],
+    "template": true
+  }
+}

@@ -226,4 +226,18 @@ final class HybridReplayTests: XCTestCase {
         XCTAssertNil(SkillBinder.folder(for: "Amit", in: ["Neha"]))
         XCTAssertEqual(SkillBinder.csvRows("name,amount\n\"Rao, Asha\",\"1,000\"\n").first, ["name": "Rao, Asha", "amount": "1,000"])
     }
+
+    func testChoicesMatchValuesWrittenAnotherWay() {
+        let sections = ["Choose…", "80C", "80D", "80G", "24B"]
+        XCTAssertEqual(SkillBinder.choice("24(b)", in: sections), "24B")
+        XCTAssertEqual(SkillBinder.choice("80 c", in: sections), "80C")
+        XCTAssertEqual(SkillBinder.choice("Old", in: ["New regime", "Old regime"]), "Old regime")
+        XCTAssertEqual(SkillBinder.choice("80", in: sections), "80", "ambiguous stays as given")
+    }
+
+    func testLoopSelectorsDropOnesThatOnlyFindTheFirstRow() {
+        let rows = [["#amount-1", "text=input|Amount", "role=textbox|Amount 1"], ["#amount-2", "text=input|Amount", "role=textbox|Amount 2"]]
+        XCTAssertEqual(SkillPromoter.template(rows), ["#amount-{{item.index}}", "role=textbox|Amount {{item.index}}"])
+        XCTAssertEqual(SkillPromoter.template([["#add", "role=button|Add"], ["#add", "role=button|Add"]]), ["#add", "role=button|Add"])
+    }
 }

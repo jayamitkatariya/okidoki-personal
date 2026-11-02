@@ -298,6 +298,11 @@ export const demoState: NativeState = {
     { id: "gemini", name: "Gemini", blurb: "Ask Gemini to export what it has saved about you, save the text, then pick the file.", files: [] },
     { id: "claude", name: "Claude", blurb: "Ask Claude to export its memories, save the text, then pick the file.", files: [] },
   ],
+  library: [
+    { id: "flights-search", name: "Search flights", summary: "Finds flights on Google Flights and lists the best options. Stops before booking.", intent: "", surface: "browser", tags: ["browser", "personal", "travel"], inputs: ["from", "to", "depart date", "return date", "passengers"], confirms: false, added: false, learned: false },
+    { id: "amazon-order", name: "Order on Amazon", summary: "Finds an item on Amazon, adds it to the cart and goes to checkout. Always checks with you before placing the order.", intent: "", surface: "browser", tags: ["browser", "personal", "shopping"], inputs: ["item", "quantity", "max price"], confirms: true, added: true, learned: false },
+    { id: "notes-create", name: "Create a note", summary: "Makes a new note in Notes with a title and text.", intent: "", surface: "mac", tags: ["mac", "personal"], inputs: ["title", "body"], confirms: false, added: false, learned: false },
+  ],
   skills: [
     {
       id: "skill-cleanup",

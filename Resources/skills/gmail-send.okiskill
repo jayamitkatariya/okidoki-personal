@@ -1,0 +1,47 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Send an email in Gmail",
+  "summary": "Writes and sends an email from Gmail.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "compose and send an email in Gmail",
+    "itemNoun": "email",
+    "startURL": "https://mail.google.com",
+    "tags": [
+      "browser",
+      "work"
+    ],
+    "inputs": [
+      {
+        "name": "to",
+        "description": "recipient email address",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "subject",
+        "description": "subject line",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "body",
+        "description": "the message",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open Gmail",
+      "Click Compose",
+      "Type {{to}} in To",
+      "Type {{subject}} in Subject",
+      "Type {{body}} in the message",
+      "Send"
+    ],
+    "template": true
+  }
+}

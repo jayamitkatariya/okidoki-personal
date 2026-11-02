@@ -100,8 +100,13 @@ public enum SkillBinder {
         guard let choices, !choices.isEmpty else { return value }
         let v = value.lowercased().trimmingCharacters(in: .whitespaces)
         if let exact = choices.first(where: { $0.lowercased() == v }) { return exact }
+        // Written another way: "24(b)" is "24B", "Old" is "Old regime".
+        let fold: (String) -> String = { $0.lowercased().filter { $0.isLetter || $0.isNumber } }
+        if let same = choices.first(where: { fold($0) == fold(v) && !fold(v).isEmpty }) { return same }
         let near = choices.filter { $0.lowercased().contains(v) || v.contains($0.lowercased()) }
-        return near.count == 1 ? near[0] : value
+        if near.count == 1 { return near[0] }
+        let folded = choices.filter { !fold(v).isEmpty && (fold($0).hasPrefix(fold(v)) || fold(v).hasPrefix(fold($0))) && !fold($0).isEmpty }
+        return folded.count == 1 ? folded[0] : value
     }
 
     // MARK: - Reading documents

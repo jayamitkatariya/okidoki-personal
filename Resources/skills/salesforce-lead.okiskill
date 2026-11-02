@@ -1,0 +1,67 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Create a Salesforce lead",
+  "summary": "Creates a new lead in Salesforce from a name, company and contact details.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "create a new lead in Salesforce",
+    "itemNoun": "lead",
+    "startURL": "https://login.salesforce.com",
+    "tags": [
+      "browser",
+      "work",
+      "sales"
+    ],
+    "inputs": [
+      {
+        "name": "first_name",
+        "description": "first name",
+        "kind": "text",
+        "source": "record"
+      },
+      {
+        "name": "last_name",
+        "description": "last name",
+        "kind": "text",
+        "source": "record"
+      },
+      {
+        "name": "company",
+        "description": "company",
+        "kind": "text",
+        "source": "record"
+      },
+      {
+        "name": "email",
+        "description": "email",
+        "kind": "text",
+        "source": "record",
+        "required": false
+      },
+      {
+        "name": "phone",
+        "description": "phone",
+        "kind": "text",
+        "source": "record",
+        "required": false
+      },
+      {
+        "name": "lead_source",
+        "description": "lead source",
+        "kind": "text",
+        "source": "record",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open Salesforce and sign in with your vault login",
+      "Go to Leads and click New",
+      "Fill First Name {{first_name}}, Last Name {{last_name}}, Company {{company}}, Email {{email}}, Phone {{phone}}, Lead Source {{lead_source}}",
+      "Save"
+    ],
+    "template": true
+  }
+}

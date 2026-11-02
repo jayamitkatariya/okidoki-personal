@@ -143,6 +143,21 @@ final class SkillCompilerTests: XCTestCase {
         XCTAssertEqual(smart.steps.filter { $0.label == "Continue" }.count, 1, "a stray click may go")
     }
 
+    func testAClickNamedAfterAValueFollowsTheValue() throws {
+        var run = ashaRun()
+        var suggestion = SkillStep.browser("click", text: "click “Asha Rao (you)”", url: "\(base)/form.html",
+                                           selectors: ["role=option|Asha Rao (you)", "#opt-3"], label: "Asha Rao (you)")
+        suggestion.role = "option"
+        run.steps.insert(suggestion, at: 5)
+        var answer = compiled()
+        answer.substitutions = [.init(step: 4, input: "{{name}}")]
+        let smart = try XCTUnwrap(SkillCompiler.apply(answer, to: run))
+        let picked = try XCTUnwrap(smart.steps.first { $0.role == "option" })
+        XCTAssertEqual(picked.label, "{{name}} (you)")
+        XCTAssertEqual(picked.selectors, ["role=option|{{name}} (you)", "#opt-3"])
+        XCTAssertEqual(ParameterFill.fill(picked.selectors![0], values: ["name": "Bharat Mehta"]).text, "role=option|Bharat Mehta (you)")
+    }
+
     func testTheRequestNeverCarriesPasswords() {
         var steps = ashaRun().steps
         steps[2].role = "password"

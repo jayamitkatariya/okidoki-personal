@@ -632,3 +632,25 @@
   gap: 8px;
   align-items: center;
 }
+
+/* Library: the same tiles as learned skills, with a filter row. */
+.library-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+.library-search { flex: 1 1 220px; max-width: 320px; }
+.library-empty { color: var(--muted); margin: 6px 0 0; }
+.skill-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 10px;
+}
+.skill-inputs-note { color: var(--muted); font-size: 12px; }
+@media (max-width: 640px) {
+  .library-search { max-width: none; }
+}

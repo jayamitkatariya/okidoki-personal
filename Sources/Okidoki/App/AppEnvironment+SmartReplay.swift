@@ -271,3 +271,74 @@ enum SmartReplayLog {
         }
     }
 }
+
+extension AppEnvironment {
+    // MARK: - Dispatch: replay first
+
+    /// Asks the router whether a saved skill does this request's job, and starts it if so. False when the
+    /// agent should do it (no fitting skill, not sure enough, or the router didn't answer).
+    /// `echo`: the request isn't in the conversation yet (it came in as a chat command); add it first.
+    func dispatchToSkill(_ text: String, threadID: String, source: String, echo: Bool = false) async -> Bool {
+        // A template that's already been learned is offered as the learned skill only.
+        let learnedFrom = Set(store.activeSkills.compactMap { $0.learned == true ? $0.templateID : nil })
+        let skills = store.activeSkills.filter { (!$0.steps.isEmpty || $0.template == true) && !learnedFrom.contains($0.id) }
+        guard !skills.isEmpty else { return false }
+        let body: [String: Any] = ["request": text, "skills": ReplayDispatcher.catalogue(skills)]
+        guard let reply = await BrainClient.shared.smartReplay("skill/route", body: body, timeout: 25),
+              reply["ok"] as? Bool == true, let raw = reply["route"] as? [String: Any] else { return false }
+        let route = ReplayDispatcher.Route(kind: raw["kind"] as? String ?? "agent", id: raw["id"] as? String,
+                                           items: raw["items"] as? [String] ?? [],
+                                           overrides: (raw["overrides"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String },
+                                           confidence: (raw["confidence"] as? NSNumber)?.doubleValue ?? 0)
+        let decision = ReplayDispatcher.decide(route, skills: skills)
+        if decision != .agent, echo { store.appendMessage(threadID: threadID, role: .user, text: text) }
+        switch decision {
+        case .agent:
+            return false
+        case .replay(let id, let passes):
+            guard let skill = store.skill(id) else { return false }
+            let started = startReplayFromChat(skill, times: 1, threadID: threadID, source: source, values: passes, request: text)
+            if started {
+                store.appendMessage(threadID: threadID, role: .assistant,
+                                    text: "this is what “\(skill.name)” does, so i'm replaying it instead of working it out again. say “use the agent” to do it from scratch.")
+            }
+            return started
+        case .template(let id, let passes):
+            guard let template = store.skill(id) else { return false }
+            return startTemplateRun(template, passes: passes, request: text, threadID: threadID, source: source)
+        }
+    }
+}
+
+extension AppEnvironment {
+    // MARK: - Templates: the agent's first run follows the outline, then it's the person's skill
+
+    /// Starts a library template: the agent does the first pass following the template's outline (so it
+    /// plans less), and what it did becomes the person's own smart skill; the other passes replay it.
+    func startTemplateRun(_ template: Skill, passes: [[String: String]], request: String, threadID: String, source: String) -> Bool {
+        guard hasKey("anthropic"), let outline = template.outline, !outline.isEmpty else { return false }
+        let first = passes.first ?? [:]
+        let given = first.filter { $0.key != "ref" && $0.key != "id" && !$0.value.isEmpty }.sorted { $0.key < $1.key }
+        var goal = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let who = first["ref"], passes.count > 1 { goal += "\n\nDo it for \(who) first; the others come after." }
+        if !given.isEmpty { goal += "\n\nValues: " + given.map { "\($0.key) \($0.value)" }.joined(separator: "; ") + "." }
+        if let start = template.startURL { goal += "\n\nStart at \(start)." } else if let app = template.startApp { goal += "\n\nUse \(app)." }
+        goal += "\n\nA proven way to do it (adapt to what the screen shows; values in {{braces}} come from above or from the person):\n"
+            + outline.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        let browser = template.startApp == nil
+        let preview = ActionPreview(summary: "\(template.name) — following the library's outline", risk: template.alwaysConfirm == true ? .high : .medium,
+                                    steps: outline.prefix(6).map { PreviewStep($0) }, commands: [],
+                                    apps: [browser ? "okidoki browser" : (template.startApp ?? "your apps")], files: [])
+        let run = store.createRun(kind: browser ? .browser : .computerUse, title: template.name, prompt: goal, threadID: threadID,
+                                  preview: preview, steps: preview.steps.map { RunStep(title: $0.text) }, status: .waiting,
+                                  builtin: browser ? "browser" : "computer-use")
+        templateRuns[run.id] = (template.id, Array(passes.dropFirst()), request, threadID)
+        store.appendMessage(threadID: threadID, role: .assistant,
+                            text: "first time doing “\(template.name)”: i'll follow the library's outline, then keep it as your skill so next time it's instant.",
+                            runID: run.id)
+        let decision = BrainDecision(kind: browser ? .browser : .computerUse, title: template.name, answer: "",
+                                     risk: template.alwaysConfirm == true ? .high : .medium)
+        startOrAsk(run, decision: decision, threadID: threadID, source: source)
+        return true
+    }
+}

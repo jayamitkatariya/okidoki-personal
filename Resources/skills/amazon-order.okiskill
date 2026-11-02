@@ -1,0 +1,52 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Order on Amazon",
+  "summary": "Finds an item on Amazon, adds it to the cart and goes to checkout. Always checks with you before placing the order.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "buy an item on Amazon: search, pick the best match, add to cart and check out",
+    "itemNoun": "order",
+    "startURL": "https://www.amazon.com",
+    "alwaysConfirm": true,
+    "tags": [
+      "browser",
+      "personal",
+      "shopping"
+    ],
+    "inputs": [
+      {
+        "name": "item",
+        "description": "what to buy, as specific as possible",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "quantity",
+        "description": "how many",
+        "kind": "number",
+        "source": "request",
+        "required": false
+      },
+      {
+        "name": "max_price",
+        "description": "most you'll pay per item",
+        "kind": "money",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open Amazon (sign in with your vault login if asked)",
+      "Search for {{item}}",
+      "Open the best match that fits the description and costs at most {{max_price}} if given (prefer Prime, good ratings)",
+      "Set quantity to {{quantity}} if given",
+      "Add to cart",
+      "Go to checkout",
+      "Stop at Place your order: that's the irreversible step"
+    ],
+    "template": true
+  }
+}

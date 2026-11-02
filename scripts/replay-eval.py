@@ -228,7 +228,18 @@ def run_mode(spec, scenario, mode, timeout):
     else:
         browser("hybrid on" if mode == "hybrid" else "hybrid off")
         time.sleep(0.5)
-        if scenario.get("fromDocuments"):
+        if scenario.get("ask"):
+            names = [item["ref"] for item in items]
+            text = scenario["ask"].replace("{names}", ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0])
+            post(f"{DOMAIN}.dev.ask", text)
+            run, error = wait_run(before, lambda r: r.get("builtin") in ("skill", "browser"), timeout * len(items))
+            runs.append(run)
+            if error:
+                notes.append(error)
+            if run and run.get("builtin") != "skill":
+                notes.append("the agent took it instead of a replay")
+            values = None
+        elif scenario.get("fromDocuments"):
             # Only who it's for: everything else has to come from their documents.
             values = [{"ref": item["ref"]} for item in items]
         elif mode == "hybrid":
@@ -236,12 +247,13 @@ def run_mode(spec, scenario, mode, timeout):
             values = [{**{k: v for k, v in item.items() if k != "deductions"}, "deductions": json.dumps(item["deductions"])} for item in items]
         else:
             values = [{k: v for k, v in item.items() if k != "deductions"} for item in items]
-        skill = spec["smartSkill"] if mode == "hybrid" else spec["skill"]
-        browser("replayjson " + json.dumps({"skill": skill, "values": values}))
-        run, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
-        runs.append(run)
-        if error:
-            notes.append(error)
+        if values is not None:
+            skill = spec["smartSkill"] if mode == "hybrid" else spec["skill"]
+            browser("replayjson " + json.dumps({"skill": skill, "values": values}))
+            run, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
+            runs.append(run)
+            if error:
+                notes.append(error)
     wall = round(time.time() - started, 1)
     submissions = fixture("/submissions")["submissions"]
     results = [(item["ref"],) + check(item, submissions) for item in items]
@@ -266,6 +278,8 @@ def table(rows, baseline=None):
         if b:
             delta = f"pass {b['passed']}/{b['total']} → {r['passed']}/{r['total']} · {b['seconds']}s → {r['seconds']}s · calls {b['modelCalls']} → {r['modelCalls']}"
         print(f"{r['scenario']:<11} {r['mode']:<8} {r['passed']:>3}/{r['total']:<2} {r['seconds']:>7} {r['modelCalls']:>6}   {delta}")
+        for note in r.get("notes", []):
+            print(f"{'':<21}! {note}")
         for it in r["items"]:
             if not it["ok"]:
                 print(f"{'':<21}✗ {it['item']}: {it['detail']}")

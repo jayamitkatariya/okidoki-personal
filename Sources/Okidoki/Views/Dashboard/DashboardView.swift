@@ -121,6 +121,22 @@ struct DashboardPayload: Encodable {
     var vault: DashboardVaultPayload
     /// Browsers to import passwords from, and how the last import went.
     var vaultImport: VaultImportStatus
+    /// The skill library's templates, and whether each is already among the person's skills.
+    var library: [DashboardLibraryEntry]
+}
+
+struct DashboardLibraryEntry: Encodable {
+    var id: String
+    var name: String
+    var summary: String
+    var intent: String
+    var surface: String
+    var tags: [String]
+    var inputs: [String]
+    var confirms: Bool
+    /// Added to the person's skills (as a template, or already learned from one).
+    var added: Bool
+    var learned: Bool
 }
 
 struct DashboardVaultPayload: Encodable {
@@ -485,6 +501,23 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         return sources
     }
 
+    /// The library, with what the person already has from it.
+    private func libraryEntries(_ env: AppEnvironment) -> [DashboardLibraryEntry] {
+        let mine = env.store.activeSkills
+        return env.library.map { entry in
+            let source = SkillLibrary.source(for: entry.id)
+            let installed = mine.filter { $0.source == source }
+            let ids = Set(installed.map(\.id))
+            let learned = mine.contains { $0.learned == true && ids.contains($0.templateID ?? "") }
+            let extras = entry.bundle.skill
+            return DashboardLibraryEntry(id: entry.id, name: entry.bundle.name, summary: entry.bundle.summary,
+                                         intent: extras?.intent ?? "", surface: entry.surface, tags: extras?.tags ?? [],
+                                         inputs: (extras?.inputs ?? []).map { $0.name.replacingOccurrences(of: "_", with: " ") },
+                                         confirms: extras?.alwaysConfirm == true,
+                                         added: !installed.isEmpty, learned: learned)
+        }
+    }
+
     private func payloadJSON() -> String? {
         guard let env else { return nil }
         let payload = DashboardPayload(
@@ -551,7 +584,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 logins: env.vault.logins,
                 salt: env.vault.salt,
                 rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? ""),
-            vaultImport: env.vaultImport
+            vaultImport: env.vaultImport,
+            library: libraryEntries(env)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -652,6 +686,14 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["id"] as? String { env.store.deleteRoutine(id); env.store.saveNow() }
         case "deleteSkill":
             if let id = payload["id"] as? String { env.store.deleteSkill(id); env.store.saveNow() }
+        case "installTemplate":
+            // A library template among the person's skills: just ask for it, and the first run teaches it.
+            if let id = payload["id"] as? String, let entry = env.library.first(where: { $0.id == id }) {
+                let skill = env.store.installTemplate(entry)
+                env.store.saveNow()
+                env.toast(title: "added “\(skill.name)”", detail: "just ask for it — the first run learns it, then it's instant", kind: .success,
+                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            }
         case "importSkill":
             // A skill brought in from a file (or an older build's share), added here; optionally replayed straight away.
             if let sharedID = payload["sharedId"] as? String, let name = payload["name"] as? String, let steps = payload["steps"] {

@@ -1,0 +1,66 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Search flights",
+  "summary": "Finds flights on Google Flights and lists the best options. Stops before booking.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "search Google Flights for a trip and list the cheapest and fastest options",
+    "itemNoun": "trip",
+    "startURL": "https://www.google.com/travel/flights",
+    "tags": [
+      "browser",
+      "personal",
+      "travel"
+    ],
+    "inputs": [
+      {
+        "name": "from",
+        "description": "departure city or airport",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "to",
+        "description": "destination city or airport",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "depart_date",
+        "description": "departure date",
+        "kind": "date",
+        "format": "yyyy-MM-dd",
+        "source": "request"
+      },
+      {
+        "name": "return_date",
+        "description": "return date, empty for one way",
+        "kind": "date",
+        "format": "yyyy-MM-dd",
+        "source": "request",
+        "required": false
+      },
+      {
+        "name": "passengers",
+        "description": "number of passengers",
+        "kind": "number",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open Google Flights",
+      "Set the trip type: round trip if {{return_date}} is given, else one way",
+      "Type {{from}} in Where from and pick the matching airport",
+      "Type {{to}} in Where to and pick the matching airport",
+      "Set the departure date {{depart_date}} and, if given, the return date {{return_date}}",
+      "Set passengers to {{passengers}} if given",
+      "Search",
+      "Read the three cheapest and the fastest options: airline, times, stops, price. Don't book."
+    ],
+    "template": true
+  }
+}

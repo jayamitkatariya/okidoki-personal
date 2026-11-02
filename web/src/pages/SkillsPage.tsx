@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
 import { clamp, cx, futureTime, relativeTime, scheduleLabel } from "../lib";
-import type { Cadence, Routine, Skill, SkillStep, Watching } from "../types";
+import type { Cadence, LibraryEntry, Routine, Skill, SkillStep, Watching } from "../types";
 import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -30,6 +30,91 @@ function elapsedLabel(startedAt: string | null | undefined, now: number): string
   if (!startedAt) return "0:00";
   const total = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+type LibraryFilter = "all" | "browser" | "mac" | "work" | "personal";
+
+/** Ready-made skills: add one, then just ask for it. The first run follows its outline and teaches it. */
+function LibrarySection({ entries, onAdd }: { entries: LibraryEntry[]; onAdd: (entry: LibraryEntry) => void }) {
+  const [filter, setFilter] = useState<LibraryFilter>("all");
+  const [query, setQuery] = useState("");
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return entries.filter((entry) => {
+      const fits =
+        filter === "all" ||
+        (filter === "browser" || filter === "mac" ? entry.surface === filter : entry.tags.includes(filter));
+      const matches = !q || [entry.name, entry.summary, entry.intent, ...entry.tags].some((text) => text.toLowerCase().includes(q));
+      return fits && matches;
+    });
+  }, [entries, filter, query]);
+  if (!entries.length) return null;
+  return (
+    <section className="skills-section library-section">
+      <div className="section-head">
+        <h2 className="skills-heading">Library</h2>
+        <span className="tile-count">{entries.length}</span>
+        <span className="spacer" />
+        <span className="section-note">Add one, then just ask. The first run learns it; after that it replays in seconds.</span>
+      </div>
+      <div className="library-tools">
+        <Segmented<LibraryFilter>
+          compact
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "all", label: "All" },
+            { value: "browser", label: "Browser" },
+            { value: "mac", label: "Mac" },
+            { value: "work", label: "Work" },
+            { value: "personal", label: "Personal" },
+          ]}
+        />
+        <TextField value={query} onChange={setQuery} placeholder="Search the library" icon="search" className="library-search" />
+      </div>
+      {shown.length ? (
+        <div className="skills-grid">
+          {shown.map((entry) => (
+            <article className="tile skill-tile library-tile reveal" key={entry.id}>
+              <header className="skill-head">
+                <span className="kind-icon">
+                  <PixelIcon name={entry.surface === "mac" ? "cursor" : "globe"} size={16} />
+                </span>
+                <div className="skill-title">
+                  <h3>{entry.name}</h3>
+                  <span>
+                    {entry.surface === "mac" ? "on your Mac" : "in okidoki's browser"}
+                    {entry.confirms ? " · always checks with you first" : ""}
+                  </span>
+                </div>
+              </header>
+              <p className="skill-summary">{entry.summary}</p>
+              {entry.inputs.length ? (
+                <div className="skill-inputs">
+                  {entry.inputs.map((input) => (
+                    <Chip key={input}>{input}</Chip>
+                  ))}
+                </div>
+              ) : null}
+              <footer className="skill-actions">
+                {entry.learned ? (
+                  <Chip tone="green">Learned</Chip>
+                ) : entry.added ? (
+                  <Chip tone="blue">Added · just ask for it</Chip>
+                ) : (
+                  <Button variant="primary" size="sm" icon="plus" onClick={() => onAdd(entry)}>
+                    Add
+                  </Button>
+                )}
+              </footer>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="library-empty">Nothing in the library matches that.</p>
+      )}
+    </section>
+  );
 }
 
 export function SkillsPage() {
@@ -239,6 +324,13 @@ export function SkillsPage() {
         </section>
       ) : null}
 
+      <LibrarySection
+        entries={state.library ?? []}
+        onAdd={(entry) => {
+          invoke("installTemplate", { id: entry.id });
+        }}
+      />
+
       <section className="skills-section">
         <div className="section-head">
           <h2 className="skills-heading">Learned skills</h2>
@@ -261,8 +353,9 @@ export function SkillsPage() {
                   <div className="skill-title">
                     <h3>{skill.name}</h3>
                     <span>
-                      {skill.steps.length} {skill.steps.length === 1 ? "step" : "steps"} · {skill.runCount.toLocaleString("en-US")} {skill.runCount === 1 ? "replay" : "replays"} · learned{" "}
-                      {relativeTime(skill.createdAt)}
+                      {skill.template
+                        ? "from the library · learns on its first run"
+                        : `${skill.steps.length} ${skill.steps.length === 1 ? "step" : "steps"} · ${skill.runCount.toLocaleString("en-US")} ${skill.runCount === 1 ? "replay" : "replays"} · learned ${relativeTime(skill.createdAt)}`}
                     </span>
                   </div>
                   <div className="skill-tools">
@@ -296,7 +389,32 @@ export function SkillsPage() {
                   </div>
                 </header>
                 {skill.summary ? <p className="skill-summary">{skill.summary}</p> : null}
-                <ol className="skill-steps">
+                {skill.inputs?.filter((input) => input.source !== "page").length ? (
+                  <div className="skill-inputs">
+                    {skill.inputs
+                      .filter((input) => input.source !== "page")
+                      .map((input) => (
+                        <Chip key={input.name} tone={input.source === "document" ? "lavender" : "default"}>
+                          {input.name.replace(/_/g, " ")}
+                        </Chip>
+                      ))}
+                    <span className="skill-inputs-note">
+                      {skill.inputs.some((input) => input.source === "document") ? "changes per " + (skill.itemNoun ?? "run") + " · read from your documents" : "changes per " + (skill.itemNoun ?? "run")}
+                    </span>
+                  </div>
+                ) : null}
+                {skill.template && skill.outline?.length ? (
+                  <ol className="skill-steps">
+                    {skill.outline.slice(0, 4).map((line, index) => (
+                      <li key={index}>
+                        <em>{index + 1}</em>
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                    {skill.outline.length > 4 ? <li className="skill-more">+{skill.outline.length - 4} more</li> : null}
+                  </ol>
+                ) : null}
+                <ol className="skill-steps" hidden={!!skill.template}>
                   {skill.steps.slice(0, 4).map((step, index) => (
                     <li key={step.id}>
                       <em>{index + 1}</em>
@@ -306,7 +424,7 @@ export function SkillsPage() {
                   ))}
                   {skill.steps.length > 4 ? <li className="skill-more">+{skill.steps.length - 4} more {skill.steps.length - 4 === 1 ? "step" : "steps"}</li> : null}
                 </ol>
-                <footer className="skill-actions">
+                <footer className="skill-actions" hidden={!!skill.template}>
                   <Button variant="primary" size="sm" icon="play" disabled={watching.recording || watching.replaying} onClick={() => replay(skill, 1)}>
                     Replay
                   </Button>

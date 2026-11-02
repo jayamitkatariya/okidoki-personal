@@ -59,6 +59,8 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
   -c "Set :CFBundleName $OKIDOKI_APP_NAME" "$APP/Contents/Info.plist"
 cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
 cp Resources/BrandMark.png "$APP/Contents/Resources/BrandMark.png"
+# The skill library's templates.
+if [ -d Resources/skills ]; then cp -R Resources/skills "$APP/Contents/Resources/skills"; fi
 # Bring your own key: no credential is ever copied into the bundle. Keys are added in the app
 # (Settings › Keys) and kept in a private file in Application Support.
 if [ -d Resources/brain ]; then

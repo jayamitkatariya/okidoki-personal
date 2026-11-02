@@ -1,0 +1,35 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Post on LinkedIn",
+  "summary": "Writes a LinkedIn post. Always checks with you before it goes live.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "publish a text post on LinkedIn",
+    "itemNoun": "post",
+    "startURL": "https://www.linkedin.com/feed/",
+    "alwaysConfirm": true,
+    "tags": [
+      "browser",
+      "work",
+      "social"
+    ],
+    "inputs": [
+      {
+        "name": "text",
+        "description": "the post",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open LinkedIn (sign in with your vault login if asked)",
+      "Click Start a post",
+      "Type {{text}}",
+      "Stop at Post: that's the irreversible step"
+    ],
+    "template": true
+  }
+}

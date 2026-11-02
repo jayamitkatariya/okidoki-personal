@@ -1,0 +1,56 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Log a call in Salesforce",
+  "summary": "Logs a call against a contact or account in Salesforce.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-02T00:00:00Z",
+  "skill": {
+    "intent": "log a call activity on a contact or account in Salesforce",
+    "itemNoun": "call",
+    "startURL": "https://login.salesforce.com",
+    "tags": [
+      "browser",
+      "work",
+      "sales"
+    ],
+    "inputs": [
+      {
+        "name": "contact",
+        "description": "contact or account name",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "subject",
+        "description": "call subject",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "notes",
+        "description": "what was discussed",
+        "kind": "text",
+        "source": "request",
+        "required": false
+      },
+      {
+        "name": "date",
+        "description": "when the call happened",
+        "kind": "date",
+        "format": "MM/dd/yyyy",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open Salesforce and sign in with your vault login",
+      "Search for {{contact}} and open the record",
+      "Open Log a Call",
+      "Type {{subject}} as the subject and {{notes}} as the comments; set the date {{date}} if given",
+      "Save"
+    ],
+    "template": true
+  }
+}

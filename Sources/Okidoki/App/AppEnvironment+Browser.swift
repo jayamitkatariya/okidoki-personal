@@ -78,6 +78,24 @@ extension AppEnvironment {
         let source = LearnedBrowserRun(title: run.title, goal: run.prompt, summary: summary, steps: learned,
                                        pages: learnedPages.removeValue(forKey: run.id) ?? [:])
         lastBrowserRun = success && !learned.isEmpty ? source : nil
+        // A template's first run: kept as the person's own skill straight away, and the rest replayed with it.
+        if let template = templateRuns.removeValue(forKey: run.id), success, learned.contains(where: { $0.action != "navigate" }),
+           let outline = store.skill(template.templateID) {
+            saveBrowserSkill(name: outline.name, steps: learned, source: "template:\(outline.id)", learnedFrom: source) { [weak self] id in
+                guard let self, var made = self.store.skill(id) else { return }
+                made.templateID = outline.id
+                made.learned = true
+                if made.intent == nil { made.intent = outline.intent }
+                if made.tags == nil { made.tags = outline.tags }
+                self.store.replaceSkill(made)
+                self.store.saveNow()
+                if !template.rest.isEmpty {
+                    _ = self.startReplayFromChat(made, times: 1, threadID: template.threadID, source: "chat", values: template.rest, request: template.request)
+                }
+            }
+            speak(success ? "Done." : summary)
+            return
+        }
         var actions: [CardAction] = []
         if success, learned.contains(where: { $0.action != "navigate" }) {
             actions.append(CardAction(title: "save as skill", kind: .primary, glyph: "wand") { [weak self] in
@@ -95,7 +113,8 @@ extension AppEnvironment {
         speak(success ? "Done." : summary)
     }
 
-    func saveBrowserSkill(name: String, steps: [SkillStep], source: String, learnedFrom: LearnedBrowserRun? = nil) {
+    func saveBrowserSkill(name: String, steps: [SkillStep], source: String, learnedFrom: LearnedBrowserRun? = nil,
+                          then: ((String) -> Void)? = nil) {
         let actions = steps.filter { $0.action != "navigate" }.count
         let site = steps.compactMap { $0.url.map(BrowserSteps.host(of:)) }.first { !$0.isEmpty } ?? "the web"
         let skill = store.createSkill(name: name, summary: "\(actions) \(actions == 1 ? "step" : "steps") on \(site), in okidoki's browser",
@@ -105,9 +124,13 @@ extension AppEnvironment {
         // If that doesn't work out it simply stays as recorded.
         if store.settings.hybridReplay {
             let run = learnedFrom ?? LearnedBrowserRun(title: name, goal: name, summary: "", steps: steps, pages: [:])
-            Task { @MainActor [weak self] in await self?.generalize(skillID: skill.id, from: run) }
+            Task { @MainActor [weak self] in
+                await self?.generalize(skillID: skill.id, from: run)
+                then?(skill.id)
+            }
             return
         }
+        then?(skill.id)
         toast(title: "saved as a skill", detail: "\(skill.name) · replays in seconds, no model", kind: .success,
               undoLabel: "replay", onUndo: { [weak self] in self?.replaySkill(skill, times: 1) },
               editLabel: "open", onEdit: { [weak self] in self?.openDashboard(.skills) }, runID: nil)

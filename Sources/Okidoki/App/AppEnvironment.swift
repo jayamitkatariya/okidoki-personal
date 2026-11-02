@@ -97,6 +97,10 @@ final class AppEnvironment: ObservableObject {
     var pendingReplayValues: [String: [[String: String]]] = [:]
     /// The words a smart replay was asked with, for finding values the request states in passing.
     var pendingReplayRequests: [String: String] = [:]
+    /// Runs following a library template: which template, and the passes still to replay once it's learned.
+    var templateRuns: [String: (templateID: String, rest: [[String: String]], request: String, threadID: String)] = [:]
+    /// The skill library that ships in the app (Resources/skills), read once.
+    private(set) lazy var library: [SkillLibrary.Entry] = SkillLibrary.load(from: Bundle.main.resourceURL?.appendingPathComponent("skills"))
     /// What "again" means in the chat.
     private var lastReplayedSkillID: String?
     private var pendingStarts: [String: DispatchWorkItem] = [:]
@@ -718,6 +722,12 @@ final class AppEnvironment: ObservableObject {
         // "save as …", "my skills". No brain round trip, no key needed, no variance.
         if screenshot == nil, documentText.isEmpty, source != "repair",
            let command = ChatCommands.parse(text, context: chatContext()) {
+            // "File the returns for Jay and Neha, their documents are in the vault" reads like "file this into
+            // the vault". With smart replay on, a skill that does the job gets the first look.
+            if case .addToVault = command, store.settings.hybridReplay, hasKey("anthropic"), !ReplayDispatcher.wantsAgent(text) {
+                let thread = threadID.flatMap { store.thread($0) } ?? store.threadForContext(app: appName, topic: inferTopic(text), text: text)
+                if await dispatchToSkill(text, threadID: thread.id, source: source, echo: true) { return }
+            }
             handleChatCommand(command, text: text, appName: appName, threadID: threadID, source: source)
             return
         }
@@ -865,6 +875,13 @@ final class AppEnvironment: ObservableObject {
                 ? "I couldn't find a lasting fact to keep there. Try \"remember that …\" with the detail itself."
                 : "Noted. I'll remember:\n" + (saved.isEmpty ? known : saved).map { "· \($0)" }.joined(separator: "\n")
             decision.previewSummary = (saved.isEmpty ? known : saved).joined(separator: " · ")
+        }
+        // Replay first: with smart replay on, a saved skill that does exactly this job runs in seconds
+        // instead of the agent working it out again. The agent still takes anything no skill covers.
+        if store.settings.hybridReplay, [.browser, .computerUse].contains(decision.kind), request.mode != "chat",
+           !ReplayDispatcher.wantsAgent(request.text),
+           await dispatchToSkill(request.text, threadID: threadID, source: source) {
+            return
         }
         switch decision.kind {
         case .answer:
@@ -1894,7 +1911,8 @@ final class AppEnvironment: ObservableObject {
     /// the same approval rules apply (always-ask apps still ask), nothing extra.
     /// Returns false when nothing started (a recording is in progress, or another tool asked while a replay runs).
     @discardableResult
-    func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String, values: [[String: String]] = []) -> Bool {
+    func startReplayFromChat(_ skill: Skill, times: Int, threadID: String, source: String, values: [[String: String]] = [],
+                             request: String = "") -> Bool {
         if watch.isRecording {
             toast(title: "still recording", detail: "save or discard the recording first", kind: .warning,
                   undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
@@ -1907,6 +1925,7 @@ final class AppEnvironment: ObservableObject {
         if hybridBrowserReplayer.isActive { hybridBrowserReplayer.cancel(reason: "replaying \(skill.name) instead") }
         let passes = max(1, min(times, 10_000))
         let run = makeReplayRun(skill, times: passes, threadID: threadID, values: values)
+        if !request.isEmpty { pendingReplayRequests[run.id] = request }
         let refs = values.compactMap { $0["ref"] }
         let count = !refs.isEmpty ? "for \(refs.joined(separator: ", "))" : passes == 1 ? "once" : "\(passes) times"
         store.appendMessage(threadID: threadID, role: .assistant,

@@ -100,6 +100,21 @@
         "hybrid"
       ],
       "why": "only names are given: every value comes from each person's vault folder (one capital gains statement is a scan)"
+    },
+    {
+      "id": "dispatch",
+      "items": [
+        "Bharat",
+        "Chandra",
+        "Divya"
+      ],
+      "drift": false,
+      "fromDocuments": true,
+      "modes": [
+        "hybrid"
+      ],
+      "ask": "file this year's Acme Filing tax returns for {names} from their documents",
+      "why": "an everyday request, no skill named: smart replay should pick the skill itself and read each person's documents"
     }
   ],
   "documents": {

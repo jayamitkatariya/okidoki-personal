@@ -86,9 +86,12 @@ public enum SkillPromoter {
     /// only the row number changes (`#amount-1`, `#amount-2` → `#amount-{{item.index}}`).
     static func template(_ rows: [[String]]) -> [String]? {
         guard let first = rows.first else { return nil }
+        // When each row's element is a different one (#amount-1, #amount-2), a selector that's the same in
+        // every row would only ever find the first row's: keep the per-row ones only.
+        let perRow = rows.count > 1 && rows.contains { Set($0) != Set(first) }
         var out: [String] = []
         for selector in first {
-            if rows.allSatisfy({ $0.contains(selector) }) { out.append(selector); continue }
+            if rows.allSatisfy({ $0.contains(selector) }) { if !perRow { out.append(selector) }; continue }
             // Each run of digits that reads "1" in the first row, tried as the row number.
             let ns = selector as NSString
             let regex = try! NSRegularExpression(pattern: #"(?<![0-9])1(?![0-9])"#)

@@ -123,6 +123,20 @@ public enum SkillCompiler {
             }
         }
 
+        // A click on something named after a value ("New York" in a list of suggestions) is about that
+        // value: its label and selectors follow the pass's value, so another city finds its own suggestion.
+        for input in compiled.inputs where !input.isSensitive && input.kind != "list" {
+            guard let example = input.example, example.count >= 3 else { continue }
+            for index in steps.indices where ["click", "hover"].contains(steps[index].action ?? "click") {
+                guard let label = steps[index].label, label.localizedCaseInsensitiveContains(example) else { continue }
+                steps[index].label = label.replacingOccurrences(of: example, with: "{{\(input.name)}}", options: .caseInsensitive)
+                steps[index].selectors = steps[index].selectors?.map {
+                    $0.replacingOccurrences(of: example, with: "{{\(input.name)}}", options: .caseInsensitive)
+                }
+                steps[index].text = "pick “{{\(input.name)}}”"
+            }
+        }
+
         for rawCondition in compiled.conditions {
             let condition = CompiledSkill.Condition(step: rawCondition.step, when: plainTruth(rawCondition.when))
             guard steps.indices.contains(condition.step) else { return nil }
