@@ -157,8 +157,13 @@ public enum SkillCompiler {
         for index in compiled.irreversible where steps.indices.contains(index) { steps[index].irreversible = true }
 
         // Lines read with placeholders, so the dashboard shows what's filled in.
-        for index in steps.indices where steps[index].isBrowser && steps[index].input != original[index].input {
-            steps[index].text = BrowserSteps.line(steps[index].action ?? "click", label: steps[index].label, input: steps[index].input)
+        for index in steps.indices where steps[index].input != original[index].input {
+            if steps[index].isBrowser {
+                steps[index].text = BrowserSteps.line(steps[index].action ?? "click", label: steps[index].label, input: steps[index].input)
+            } else if let was = original[index].input, !was.isEmpty, let now = steps[index].input {
+                // "in Numbers, type “Asha Rao”" → "in Numbers, type “{{name}}”"
+                steps[index].text = steps[index].text.replacingOccurrences(of: was, with: now)
+            }
         }
 
         // Think steps go in before the step they name, so indices above still mean the recorded steps.

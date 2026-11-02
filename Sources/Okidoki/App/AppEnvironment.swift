@@ -1397,6 +1397,9 @@ final class AppEnvironment: ObservableObject {
                     } else {
                         browserReplayer.begin(skill: skill, runID: run.id, times: times, values: values)
                     }
+                } else if store.settings.hybridReplay {
+                    replayer.beginSmart(skill: skill, runID: run.id, passes: values, times: times,
+                                        request: pendingReplayRequests.removeValue(forKey: run.id) ?? "")
                 } else {
                     replayer.begin(skill: skill, runID: run.id, times: times, values: values)
                 }
@@ -1674,6 +1677,11 @@ final class AppEnvironment: ObservableObject {
         if let n = kinds["scroll"], n > 0 { bits.append("\(n) \(n == 1 ? "scroll" : "scrolls")") }
         let summary = "\(bits.isEmpty ? "\(meaningful.count) steps" : bits.joined(separator: ", ")) in \(apps.joined(separator: ", "))"
         let skill = store.createSkill(name: name, summary: summary, steps: meaningful.map(\.step), source: "watch me")
+        // Smart replay: what was typed that would differ next time becomes an input, in the background.
+        if store.settings.hybridReplay {
+            let learned = LearnedBrowserRun(title: name, goal: name, summary: summary, steps: skill.steps, pages: [:])
+            Task { @MainActor [weak self] in await self?.generalize(skillID: skill.id, from: learned) }
+        }
         let finishedRunID = watchRunID
         if let watchRunID {
             store.finishRun(watchRunID, status: .done, summary: "saved as a skill: \(skill.name)")

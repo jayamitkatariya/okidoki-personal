@@ -158,6 +158,17 @@ final class SkillCompilerTests: XCTestCase {
         XCTAssertEqual(ParameterFill.fill(picked.selectors![0], values: ["name": "Bharat Mehta"]).text, "role=option|Bharat Mehta (you)")
     }
 
+    func testMacStepsReadWithTheirPlaceholders() throws {
+        let steps = [SkillStep(text: "in Numbers, click “Name”", app: "Numbers", action: "click", label: "Name"),
+                     SkillStep(text: "in Numbers, type “Asha Rao”", app: "Numbers", action: "type", input: "Asha Rao")]
+        let skill = Skill(accountID: "a", name: "row", summary: "", steps: steps)
+        let answer = CompiledSkill(intent: "add a row", inputs: [SkillInput(name: "name", description: "name", example: "Asha Rao")],
+                                   substitutions: [.init(step: 1, input: "{{name}}")])
+        let smart = try XCTUnwrap(SkillCompiler.apply(answer, to: skill))
+        XCTAssertEqual(smart.steps[1].text, "in Numbers, type “{{name}}”")
+        XCTAssertNil(smart.steps[1].anchor, "Mac steps keep finding controls the way they always have")
+    }
+
     func testTheRequestNeverCarriesPasswords() {
         var steps = ashaRun().steps
         steps[2].role = "password"
