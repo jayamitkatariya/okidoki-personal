@@ -414,15 +414,19 @@ public final class OkidokiStore: ObservableObject {
             run.endedAt = Date()
             run.summary = summary
             if let freedBytes { run.freedBytes = freedBytes }
-            // On failure, steps that finished stay done: the first unfinished one failed, later ones never ran.
-            var failedOne = false
+            // Steps that finished stay done. On failure or a question, the first unfinished step is where
+            // it stopped (failed, or needs your answer) and later ones never ran. Stopped: none of them ran on.
+            var stoppedOne = false
             for index in run.steps.indices {
+                let unfinished = ![.done, .failed, .cancelled].contains(run.steps[index].status)
                 switch status {
                 case .done:
                     run.steps[index].status = .done
-                case .failed where run.steps[index].status != .done:
-                    run.steps[index].status = failedOne ? .cancelled : .failed
-                    failedOne = true
+                case .failed where run.steps[index].status != .done, .asked where unfinished:
+                    run.steps[index].status = stoppedOne ? .cancelled : status
+                    stoppedOne = true
+                case .cancelled where unfinished:
+                    run.steps[index].status = .cancelled
                 default:
                     break
                 }
@@ -437,6 +441,10 @@ public final class OkidokiStore: ObservableObject {
             run.status = .cancelled
             run.endedAt = Date()
             run.summary = "stopped by you"
+            for index in run.steps.indices where ![.done, .failed, .cancelled].contains(run.steps[index].status) {
+                run.steps[index].status = .cancelled
+                if run.steps[index].endedAt == nil { run.steps[index].endedAt = Date() }
+            }
         }
     }
 

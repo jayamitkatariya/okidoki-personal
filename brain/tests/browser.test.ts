@@ -96,7 +96,7 @@ test("turns ask for low effort and clear old pages server-side, never by editing
   await browserStep(request(1, { results: [{ ok: true }] }), "key", api.impl);
   await browserStep(request(2, { results: [{ ok: true }] }), "key", api.impl);
   const [first, second, third] = api.sent.map((s) => s.body);
-  expect(first.output_config).toEqual({ effort: "low" });
+  expect(first.output_config).toEqual({ effort: "medium" });
   expect(first.context_management.edits[0].type).toBe("clear_tool_uses_20250919");
   // Append-only: each request starts with the previous one's messages, byte for byte.
   expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
@@ -189,4 +189,41 @@ test("without context editing, a long run sends only the latest pages but keeps 
   const results = last.messages.filter((m: any) => m.role === "user").flatMap((m: any) => m.content).filter((b: any) => b.type === "tool_result");
   expect(results.length).toBe(7);
   expect(text.length).toBeLessThan(500_000);
+});
+
+test("the agent hears when more of the page is further down", async () => {
+  const api = fakeAPI([reply([{ type: "tool_use", id: "t1", name: "scroll", input: { direction: "down" } }])]);
+  await browserStep(request(0, { observation: { ...page, more: 42 } }), "key", api.impl);
+  expect(JSON.stringify(api.sent[0].body.messages)).toContain("(42 more further down the page: scroll down to see them)");
+});
+
+test("giving up is questioned once, and the run keeps going when there's more to try", async () => {
+  const quit = reply([{ type: "tool_use", id: "q1", name: "finish", input: { success: false, summary: "size 8 is unavailable" } }]);
+  const api = fakeAPI([
+    reply([{ type: "tool_use", id: "t1", name: "click", input: { ref: 2 } }]),
+    quit,
+    reply([{ type: "tool_use", id: "t2", name: "click", input: { ref: 1 } }]),
+    reply([{ type: "tool_use", id: "q2", name: "finish", input: { success: false, summary: "none left" } }]),
+  ]);
+  await browserStep(request(0), "key", api.impl);
+  const second = await browserStep(request(1, { results: [{ ok: true }] }), "key", api.impl);
+  expect(second.actions).toEqual([{ type: "click", ref: 1 }]);
+  const nudgeTurn = api.sent[2].body.messages.at(-1);
+  expect(nudgeTurn.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "q1" });
+  // From the nudge on, the run thinks harder.
+  expect(api.sent[1].body.output_config).toEqual({ effort: "medium" });
+  expect(api.sent[2].body.output_config).toEqual({ effort: "high" });
+  // Not again right away: the next give-up a turn later goes through.
+  const third = await browserStep(request(2, { results: [{ ok: true }] }), "key", api.impl);
+  expect(third.actions).toEqual([{ type: "finish", success: false, summary: "none left" }]);
+  expect(api.sent.length).toBe(4);
+  // Still append-only across the nudge.
+  expect(api.sent[3].body.messages.slice(0, api.sent[2].body.messages.length)).toEqual(api.sent[2].body.messages);
+});
+
+test("a give-up that offers the user a choice becomes a question", () => {
+  const offer = "Size 8 is unavailable in blue. The closest is the black-blue pair at ₹2,299. Tell me if you want that one added.";
+  expect(mapBrowserTool("finish", { success: false, summary: offer })).toEqual({ type: "ask", question: offer });
+  expect(mapBrowserTool("finish", { success: false, summary: "the site is down." })).toEqual({ type: "finish", success: false, summary: "the site is down." });
+  expect(mapBrowserTool("finish", { success: true, summary: "Added it. Want anything else?" })).toMatchObject({ type: "finish", success: true });
 });

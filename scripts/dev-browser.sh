@@ -6,6 +6,7 @@
 #   scripts/dev-browser.sh open https://example.com
 #   scripts/dev-browser.sh record | save "my flow" | keep "my flow"   # keep = save the last run's steps
 #   scripts/dev-browser.sh replay "my flow"                         # waits and prints the replay
+#   scripts/dev-browser.sh answer "yes, add that one"               # replies to the run waiting on a question
 #   scripts/dev-browser.sh eval "return document.title"             # in the browser's page; prints the result
 #   scripts/dev-browser.sh dash "return location.hash"              # in the dashboard's page
 #   scripts/dev-browser.sh route skills | winfo                     # show a dashboard page | where the browser is
@@ -64,6 +65,8 @@ EOF
 case "$cmd" in
   browse)
     before=$(newest); post "dev.okidoki.personal.dev.browse" "$arg"; echo "▸ browse: $arg"; wait_run "$before" ;;
+  answer)
+    before=$(newest); post "dev.okidoki.personal.dev.browser" "answer $arg"; echo "▸ answer: $arg"; wait_run "$before" ;;
   replay)
     before=$(newest); post "dev.okidoki.personal.dev.browser" "replay $arg"; echo "▸ replay: $arg"; wait_run "$before" ;;
   eval|dash|winfo)

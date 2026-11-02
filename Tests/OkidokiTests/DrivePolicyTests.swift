@@ -66,4 +66,25 @@ final class DrivePolicyTests: XCTestCase {
         store.finishRun(ok.id, status: .done, summary: "done")
         XCTAssertEqual(store.run(ok.id)?.steps.map(\.status), [.done, .done])
     }
+
+    func testAnAskedOrStoppedRunLeavesNoStepRunning() {
+        let store = freshStore()
+        let plan = { [RunStep(title: "search"), RunStep(title: "pick"), RunStep(title: "add to cart")] }
+        let asked = store.createRun(kind: .browser, title: "cart", prompt: "add studs", steps: plan(), status: .running)
+        store.updateRun(asked.id) { run in
+            run.steps[0].status = .running
+            run.steps[1].status = .previewing
+            run.steps[2].status = .previewing
+        }
+        store.finishRun(asked.id, status: .asked, summary: "which size?")
+        XCTAssertEqual(store.run(asked.id)?.steps.map(\.status), [.asked, .cancelled, .cancelled])
+
+        let stopped = store.createRun(kind: .browser, title: "cart", prompt: "add studs", steps: plan(), status: .running)
+        store.updateRun(stopped.id) { run in
+            run.steps[0].status = .done
+            run.steps[1].status = .running
+        }
+        store.finishRun(stopped.id, status: .cancelled, summary: "you stopped me")
+        XCTAssertEqual(store.run(stopped.id)?.steps.map(\.status), [.done, .cancelled, .cancelled])
+    }
 }

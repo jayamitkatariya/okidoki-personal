@@ -57,15 +57,22 @@ public enum BrowserPageScript {
         if (!el.isConnected) return false;
         const r = el.getBoundingClientRect();
         if (r.width < 2 || r.height < 2) return false;
+        // Parked off the side of the page: skip links and keyboard-shortcut menus that only appear on
+        // focus (Amazon's hidden "Add to cart, shift, option, K" adds whatever the page last held).
+        const win = viewOf(el);
+        if (r.right <= -win.scrollX || r.left >= Math.max(win.innerWidth, win.document.documentElement.scrollWidth)) return false;
         if (el.checkVisibility) return el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
         const st = viewOf(el).getComputedStyle(el);
         return st.visibility !== 'hidden' && st.display !== 'none' && Number(st.opacity) > 0.05;
       }
 
       function role(el) {
+        const tag = el.tagName.toLowerCase();
+        // A real dropdown stays one whatever the page calls it (Amazon marks its size picker "combobox"):
+        // it's chosen with select, and its options are what matter.
+        if (tag === 'select') return 'select';
         const explicit = el.getAttribute('role');
         if (explicit) return explicit;
-        const tag = el.tagName.toLowerCase();
         if (tag === 'a') return 'link';
         if (tag === 'select') return 'select';
         if (tag === 'textarea') return 'textbox';
@@ -100,15 +107,51 @@ public enum BrowserPageScript {
         const tag = el.tagName.toLowerCase();
         if (tag !== 'input' && tag !== 'textarea' && tag !== 'select' && clean(el.innerText)) return clean(el.innerText);
         return clean(el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') ||
-          (['button', 'submit'].includes(el.getAttribute('type')) ? el.value : '') || el.getAttribute('name') || '');
+          (['button', 'submit'].includes(el.getAttribute('type')) ? el.value : '') || el.getAttribute('name') ||
+          // A product photo that links to the product: its picture's description is its name.
+          el.querySelector?.('img[alt]')?.getAttribute('alt') || el.querySelector?.('svg title')?.textContent || '');
+      }
+
+      /** A dropdown's choices, so the agent can pick one it can see; ones the page marks unavailable say so. */
+      function optionsOf(el) {
+        const out = [];
+        let length = 0;
+        for (const o of el.options) {
+          const text = clean(o.text, 40);
+          if (!text) continue;
+          const off = o.disabled || /unavailable|disabled|out.?of.?stock|sold.?out/i.test(`${o.className} ${o.getAttribute('aria-disabled') === 'true' ? 'disabled' : ''}`);
+          const item = `"${quote(text)}"${off ? ' (unavailable)' : ''}`;
+          if (length + item.length > 1500 || out.length >= 60) { out.push(`… ${el.options.length - out.length} more`); break; }
+          out.push(item);
+          length += item.length + 2;
+        }
+        return out.length ? ` options: ${out.join(', ')}` : '';
+      }
+
+      /** For a bare label like "8" or "M": the heading of the group it's in ("Men's shoe size"). */
+      function groupFor(el) {
+        let node = el;
+        for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+          for (let sib = node.previousElementSibling, k = 0; sib && k < 2; sib = sib.previousElementSibling, k++) {
+            const text = clean(sib.innerText, 50);
+            if (text && text.length <= 40 && !sib.querySelector(INTERACTIVE) && !sib.matches(INTERACTIVE)) return text;
+          }
+        }
+        return '';
       }
 
       function describe(el, n) {
         const r = role(el);
-        let line = `[${n}] ${r} "${quote(labelFor(el))}"`;
+        const label = labelFor(el);
+        let line = `[${n}] ${r} "${quote(label)}"`;
+        if (label.length <= 3 && ['button', 'link', 'radio', 'checkbox', 'option'].includes(r)) {
+          const group = groupFor(el);
+          if (group && group !== label) line += ` in "${quote(group)}"`;
+        }
         if (r === 'password') line += ' (password field)';
         else if ('value' in el && ['textbox', 'searchbox', 'combobox'].includes(r) && el.value) line += ` value="${quote(clean(el.value, 60))}"`;
         if (r === 'select' && el.selectedOptions?.[0]) line += ` selected="${quote(clean(el.selectedOptions[0].text, 40))}"`;
+        if (r === 'select' && el.options) line += optionsOf(el);
         if ((r === 'checkbox' || r === 'radio' || r === 'switch') && (el.checked || el.getAttribute('aria-checked') === 'true')) line += ' checked';
         if (el.disabled || el.getAttribute('aria-disabled') === 'true') line += ' disabled';
         if (r === 'link') {
@@ -189,12 +232,14 @@ public enum BrowserPageScript {
         const lines = [];
         const seen = new Set();
         const below = innerHeight * 2.5;
+        let more = 0;
         for (const el of deepAll(INTERACTIVE)) {
-          if (lines.length >= MAX_ELEMENTS) break;
           if (seen.has(el)) continue;
           // Cheap geometry first: most of a long page is far off screen, and style checks cost more.
           const r = el.getBoundingClientRect();
-          if (r.bottom < -innerHeight || r.top > below) continue;
+          // Further down (or past the cap): counted, so the agent knows scrolling finds more.
+          if (r.top > below || lines.length >= MAX_ELEMENTS) { if (r.width > 0 && r.height > 0 && r.top > -innerHeight) more++; continue; }
+          if (r.bottom < -innerHeight) continue;
           if (!visible(el)) continue;
           // A link wrapping a button, a label wrapping its input: the inner one is what acts.
           if (el.closest('a[href],button') && el.closest('a[href],button') !== el && !['input', 'select', 'textarea'].includes(el.tagName.toLowerCase())) continue;
@@ -203,7 +248,7 @@ public enum BrowserPageScript {
           refs.set(n, el);
           lines.push(describe(el, n));
         }
-        return { url: location.href, title: document.title, elements: lines.join('\n'), text: pageText(), count: refs.size };
+        return { url: location.href, title: document.title, elements: lines.join('\n'), text: pageText(), count: refs.size, more };
       }
 
       const nativeValue = (el, value) => {
@@ -410,7 +455,7 @@ public enum BrowserPageScript {
         const el = target(e);
         if (!el || el === document.body) return;
         const r = role(el);
-        if (['textbox', 'searchbox', 'password', 'combobox'].includes(r) && el.tagName !== 'BUTTON') return;
+        if (['textbox', 'searchbox', 'password', 'combobox', 'select'].includes(r) && el.tagName !== 'BUTTON') return;
         // Enter in a field makes the browser "click" the form's submit button; the Enter is already recorded.
         if (Date.now() - enterAt < 400 && (el.type === 'submit' || el.tagName === 'BUTTON') && el.form) return;
         post(step(el, 'click'));

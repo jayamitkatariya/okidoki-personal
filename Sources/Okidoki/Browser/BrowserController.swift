@@ -206,7 +206,8 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
                                count: raw?["count"] as? Int ?? 0,
                                downloads: downloads,
                                dialogs: dialogs,
-                               loadError: model.loadError)
+                               loadError: model.loadError,
+                               more: raw?["more"] as? Int ?? 0)
     }
 
     /// One action on the page. `action` is the page script's: click · type · select · press · scroll · locate.
@@ -616,6 +617,8 @@ struct BrowserSnapshot {
     var downloads: [String]
     var dialogs: [String] = []
     var loadError: String?
+    /// Elements further down the page than the list reaches.
+    var more: Int = 0
 }
 
 struct BrowserActResult {

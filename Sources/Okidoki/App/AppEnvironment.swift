@@ -323,6 +323,9 @@ final class AppEnvironment: ObservableObject {
                 saveBrowserSkill(name: arg.isEmpty ? "recorded flow" : arg, steps: BrowserRecordingCleanup.tidy(steps), source: "watch me") }
         case "keep":
             if let last = lastBrowserRun { saveBrowserSkill(name: arg.isEmpty ? last.title : arg, steps: last.steps, source: "act") }
+        case "answer":
+            // The reply box on the question card, for the newest run that's waiting on one.
+            if let asked = store.runs.first(where: { $0.status == .asked }) { answerDriveQuestion(runID: asked.id, text: arg) }
         case "replay":
             if let skill = store.activeSkills.first(where: { $0.name == arg }) {
                 let run = makeReplayRun(skill, times: 1, threadID: nil)

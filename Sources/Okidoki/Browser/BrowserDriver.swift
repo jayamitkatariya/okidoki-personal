@@ -108,6 +108,7 @@ final class BrowserDriver {
             if !page.downloads.isEmpty { observation["downloads"] = page.downloads }
             if !page.dialogs.isEmpty { observation["dialogs"] = page.dialogs }
             if let loadError = page.loadError { observation["loadError"] = loadError }
+            if page.more > 0 { observation["more"] = page.more }
             // A blank or unreadable page gets a look even if the model didn't ask.
             if lookNext || (page.count == 0 && !page.url.isEmpty && !page.url.hasPrefix("about:")),
                let shot = await browser.screenshot() {
@@ -119,12 +120,12 @@ final class BrowserDriver {
                 "results": results, "logins": logins, "settings": ["claudeModel": env.store.settings.claudeModel],
             ]
             results = []
-            var halted = false
+            var haltReason: String?
             var ended = false
             // One action of this turn. False once the run is over (finished, asked, or stopped).
             let handle: ([String: Any]) async -> Bool = { action in
                 if Task.isCancelled { ended = true; return false }
-                if halted { results.append(["ok": false, "detail": "not run: an earlier action failed"]); return true }
+                if let haltReason { results.append(["ok": false, "detail": haltReason]); return true }
                 let type = action["type"] as? String ?? ""
                 switch type {
                 case "finish":
@@ -152,7 +153,10 @@ final class BrowserDriver {
                     results.append(outcome.ok ? ["ok": true] : ["ok": false, "detail": outcome.detail ?? "didn't work"])
                     if outcome.ok, let line = outcome.line { browser.updateWork(line) }
                     self.log(run.id, outcome.ok ? "→ \(outcome.line ?? type)" : "✗ \(type): \(outcome.detail ?? "didn't work")")
-                    if !outcome.ok { halted = true }
+                    if !outcome.ok { haltReason = "not run: an earlier action failed" }
+                    // A click can change what's on the page (or quietly not do what was expected, like an
+                    // unavailable size): what was planned after it is checked against a fresh look first.
+                    else if outcome.changedPage { haltReason = "not run: the page may have changed after the previous action; check it and act again" }
                 }
                 return true
             }
@@ -169,7 +173,9 @@ final class BrowserDriver {
         finish(run, success: false, summary: "that took more than \(Self.maxTurns) turns, so i stopped. it may be most of the way there.")
     }
 
-    private struct Outcome { var ok: Bool; var detail: String?; var line: String? }
+    /// `changedPage`: the page may now be different from what the model saw, so the rest of its turn
+    /// (planned against the old page) waits for a fresh look.
+    private struct Outcome { var ok: Bool; var detail: String?; var line: String?; var changedPage = false }
 
     /// The run's step log, as the Live page and history show it.
     private func log(_ runID: String, _ line: String) {
@@ -184,12 +190,12 @@ final class BrowserDriver {
             guard let raw = action["url"] as? String, let target = BrowserSteps.addressURL(raw) else { return Outcome(ok: false, detail: "not a URL") }
             await browser.navigate(target)
             learned.append(BrowserSteps.navigate(target.absoluteString, delay: gap))
-            return Outcome(ok: true, line: "opening \(BrowserSteps.displayURL(target.absoluteString))")
+            return Outcome(ok: true, line: "opening \(BrowserSteps.displayURL(target.absoluteString))", changedPage: true)
         case "back":
             await browser.goBack()
             // Back undoes the wrong turn: the step that led away isn't part of the skill.
             if !learned.isEmpty { learned.removeLast() }
-            return Outcome(ok: true, line: "going back")
+            return Outcome(ok: true, line: "going back", changedPage: true)
         case "fill_login":
             // Only ever the login for the page's own site, whatever site the model names: a page that
             // talks the model into "filling the bank login" here gets nothing.
@@ -212,14 +218,19 @@ final class BrowserDriver {
             if let value = action["value"] as? String { payload["value"] = value }
             if let key = action["key"] as? String { payload["key"] = key }
             if let direction = action["direction"] as? String { payload["direction"] = direction }
+            let addressBefore = browser.webView.url
             let result = await browser.act(payload)
             guard result.ok else { return Outcome(ok: false, detail: result.detail) }
-            if ["click", "press"].contains(type) || payload["submit"] as? Bool == true {
+            // A choice in a dropdown can load a page too (a shop's size picker).
+            if ["click", "press", "select"].contains(type) || payload["submit"] as? Bool == true {
                 // Whatever the action set off (a new page, results arriving) gets its moment, no longer.
                 await browser.settle(limit: 6, fresh: true)
             } else if type == "hover" {
                 await browser.settle(limit: 1.5, fresh: true)
             }
+            let formControl = ["checkbox", "radio", "switch", "textbox", "searchbox", "combobox", "select"].contains(result.role ?? "")
+            let changedPage = browser.webView.url != addressBefore
+                || (type == "click" && !formControl) || type == "press" || payload["submit"] as? Bool == true
             // Scrolling isn't part of the skill: a replay finds elements wherever they are.
             guard type != "scroll" else { return Outcome(ok: true, line: "scrolling") }
             var input: String? = type == "type" ? payload["text"] as? String : type == "select" ? payload["value"] as? String
@@ -234,9 +245,9 @@ final class BrowserDriver {
             }
             // Typed now from the task, not the vault; the saved skill fills it from the vault next time.
             if type == "type", result.role == "password" {
-                return Outcome(ok: true, line: "type the password in \(result.label.map { "“\($0)”" } ?? "the field")")
+                return Outcome(ok: true, line: "type the password in \(result.label.map { "“\($0)”" } ?? "the field")", changedPage: changedPage)
             }
-            return Outcome(ok: true, line: BrowserSteps.line(type, label: result.label, input: input))
+            return Outcome(ok: true, line: BrowserSteps.line(type, label: result.label, input: input), changedPage: changedPage)
         default:
             return Outcome(ok: false, detail: "unknown action \(type)")
         }
