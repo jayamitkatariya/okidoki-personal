@@ -1,0 +1,40 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Look up on Wikipedia",
+  "summary": "Finds a fact in a Wikipedia article: a population, a date, a height, a founder.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "look up a fact about a topic in its English Wikipedia article",
+    "itemNoun": "topic",
+    "startURL": "https://en.wikipedia.org",
+    "tags": [
+      "browser",
+      "personal",
+      "research"
+    ],
+    "inputs": [
+      {
+        "name": "topic",
+        "description": "the article to open",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "fact",
+        "description": "what to find in it, like population or founding year",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open Wikipedia",
+      "Type {{topic}} in the search box and press Enter",
+      "Open the article for {{topic}} if a results list shows",
+      "Read {{fact}} from the infobox or the article text and give it with its year or context"
+    ],
+    "template": true
+  }
+}

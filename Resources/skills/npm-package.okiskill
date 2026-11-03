@@ -1,0 +1,32 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Check an npm package",
+  "summary": "Opens a package on npmjs.com and reads its version, weekly downloads and license.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "read an npm package's latest version, weekly downloads and license",
+    "itemNoun": "package",
+    "startURL": "https://www.npmjs.com",
+    "tags": [
+      "browser",
+      "work",
+      "code"
+    ],
+    "inputs": [
+      {
+        "name": "package",
+        "description": "the npm package name",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open https://www.npmjs.com/package/{{package}}",
+      "Read the latest version, weekly downloads, license and last publish date"
+    ],
+    "template": true
+  }
+}

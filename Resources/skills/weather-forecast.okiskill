@@ -1,0 +1,32 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Check the weather",
+  "summary": "Reads today's weather and the next days' forecast for a city on timeanddate.com.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "read the current weather and short forecast for a city on timeanddate.com",
+    "itemNoun": "city",
+    "startURL": "https://www.timeanddate.com/weather/",
+    "tags": [
+      "browser",
+      "personal"
+    ],
+    "inputs": [
+      {
+        "name": "city",
+        "description": "the city",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open timeanddate.com's weather page",
+      "Search for {{city}} and open its weather page",
+      "Read the current temperature and conditions, and the forecast for the next few days"
+    ],
+    "template": true
+  }
+}

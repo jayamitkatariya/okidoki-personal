@@ -1,0 +1,46 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Convert currency",
+  "summary": "Converts an amount between currencies at today's mid-market rate on xe.com.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "convert an amount from one currency to another on xe.com",
+    "itemNoun": "conversion",
+    "startURL": "https://www.xe.com/currencyconverter/",
+    "tags": [
+      "browser",
+      "personal",
+      "money"
+    ],
+    "inputs": [
+      {
+        "name": "amount",
+        "description": "how much",
+        "kind": "number",
+        "source": "request"
+      },
+      {
+        "name": "from_currency",
+        "description": "currency code to convert from, like USD",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "to_currency",
+        "description": "currency code to convert to, like INR",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open the xe.com currency converter",
+      "Set the amount to {{amount}}",
+      "Set From to {{from_currency}} and To to {{to_currency}}",
+      "Convert and read the result and the rate"
+    ],
+    "template": true
+  }
+}

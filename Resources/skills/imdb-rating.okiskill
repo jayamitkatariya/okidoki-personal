@@ -1,0 +1,34 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Check a film's rating",
+  "summary": "Finds a film or show on IMDb and reads its rating, year and runtime.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "look up a film or show on IMDb and read its rating, year and runtime",
+    "itemNoun": "title",
+    "startURL": "https://www.imdb.com",
+    "tags": [
+      "browser",
+      "personal",
+      "entertainment"
+    ],
+    "inputs": [
+      {
+        "name": "title",
+        "description": "the film or show",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open IMDb",
+      "Search for {{title}}",
+      "Open the matching title",
+      "Read its IMDb rating, year, runtime and director"
+    ],
+    "template": true
+  }
+}

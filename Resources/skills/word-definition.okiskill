@@ -1,0 +1,33 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Define a word",
+  "summary": "Looks a word up in the Merriam-Webster dictionary and reads its first definition.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "look up a word's meaning in the Merriam-Webster dictionary",
+    "itemNoun": "word",
+    "startURL": "https://www.merriam-webster.com",
+    "tags": [
+      "browser",
+      "personal",
+      "research"
+    ],
+    "inputs": [
+      {
+        "name": "word",
+        "description": "the word to define",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open Merriam-Webster",
+      "Search for {{word}}",
+      "Read the part of speech and the first definition"
+    ],
+    "template": true
+  }
+}

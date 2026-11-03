@@ -1,0 +1,32 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Check a GitHub repo",
+  "summary": "Opens a GitHub repository and reads its stars, forks, latest release and last commit.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "read a GitHub repository's stars, forks, latest release and last update",
+    "itemNoun": "repository",
+    "startURL": "https://github.com",
+    "tags": [
+      "browser",
+      "work",
+      "code"
+    ],
+    "inputs": [
+      {
+        "name": "repo",
+        "description": "the repository as owner/name, like facebook/react",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open https://github.com/{{repo}}",
+      "Read the stars, forks, the latest release and when it was last updated"
+    ],
+    "template": true
+  }
+}

@@ -13,7 +13,7 @@ const API = "https://api.anthropic.com/v1/messages";
 /** Once per saved skill, in the background: the most capable model, since every replay inherits its reading. */
 export const COMPILE_MODEL = "claude-opus-5-5";
 export const RESOLVE_MODEL = "claude-sonnet-5-5";
-export const ROUTE_MODEL = "claude-haiku-5-5";
+export const ROUTE_MODEL = "claude-sonnet-5-5";
 
 /** Every object closed (`additionalProperties: false`), as structured outputs requires. */
 export function strictSchema(schema: unknown): unknown {
@@ -334,7 +334,11 @@ When several skills do the same job, pick the one whose inputs cover what change
 
 items: every person, invoice, order or row the request wants it done for, in order, as named ("for Jay, Jia and Neha" → ["Jay", "Jia", "Neha"]; "for invoices 4471 and 4472" → ["4471", "4472"]). Empty for a single unnamed pass. "everyone in X.csv" → ["every row in X.csv"].
 overrides: only values the request states outright, keyed by the skill's input names.
-confidence: how sure you are this skill is right for this request, 0-1.`;
+confidence: how sure you are this skill is right for this request, 0-1:
+- 0.9-1: the skill's intent is the job the request asks for, on the same site or app; only the data differs (other people, other values, other documents). Different data is the point of a skill, never a reason for doubt.
+- 0.6-0.8: same site, but the request asks for a noticeably different action or an extra step the skill doesn't cover.
+- below 0.5: a different job, or you can't tell which skill.
+Missing values are not your concern: they're found later in the person's documents or asked for.`;
 
 const routeTool = {
   name: "route",

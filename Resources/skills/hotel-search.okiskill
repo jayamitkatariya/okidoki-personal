@@ -1,0 +1,57 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Search hotels",
+  "summary": "Searches Booking.com for a stay and lists the best-rated options with prices. Stops before booking.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "search Booking.com for hotels in a city for given dates and list the top options",
+    "itemNoun": "stay",
+    "startURL": "https://www.booking.com",
+    "tags": [
+      "browser",
+      "personal",
+      "travel"
+    ],
+    "inputs": [
+      {
+        "name": "city",
+        "description": "where to stay",
+        "kind": "text",
+        "source": "request"
+      },
+      {
+        "name": "check_in",
+        "description": "check-in date",
+        "kind": "date",
+        "source": "request",
+        "format": "yyyy-MM-dd"
+      },
+      {
+        "name": "check_out",
+        "description": "check-out date",
+        "kind": "date",
+        "source": "request",
+        "format": "yyyy-MM-dd"
+      },
+      {
+        "name": "guests",
+        "description": "number of adults",
+        "kind": "number",
+        "source": "request",
+        "required": false
+      }
+    ],
+    "outline": [
+      "Open Booking.com and close any sign-in popup",
+      "Type {{city}} as the destination and pick it",
+      "Set the dates {{check_in}} to {{check_out}}",
+      "Set adults to {{guests}} if given",
+      "Search",
+      "Read the top three by review score: name, score, price for the stay. Don't reserve"
+    ],
+    "template": true
+  }
+}

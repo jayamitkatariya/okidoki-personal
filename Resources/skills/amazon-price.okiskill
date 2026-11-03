@@ -1,0 +1,34 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "Check a price on Amazon",
+  "summary": "Finds a product on Amazon and reads its price, rating and delivery. Never adds to cart or buys.",
+  "steps": [],
+  "frames": {},
+  "exportedAt": "2026-11-03T00:00:00Z",
+  "skill": {
+    "intent": "search Amazon for a product and read its price, rating and delivery estimate",
+    "itemNoun": "product",
+    "startURL": "https://www.amazon.com",
+    "tags": [
+      "browser",
+      "personal",
+      "shopping"
+    ],
+    "inputs": [
+      {
+        "name": "product",
+        "description": "what to search for",
+        "kind": "text",
+        "source": "request"
+      }
+    ],
+    "outline": [
+      "Open Amazon",
+      "Type {{product}} in the search box and search",
+      "Skip sponsored results; open the first result that matches {{product}}",
+      "Read the title, price, star rating and delivery estimate. Don't add to cart or buy"
+    ],
+    "template": true
+  }
+}

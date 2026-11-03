@@ -304,7 +304,19 @@ extension AppEnvironment {
     func dispatchToSkill(_ text: String, threadID: String, source: String, echo: Bool = false) async -> Bool {
         // A template that's already been learned is offered as the learned skill only.
         let learnedFrom = Set(store.activeSkills.compactMap { $0.learned == true ? $0.templateID : nil })
-        let skills = store.activeSkills.filter { (!$0.steps.isEmpty || $0.template == true) && !learnedFrom.contains($0.id) }
+        var skills = store.activeSkills.filter { (!$0.steps.isEmpty || $0.template == true) && !learnedFrom.contains($0.id) }
+        // The whole library is on offer, not just what's been added: a template that fits is added the
+        // first time a request needs it. One already added (or learned from) is offered as that.
+        let installed = Set(store.activeSkills.compactMap { $0.source } + store.activeSkills.compactMap { $0.templateID })
+            .union(store.activeSkills.filter { $0.template == true || $0.learned == true }.compactMap { $0.source })
+        let available = library.filter { !installed.contains(SkillLibrary.source(for: $0.id)) }
+        var offered: [String: SkillLibrary.Entry] = [:]
+        for entry in available {
+            var template = SkillLibrary.skill(from: entry, accountID: store.currentAccountID)
+            template.id = SkillLibrary.source(for: entry.id)
+            offered[template.id] = entry
+            skills.append(template)
+        }
         guard !skills.isEmpty else { return false }
         let body: [String: Any] = ["request": text, "skills": ReplayDispatcher.catalogue(skills)]
         guard let reply = await BrainClient.shared.smartReplay("skill/route", body: body, timeout: 25),
@@ -333,7 +345,8 @@ extension AppEnvironment {
             }
             return started
         case .template(let id, let passes):
-            guard let template = store.skill(id) else { return false }
+            let added = offered[id].map { store.installTemplate($0) }
+            guard let template = added ?? store.skill(id) else { return false }
             return startTemplateRun(template, passes: passes, request: text, threadID: threadID, source: source)
         }
     }
