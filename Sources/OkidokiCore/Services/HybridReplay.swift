@@ -193,9 +193,16 @@ public enum HybridReplay {
             if plan[current..<index].contains(where: { $0.step.irreversible == true }) { return nil }
             return index
         }
-        let backward = stride(from: current - 1, through: max(0, current - window), by: -1)
+        let backward = stride(from: current - 1, through: max(0, current - window * 2), by: -1)
         for index in backward where hasAnchor(plan[index].step) && matches(plan[index].step.anchor, seen) {
-            return index
+            // Back on an earlier page (signed out, sent back a step): it's a fresh copy of that page, so
+            // start from its first step, not its last; the fields it had filled are empty again.
+            var first = index
+            while first > 0, first > current - window * 2, plan[first - 1].step.action != "navigate",
+                  hasAnchor(plan[first - 1].step), matches(plan[first - 1].step.anchor, seen) {
+                first -= 1
+            }
+            return first
         }
         return nil
     }
@@ -229,13 +236,80 @@ public enum HybridReplay {
         InterruptHandler(id: "survey-no", whenText: "survey", clickLabel: "No thanks", source: "builtin"),
         InterruptHandler(id: "notifications", whenText: "notifications", clickLabel: "Not now", source: "builtin"),
         InterruptHandler(id: "save-password", whenText: "save password", clickLabel: "Not Now", source: "builtin"),
+        InterruptHandler(id: "stay-signed-in", whenText: "stay signed in", clickLabel: "Stay signed in", source: "builtin"),
+        InterruptHandler(id: "keep-signed-in", whenText: "keep me signed in", clickLabel: "Keep me signed in", source: "builtin"),
+        InterruptHandler(id: "stay-logged-in", whenText: "stay logged in", clickLabel: "Stay logged in", source: "builtin"),
+        InterruptHandler(id: "continue-session", whenText: "session", clickLabel: "Continue session", source: "builtin"),
+        InterruptHandler(id: "newsletter", whenText: "newsletter", clickLabel: "No thanks", source: "builtin"),
     ]
 
+    /// Buttons that close a popup without doing anything, safe to press in any dialog that's in the way.
+    /// Never "OK", "Continue", "Yes" or "Confirm": in a dialog those can be the very thing not to do.
+    public static let safeDismissals = ["stay signed in", "keep me signed in", "stay logged in", "continue session",
+                                        "maybe later", "not now", "no thanks", "no, thanks", "remind me later", "later",
+                                        "skip for now", "got it", "accept all", "accept all cookies"]
+    /// Ones that close whatever dialog they're in, which might be one a step opened on purpose: only
+    /// pressed once a step is already stuck behind it.
+    public static let genericDismissals = ["dismiss", "close", "×", "✕", "x", "skip"]
+
+    /// The button to press to get a dialog out of the way, from what it offers: the first safe one, in
+    /// the order a person would pick (stay signed in before close). Nil when none is safe.
+    public static func safeDismissal(in buttons: [String], generic: Bool = true) -> String? {
+        let offered = buttons.map { ($0, $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)) }
+        for safe in safeDismissals + (generic ? genericDismissals : []) {
+            if let hit = offered.first(where: { $0.1 == safe }) { return hit.0 }
+        }
+        return nil
+    }
+
+    /// Text a dialog can be known by again: its words without numbers ("time out in 2 minutes" changes),
+    /// the first few that are long enough to mean something.
+    public static func dialogKey(_ text: String) -> String? {
+        let words = text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !$0.contains(where: \.isNumber) }
+        guard words.count >= 2 else { return nil }
+        return words.prefix(4).joined(separator: " ")
+    }
+
+    /// Buttons that move past a page nobody recorded (a "verify your email" step) without doing anything.
+    public static let pageSkips = ["skip for now", "not now", "maybe later", "remind me later", "no thanks", "skip this step",
+                                   "continue without", "skip", "do this later", "i'll do it later"]
+
+    /// What the page newly says after a final step that it refused: a line that wasn't there before and
+    /// asks for something ("Please confirm the declaration"). Nil when nothing like that appeared.
+    public static func refusal(before: String, after: String) -> String? {
+        let old = Set(before.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) })
+        let asks = ["please", "required", "must", "confirm", "tick", "agree", "accept the", "missing", "invalid", "enter a", "select a", "can't be empty", "cannot be empty"]
+        return after.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { line in
+            let l = line.lowercased()
+            return !line.isEmpty && line.count <= 200 && !old.contains(line) && asks.contains { l.contains($0) } && transientError(in: line) == nil
+        }
+    }
+
+    /// Whether the page says the last submit failed for a passing reason, so trying once more is what a
+    /// person would do: "busy, try again", "temporarily unavailable". Not a validation error, and not a
+    /// vague "something went wrong" (that one may have gone through).
+    public static func transientError(in text: String) -> String? {
+        let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let signs = ["try again", "busy", "temporarily unavailable", "please retry", "timed out", "too many requests", "service unavailable"]
+        return lines.first { line in
+            let l = line.lowercased()
+            return line.count <= 200 && signs.contains { l.contains($0) }
+        }
+    }
+
     /// The handlers whose trigger is on screen now: the skill's own first, then the built-ins.
-    public static func interrupts(showing seen: Observation, skill: [InterruptHandler], present: (String) -> Bool = { _ in false }) -> [InterruptHandler] {
+    /// A learned handler only fires on a dialog (`dialogText`), so its words showing elsewhere on a page
+    /// never set it off.
+    public static func interrupts(showing seen: Observation, skill: [InterruptHandler], present: (String) -> Bool = { _ in false },
+                                  dialogText: String? = nil) -> [InterruptHandler] {
         (skill + builtinInterrupts).filter { handler in
             if let element = handler.whenElement, !element.isEmpty { return present(element) }
-            if let text = handler.whenText, !text.isEmpty { return contains(seen.text, text) || contains(seen.window, text) }
+            if handler.source == "learned-page" { return false }
+            if let text = handler.whenText, !text.isEmpty {
+                if handler.source == "learned" { return dialogText.map { contains($0, text) } ?? false }
+                return contains(seen.text, text) || contains(seen.window, text)
+            }
             return false
         }
     }
@@ -396,6 +470,24 @@ public enum HybridReplay {
         var reasons = doubts.values.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
         reasons += doubts.helped.map { "needed help with “\($0)”" }
         return reasons
+    }
+
+    /// Which of a pass's values the page shows (its text and its fields' contents): text loosely, numbers
+    /// however they're grouped ("980000" shows as "9,80,000" or "980,000"). Short values, secrets and
+    /// lists aren't counted: they'd match by chance or never show.
+    public static func shownValues(_ values: [String: String], inputs: [SkillInput], on page: String) -> (checked: Int, shown: Int) {
+        let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let haystack = fold(page)
+        var checked = 0, shown = 0
+        for input in inputs where input.kind != "list" && !input.isSensitive && input.source != "page" {
+            guard let value = values[input.name]?.trimmingCharacters(in: .whitespaces), value.count >= 4 else { continue }
+            checked += 1
+            let digits = value.filter(\.isNumber)
+            let numeric = !digits.isEmpty && value.allSatisfy { $0.isNumber || ",. ₹$€£-".contains($0) }
+            let forms = numeric ? [digits, group(digits, indian: true), group(digits, indian: false)] : [fold(value)]
+            if forms.contains(where: { haystack.contains($0) }) { shown += 1 }
+        }
+        return (checked, shown)
     }
 
     /// Below this, a value found in a document is doubtful.

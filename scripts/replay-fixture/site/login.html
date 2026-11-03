@@ -1,8 +1,11 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Sign in</title>
 <link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
-<body><h1>Acme Filing</h1><p>Sign in to file a return.</p>
+<body><h1>Acme Filing</h1><p id="intro">Sign in to file a return.</p>
 <form id="f"></form>
 <script>
+const params = new URLSearchParams(location.search);
+if (params.get("expired")) $("#intro").textContent = "Your session has expired. Sign in again to carry on where you left off.";
+ready(() => {
 $("#f").innerHTML = `
   <label for="${id("user")}">Username</label><input id="${id("user")}" name="user" autocomplete="username">
   <label for="${id("pass")}">Password</label><input id="${id("pass")}" name="pass" type="password" autocomplete="current-password">
@@ -10,8 +13,12 @@ $("#f").innerHTML = `
 $("#f").onsubmit = (e) => {
   e.preventDefault();
   if (!$("#" + id("user")).value || !$("#" + id("pass")).value) return;
+  // Signing in again after the session ran out keeps the return you were filing.
+  const next = params.get("next");
+  if (next) { location.href = next; return; }
   sessionStorage.removeItem("filing");
   location.href = "form.html";
 };
-banner();
+banner(); noise();
+});
 </script></body></html>

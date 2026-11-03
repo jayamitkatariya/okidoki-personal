@@ -4,6 +4,7 @@ section, an add-row table, a review page and a submit that returns a reference n
 
 Every submission is kept, so the eval checks what was actually filed, not what a run claimed.
 `drift` changes labels, ids and order and adds a survey popup: the same flow, a different page.
+Hard mode (randomIds, slow, popups, expire, busy) is described in site/app.js.
 
   scripts/replay-fixture/server.py --port 8777            # serve
   curl -XPOST localhost:8777/config -d '{"drift": true}'  # change the site while it runs
@@ -13,11 +14,13 @@ import argparse
 import json
 import random
 import string
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent / "site"
-CONFIG = {"drift": False, "banner": False}
+CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False}
+BUSY_SEEN = set()
 SUBMISSIONS = []
 
 
@@ -57,6 +60,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/submit":
             data = self.body()
+            if CONFIG.get("slow"):
+                time.sleep(2.5)
+            # Busy: the first try for each return fails; trying again works.
+            if CONFIG.get("busy") and data.get("pan") not in BUSY_SEEN:
+                BUSY_SEEN.add(data.get("pan"))
+                return self.send_json({"error": "The service is busy right now. Please try again."}, 503)
             ref = "REF-" + "".join(random.choices(string.digits, k=6))
             SUBMISSIONS.append({**data, "ref": ref})
             return self.send_json({"ref": ref})
@@ -65,6 +74,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(CONFIG)
         if self.path == "/reset":
             SUBMISSIONS.clear()
+            BUSY_SEEN.clear()
             return self.send_json({"ok": True})
         return self.send_json({"error": "no such route"}, 404)
 

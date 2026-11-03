@@ -551,6 +551,9 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     public var observedAfter: StepObservation?
     /// How often replays needed help with this step; shows which steps are fragile.
     public var heals: Int?
+    /// The page an irreversible step is on shows what the pass entered (a review page). Learned on a
+    /// replay; once true, a pass whose details don't show there is paused, not submitted.
+    public var echoes: Bool?
 
     public init(id: String = UUID().uuidString, text: String, app: String = "",
                 x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,

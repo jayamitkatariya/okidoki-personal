@@ -5,11 +5,21 @@
 <button type="button"></button><br>
 <button id="next" type="button"></button>
 <script>
+// The session runs out once per return, here: sign in again and you're sent back.
+if (F.expire && !sessionStorage.getItem("expired-" + (state().pan || ""))) {
+  sessionStorage.setItem("expired-" + (state().pan || ""), "1");
+  location.replace("login.html?expired=1&next=deductions.html");
+}
+ready(() => {
 const add = document.querySelectorAll("button")[0], next = document.querySelectorAll("button")[1];
-add.id = id("add-row"); add.textContent = L("Add deduction", "+ New row");
+add.id = id("add-row"); add.textContent = chance(0.5) ? "Add another deduction" : L("Add deduction", "+ New row");
+// Random: a decoy that looks like the way on, and isn't.
+if (chance(0.5)) { const draft = document.createElement("button"); draft.type = "button"; draft.textContent = "Save draft";
+  draft.onclick = () => { draft.textContent = "Saved"; }; next.before(draft); }
 next.id = id("to-review"); next.textContent = L("Continue", "Review");
 let n = 0;
 add.onclick = () => {
+  if (blocked()) return;
   n += 1;
   const row = document.createElement("tr");
   row.innerHTML = `<td><label for="${id("section-" + n)}">Section ${n}</label><select id="${id("section-" + n)}" class="section">
@@ -19,11 +29,15 @@ add.onclick = () => {
   moneyMask(row.querySelector(".amount"));
 };
 next.onclick = () => {
+  if (blocked()) return;
   const rows = [...document.querySelectorAll("#rows tr")].map((tr) => ({
     section: tr.querySelector(".section").value, amount: digits(tr.querySelector(".amount").value) }))
     .filter((r) => r.section && r.amount);
   save({ deductions: rows });
+  // Wipe: the site loses Chandra's return on the way to review (a reset, a stray "Undo").
+  if (F.wipe && /^C/i.test(state().name || "")) sessionStorage.removeItem("filing");
   location.href = "review.html";
 };
-banner();
+banner(); staySignedIn(); noise();
+});
 </script></body></html>

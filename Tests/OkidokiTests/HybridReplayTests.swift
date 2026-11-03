@@ -109,7 +109,68 @@ final class HybridReplayTests: XCTestCase {
         XCTAssertEqual(found.first?.clickLabel, "Accept all")
         XCTAssertTrue(HybridReplay.interrupts(showing: HybridReplay.Observation(text: "Your details"), skill: []).isEmpty)
         let learned = InterruptHandler(id: "x", whenText: "rate us", clickLabel: "Close", source: "learned")
-        XCTAssertEqual(HybridReplay.interrupts(showing: HybridReplay.Observation(text: "Please rate us"), skill: [learned]).first?.id, "x")
+        // A learned rule only fires on a popup saying it, never on the same words in the page behind.
+        XCTAssertEqual(HybridReplay.interrupts(showing: HybridReplay.Observation(text: "Please rate us"), skill: [learned],
+                                               dialogText: "Please rate us!").first?.id, "x")
+        XCTAssertNil(HybridReplay.interrupts(showing: HybridReplay.Observation(text: "Please rate us"), skill: [learned]).first { $0.id == "x" })
+    }
+
+    func testStaySignedInIsABuiltInRule() {
+        let seen = HybridReplay.Observation(text: "Your session will time out in 2 minutes. Do you want to stay signed in?")
+        XCTAssertEqual(HybridReplay.interrupts(showing: seen, skill: []).first?.clickLabel, "Stay signed in")
+    }
+
+    func testSafeDismissalsNeverPickWhatCouldDoSomething() {
+        XCTAssertEqual(HybridReplay.safeDismissal(in: ["Sign out", "Stay signed in"]), "Stay signed in")
+        XCTAssertEqual(HybridReplay.safeDismissal(in: ["Show me how", "Maybe later"]), "Maybe later")
+        XCTAssertNil(HybridReplay.safeDismissal(in: ["OK", "Continue", "Confirm", "Yes"]))
+        XCTAssertNil(HybridReplay.safeDismissal(in: ["Show me how", "Back to my return"]))
+        // "Close" only once a step is already stuck behind the popup.
+        XCTAssertNil(HybridReplay.safeDismissal(in: ["Close"], generic: false))
+        XCTAssertEqual(HybridReplay.safeDismissal(in: ["Close"]), "Close")
+    }
+
+    func testDialogKeysIgnoreNumbersThatChange() {
+        XCTAssertEqual(HybridReplay.dialogKey("New this year: e-verify in 1 tap"), HybridReplay.dialogKey("New this year: e-verify in 2 taps")?.replacingOccurrences(of: "taps", with: "tap"))
+        XCTAssertEqual(HybridReplay.dialogKey("New this year You can now e-verify"), "new this year you")
+        XCTAssertNil(HybridReplay.dialogKey("OK"))
+    }
+
+    func testTransientErrorsAreTheOnesWorthOneMoreTry() {
+        XCTAssertNotNil(HybridReplay.transientError(in: "Review your return\nThe service is busy right now. Please try again."))
+        XCTAssertNotNil(HybridReplay.transientError(in: "503 Service Unavailable"))
+        XCTAssertNil(HybridReplay.transientError(in: "Review your return\nSomething went wrong"))
+        XCTAssertNil(HybridReplay.transientError(in: "PAN should look like ABCDE1234F"))
+    }
+
+    func testShownValuesFindDetailsHoweverTheyreWritten() {
+        let inputs = [SkillInput(name: "full_name"), SkillInput(name: "pan"), SkillInput(name: "income", kind: "money")]
+        let values = ["full_name": "Zoë D'Souza", "pan": "ZDSPD1357N", "income": "1250000"]
+        let review = "Review your return\nZOE D'SOUZA · ZDSPD1357N\nIncome ₹12,50,000 · old regime"
+        XCTAssertEqual(HybridReplay.shownValues(values, inputs: inputs, on: review).shown, 3)
+        let empty = "Review your return\n·\nIncome ₹0 · regime"
+        XCTAssertEqual(HybridReplay.shownValues(values, inputs: inputs, on: empty).shown, 0)
+        XCTAssertEqual(HybridReplay.shownValues(values, inputs: inputs, on: empty).checked, 3)
+    }
+
+    func testARefusalIsANewLineAskingForSomething() {
+        let before = "Review your return\nAsha Rao · ABCPR1234K\nI declare that the information above is correct\nSubmit return"
+        XCTAssertEqual(HybridReplay.refusal(before: before, after: before + "\nPlease confirm the declaration before filing."),
+                       "Please confirm the declaration before filing.")
+        // Text that was already there isn't the page's answer; a passing error is retried, not fixed.
+        XCTAssertNil(HybridReplay.refusal(before: before, after: before))
+        XCTAssertNil(HybridReplay.refusal(before: before, after: before + "\nThe service is busy right now. Please try again."))
+    }
+
+    func testResyncBackStartsAtTheFirstStepOfThatPage() {
+        // Signed out mid-way: the login page is a fresh one, so the whole sign-in is done again.
+        let login = StepAnchor(path: "/login.html")
+        var nav = SkillStep.browser("navigate", text: "open", url: "http://x/login.html")
+        nav.anchor = login
+        let steps = [nav, step("username", anchor: login), step("password", anchor: login), step("sign in", anchor: login),
+                     step("name", anchor: StepAnchor(path: "/form.html")), step("add row", anchor: StepAnchor(path: "/deductions.html"))]
+        let plan = HybridReplay.plan(steps, values: [:])
+        XCTAssertEqual(HybridReplay.resync(plan, current: 5, seen: HybridReplay.Observation(url: "http://x/login.html?expired=1")), 1)
     }
 
     // MARK: values

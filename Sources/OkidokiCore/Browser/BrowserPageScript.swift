@@ -523,8 +523,66 @@ public enum BrowserPageScript {
         return true;
       }
 
+      /**
+       * Popups in the way: open dialogs, and anything without a role that covers the middle of the window
+       * from above the page (a fixed overlay). Each with its text and its buttons' labels.
+       */
+      const modals = new WeakSet();
+      function dialogBoxes() {
+        const boxes = [];
+        const add = (el, modal) => { if (el && !boxes.includes(el) && visible(el)) { boxes.push(el); if (modal) modals.add(el); } };
+        for (const el of deepAll('dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]')) add(el, true);
+        let node = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+        while (node && node !== document.body && node !== document.documentElement) {
+          const st = getComputedStyle(node);
+          if (st.position === 'fixed' || st.position === 'sticky') {
+            const r = node.getBoundingClientRect();
+            if (r.width * r.height >= innerWidth * innerHeight * 0.2) add(node, true);
+            break;
+          }
+          node = node.parentElement;
+        }
+        // Fixed bars and boxes elsewhere (a cookie bar at the bottom) that hold buttons.
+        for (const el of document.body ? document.body.children : []) {
+          if (boxes.includes(el) || !visible(el)) continue;
+          const st = getComputedStyle(el);
+          if ((st.position === 'fixed' || st.position === 'sticky') && Number(st.zIndex || 0) >= 0 && el.querySelector('button,[role=button]')) add(el);
+        }
+        return boxes.slice(0, 4);
+      }
+      const BUTTONS = 'button,a[href],[role=button],input[type=button],input[type=submit]';
+      function dialogs() {
+        return dialogBoxes().map(el => ({
+          text: clean(el.innerText, 400), modal: modals.has(el),
+          buttons: [...el.querySelectorAll(BUTTONS)].filter(visible).map(b => labelFor(b) || clean(b.innerText || b.value || '', 40)).filter(Boolean).slice(0, 8),
+        })).filter(d => d.buttons.length);
+      }
+      /** Clicks the button labelled exactly `label` inside a popup (never one on the page behind it). */
+      function clickInDialog(label) {
+        const want = (label || '').trim().toLowerCase();
+        for (const box of dialogBoxes()) {
+          const el = [...box.querySelectorAll(BUTTONS)].find(b => visible(b) &&
+            [labelFor(b), clean(b.innerText || b.value || '', 80)].some(t => (t || '').trim().toLowerCase() === want));
+          if (el) { click(el); return true; }
+        }
+        return false;
+      }
+      /** Whether the element these selectors find sits inside a popup (then the popup is the step's own). */
+      function inDialog(selectors) {
+        const hit = find(selectors || []);
+        if (!hit) return false;
+        return dialogBoxes().some(box => box.contains(hit.el));
+      }
+      /** Something on the page says it's still loading. */
+      function busy() {
+        if (document.readyState === 'loading') return true;
+        if (deepAll('[aria-busy=true],[role=progressbar],.spinner,.loading,.loader,#loading').some(visible)) return true;
+        const text = (document.body?.innerText || '').trim();
+        return text.length < 400 && /^(loading|please wait|just a moment)/im.test(text.split('\n').slice(-3).join('\n'));
+      }
+
       window.__okidoki = {
-        headings, valueOf, present, clickText, optionsOf,
+        headings, valueOf, present, clickText, optionsOf, dialogs, clickInDialog, inDialog, busy,
         snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
         fillLogin, settle, pageText,
         record: (on) => { recording = !!on; return recording; },

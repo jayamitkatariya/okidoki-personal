@@ -3,6 +3,7 @@
 <body><h1>Your details</h1>
 <form id="f"></form><p class="error" id="err"></p>
 <script>
+ready(() => {
 const name = `<label for="${id("fullname")}">Full name</label><input id="${id("fullname")}">`;
 const pan = `<label for="${id("pan")}">PAN</label><input id="${id("pan")}" maxlength="10" placeholder="ABCDE1234F">`;
 const income = `<label for="${id("income")}">Annual income (₹)</label><input id="${id("income")}" inputmode="numeric">`;
@@ -16,13 +17,16 @@ moneyMask($("#" + id("income"))); moneyMask($("#" + id("gains")));
 $("#" + id("has-gains")).onchange = (e) => $("#gains-box").classList.toggle("hidden", !e.target.checked);
 $("#f").onsubmit = (e) => {
   e.preventDefault();
+  if (blocked()) return;
   const v = (n) => $("#" + id(n)).value.trim();
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v("pan"))) { $("#err").textContent = "PAN should look like ABCDE1234F"; return; }
   if (!v("fullname") || !digits(v("income")) || !v("regime")) { $("#err").textContent = "Fill every field"; return; }
   const hasGains = $("#" + id("has-gains")).checked;
   save({ name: v("fullname"), pan: v("pan"), income: digits(v("income")), regime: v("regime"),
          gains: hasGains ? digits(v("gains")) : "" });
-  location.href = "deductions.html";
+  // Random: sometimes a page nobody recorded comes first.
+  location.href = chance(0.5) ? "verify.html" : "deductions.html";
 };
-banner(); survey();
+banner(); survey(); staySignedIn(); noise();
+});
 </script></body></html>

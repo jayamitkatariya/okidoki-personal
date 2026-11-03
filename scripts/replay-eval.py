@@ -75,6 +75,9 @@ def start_fixture():
         sys.exit("the fixture site didn't start")
 
 
+GATE = {"answer": "carry"}
+
+
 def wait_run(before_ids, match, timeout):
     """The first run started after `before_ids` that `match` accepts, once it has finished."""
     deadline = time.time() + timeout
@@ -82,7 +85,7 @@ def wait_run(before_ids, match, timeout):
     while time.time() < deadline:
         time.sleep(1.0)
         # Smart replay's "check before submitting" card, answered the way a person who agrees would.
-        browser("gate carry")
+        browser("gate " + GATE["answer"])
         runs = [r for r in load_state().get("runs", []) if r.get("id") not in before_ids and match(r)]
         if runs:
             run = runs[-1]
@@ -140,7 +143,7 @@ def skill_exists(name):
 def learn(spec, timeout):
     """The agent files the learn item once; its steps are kept as the skill."""
     item = spec["items"][spec["learnItem"]]
-    fixture("/config", {"drift": False, "banner": False})
+    configure({})
     goal = goal_for(spec["site"], item)
     before = {r["id"] for r in load_state().get("runs", [])}
     post(f"{DOMAIN}.dev.browse", "[fresh] " + goal)
@@ -208,9 +211,36 @@ def write_documents(spec, names):
     time.sleep(2.5)  # the vault notices new files through FSEvents
 
 
+KNOBS = ["drift", "banner", "randomIds", "slow", "popups", "expire", "busy", "random", "wipe"]
+
+
+def configure(scenario):
+    """The site as the scenario wants it: every hard-mode knob off unless the scenario turns it on."""
+    knobs = {k: False for k in KNOBS} | {"drift": scenario.get("drift", False)} | scenario.get("site", {})
+    fixture("/config", knobs)
+
+
+def given(item):
+    """What a request would say for this item: its values, written the way the item's `given` says
+    (money with commas, "Old" for old, "24(b)" for 24B). Keys in `omit` aren't given at all."""
+    out = {k: v for k, v in item.items() if k not in ("deductions", "given", "omit")}
+    deductions = item["deductions"]
+    for key, value in item.get("given", {}).items():
+        if key == "deductions":
+            deductions = value
+        else:
+            out[key] = value
+    out["deductions"] = json.dumps(deductions)
+    for key in item.get("omit", []):
+        out.pop(key, None)
+    return out
+
+
 def run_mode(spec, scenario, mode, timeout):
     items = [spec["items"][name] | {"ref": name} for name in scenario["items"]]
-    fixture("/config", {"drift": scenario["drift"], "banner": False})
+    configure(scenario)
+    # How a person answers smart replay's "check before submitting" card in this scenario.
+    GATE["answer"] = scenario.get("gate", "carry")
     fixture("/reset", {})
     before = {r["id"] for r in load_state().get("runs", [])}
     started = time.time()
@@ -244,19 +274,49 @@ def run_mode(spec, scenario, mode, timeout):
             values = [{"ref": item["ref"]} for item in items]
         elif mode == "hybrid":
             # Lists travel as JSON, like any value.
-            values = [{**{k: v for k, v in item.items() if k != "deductions"}, "deductions": json.dumps(item["deductions"])} for item in items]
+            values = [given(item) for item in items]
         else:
-            values = [{k: v for k, v in item.items() if k != "deductions"} for item in items]
+            values = [{k: v for k, v in given(item).items() if k != "deductions"} for item in items]
         if values is not None:
             skill = spec["smartSkill"] if mode == "hybrid" else spec["skill"]
             browser("replayjson " + json.dumps({"skill": skill, "values": values}))
+            if scenario.get("stopAfter"):
+                stopped = stop_midway(before, scenario["stopAfter"])
+                notes.extend(stopped)
             run, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
             runs.append(run)
             if error:
                 notes.append(error)
     wall = round(time.time() - started, 1)
     submissions = fixture("/submissions")["submissions"]
-    results = [(item["ref"],) + check(item, submissions) for item in items]
+    results = []
+    for item in items:
+        ok, detail = check(item, submissions)
+        if item["ref"] in scenario.get("expectNotFiled", []):
+            # Something it should refuse to do (a value is missing): passing means nothing was filed,
+            # and the run said why.
+            said = " ".join((r or {}).get("summary") or "" for r in runs)
+            ok, detail = (not ok and item["ref"] in said), (f"not filed, as it shouldn't be" if not ok else "filed although it shouldn't have been")
+            if not ok and "not filed" in detail:
+                detail += f" — but the run didn't say why (summary: {said[:160]!r})"
+        results.append((item["ref"], ok, detail))
+    # A return with nobody's details on it is always wrong.
+    empty = [s.get("ref") for s in submissions if not s.get("name") and not s.get("pan")]
+    if empty:
+        notes.append(f"filed {len(empty)} empty return(s): {empty}")
+        results = [(ref, False, detail + " · and an empty return was filed") if ref in scenario.get("expectNotFiled", []) else (ref, ok, detail)
+                   for ref, ok, detail in results]
+    # Filing anyone twice is always wrong.
+    pans = [s.get("pan") for s in submissions]
+    twice = sorted({p for p in pans if pans.count(p) > 1})
+    if twice:
+        notes.append(f"filed twice: {twice}")
+    if scenario.get("stopAfter"):
+        # After a stop: whatever was filed is whole, and nothing else is.
+        run = runs[-1] if runs else None
+        if not run or run.get("status") != "cancelled":
+            notes.append(f"the run wasn't cancelled (status {(run or {}).get('status')})")
+        results = [(ref, True, detail) if not ok and "nothing filed" in detail else (ref, ok, detail) for ref, ok, detail in results]
     passed = sum(1 for _, ok, _ in results if ok)
     return {
         "scenario": scenario["id"], "mode": mode, "passed": passed, "total": len(items),
@@ -269,15 +329,31 @@ def run_mode(spec, scenario, mode, timeout):
     }
 
 
+def stop_midway(before, after_seconds):
+    """Waits until the replay has been going `after_seconds`, then stops it the way the stop button does."""
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        runs = [r for r in load_state().get("runs", []) if r.get("id") not in before and r.get("builtin") == "skill"]
+        if runs and runs[-1].get("status") == "running":
+            time.sleep(after_seconds)
+            filed_before = len(fixture("/submissions")["submissions"])
+            post(f"{DOMAIN}.dev.stop", "")
+            time.sleep(6)
+            filed_after = len(fixture("/submissions")["submissions"])
+            return [] if filed_after == filed_before else [f"{filed_after - filed_before} filed after the stop"]
+        time.sleep(0.3)
+    return ["the replay never started"]
+
+
 def table(rows, baseline=None):
     base = {(r["scenario"], r["mode"]): r for r in (baseline or {}).get("results", [])}
-    print(f"\n{'scenario':<11} {'mode':<8} {'pass':>6} {'secs':>7} {'calls':>6}   vs baseline")
+    print(f"\n{'scenario':<13} {'mode':<8} {'pass':>6} {'secs':>7} {'calls':>6}   vs baseline")
     for r in rows:
         b = base.get((r["scenario"], r["mode"]))
         delta = ""
         if b:
             delta = f"pass {b['passed']}/{b['total']} → {r['passed']}/{r['total']} · {b['seconds']}s → {r['seconds']}s · calls {b['modelCalls']} → {r['modelCalls']}"
-        print(f"{r['scenario']:<11} {r['mode']:<8} {r['passed']:>3}/{r['total']:<2} {r['seconds']:>7} {r['modelCalls']:>6}   {delta}")
+        print(f"{r['scenario']:<13} {r['mode']:<8} {r['passed']:>3}/{r['total']:<2} {r['seconds']:>7} {r['modelCalls']:>6}   {delta}")
         for note in r.get("notes", []):
             print(f"{'':<21}! {note}")
         for it in r["items"]:

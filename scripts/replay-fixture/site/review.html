@@ -1,17 +1,27 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Review</title>
 <link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
-<body><h1>Review your return</h1><div id="summary"></div><button id="submit" type="button"></button>
+<body><h1>Review your return</h1><div id="summary"></div><button id="submit" type="button"></button><p class="error" id="err"></p>
 <script>
+ready(() => {
 const s = state();
 $("#summary").innerHTML = `<p><b>${s.name || ""}</b> · ${s.pan || ""}</p><p>Income ₹${s.income || 0} · ${s.regime || ""} regime</p>
   <p>Capital gains: ${s.gains ? "₹" + s.gains : "none"}</p><p>Deductions: ${(s.deductions || []).map((d) => d.section + " ₹" + d.amount).join(", ") || "none"}</p>`;
+// Random: a declaration box that has to be ticked before the return can be filed.
+const declare = chance(0.5);
+if (declare) $("#summary").insertAdjacentHTML("afterend",
+  `<label><input type="checkbox" id="${id("declare")}" style="width:auto"> I declare that the information above is correct</label>`);
 $("#submit").id = id("submit");
 $("#" + id("submit")).textContent = L("Submit return", "File now");
 $("#" + id("submit")).onclick = async () => {
+  if (blocked()) return;
+  if (declare && !$("#" + id("declare")).checked) { $("#err").textContent = "Please confirm the declaration before filing."; return; }
+  $("#err").textContent = "";
   const res = await fetch("/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(state()) });
-  const { ref } = await res.json();
+  const { ref, error } = await res.json();
+  if (!res.ok) { $("#err").textContent = error || "Something went wrong"; return; }
   sessionStorage.setItem("ref", ref);
   location.href = "done.html";
 };
-banner();
+banner(); whatsNew(); noise();
+});
 </script></body></html>

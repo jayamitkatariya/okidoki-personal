@@ -130,3 +130,14 @@ public struct InterruptHandler: Codable, Equatable, Sendable, Identifiable {
         self.clickLabel = clickLabel; self.key = key; self.source = source; self.uses = uses
     }
 }
+
+extension Skill {
+    /// Uses anything only smart replay understands: inputs, conditions, loops, think or read steps.
+    /// Such a skill always replays smartly; plain replay would type its placeholders as they are.
+    public var usesSmartReplay: Bool {
+        !(inputs ?? []).isEmpty || steps.contains { step in
+            step.when?.isEmpty == false || step.repeatOver?.isEmpty == false || step.mode == "think"
+                || step.action == "read" || step.capture?.isEmpty == false
+        }
+    }
+}

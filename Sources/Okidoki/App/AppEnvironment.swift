@@ -95,6 +95,8 @@ final class AppEnvironment: ObservableObject {
     private var pendingReplays: [String: Int] = [:]
     /// `{{placeholder}}` values for each pass of a queued replay (one record per pass), by run id.
     var pendingReplayValues: [String: [[String: String]]] = [:]
+    /// The last partly failed replay's "retry those" (its toast button), for scripts too.
+    var lastFailedReplay: (() -> Void)?
     /// The words a smart replay was asked with, for finding values the request states in passing.
     var pendingReplayRequests: [String: String] = [:]
     /// Runs following a library template: which template, and the passes still to replay once it's learned.
@@ -381,6 +383,9 @@ final class AppEnvironment: ObservableObject {
         case "forget":
             for skill in store.activeSkills where skill.name == arg { store.deleteSkill(skill.id) }
             store.saveNow()
+        case "retryfailed":
+            lastFailedReplay?()
+            lastFailedReplay = nil
         case "gate":
             if let answer = HybridBrowserReplayer.GateAnswer(rawValue: arg) { pendingGate?(answer); pendingGate = nil }
         case "replayjson":
@@ -1390,14 +1395,17 @@ final class AppEnvironment: ObservableObject {
                     return
                 }
                 let values = pendingReplayValues.removeValue(forKey: run.id) ?? []
+                // A skill smart replay made (inputs, conditions, loops, think steps) only makes sense to
+                // the smart replayer, whatever the switch says; the switch decides for plain recordings.
+                let smart = store.settings.hybridReplay || skill.usesSmartReplay
                 if skill.runsInBrowser {
-                    if store.settings.hybridReplay {
+                    if smart {
                         hybridBrowserReplayer.begin(skill: skill, runID: run.id, passes: values, times: times,
                                                     request: pendingReplayRequests.removeValue(forKey: run.id) ?? "")
                     } else {
                         browserReplayer.begin(skill: skill, runID: run.id, times: times, values: values)
                     }
-                } else if store.settings.hybridReplay {
+                } else if smart {
                     replayer.beginSmart(skill: skill, runID: run.id, passes: values, times: times,
                                         request: pendingReplayRequests.removeValue(forKey: run.id) ?? "")
                 } else {
@@ -1964,12 +1972,24 @@ final class AppEnvironment: ObservableObject {
         store.saveNow()
     }
 
-    func failReplay(runID: String, reason: String) {
+    /// `retry`: the passes that failed (as they were given), offered as one tap that replays just those.
+    func failReplay(runID: String, reason: String, retry: (skillID: String, passes: [[String: String]])? = nil) {
         pendingReplays[runID] = nil
         pendingReplayValues[runID] = nil
         store.finishRun(runID, status: .failed, summary: reason)
+        var again: (() -> Void)?
+        if let retry, let skill = store.skill(retry.skillID) {
+            let threadID = store.run(runID)?.threadID
+            again = { [weak self] in
+                guard let self else { return }
+                let run = self.makeReplayRun(skill, times: 1, threadID: threadID, values: retry.passes)
+                self.approveRun(run.id)
+            }
+            lastFailedReplay = again
+        }
+        let label = retry.map { $0.passes.count == 1 ? "retry that one" : "retry those \($0.passes.count)" }
         toast(title: "couldn't finish the replay", detail: reason, kind: .warning,
-              undoLabel: nil, onUndo: nil, editLabel: "details", onEdit: { [weak self] in
+              undoLabel: again == nil ? nil : label, onUndo: again, editLabel: "details", onEdit: { [weak self] in
                   self?.openDashboard(.runs, runID: runID)
               }, runID: runID)
         store.saveNow()

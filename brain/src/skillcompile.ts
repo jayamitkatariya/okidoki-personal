@@ -263,6 +263,9 @@ const RESOLVE_SYSTEM = `You fill in a form's values for one item from that item'
 
 Rules:
 - Use only the documents and the request. Never guess or invent a value; if it isn't there, give value "" and confidence 0.
+- Only what's about this item counts. Some documents may be about someone or something else (another person, another
+  invoice): ignore them entirely, and a value from one of them is never this item's. The request may name several items;
+  use only the part about this one.
 - Copy identifiers exactly (case, digits). Give money and numbers as plain digits (no commas or currency), dates as yyyy-MM-dd.
 - For a list input, give an array of objects with exactly the listed fields; an empty array when the documents show none.
 - For a choice input, give one of its choices verbatim.
@@ -326,6 +329,8 @@ export interface RouteResult {
 const ROUTE_SYSTEM = `You decide whether a saved skill can do what the user asked, so it runs instantly instead of an AI agent working it out from scratch.
 
 Pick a skill only when it does the same job the request asks for (same site or app and same kind of action), only for different data. If the request asks for something the skill doesn't do, or is a question, or is ambiguous, answer kind "agent". Templates (template: true) are starting points: pick one when it fits and no learned skill does.
+
+When several skills do the same job, pick the one whose inputs cover what changes between items. A skill with no inputs repeats exactly what was recorded, so it only fits a request for that same data once.
 
 items: every person, invoice, order or row the request wants it done for, in order, as named ("for Jay, Jia and Neha" → ["Jay", "Jia", "Neha"]; "for invoices 4471 and 4472" → ["4471", "4472"]). Empty for a single unnamed pass. "everyone in X.csv" → ["every row in X.csv"].
 overrides: only values the request states outright, keyed by the skill's input names.

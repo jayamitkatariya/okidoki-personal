@@ -47,6 +47,21 @@ public enum ReplayDispatcher {
         }
     }
 
+    /// The one other skill that does `skill`'s job with inputs: it starts on the same site, and its name
+    /// is the same or contains it ("acme filing" → "acme filing smart"). Nil when none or several fit.
+    static func smartSibling(of skill: Skill, in skills: [Skill]) -> Skill? {
+        func host(_ s: Skill) -> String? {
+            (s.startURL ?? s.steps.first { $0.url?.isEmpty == false }?.url).map { BrowserSteps.host(of: $0) }
+        }
+        let name = skill.name.lowercased()
+        let fits = skills.filter { other in
+            other.id != skill.id && other.template != true && !other.steps.isEmpty && !(other.inputs ?? []).isEmpty
+                && host(other) != nil && host(other) == host(skill)
+                && (other.name.lowercased().contains(name) || name.contains(other.name.lowercased()) || (other.intent != nil && other.intent == skill.intent))
+        }
+        return fits.count == 1 ? fits[0] : nil
+    }
+
     public static func decide(_ route: Route, skills: [Skill]) -> Decision {
         guard route.confidence >= threshold, let id = route.id, let skill = skills.first(where: { $0.id == id }) else { return .agent }
         let names = route.items.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -55,8 +70,12 @@ public enum ReplayDispatcher {
             : names.map { route.overrides.merging(["ref": $0]) { _, ref in ref } }
         switch route.kind {
         case "skill" where skill.template != true && !skill.steps.isEmpty:
-            // A plain recording with no inputs can't do it for someone else: only when it's one pass as recorded.
-            if (skill.inputs ?? []).isEmpty, passes.count > 1 || !route.overrides.isEmpty { return .agent }
+            // A plain recording with no inputs can't do it for someone else: only when it's one pass as
+            // recorded. A smart version of the same job (same site, with inputs) can.
+            if (skill.inputs ?? []).isEmpty, passes.count > 1 || !route.overrides.isEmpty {
+                guard let smart = smartSibling(of: skill, in: skills) else { return .agent }
+                return .replay(skillID: smart.id, passes: passes)
+            }
             return .replay(skillID: id, passes: passes)
         case "template", "skill" where skill.template == true:
             return .template(skillID: id, passes: passes)

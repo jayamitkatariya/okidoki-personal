@@ -52,22 +52,37 @@ final class HybridBrowserReplayer {
             self.status("getting everyone's details ready", in: first)
             let bound = await env.bindItems(skill, passes: passes, runID: runID, request: request)
             if Task.isCancelled || self.runID != runID { return }
+            // A pass that can't be finished is never started; the others still go.
             let gaps = bound.filter { !$0.missing.isEmpty }
-            if !gaps.isEmpty {
+            let howToFix = "Add them to the request (name=value) or put their documents in a vault folder named after them."
+            let ready = bound.indices.filter { bound[$0].missing.isEmpty }
+            if ready.isEmpty {
                 let lines = gaps.map { "\($0.label): \($0.missing.joined(separator: ", "))" }
                 self.end()
-                env.failReplay(runID: runID, reason: "missing before starting — " + lines.joined(separator: "; ")
-                               + ". Add them to the request (name=value) or put their documents in a vault folder named after them.")
+                env.failReplay(runID: runID, reason: "missing before starting — " + lines.joined(separator: "; ") + ". " + howToFix)
                 return
             }
+            var outcomes: [(label: String, ok: Bool, note: String)] = []
+            // The passes worth trying again, as they were given: failed ones, never one that may have gone through.
+            var retryable: [[String: String]] = []
             env.store.updateRun(runID) { run in
-                run.steps = bound.map { RunStep(title: $0.label, status: .waiting) }
-                if bound.count > 1 { run.summary = "\(bound.count) to do" }
+                run.steps = bound.map { item in
+                    var step = RunStep(title: item.label, status: item.missing.isEmpty ? .waiting : .failed)
+                    if !item.missing.isEmpty { step.detail = "missing \(item.missing.joined(separator: ", "))" }
+                    return step
+                }
+                if bound.count > 1 { run.summary = "\(ready.count) to do" }
+            }
+            for (n, item) in bound.enumerated() where !item.missing.isEmpty {
+                if raw.indices.contains(n) { retryable.append(raw[n]) }
+                let note = "not started — missing \(item.missing.joined(separator: ", "))"
+                outcomes.append((item.label, false, note))
+                env.replayLog(runID, "✗ \(item.label): \(note). \(howToFix)")
             }
             var healed = skill.steps
             var promotions: [Int: [SkillStep]] = [:]
-            var outcomes: [(label: String, ok: Bool, note: String)] = []
-            let limit = max(1, min(3, bound.count))
+            self.learnedInterrupts = []
+            let limit = max(1, min(3, ready.count))
             var tabs: [BrowserTab] = [first]
             for _ in 1..<limit { tabs.append(browser.openTab(activate: false)); self.claim(tabs.last!, runID: runID, skill: skill) }
             // Items run in parallel tabs, a few at a time; each pass's fixes are shared with the next ones.
@@ -85,16 +100,20 @@ final class HybridBrowserReplayer {
                     }
                 }
                 var free: [BrowserTab] = []
-                for (n, tab) in tabs.enumerated() where n < bound.count { launch(n, on: tab); next = n + 1 }
+                for (n, tab) in tabs.enumerated() where n < ready.count { launch(ready[n], on: tab); next = n + 1 }
                 for await (index, result) in group {
                     if Task.isCancelled || self.runID != runID { group.cancelAll(); return }
                     for (source, steps) in result.promotions where promotions[source] == nil { promotions[source] = steps }
+                    for source in result.echoes where healed.indices.contains(source) && healed[source].echoes != true {
+                        healed[source].echoes = true
+                    }
                     for (source, selectors) in result.healed where healed.indices.contains(source) {
                         healed[source].selectors = selectors
                         healed[source].heals = (healed[source].heals ?? 0) + 1
                     }
                     let item = bound[index]
                     outcomes.append((item.label, result.ok, result.note))
+                    if !result.ok, !result.skipped, !result.stop, !result.unconfirmed, raw.indices.contains(index) { retryable.append(raw[index]) }
                     env.store.updateRun(runID) { run in
                         guard run.steps.indices.contains(index) else { return }
                         run.steps[index].status = result.ok ? .done : (result.skipped ? .cancelled : .failed)
@@ -107,34 +126,44 @@ final class HybridBrowserReplayer {
                         env.replayLog(runID, "✗ \(item.label): \(result.note)")
                     }
                     if result.stop { group.cancelAll(); break }
-                    if next < bound.count {
+                    if next < ready.count {
                         free.append(result.tab)
-                        launch(next, on: free.removeFirst())
+                        launch(ready[next], on: free.removeFirst())
                         next += 1
                     }
                 }
             }
+            // The extra tabs go either way, stopped or finished; the first one stays, showing where it ended.
+            // (Released first: closing a tab a run still owns would stop that run.)
+            if tabs.count > 1 { env.browser.endWork(runID: runID) }
+            for tab in tabs.dropFirst() { env.browser.closeTab(tab) }
             if Task.isCancelled || self.runID != runID { return }
-            if !promotions.isEmpty, var current = env.store.skill(skill.id) {
-                // What the model worked out becomes plain steps: the next replay of these parts needs no model.
+            let popups = self.learnedInterrupts
+            if !promotions.isEmpty || !popups.isEmpty, var current = env.store.skill(skill.id) {
+                // What the model worked out becomes plain steps and rules: next time, these parts need no model.
                 var steps = healed
                 for (source, plain) in promotions.sorted(by: { $0.key > $1.key }) {
                     env.replayLog(runID, "→ learned “\(skill.steps[source].text.prefix(60))…” as \(plain.count) plain steps")
                     steps = SkillPromoter.replacing(steps, at: source, with: plain)
                 }
-                current.steps = SkillCompiler.deriveChecks(steps)
+                current.steps = promotions.isEmpty ? steps : SkillCompiler.deriveChecks(steps)
+                if !popups.isEmpty {
+                    let known = current.interrupts ?? []
+                    current.interrupts = known + popups.filter { new in !known.contains { $0.whenText == new.whenText } }
+                    env.replayLog(runID, "→ learned how to close \(popups.count == 1 ? "a popup" : "\(popups.count) popups")")
+                }
                 env.store.replaceSkill(current)
             } else if healed != skill.steps {
                 env.store.updateSkillSteps(skill.id, healed)
             }
-            for tab in tabs.dropFirst() { env.browser.endWork(runID: runID); env.browser.closeTab(tab) }
             self.end()
             let done = outcomes.filter(\.ok).count
             if done == bound.count {
                 env.finishReplay(runID: runID, passes: bound.count)
             } else {
                 let failed = outcomes.filter { !$0.ok }.map { "\($0.label): \($0.note)" }
-                env.failReplay(runID: runID, reason: "\(done) of \(bound.count) done · " + failed.joined(separator: "; "))
+                env.failReplay(runID: runID, reason: "\(done) of \(bound.count) done · " + failed.joined(separator: "; "),
+                               retry: retryable.isEmpty ? nil : (skill.id, retryable))
             }
         }
     }
@@ -184,6 +213,11 @@ final class HybridBrowserReplayer {
         var skipped = false
         /// The person said stop at the gate: no more passes.
         var stop = false
+        /// Irreversible steps whose page showed this pass's details.
+        var echoes: Set<Int> = []
+        /// Something irreversible was done but never confirmed: it may have gone through, so it's never
+        /// offered for a retry.
+        var unconfirmed = false
     }
 
     private func runPass(skill: Skill, steps: [SkillStep], item: SkillBinder.Bound, index: Int, of total: Int, tab: BrowserTab) async -> PassResult {
@@ -197,6 +231,7 @@ final class HybridBrowserReplayer {
         var cursor = 0
         var jumps = 0
         var rescues = 0
+        var fixes = 0
         let prefix = total > 1 ? "\(item.label) · " : ""
 
         while cursor < plan.count {
@@ -225,6 +260,26 @@ final class HybridBrowserReplayer {
                     cursor = target
                     continue
                 }
+                if !HybridReplay.matches(anchor, seen), jumps < 6, await passUnknownPage(skill: skill, plan: plan, tab: tab, prefix: prefix) {
+                    jumps += 1
+                    continue
+                }
+            }
+
+            // Before something irreversible, on a page that shows what was entered (a review page): if none
+            // of this pass's details are there, something was lost on the way (a reset, an undo), and it
+            // isn't submitted without asking.
+            if step.irreversible == true {
+                let page = await tab.pageText() + "\n" + (await tab.fieldValues())
+                let seen = HybridReplay.shownValues(values, inputs: skill.inputs ?? [], on: page)
+                let key = "\(skill.id)#\(planned.source)"
+                if seen.checked > 0, seen.shown > 0 {
+                    result.echoes.insert(planned.source)
+                    echoing.insert(key)
+                } else if seen.checked > 0, step.echoes == true || echoing.contains(key) {
+                    env.replayLog(runID, "✗ \(item.label): the page before “\(step.text)” shows none of their details")
+                    doubts.helped.append("the page before “\(step.text)” shows none of \(item.label)'s details — they may have been lost on the way")
+                }
             }
 
             // The pause before something irreversible, only when this pass has a doubt.
@@ -237,13 +292,29 @@ final class HybridBrowserReplayer {
             }
 
             var outcome = await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item)
-            if case .lost(let why) = outcome, step.irreversible == true {
+            if case .lost(let why) = outcome, step.irreversible == true,
+               let expect = step.expect, !expect.isEmpty, (await check(expect, tab: tab)).isEmpty {
+                // A rescue that pressed it, then gave up: it's done, and must not be done twice.
+                outcome = .done
+            } else if case .lost(let why) = outcome, step.irreversible == true {
                 // The final step itself moved. Only now that it's due (and past the gate) may the model
                 // look for it, and for nothing else.
                 let (ok, summary) = await think(goal: "Do exactly this one final step now, on the current page: \(step.text). "
                                                   + "The control may be labelled differently now (it does the same job). Then finish with success true.",
                                                   tab: tab, maxTurns: 3, tag: "final")
                 outcome = ok ? .done : .failed(summary.isEmpty ? why : summary)
+            } else if case .lost(let lostWhy) = outcome, jumps < 6, let page = step.anchor?.path,
+                      case let seen = await tab.observation(), !HybridReplay.matches(StepAnchor(path: page), seen),
+                      let target = HybridReplay.resync(plan, current: cursor, seen: seen), target != cursor {
+                // It went to a page the skill knows, just not the one expected next (signed in again and
+                // sent straight back to where it was): carry on from there, no agent needed.
+                jumps += 1
+                env.replayLog(runID, "→ \(prefix)“\(step.text)”: \(lostWhy) — now on “\(await tab.observation().title)”, picking up at “\(plan[target].step.text)”")
+                cursor = target
+                continue
+            } else if case .lost = outcome, jumps < 6, await passUnknownPage(skill: skill, plan: plan, tab: tab, prefix: prefix) {
+                jumps += 1
+                continue
             } else if case .lost(let why) = outcome {
                 // Lost the thread: the agent carries this pass on from where the page is, up to (never
                 // through) the next irreversible step, which the replay does itself under the gate.
@@ -296,6 +367,32 @@ final class HybridBrowserReplayer {
             case .failed(let why), .lost(let why):
                 result.note = "step “\(ParameterFill.fill(step.text, values: planned.values).text)”: \(why)"
                 return result
+            case .refused(let said):
+                // Nothing went through. The model does only what the site asks (tick the box, fix the
+                // field), with this pass's values; the replay presses the step again, after the gate.
+                if fixes < 2 {
+                    fixes += 1
+                    let shown = ParameterFill.fill(step.text, values: planned.values).text
+                    env.replayLog(runID, "→ \(prefix)the site said “\(said)” — putting that right")
+                    let goal = "On this page, the site turned down “\(shown)” and says: “\(said)”. Do only what it asks to put that right "
+                        + "(tick a box, fill in or correct a field), using these values: \(spelled(skill: skill, values: values)). "
+                        + "Never press “\(shown)” or submit anything yourself. Then finish with success true. If it asks for something "
+                        + "these values don't cover, finish with success false and say what."
+                    let (ok, summary) = await think(goal: goal, tab: tab, maxTurns: 5, tag: "fix")
+                    if ok {
+                        doubts.helped.append("the site asked “\(said)”")
+                        continue
+                    }
+                    result.note = "the site turned down “\(shown)”: \(said)" + (summary.isEmpty ? "" : " — \(summary)")
+                    return result
+                }
+                result.note = "the site turned down “\(ParameterFill.fill(step.text, values: planned.values).text)”: \(said)"
+                return result
+            case .unconfirmed(let why):
+                result.unconfirmed = true
+                result.note = "did “\(ParameterFill.fill(step.text, values: planned.values).text)” but the site didn't confirm it — \(why). "
+                    + "It may have gone through: check the site before doing it again"
+                return result
             }
             cursor += 1
         }
@@ -319,6 +416,12 @@ final class HybridBrowserReplayer {
         case failed(String)
         /// The page isn't where the skill thinks; the agent should take over.
         case lost(String)
+        /// An irreversible step was done, but the page never confirmed it. Never retried or handed on:
+        /// it may have gone through.
+        case unconfirmed(String)
+        /// An irreversible step the page turned down, saying what it wants ("Please confirm the declaration").
+        /// Nothing went through.
+        case refused(String)
     }
 
     private func perform(_ planned: HybridReplay.Planned, skill: Skill, inputs: [String: SkillInput], values: [String: String],
@@ -391,14 +494,45 @@ final class HybridBrowserReplayer {
             if typed != nil { typed = picked }
         }
 
+        // A page that says it's still loading isn't ready: its buttons may not do anything yet.
+        for _ in 0..<40 where await tab.isBusy() {
+            if Task.isCancelled { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        if step.irreversible == true, let want = step.label.map({ ParameterFill.fill($0, values: scoped).text }), !want.isEmpty {
+            // Something that can't be undone is pressed once, so only once it's really the control it was:
+            // a button the page hasn't finished setting up yet (no label, no handler) would swallow it.
+            let same: (String?) -> Bool = { got in got.map { HybridReplay.sameValue(typed: want, field: $0) } ?? false }
+            for _ in 0..<25 where !same(await tab.label(of: selectors)) {
+                if Task.isCancelled { break }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            await tab.settle(limit: 2)
+        }
+        await clearBefore(step, selectors: selectors, skill: skill, tab: tab)
+        let textBefore = step.irreversible == true ? await tab.pageText() : ""
         var result = await tab.act(payload)
         // A page that builds itself after load: look again every 150ms, then clear popups. On the right
         // page, already settled, a missing element is really missing (renamed): a short look is enough.
+        // A page that says it's loading gets up to 8s more.
         var patience = 16
-        if !result.ok, let path = step.anchor?.path, HybridReplay.matches(StepAnchor(path: path), await tab.observation()) { patience = 4 }
+        if !result.ok, let path = step.anchor?.path, HybridReplay.matches(StepAnchor(path: path), await tab.observation()) { patience = 10 }
         var waited = 0
-        while !result.ok, result.detail == "not on this page", waited < patience, !Task.isCancelled {
-            if waited == min(4, patience - 1), await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab) { result = await tab.act(payload); continue }
+        var cleared = false
+        // Not found yet, or the page mid-navigation (its script not there yet, or the call failing).
+        let notYet: (BrowserActResult) -> Bool = { r in
+            !r.ok && (r.detail == nil || r.detail == "not on this page" || r.detail == "the page is still loading")
+        }
+        while notYet(result), !Task.isCancelled {
+            if waited >= patience {
+                guard waited < patience + 53, await tab.isBusy() else { break }
+            }
+            if waited == min(4, patience - 1), !cleared,
+               await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab, allowModel: true) {
+                cleared = true
+                result = await tab.act(payload)
+                continue
+            }
             try? await Task.sleep(nanoseconds: 150_000_000)
             result = await tab.act(payload)
             waited += 1
@@ -448,13 +582,48 @@ final class HybridBrowserReplayer {
         // Did it lead where it should?
         if let expect = step.expect, !expect.isEmpty {
             var unmet = await check(expect, tab: tab)
-            if !unmet.isEmpty {
+            if !unmet.isEmpty, step.irreversible == true {
+                // Something that can't be undone is never simply done again: it may be on its way (a slow
+                // submit). Only when the site says it failed for a passing reason ("busy, try again") is it
+                // pressed once more, the way a person would.
+                var retries = 0
+                let deadline = Date().addingTimeInterval(25)
+                while !unmet.isEmpty, Date() < deadline, !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    unmet = await check(expect, tab: tab)
+                    guard !unmet.isEmpty else { break }
+                    let now = await tab.pageText()
+                    if let said = HybridReplay.refusal(before: textBefore, after: now) { return .refused(said) }
+                    if retries < 2, let said = HybridReplay.transientError(in: now) {
+                        retries += 1
+                        env.replayLog(runID, "→ \(item.label): the site said “\(said)” — trying again")
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        if !(await check(expect, tab: tab)).isEmpty {
+                            _ = await tab.act(payload)
+                            await tab.settle(limit: 6, fresh: true)
+                        }
+                    }
+                }
+                if !unmet.isEmpty {
+                    let page = await tab.pageText()
+                    let said = page.split(separator: "\n").first { line in
+                        let l = line.lowercased()
+                        return ["error", "failed", "couldn't", "could not", "try again", "wrong", "invalid", "sure"].contains { l.contains($0) }
+                    }
+                    return .unconfirmed(unmet.joined(separator: ", ") + (said.map { " (the page says “\($0)”)" } ?? ""))
+                }
+            } else if !unmet.isEmpty {
                 // Slow page, or a popup in the way.
-                for _ in 0..<10 where !unmet.isEmpty {
+                let deadline = Date().addingTimeInterval(4)
+                while !unmet.isEmpty, !Task.isCancelled {
+                    if Date() >= deadline {
+                        let loading = await tab.isBusy()
+                        guard loading, Date() < deadline.addingTimeInterval(8) else { break }
+                    }
                     try? await Task.sleep(nanoseconds: 200_000_000)
                     unmet = await check(expect, tab: tab)
                 }
-                if !unmet.isEmpty, await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab) {
+                if !unmet.isEmpty, await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab, allowModel: true) {
                     _ = await tab.act(payload)
                     await tab.settle(limit: 6, fresh: true)
                     unmet = await check(expect, tab: tab)
@@ -515,22 +684,79 @@ final class HybridBrowserReplayer {
         return HybridReplay.unmet(expect, seen, present: { present[$0] ?? false })
     }
 
-    /// Clears whatever known popup is showing. True when something was clicked.
-    private func clearInterrupts(skill: Skill, seen: HybridReplay.Observation, tab: BrowserTab) async -> Bool {
-        var cleared = false
-        for handler in HybridReplay.interrupts(showing: seen, skill: skill.interrupts ?? []) {
+    /// Popups the model closed on this run, kept on the skill at the end so code closes them next time.
+    private var learnedInterrupts: [InterruptHandler] = []
+    /// "skill#step" for irreversible steps seen showing a pass's details, this session.
+    private var echoing: Set<String> = []
+
+    /// Gets a popup out of the way. True when something was clicked. In order: the skill's own and the
+    /// built-in rules; a button that only closes it ("Maybe later", "Stay signed in"; with `generic`, also
+    /// "Close" and "×"); and, with `allowModel`, one look by the model at a real modal, whose choice
+    /// becomes a rule. Rules click inside the popup only, never a button on the page behind it.
+    private func clearInterrupts(skill: Skill, seen: HybridReplay.Observation, tab: BrowserTab,
+                                 generic: Bool = true, allowModel: Bool = false) async -> Bool {
+        let boxes = await tab.dialogs()
+        guard !boxes.isEmpty else { return false }
+        let dialogText = boxes.map(\.text).joined(separator: "\n")
+        for handler in HybridReplay.interrupts(showing: seen, skill: (skill.interrupts ?? []) + learnedInterrupts, dialogText: dialogText) {
             var hit = false
-            if let label = handler.clickLabel { hit = await tab.clickText(label) }
+            if let label = handler.clickLabel { hit = await tab.clickInDialog(label) }
             if !hit, let selector = handler.clickSelector { hit = await tab.act(["action": "click", "selectors": [selector]]).ok }
             if !hit, let key = handler.key { hit = await tab.act(["action": "press", "key": key]).ok }
             if hit {
-                cleared = true
                 if let runID { env?.replayLog(runID, "→ closed a popup (\(handler.clickLabel ?? handler.key ?? "it"))") }
                 await tab.settle(limit: 2, fresh: true)
-                break
+                return true
             }
         }
-        return cleared
+        for box in boxes {
+            if let label = HybridReplay.safeDismissal(in: box.buttons, generic: generic), await tab.clickInDialog(label) {
+                if let runID { env?.replayLog(runID, "→ closed a popup (\(label))") }
+                await tab.settle(limit: 2, fresh: true)
+                return true
+            }
+        }
+        guard allowModel, let modal = boxes.first(where: \.modal), let env, env.hasKey("anthropic") else { return false }
+        let goal = "A popup is covering the page in the middle of a task. Close it the way a careful person would to get back to "
+            + "what they were doing: stay signed in, decline tours, offers and surveys, accept cookies. Never sign out, buy, pay, "
+            + "submit, delete or confirm anything, and don't leave the page. The popup says: “\(modal.text.prefix(300))”, with buttons "
+            + modal.buttons.map { "“\($0)”" }.joined(separator: ", ") + ". Do only that, then finish with success true."
+        let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 2, tag: "popup")
+        guard result.ok, let clicked = result.touched.last(where: { $0.action == "click" })?.label, !clicked.isEmpty else { return false }
+        if let runID { env.replayLog(runID, "→ closed a popup (\(clicked)) — remembered for next time") }
+        let risky = ["sign out", "log out", "logout", "delete", "buy", "pay", "submit", "confirm", "remove", "cancel"]
+        if let key = HybridReplay.dialogKey(modal.text), !risky.contains(where: { clicked.lowercased().contains($0) }),
+           !learnedInterrupts.contains(where: { $0.whenText == key }) {
+            learnedInterrupts.append(InterruptHandler(whenText: key, clickLabel: clicked, source: "learned"))
+        }
+        await tab.settle(limit: 2, fresh: true)
+        return true
+    }
+
+    /// On a page no step of this skill is on (a "verify your email" step put into the flow): the rule
+    /// learned for that page, or a button that only moves past it ("Skip for now"). True when one was pressed.
+    private func passUnknownPage(skill: Skill, plan: [HybridReplay.Planned], tab: BrowserTab, prefix: String) async -> Bool {
+        let norm: (String) -> String = { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        guard let path = URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path, !norm(path).isEmpty else { return false }
+        let known = Set(plan.compactMap { $0.step.anchor?.path }.map(norm))
+        guard !known.isEmpty, !known.contains(norm(path)) else { return false }
+        let rules = ((skill.interrupts ?? []) + learnedInterrupts)
+            .filter { $0.source == "learned-page" && norm(String(($0.whenText ?? "").dropFirst(5))) == norm(path) }.compactMap(\.clickLabel)
+        for label in rules + HybridReplay.pageSkips where await tab.clickText(label) {
+            if let runID { env?.replayLog(runID, "→ \(prefix)on a page the skill doesn't know (“\(tab.webView.title ?? path)”), pressed “\(label)”") }
+            await tab.settle(limit: 6, fresh: true)
+            return true
+        }
+        return false
+    }
+
+    /// Before acting: a popup in front of the page swallows clicks, so it goes first. Not when the
+    /// step's own element is in it (the step is answering that dialog).
+    private func clearBefore(_ step: SkillStep, selectors: [String], skill: Skill, tab: BrowserTab) async {
+        let boxes = await tab.dialogs()
+        guard !boxes.isEmpty, !(await tab.inDialog(selectors)) else { return }
+        _ = await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab, generic: false,
+                                  allowModel: boxes.contains(where: \.modal))
     }
 
     private func read(_ step: SkillStep, inputs: [String: SkillInput], tab: BrowserTab) async -> String? {
@@ -662,6 +888,36 @@ final class HybridBrowserReplayer {
     /// of the recording as a guide.
     private func escalate(skill: Skill, plan: [HybridReplay.Planned], from cursor: Int, until stop: Int?, values: [String: String],
                           item: SkillBinder.Bound, tab: BrowserTab, reason: String) async -> (outcome: StepOutcome, typed: Bool) {
+        let done = plan[..<cursor].map { ParameterFill.fill($0.step.text, values: $0.values).text }.suffix(12)
+        let left = plan[cursor..<(stop ?? plan.count)].filter { $0.step.capture == nil }.map { ParameterFill.fill($0.step.text, values: $0.values).text }.prefix(20)
+        let ending = stop.map { "Stop right before this final step and don't do it: “\(ParameterFill.fill(plan[$0].step.text, values: plan[$0].values).text)” — when the page is ready for it, finish with success true." }
+            ?? "Finish on the confirmation page with success true, and put any reference or confirmation number in your summary."
+        let goal = """
+        Finish this task in the current tab: \(skill.intent ?? skill.name), for \(item.label). \
+        Values to use: \(spelled(skill: skill, values: values)). \
+        A replay already did: \(done.joined(separator: " → ")). It stopped because \(reason). \
+        What was left, as recorded (the page may have changed, so adapt): \(left.joined(separator: " → ")). \
+        Check what the page shows now and continue from there. Never submit, pay, send or delete anything \
+        unless it's in the steps above. \(ending)
+        """
+        let startPath = URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path ?? ""
+        let known = Set(plan.compactMap { $0.step.anchor?.path })
+        let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 30, tag: "rest")
+        if let runID, !result.summary.isEmpty { env?.replayLog(runID, "→ \(item.label): \(result.summary)") }
+        // A page nobody recorded that the agent got past with one click ("Skip for now"): a rule for next time.
+        if result.ok, !startPath.isEmpty, !known.contains(startPath), let first = result.touched.first, first.action == "click",
+           let label = first.label, !label.isEmpty, URLComponents(string: first.url ?? "")?.path == startPath,
+           !["submit", "pay", "buy", "delete", "sign out", "confirm"].contains(where: { label.lowercased().contains($0) }),
+           !learnedInterrupts.contains(where: { $0.whenText == "page:" + startPath }) {
+            learnedInterrupts.append(InterruptHandler(whenText: "page:" + startPath, clickLabel: label, source: "learned-page"))
+            env?.replayLog(runID ?? "", "→ remembered: on \(startPath), “\(label)” moves on")
+        }
+        let typed = result.touched.contains { $0.action == "type" || $0.action == "select" }
+        return (result.ok ? .done : .failed(result.summary.isEmpty ? reason : result.summary), typed)
+    }
+
+    /// This pass's values, spelled out for the model (lists as entries, choices as their option, secrets left out).
+    private func spelled(skill: Skill, values: [String: String]) -> String {
         let inputs = skill.inputs ?? []
         let given = inputs.filter { $0.source != "page" }.compactMap { input -> String? in
             guard let value = values[input.name], !value.isEmpty else { return "\(input.description): none" }
@@ -673,21 +929,6 @@ final class HybridBrowserReplayer {
             let rendered = input.kind == "choice" ? SkillBinder.choice(value, in: input.choices) : HybridReplay.render(value, as: input)
             return "\(input.description): \(rendered)"
         }
-        let done = plan[..<cursor].map { ParameterFill.fill($0.step.text, values: $0.values).text }.suffix(12)
-        let left = plan[cursor..<(stop ?? plan.count)].filter { $0.step.capture == nil }.map { ParameterFill.fill($0.step.text, values: $0.values).text }.prefix(20)
-        let ending = stop.map { "Stop right before this final step and don't do it: “\(ParameterFill.fill(plan[$0].step.text, values: plan[$0].values).text)” — when the page is ready for it, finish with success true." }
-            ?? "Finish on the confirmation page with success true, and put any reference or confirmation number in your summary."
-        let goal = """
-        Finish this task in the current tab: \(skill.intent ?? skill.name), for \(item.label). \
-        Values to use: \(given.joined(separator: "; ")). \
-        A replay already did: \(done.joined(separator: " → ")). It stopped because \(reason). \
-        What was left, as recorded (the page may have changed, so adapt): \(left.joined(separator: " → ")). \
-        Check what the page shows now and continue from there. Never submit, pay, send or delete anything \
-        unless it's in the steps above. \(ending)
-        """
-        let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 30, tag: "rest")
-        if let runID, !result.summary.isEmpty { env?.replayLog(runID, "→ \(item.label): \(result.summary)") }
-        let typed = result.touched.contains { $0.action == "type" || $0.action == "select" }
-        return (result.ok ? .done : .failed(result.summary.isEmpty ? reason : result.summary), typed)
+        return given.joined(separator: "; ")
     }
 }

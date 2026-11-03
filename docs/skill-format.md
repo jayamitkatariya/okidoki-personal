@@ -138,3 +138,11 @@ For each pass, smart replay works in this order:
    3. Typed values are read back and compared.
    4. `expect` is checked.
    5. Only when one of these fails does the model help with that step. If it can't, the agent finishes the job from where the replay is, and its fix can be saved into the skill.
+4. Popups are cleared before a step acts, unless the step's own element is inside the popup. The replay tries these in order:
+   1. the skill's own rules and the built-in ones (cookies, "stay signed in", surveys). These rules click only inside the popup.
+   2. a button that only closes it ("Maybe later", "No thanks").
+   3. one look by the model at a real modal. The model's choice is saved as a `learned` rule in `interrupts`.
+
+   A learned rule fires only on a popup that says its words, never on the same words elsewhere on the page.
+5. An irreversible step is never simply done again. The replay waits up to 25 seconds for its `expect`. The step is pressed once more only when the site says it failed for a passing reason ("busy, try again"). Otherwise the pass ends with "the site didn't confirm it — check before doing it again".
+6. A pass missing a required value isn't started, but the other passes still run. When a run partly fails, its toast offers to retry only the failed passes, never one that may have gone through.

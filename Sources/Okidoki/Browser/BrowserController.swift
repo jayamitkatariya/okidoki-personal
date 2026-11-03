@@ -332,14 +332,15 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         stack.add(webView)
         if activate || model.activeID == nil { select(tab) } else { stack.bringToFront(model.active?.webView) }
         if let url { tab.load(url) }
-        trimTabs()
+        trimTabs(keeping: tab)
         return tab
     }
 
-    /// Too many tabs: the oldest the person isn't looking at and nobody's working in goes.
-    private func trimTabs() {
+    /// Too many tabs: the oldest the person isn't looking at and nobody's working in goes. Never the one
+    /// just opened: whoever asked for it is about to use it.
+    private func trimTabs(keeping fresh: BrowserTab? = nil) {
         while model.tabs.count > Self.maxTabs,
-              let idle = model.tabs.first(where: { $0.id != model.activeID && $0.ownerRunID == nil && !$0.working }) {
+              let idle = model.tabs.first(where: { $0.id != model.activeID && $0 !== fresh && $0.ownerRunID == nil && !$0.working }) {
             closeTab(idle)
         }
     }
@@ -366,6 +367,8 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
 
     /// Closes a tab. A run working in it is stopped first; the last tab is replaced by a new one.
     func closeTab(_ tab: BrowserTab) {
+        // A tab that's already gone stops nobody's run.
+        guard model.tabs.contains(where: { $0.id == tab.id }) else { return }
         if let owner = tab.ownerRunID { env?.stopRun(owner) }
         guard let index = model.tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         if recordingTab === tab { env?.stopBrowserRecording() }

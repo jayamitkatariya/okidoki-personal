@@ -58,6 +58,69 @@
           "amount": "200000"
         }
       ]
+    },
+    "Ezra": {
+      "name": "Ezra Thomas",
+      "pan": "EZTPT2468M",
+      "income": "3450000",
+      "regime": "old",
+      "gains": "45000",
+      "deductions": [
+        {
+          "section": "80C",
+          "amount": "150000"
+        },
+        {
+          "section": "80D",
+          "amount": "50000"
+        },
+        {
+          "section": "80G",
+          "amount": "5000"
+        },
+        {
+          "section": "24B",
+          "amount": "200000"
+        },
+        {
+          "section": "80D",
+          "amount": "25000"
+        }
+      ]
+    },
+    "Zoe": {
+      "name": "Zoë D'Souza",
+      "pan": "ZDSPD1357N",
+      "income": "1250000",
+      "regime": "old",
+      "gains": "",
+      "deductions": [
+        {
+          "section": "24B",
+          "amount": "175000"
+        }
+      ],
+      "given": {
+        "income": "12,50,000",
+        "regime": "Old",
+        "deductions": [
+          {
+            "section": "24(b)",
+            "amount": "1,75,000"
+          }
+        ]
+      }
+    },
+    "Farah": {
+      "name": "Farah Khan",
+      "pan": "FKHPK9753R",
+      "income": "880000",
+      "regime": "new",
+      "gains": "",
+      "deductions": [],
+      "omit": [
+        "pan"
+      ]
     }
   },
   "scenarios": [
@@ -115,6 +178,169 @@
       ],
       "ask": "file this year's Acme Filing tax returns for {names} from their documents",
       "why": "an everyday request, no skill named: smart replay should pick the skill itself and read each person's documents"
+    },
+    {
+      "id": "hard-ids",
+      "items": [
+        "Bharat"
+      ],
+      "site": {
+        "randomIds": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "every id is new on each load: found by label, not by id"
+    },
+    {
+      "id": "hard-slow",
+      "items": [
+        "Chandra",
+        "Divya"
+      ],
+      "site": {
+        "slow": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "pages build their form 0.7–2.4s late; submitting takes 2.5s"
+    },
+    {
+      "id": "hard-popups",
+      "items": [
+        "Bharat",
+        "Divya"
+      ],
+      "site": {
+        "popups": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "a cookie banner, and a stay-signed-in dialog mid-typing that swallows clicks until dismissed"
+    },
+    {
+      "id": "hard-expire",
+      "items": [
+        "Bharat"
+      ],
+      "site": {
+        "expire": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "the session expires on the deductions page: sign in again, carry on"
+    },
+    {
+      "id": "hard-busy",
+      "items": [
+        "Chandra"
+      ],
+      "site": {
+        "busy": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "the first submit fails with 'busy, try again': retry once, never file twice"
+    },
+    {
+      "id": "edge-data",
+      "items": [
+        "Ezra",
+        "Zoe"
+      ],
+      "modes": [
+        "hybrid"
+      ],
+      "why": "5 deduction rows; a name with ë and an apostrophe; money with commas, 'Old', '24(b)'"
+    },
+    {
+      "id": "missing",
+      "items": [
+        "Bharat",
+        "Farah"
+      ],
+      "modes": [
+        "hybrid"
+      ],
+      "expectNotFiled": [
+        "Farah"
+      ],
+      "why": "Farah's PAN isn't given: Bharat is filed, Farah is reported, not guessed"
+    },
+    {
+      "id": "chaos",
+      "items": [
+        "Ezra",
+        "Zoe",
+        "Divya"
+      ],
+      "site": {
+        "randomIds": true,
+        "slow": true,
+        "popups": true,
+        "expire": true,
+        "busy": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "everything at once"
+    },
+    {
+      "id": "stop",
+      "items": [
+        "Bharat",
+        "Chandra",
+        "Divya"
+      ],
+      "site": {
+        "slow": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "stopAfter": 3,
+      "why": "stopped mid-run: nothing after the stop, nothing half-filed"
+    },
+    {
+      "id": "random",
+      "items": [
+        "Bharat",
+        "Chandra",
+        "Divya",
+        "Ezra",
+        "Zoe",
+        "Asha"
+      ],
+      "site": {
+        "random": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "why": "each page load may add a page nobody recorded, a required declaration box, a renamed or decoy button, a promo banner, a toast with Undo, a chat widget"
+    },
+    {
+      "id": "wipe",
+      "items": [
+        "Bharat",
+        "Chandra"
+      ],
+      "site": {
+        "wipe": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "gate": "skip",
+      "expectNotFiled": [
+        "Chandra"
+      ],
+      "why": "the site loses Chandra's details before review: replay must notice and ask, not file an empty return"
     }
   ],
   "documents": {

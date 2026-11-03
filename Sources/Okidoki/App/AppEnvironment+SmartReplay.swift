@@ -62,6 +62,18 @@ extension AppEnvironment {
                 smart = made
             }
         }
+        if var made = smart {
+            // A final step on a page that showed what the run entered (a review page) is marked, so a later
+            // pass whose details don't show there is paused instead of submitted, from the very first replay.
+            let examples = Dictionary((made.inputs ?? []).compactMap { input in input.example.map { (input.name, $0) } },
+                                      uniquingKeysWith: { first, _ in first })
+            for index in made.steps.indices where made.steps[index].irreversible == true {
+                guard let url = made.steps[index].url, let text = run.pages[url] else { continue }
+                let seen = HybridReplay.shownValues(examples, inputs: made.inputs ?? [], on: text)
+                if seen.checked > 0, seen.shown > 0 { made.steps[index].echoes = true }
+            }
+            smart = made
+        }
         if let smart {
             store.replaceSkill(smart)
             store.saveNow()
@@ -139,6 +151,12 @@ extension AppEnvironment {
                     }
                     return vault.search(label, limit: 5).map { vaultRoot.appendingPathComponent($0.id) }
                 }()
+                // What okidoki remembers: lines about this item, or, for a pass that's nobody else's, about you.
+                let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+                let name = fold(label).split(separator: " ").first.map(String.init) ?? ""
+                let remembered: [String] = pass["ref"] == nil && pass["name"] == nil
+                    ? store.memoryLines(limit: 40)
+                    : (name.count >= 3 ? store.memories.filter { fold($0.text).contains(name) }.prefix(20).map(\.text) : [])
                 group.addTask { @MainActor in
                     var (values, leftover) = SkillBinder.match(pass, to: inputs)
                     for input in inputs where input.kind == "choice" {
@@ -148,7 +166,8 @@ extension AppEnvironment {
                     var sources: [String: String] = Dictionary(uniqueKeysWithValues: values.keys.map { ($0, "given") })
                     let still = inputs.filter { values[$0.name] == nil }
                     if !still.isEmpty, canAsk {
-                        let found = await self.resolve(still, label: label, files: files, leftover: leftover, request: request, runID: runID)
+                        let found = await self.resolve(still, label: label, files: files, leftover: leftover, request: request,
+                                                       memory: remembered, runID: runID)
                         for (name, hit) in found {
                             values[name] = hit.value
                             confidence[name] = hit.confidence
@@ -170,13 +189,14 @@ extension AppEnvironment {
 
     /// One call: these inputs, for this item, from its documents (cached by the files' dates).
     private func resolve(_ inputs: [SkillInput], label: String, files: [URL], leftover: [String: String], request: String,
-                         runID: String) async -> [String: (value: String, confidence: Double, source: String?)] {
+                         memory: [String] = [], runID: String) async -> [String: (value: String, confidence: Double, source: String?)] {
         let stamp = files.map { url -> String in
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
             return "\(url.lastPathComponent)@\(Int(date))"
         }.sorted().joined(separator: "|")
         let cacheKey = [label.lowercased(), inputs.map(\.name).sorted().joined(separator: ","), stamp,
-                        leftover.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&"), request].joined(separator: "#")
+                        leftover.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&"), request,
+                        memory.joined(separator: "|")].joined(separator: "#")
         if let hit = SmartReplayCache.shared.get(cacheKey) {
             replayLog(runID, "→ \(label): values from last time (documents unchanged)")
             return hit
@@ -187,6 +207,9 @@ extension AppEnvironment {
         if !leftover.isEmpty {
             documents.append(["name": "values given with the request",
                               "text": leftover.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "\n")])
+        }
+        if !memory.isEmpty {
+            documents.append(["name": "what okidoki remembers", "text": memory.joined(separator: "\n")])
         }
         guard !documents.isEmpty || !request.isEmpty else { return [:] }
         let payload: [String: Any] = [
@@ -285,12 +308,18 @@ extension AppEnvironment {
         guard !skills.isEmpty else { return false }
         let body: [String: Any] = ["request": text, "skills": ReplayDispatcher.catalogue(skills)]
         guard let reply = await BrainClient.shared.smartReplay("skill/route", body: body, timeout: 25),
-              reply["ok"] as? Bool == true, let raw = reply["route"] as? [String: Any] else { return false }
+              reply["ok"] as? Bool == true, let raw = reply["route"] as? [String: Any] else {
+            SmartReplayLog.write("route: no answer for a request of \(text.count) chars")
+            return false
+        }
         let route = ReplayDispatcher.Route(kind: raw["kind"] as? String ?? "agent", id: raw["id"] as? String,
                                            items: raw["items"] as? [String] ?? [],
                                            overrides: (raw["overrides"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String },
                                            confidence: (raw["confidence"] as? NSNumber)?.doubleValue ?? 0)
         let decision = ReplayDispatcher.decide(route, skills: skills)
+        // Names and confidence only, never values.
+        SmartReplayLog.write("route: \(route.kind) \(skills.first { $0.id == route.id }?.name ?? "-") at \(route.confidence), "
+                             + "\(route.items.count) items → \(decision == .agent ? "agent" : "replay")")
         if decision != .agent, echo { store.appendMessage(threadID: threadID, role: .user, text: text) }
         switch decision {
         case .agent:

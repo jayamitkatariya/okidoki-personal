@@ -26,6 +26,42 @@ extension BrowserTab {
         await call("return window.__okidoki ? window.__okidoki.clickText(l) : false", ["l": label]) as? Bool ?? false
     }
 
+    /// Popups showing now (open dialogs and overlays), each with its text and button labels.
+    /// `modal`: an open dialog or an overlay over the middle of the page, not a bar along an edge.
+    func dialogs() async -> [(text: String, buttons: [String], modal: Bool)] {
+        guard let raw = await call("return window.__okidoki ? window.__okidoki.dialogs() : []") as? [[String: Any]] else { return [] }
+        return raw.map { ($0["text"] as? String ?? "", $0["buttons"] as? [String] ?? [], $0["modal"] as? Bool ?? false) }
+    }
+
+    /// The label of the element these selectors find now; nil when none does.
+    func label(of selectors: [String]) async -> String? {
+        guard let raw = await call("return window.__okidoki ? window.__okidoki.find(s) : null", ["s": selectors]) as? [String: Any] else { return nil }
+        return raw["label"] as? String ?? ""
+    }
+
+    func inDialog(_ selectors: [String]) async -> Bool {
+        await call("return window.__okidoki ? window.__okidoki.inDialog(s) : false", ["s": selectors]) as? Bool ?? false
+    }
+
+    func clickInDialog(_ label: String) async -> Bool {
+        await call("return window.__okidoki ? window.__okidoki.clickInDialog(l) : false", ["l": label]) as? Bool ?? false
+    }
+
+    /// The page says it's still loading (a spinner, "Loading…", a busy region).
+    func isBusy() async -> Bool {
+        await call("return window.__okidoki ? window.__okidoki.busy() : true") as? Bool ?? false
+    }
+
+    /// What the page's fields hold (text boxes, chosen options), one per line: a one-page form shows its
+    /// values there, not in its text.
+    func fieldValues() async -> String {
+        await call("""
+        return [...document.querySelectorAll('input:not([type=hidden]):not([type=password]),select,textarea')]
+          .map(e => e.tagName === 'SELECT' ? ((e.selectedOptions && e.selectedOptions[0]) ? e.selectedOptions[0].text : '') : (e.value || ''))
+          .filter(Boolean).join('\\n')
+        """) as? String ?? ""
+    }
+
     func pageText() async -> String {
         await call("return window.__okidoki ? window.__okidoki.pageText() : (document.body ? document.body.innerText : '')") as? String ?? ""
     }

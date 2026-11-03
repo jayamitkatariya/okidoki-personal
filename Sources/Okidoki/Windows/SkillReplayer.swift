@@ -126,8 +126,10 @@ final class SkillReplayer {
             guard let self else { return }
             let bound = await env.bindItems(skill, passes: raw.map { builtins.merging($0) { _, mine in mine } }, runID: runID, request: request)
             if Task.isCancelled || self.runID != runID { return }
+            // A pass that can't be finished is never started; the others still go.
             let gaps = bound.filter { !$0.missing.isEmpty }
-            if !gaps.isEmpty {
+            let gapNote = gaps.isEmpty ? nil : "not started (missing values) — " + gaps.map { "\($0.label): \($0.missing.joined(separator: ", "))" }.joined(separator: "; ")
+            if gaps.count == bound.count {
                 self.finish(failed: "missing before starting — " + gaps.map { "\($0.label): \($0.missing.joined(separator: ", "))" }.joined(separator: "; "),
                             passes: bound.count)
                 return
@@ -135,7 +137,7 @@ final class SkillReplayer {
             env.speaker.speak("replaying \(skill.name).", voiceID: env.store.settings.voiceID, speed: env.store.settings.voiceSpeed)
             var failed: String?
             var done = 0
-            outer: for (n, item) in bound.enumerated() {
+            outer: for (n, item) in bound.enumerated() where item.missing.isEmpty {
                 let pass = n + 1
                 let plan = HybridReplay.plan(skill.steps, values: item.values)
                 let steps = plan.map(\.step)
@@ -189,7 +191,8 @@ final class SkillReplayer {
                 env.replayLog(runID, "\(item.label) · done", receipt: true)
             }
             if Task.isCancelled { return }
-            self.finish(failed: failed.map { done > 0 ? "\(done) of \(bound.count) done · \($0)" : $0 }, passes: bound.count)
+            let problems = [failed, gapNote].compactMap { $0 }
+            self.finish(failed: problems.isEmpty ? nil : "\(done) of \(bound.count) done · " + problems.joined(separator: "; "), passes: bound.count)
         }
     }
 
