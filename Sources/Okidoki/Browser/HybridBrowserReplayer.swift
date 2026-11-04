@@ -232,6 +232,7 @@ final class HybridBrowserReplayer {
         // done), so nothing okidoki typed is taken for theirs.
         personSteps = []
         personTab = env.browser.activeTab.ownerRunID == runID ? env.browser.activeTab : nil
+        if let personTab { env.browser.watchPerson(in: personTab) { [weak self] step in self?.personSteps.append(step) } }
         // A question already on screen (the check before submitting) stays the only card.
         guard gate == nil else { return }
         env.browser.show()
@@ -365,11 +366,19 @@ final class HybridBrowserReplayer {
             // The person has the page (paused): wait for them to hand it back, then pick up from where it is.
             if personHasIt {
                 let at = cursor
-                if personTab === tab { env.browser.watchPerson(in: tab) { [weak self] step in self?.personSteps.append(step) } }
                 while personHasIt, !Task.isCancelled, self.runID == runID { try? await Task.sleep(nanoseconds: 300_000_000) }
                 // Theirs was this page: what they did by hand is kept to offer to the skill.
                 if personTab === tab, !personSteps.isEmpty {
-                    let did = BrowserRecordingCleanup.tidy(personSteps).filter { $0.action != "navigate" }
+                    // Not theirs: what okidoki itself did in this field with this value (its own last step was
+                    // still finishing when they pressed pause; the browser reports that as typed).
+                    let mine = plan[..<min(at + 1, plan.count)].map { planned -> (Set<String>, String) in
+                        (Set(planned.step.selectors ?? []), ParameterFill.fill(planned.step.input ?? "", values: planned.values).text)
+                    }
+                    let did = BrowserRecordingCleanup.tidy(personSteps).filter { step in
+                        guard step.action != "navigate" else { return false }
+                        let selectors = Set(step.selectors ?? [])
+                        return !mine.contains { own in !own.0.isDisjoint(with: selectors) && (own.1 == (step.input ?? "") || step.action == "type" && HybridReplay.sameValue(typed: own.1, field: step.input ?? "")) }
+                    }
                     personSteps = []
                     personTab = nil
                     if !did.isEmpty, plan.indices.contains(at) {
