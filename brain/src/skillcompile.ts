@@ -201,7 +201,8 @@ Rules:
 - Mark steps that submit, file, pay, send, post or delete as irreversible. alwaysConfirm only when money is spent or something is deleted.
 - If the last page showed a value worth keeping (a reference, an order number, a confirmation id), give capture with its example from the run.
 - If the task's point is to find something out (a price, a rating, a definition, a list of results), give capture: a short snake_case name, a description of exactly what to read as the task asked it ("the top five video results: title, channel, length, views"), and the run's answer as example. Never make a thinkStep that only reads or reports: reading the page is what capture does, in one look.
-- drop only true detours (a wrong click that was undone). Never drop signing in, typing or choosing.
+- Custom widgets: steps that worked a calendar (clicking a month/year dropdown inside it, then one specific day), an autocomplete (typing, then clicking or pressing Enter on one suggestion) or a slider pick this run's value by where it sat, so for another item they'd pick the wrong thing. Drop all of that widget's steps and put one thinkStep where they were, naming the field and the value, e.g. "Set 'Date of birth' to {{dob}} with its date picker (open it, choose the month and year, click the day), then check the field shows it." Recorded steps that type a value straight into an ordinary text field are not widgets; keep those.
+- drop only true detours (a wrong click that was undone, a failed attempt) and widget steps replaced as above. Never drop signing in or typing into ordinary fields.
 - An optional amount (capital gains, a bonus) is a money input that's empty when absent, used in "when": "{{capital_gains}}", and the think step types the amount; not a yes/no choice.
 - Step numbers are the "i" values given. Keep names short, snake_case.`;
 

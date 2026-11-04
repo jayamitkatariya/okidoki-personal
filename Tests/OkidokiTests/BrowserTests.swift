@@ -230,6 +230,40 @@ final class BrowserPageScriptTests: XCTestCase {
         XCTAssertEqual(fromPage, "undefined")
     }
 
+    func testHoverShowsWhatOnlyAPointerWouldWithoutMovingIt() async throws {
+        try await load("""
+        <html><head><style>.cap { display: none } .figure:hover .cap { display: block }</style></head><body>
+          <div class="figure"><img alt="User Avatar" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="80" height="80"><div class="cap">name: user1</div></div>
+          <div class="figure"><img alt="User Avatar" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="80" height="80"><div class="cap">name: user2</div></div>
+        </body></html>
+        """)
+        let snap = try await object("return window.__okidoki.snapshot()")
+        let elements = snap["elements"] as? String ?? ""
+        XCTAssertTrue(elements.contains(#"image "User Avatar" (hover)"#), elements)
+        XCTAssertFalse((snap["text"] as? String ?? "").contains("user2"))
+        let lines = elements.split(separator: "\n").filter { $0.contains("User Avatar") }
+        let second = Int(lines[1].dropFirst().prefix { $0.isNumber }) ?? 0
+        let hovered = try await object("return window.__okidoki.act(a)", ["a": ["action": "hover", "ref": second]])
+        XCTAssertEqual(hovered["ok"] as? Bool, true)
+        let after = try await object("return window.__okidoki.snapshot()")
+        XCTAssertTrue((after["text"] as? String ?? "").contains("name: user2"), after["text"] as? String ?? "")
+        XCTAssertFalse((after["text"] as? String ?? "").contains("name: user1"))
+    }
+
+    func testFieldsLabelledBesideThemGetTheirLabel() async throws {
+        try await load("""
+        <html><body><form>
+          <div class="row"><div class="col"><label id="dob-label">Date of Birth</label></div><div class="col"><div><input id="dobInput" value="04 Nov 2026"></div></div></div>
+          <div class="row"><div class="col"><label>Subjects</label></div><div class="col"><div class="select"><div><input role="combobox" aria-autocomplete="list"></div></div></div></div>
+          <div class="row"><label><input type="radio" name="g"> Male</label></div>
+        </form></body></html>
+        """)
+        let elements = try await object("return window.__okidoki.snapshot()")["elements"] as? String ?? ""
+        XCTAssertTrue(elements.contains(#"textbox "Date of Birth""#), elements)
+        XCTAssertTrue(elements.contains(#"combobox "Subjects""#), elements)
+        XCTAssertTrue(elements.contains(#"radio "Male""#), elements)
+    }
+
     // MARK: Hand-off: only a real check calls the person
 
     private func check(_ html: String) async throws -> String? {

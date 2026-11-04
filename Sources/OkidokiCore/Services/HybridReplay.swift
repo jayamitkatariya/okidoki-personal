@@ -511,8 +511,14 @@ public enum HybridReplay {
         guard !values.isEmpty else { return false }
         let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ") }
-        let have = fold(label)
-        return values.allSatisfy { have.contains(fold($0)) }
+        let words: (String) -> String = { fold($0).map { $0.isLetter || $0.isNumber ? String($0) : " " }.joined()
+            .components(separatedBy: " ").filter { !$0.isEmpty }.joined(separator: " ") }
+        let have = " " + words(label) + " "
+        // Whole words only: "Female" doesn't carry "Male", "Category 12" doesn't carry "1".
+        return values.allSatisfy { value in
+            let want = words(value)
+            return !want.isEmpty && have.contains(" " + want + " ")
+        }
     }
 
     /// Below this, a value found in a document is doubtful.

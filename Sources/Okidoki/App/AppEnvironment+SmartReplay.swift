@@ -62,6 +62,7 @@ extension AppEnvironment {
                 smart = made
             }
         }
+        if let made = smart { smart = SkillCompiler.finishing(made, goal: run.goal) }
         if var made = smart {
             // A final step on a page that showed what the run entered (a review page) is marked, so a later
             // pass whose details don't show there is paused instead of submitted, from the very first replay.

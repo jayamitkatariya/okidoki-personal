@@ -78,7 +78,8 @@ extension AppEnvironment {
         let source = LearnedBrowserRun(title: run.title, goal: run.prompt, summary: summary, steps: learned,
                                        pages: learnedPages.removeValue(forKey: run.id) ?? [:])
         lastBrowserRun = success && !learned.isEmpty ? source : nil
-        if success, learned.contains(where: { $0.action != "navigate" }) {
+        // A lookup that only went to an address is a skill too (the address carries the data; a read step is added).
+        if success, !learned.isEmpty {
             savableRuns[run.id] = source
             if savableRuns.count > 30, let oldest = savableRuns.keys.min(by: { (store.run($0)?.createdAt ?? .distantPast) < (store.run($1)?.createdAt ?? .distantPast) }) {
                 savableRuns[oldest] = nil

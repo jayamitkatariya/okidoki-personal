@@ -356,6 +356,8 @@ final class HybridBrowserReplayer {
         var jumps = 0
         var rescues = 0
         var fixes = 0
+        /// The page came out differently and only reading is left: read it where it is, no re-syncing.
+        var readingAnyway = false
         let prefix = total > 1 ? "\(item.label) · " : ""
 
         while cursor < plan.count {
@@ -391,7 +393,7 @@ final class HybridBrowserReplayer {
             status("\(prefix)\(cursor + 1)/\(plan.count) · \(ParameterFill.fill(step.text, values: planned.values).text)", in: tab)
 
             // Is this the place? Popups get cleared; a page that's further along (or behind) gets re-synced.
-            if let anchor = step.anchor, !anchor.isEmpty, action != "navigate" {
+            if let anchor = step.anchor, !anchor.isEmpty, action != "navigate", !(readingAnyway && action == "read") {
                 var seen = await tab.observation()
                 if !HybridReplay.matches(anchor, seen) {
                     if await clearInterrupts(skill: skill, seen: seen, tab: tab) { seen = await tab.observation() }
@@ -450,6 +452,14 @@ final class HybridBrowserReplayer {
             }
 
             var outcome = await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item)
+            // A lookup whose page came out differently (a wrong password's "invalid" message instead of the
+            // secure area): when all that's left is reading, what the page says now is the answer.
+            if case .lost(let why) = outcome, step.irreversible != true, cursor + 1 < plan.count,
+               plan[(cursor + 1)...].allSatisfy({ $0.step.action == "read" }), await tab.humanCheck() == nil {
+                env.replayLog(runID, "→ \(prefix)\(why) — reading what the page says instead")
+                readingAnyway = true
+                outcome = .done
+            }
             if case .lost = outcome, let human = await tab.humanCheck() {
                 // Not lost: a person is needed. Once they're through, the page tells where to pick up.
                 guard await handOff(human.text, label: item.label, tab: tab) else {

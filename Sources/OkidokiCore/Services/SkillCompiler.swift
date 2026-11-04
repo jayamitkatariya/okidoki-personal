@@ -86,6 +86,8 @@ public enum SkillCompiler {
         func known(_ name: String, at index: Int?) -> Bool {
             if name.hasPrefix("vault:") { return true }
             let key = ParameterFill.key(name)
+            // A password from the request: its input is added, sensitive, by `finishing`.
+            if key == "password" { return true }
             if key.hasPrefix("item_") { return index.map { i in loopRanges.contains { $0.contains(i) } } ?? true }
             return declared[key] != nil || ParameterFill.builtins()[key] != nil
         }
@@ -109,7 +111,7 @@ public enum SkillCompiler {
             let sub = CompiledSkill.Substitution(step: raw.step, input: braced(raw.input))
             guard steps.indices.contains(sub.step) else { return nil }
             // A secret is filled from the vault; nothing may replace that.
-            if (steps[sub.step].input ?? "").hasPrefix("{{vault:") { continue }
+            if (steps[sub.step].input ?? "").hasPrefix("{{vault:") || steps[sub.step].input == "{{password}}" { continue }
             guard ParameterFill.names(in: sub.input).allSatisfy({ known($0, at: sub.step) }) else { return nil }
             if steps[sub.step].action == "navigate" { steps[sub.step].url = sub.input }
             steps[sub.step].input = sub.input
@@ -242,6 +244,56 @@ public enum SkillCompiler {
         smart.itemNoun = compiled.itemNoun
         smart.alwaysConfirm = compiled.alwaysConfirm == true ? true : nil
         return smart
+    }
+
+    /// A request that wants something back ("…and tell me the message", "what is the email of…").
+    public static func asksForAnswer(_ goal: String) -> Bool {
+        let g = goal.lowercased()
+        return g.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+            || ["tell me", "what is", "what's", "what are", "what was", "how many", "how much", "which ", "find out", "look up",
+                "let me know", "report ", "read me", "give me"].contains { g.contains($0) }
+    }
+
+    /// Finishing touches on a compiled skill, whatever the compiler said:
+    /// - a request that wants an answer gets a final read step (the compiler sometimes leaves it out, and
+    ///   then a replay does everything and says nothing);
+    /// - a `{{password}}` step (a password the person gave in the request) has its input, sensitive.
+    public static func finishing(_ skill: Skill, goal: String) -> Skill {
+        var made = skill
+        var inputs = made.inputs ?? []
+        let has = { (name: String) in inputs.contains { ParameterFill.key($0.name) == ParameterFill.key(name) } }
+        if made.steps.contains(where: { ($0.input ?? "").contains("{{password}}") }), !has("password") {
+            inputs.append(SkillInput(name: "password", description: "the password to sign in with, as given in the request", kind: "text",
+                                     sensitive: true, required: true))
+        }
+        // Every placeholder a step uses has an input (the compiler sometimes names one in a read or think
+        // step without declaring it, and then the replay can't fill it).
+        let builtins = ParameterFill.builtins()
+        for step in made.steps {
+            for name in ParameterFill.names(in: step.text + " " + (step.input ?? "") + " " + (step.when ?? "")) {
+                let key = ParameterFill.key(name)
+                guard !name.hasPrefix("vault:"), !key.hasPrefix("item_"), builtins[key] == nil, !has(name) else { continue }
+                inputs.append(SkillInput(name: name, description: name.replacingOccurrences(of: "_", with: " "), kind: "text", required: true))
+            }
+        }
+        if asksForAnswer(goal), !made.steps.contains(where: { $0.capture != nil }) {
+            // What to read, in the request's words with this run's values swapped for their inputs.
+            var what = goal
+            for input in inputs where input.sensitive != true {
+                if let example = input.example, example.count >= 2 { what = what.replacingOccurrences(of: example, with: "{{\(input.name)}}") }
+            }
+            let last = made.steps.last
+            var read = SkillStep(text: "read the answer to: \(what)", app: last?.app ?? "", action: "read")
+            read.surface = last?.surface
+            read.url = last?.observedAfter?.url ?? last?.url
+            read.capture = "answer"
+            made.steps.append(read)
+            if !has("answer") {
+                inputs.append(SkillInput(name: "answer", description: "what the request asked for: \(what)", kind: "text", required: false))
+            }
+        }
+        made.inputs = inputs.isEmpty ? made.inputs : inputs
+        return made
     }
 
     /// A goal that only reads or reports what's on the page, with nothing to click, type or choose.

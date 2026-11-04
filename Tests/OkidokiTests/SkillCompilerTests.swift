@@ -189,3 +189,47 @@ final class SkillCompilerTests: XCTestCase {
         XCTAssertFalse(SkillCompiler.onlyReads("For each entry in {{deductions}}, click 'Add deduction' and type its amount"))
     }
 }
+
+final class SkillCompilerFinishingTests: XCTestCase {
+    func testARequestForAnAnswerAlwaysEndsWithARead() {
+        var skill = Skill(accountID: "a", name: "reveal", summary: "", steps: [
+            BrowserSteps.navigate("https://the-internet.herokuapp.com/dynamic_loading/2"),
+            SkillStep.browser("click", text: "click “Start”", url: "https://the-internet.herokuapp.com/dynamic_loading/2", selectors: ["#start button"]),
+        ])
+        skill.inputs = [SkillInput(name: "last_name", description: "", kind: "text", example: "Bach")]
+        let made = SkillCompiler.finishing(skill, goal: "press Start and tell me the text for Bach")
+        XCTAssertEqual(made.steps.last?.action, "read")
+        XCTAssertEqual(made.steps.last?.capture, "answer")
+        XCTAssertTrue(made.steps.last?.text.contains("{{last_name}}") == true, made.steps.last?.text ?? "")
+        // Already reading: nothing added. Not a question: nothing added.
+        XCTAssertEqual(SkillCompiler.finishing(made, goal: "tell me the text").steps.count, made.steps.count)
+        XCTAssertEqual(SkillCompiler.finishing(skill, goal: "press Start").steps.count, 2)
+    }
+
+    func testAPasswordFromTheRequestIsASensitiveInput() {
+        let skill = Skill(accountID: "a", name: "sign in", summary: "", steps: [
+            SkillStep.browser("type", text: "type the password", url: "https://x.example/login", selectors: ["#password"], input: "{{password}}"),
+        ])
+        let made = SkillCompiler.finishing(skill, goal: "sign in with password hunter22")
+        let input = made.inputs?.first { $0.name == "password" }
+        XCTAssertEqual(input?.sensitive, true)
+        XCTAssertNil(input?.example)
+    }
+}
+
+final class SkillCompilerUndeclaredTests: XCTestCase {
+    func testAPlaceholderAReadStepUsesGetsAnInput() {
+        var read = SkillStep(text: "read the email of the row whose Last Name is {{last_name}}", app: "", action: "read")
+        read.capture = "email"
+        let skill = Skill(accountID: "a", name: "t", summary: "", steps: [BrowserSteps.navigate("https://x.example/tables"), read])
+        let made = SkillCompiler.finishing(skill, goal: "what is the email of Bach?")
+        XCTAssertTrue(made.inputs?.contains { $0.name == "last_name" } == true)
+    }
+
+    func testCarriesWholeWordsOnly() {
+        XCTAssertFalse(HybridReplay.carries("Female", all: ["Male"]))
+        XCTAssertTrue(HybridReplay.carries("Male", all: ["male"]))
+        XCTAssertTrue(HybridReplay.carries("Lisbon, Portugal · 12–14 Dec", all: ["Lisbon"]))
+        XCTAssertFalse(HybridReplay.carries("Category 12", all: ["1"]))
+    }
+}

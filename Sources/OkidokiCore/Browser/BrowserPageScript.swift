@@ -106,10 +106,29 @@ public enum BrowserPageScript {
         if (wrapping && clean(wrapping.innerText)) return clean(wrapping.innerText);
         const tag = el.tagName.toLowerCase();
         if (tag !== 'input' && tag !== 'textarea' && tag !== 'select' && clean(el.innerText)) return clean(el.innerText);
+        // A form whose labels sit beside their fields rather than pointing at them ("Date of Birth" in the
+        // row next to a date box, a custom dropdown's input): the label just before it in its row.
+        if (['input', 'textarea', 'select'].includes(tag) && !['checkbox', 'radio', 'button', 'submit'].includes(el.type)) {
+          const near = nearbyLabel(el);
+          if (near) return near;
+        }
         return clean(el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') ||
           (['button', 'submit'].includes(el.getAttribute('type')) ? el.value : '') || el.getAttribute('name') ||
           // A product photo that links to the product: its picture's description is its name.
           el.querySelector?.('img[alt]')?.getAttribute('alt') || el.querySelector?.('svg title')?.textContent || '');
+      }
+
+      function nearbyLabel(el) {
+        let box = el.parentElement;
+        for (let depth = 0; box && depth < 5; depth++, box = box.parentElement) {
+          const fields = box.querySelectorAll('input:not([type=hidden]),select,textarea');
+          if (fields.length > 3) break;
+          const labels = [...box.querySelectorAll('label,[id$="-label"]')]
+            .filter(l => !l.contains(el) && !l.htmlFor && (l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+          const text = labels.length ? clean(labels[labels.length - 1].innerText) : '';
+          if (text && text.length <= 60) return text;
+        }
+        return '';
       }
 
       /** A dropdown's choices, so the agent can pick one it can see; ones the page marks unavailable say so. */
@@ -248,6 +267,20 @@ public enum BrowserPageScript {
           refs.set(n, el);
           lines.push(describe(el, n));
         }
+        // Pictures that do something on hover (captions, menus) aren't controls: offered too, for hovering,
+        // when they say what they are and aren't already inside one.
+        let pictures = 0;
+        for (const el of deepAll('img[alt]:not([alt=""]),[aria-haspopup]:not(a):not(button)')) {
+          if (pictures >= 20 || lines.length >= MAX_ELEMENTS || seen.has(el)) continue;
+          if (el.closest('a[href],button')) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 32 || r.height < 32 || r.top > below || r.bottom < -innerHeight || !visible(el)) continue;
+          seen.add(el);
+          pictures++;
+          const n = refs.size + 1;
+          refs.set(n, el);
+          lines.push(`[${n}] ${el.tagName === 'IMG' ? 'image' : role(el)} "${quote(clean(el.getAttribute('alt') || labelFor(el), 60))}" (hover)`);
+        }
         return { url: location.href, title: document.title, elements: lines.join('\n'), text: pageText(), count: refs.size, more };
       }
 
@@ -311,6 +344,36 @@ public enum BrowserPageScript {
         const at = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, view: viewOf(el) };
         for (const type of ['pointerover', 'pointerenter', 'pointermove']) el.dispatchEvent(new PointerEvent(type, at));
         for (const type of ['mouseover', 'mouseenter', 'mousemove']) el.dispatchEvent(new MouseEvent(type, at));
+        // CSS :hover only follows the real pointer, which stays the person's. The page's own :hover rules are
+        // mirrored onto a class instead, put on the element and everything it sits in.
+        hoverStyles(el.ownerDocument || document);
+        for (const old of deepAll('.okidoki-hover')) old.classList.remove('okidoki-hover');
+        for (let node = el; node && node.nodeType === 1; node = node.parentElement || node.getRootNode()?.host) node.classList.add('okidoki-hover');
+      }
+      const mirrored = new WeakSet();
+      function hoverStyles(doc) {
+        const copy = (sheet, into) => {
+          let rules;
+          try { rules = sheet.cssRules; } catch { return; }  // another site's stylesheet: can't be read
+          for (const rule of [...(rules || [])]) {
+            if (rule.cssRules && !rule.selectorText) { copy(rule, into); continue; }  // @media and friends
+            if (rule.selectorText && rule.selectorText.includes(':hover')) {
+              into.push(`${rule.selectorText.replace(/:hover/g, '.okidoki-hover')} { ${rule.style.cssText} }`);
+            }
+          }
+        };
+        for (const sheet of [...doc.styleSheets]) {
+          if (mirrored.has(sheet)) continue;
+          mirrored.add(sheet);
+          const rules = [];
+          copy(sheet, rules);
+          if (!rules.length) continue;
+          const style = doc.createElement('style');
+          style.setAttribute('data-okidoki', 'hover');
+          style.textContent = rules.join('\n');
+          (doc.head || doc.documentElement).appendChild(style);
+          mirrored.add(style.sheet);
+        }
       }
 
       function click(el) {

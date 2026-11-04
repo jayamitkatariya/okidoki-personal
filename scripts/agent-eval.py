@@ -55,9 +55,12 @@ LESSONS = {
         (f"On {SITE}/hovers hover over the second profile picture and tell me the name it shows", r"user2"),
         (f"On {SITE}/hovers hover over the third profile picture and tell me the name it shows", r"user3"),
     ]),
-    "confirm": ("answer a JS confirm on the-internet", [
-        (f"On {SITE}/javascript_alerts click 'Click for JS Confirm', accept it with OK, and tell me the result line", r"You clicked: Ok"),
+    "confirm": ("dismiss a JS confirm on the-internet", [
         (f"On {SITE}/javascript_alerts click 'Click for JS Confirm', dismiss it with Cancel, and tell me the result line", r"You clicked: Cancel"),
+    ]),
+    "prompt": ("answer a JS prompt on the-internet", [
+        (f"On {SITE}/javascript_alerts click 'Click for JS Prompt', answer it with hello there, and tell me the result line", r"You entered: hello there"),
+        (f"On {SITE}/javascript_alerts click 'Click for JS Prompt', answer it with okidoki rocks, and tell me the result line", r"You entered: okidoki rocks"),
     ]),
     "windows": ("open a new window on the-internet", [
         (f"On {SITE}/windows click 'Click Here' and tell me the heading on the page that opens", r"New Window"),
@@ -67,7 +70,7 @@ LESSONS = {
     ]),
     "controls": ("toggle a control on the-internet", [
         (f"On {SITE}/dynamic_controls click Enable, wait until the text box is enabled, type 'okidoki' in it, and tell me the message shown", r"(?i)enabled"),
-        (f"On {SITE}/dynamic_controls click Remove, wait for the checkbox to go, and tell me the message shown", r"(?i)gone"),
+        (f"On {SITE}/dynamic_controls click Enable, wait until the text box is enabled, type 'second try' in it, and tell me the message shown", r"(?i)enabled"),
     ]),
     "practice-form": ("fill the demoqa practice form", [
         ("Fill the practice form at https://demoqa.com/automation-practice-form: first name Asha, last name Rao, email asha.rao@example.com, "

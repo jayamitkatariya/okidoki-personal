@@ -506,7 +506,13 @@ final class BrowserAgentRun {
             var input: String? = type == "type" ? payload["text"] as? String : type == "select" ? payload["value"] as? String
                 : type == "press" ? (payload["key"] as? String ?? "Enter") : nil
             // Whatever went into a password field (a code they gave in an answer, say) isn't kept in the skill.
-            if type == "type", result.role == "password" { input = BrowserSteps.vaultPlaceholder(site: BrowserSteps.host(of: url), field: "password") }
+            // A password given in the request itself is an input of the skill ({{password}}, never the text); any
+            // other password goes to the vault.
+            if type == "type", result.role == "password" {
+                let typed = payload["text"] as? String ?? ""
+                input = typed.count >= 4 && run.prompt.contains(typed) ? "{{password}}"
+                    : BrowserSteps.vaultPlaceholder(site: BrowserSteps.host(of: url), field: "password")
+            }
             learned.append(.browser(type, text: BrowserSteps.line(type, label: result.label, input: input), url: url,
                                     selectors: result.selectors, label: result.label, role: result.role, input: input, delay: gap))
             if type == "type", payload["submit"] as? Bool == true {
