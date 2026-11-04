@@ -54,6 +54,16 @@ extension BrowserTab {
         return (kind, raw["text"] as? String ?? kind)
     }
 
+    /// The page's address, whether it has finished loading, and any check on it. `known` is false when the
+    /// page couldn't be read (mid-navigation, or the script not in yet): that never counts as "the check is gone".
+    func checkState() async -> (known: Bool, url: String, ready: Bool, check: String?) {
+        guard let raw = await call("return window.__okidoki && window.__okidoki.checkState ? window.__okidoki.checkState() : null") as? [String: Any] else {
+            return (false, "", false, nil)
+        }
+        let check = (raw["check"] as? [String: Any]).map { $0["text"] as? String ?? $0["kind"] as? String ?? "a check" }
+        return (true, raw["url"] as? String ?? "", raw["ready"] as? Bool ?? false, check)
+    }
+
     /// The page says it's still loading (a spinner, "Loading…", a busy region).
     func isBusy() async -> Bool {
         await call("return window.__okidoki ? window.__okidoki.busy() : true") as? Bool ?? false

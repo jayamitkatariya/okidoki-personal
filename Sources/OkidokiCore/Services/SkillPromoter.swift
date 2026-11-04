@@ -56,6 +56,32 @@ public enum SkillPromoter {
         return out.map { var s = $0; s.when = think.when; return s }
     }
 
+    /// What the person did by hand while a replay was paused, as steps for the skill: typed values that are
+    /// one of the pass's values become its `{{input}}`; anything else they typed stays as they typed it.
+    /// Nil when something can't be found again without them (no selectors), or was picked for this pass's data.
+    public static func fromPerson(_ actions: [Action], values: [String: String], inputs: [SkillInput], near: SkillStep) -> [SkillStep]? {
+        let acted = actions.filter { $0.action != "scroll" && $0.action != "hover" && $0.action != "navigate" }
+        guard !acted.isEmpty, acted.allSatisfy({ !$0.selectors.isEmpty || $0.action == "press" }) else { return nil }
+        let picked = values.filter { key, value in !key.hasPrefix("today") && !key.hasPrefix("item.") && key != "ref" && value.count >= 3 }.map(\.value)
+        if acted.contains(where: { action in
+            action.action == "click" && picked.contains { value in (action.label ?? "").localizedCaseInsensitiveContains(value) }
+        }) { return nil }
+        return acted.map { action in
+            var input = action.input
+            if let typed = action.input, ["type", "select"].contains(action.action), !typed.hasPrefix("{{"),
+               let source = inputs.first(where: { input in
+                   guard input.kind != "list", let value = values[input.name], !value.isEmpty else { return false }
+                   return HybridReplay.sameValue(typed: value, field: typed)
+                       || SkillBinder.choice(value, in: input.choices).lowercased() == typed.lowercased()
+               }) {
+                input = "{{\(source.name)}}"
+            }
+            var made = step(action, input: input, near: near)
+            made.when = near.when
+            return made
+        }
+    }
+
     private static func loop(_ think: SkillStep, _ acted: [Action], list: SkillInput, entries: [[String: String]]) -> [SkillStep]? {
         let n = entries.count
         guard acted.count % n == 0 else { return nil }

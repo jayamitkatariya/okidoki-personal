@@ -373,6 +373,92 @@
       ],
       "pauseAfter": 3,
       "why": "the person presses pause mid-run, holds the page, then takes it back: nothing done while paused, everything finished after"
+    },
+    {
+      "id": "decoys",
+      "items": [
+        "Bharat",
+        "Chandra"
+      ],
+      "site": {
+        "decoys": true,
+        "random": true
+      },
+      "modes": [
+        "agent",
+        "hybrid"
+      ],
+      "maxTurns": 0,
+      "why": "pages carry reCAPTCHA's invisible badge and a footer about security checks and verification codes: nothing there is a check, so nobody is called"
+    },
+    {
+      "id": "captcha-slow",
+      "items": [
+        "Bharat",
+        "Chandra"
+      ],
+      "site": {
+        "captcha": true,
+        "captchaSlow": true,
+        "slow": true
+      },
+      "modes": [
+        "agent",
+        "hybrid"
+      ],
+      "person": "document.querySelector('#robot').click(); document.querySelector('#robot').dispatchEvent(new Event('change',{bubbles:true})); setTimeout(()=>document.querySelector('#human-continue').click(),400)",
+      "maxTurns": 2,
+      "why": "the captcha widget stays after it's ticked and Continue goes through a slow sign-in page: one hand-off per person, no card flicker, then it finishes"
+    },
+    {
+      "id": "captcha-notch",
+      "items": [
+        "Bharat"
+      ],
+      "site": {
+        "captcha": true
+      },
+      "modes": [
+        "agent",
+        "hybrid"
+      ],
+      "person": "document.querySelector('#robot').click(); document.querySelector('#robot').dispatchEvent(new Event('change',{bubbles:true}))",
+      "personThen": "notch",
+      "maxTurns": 1,
+      "why": "the person ticks the box and presses play in the notch instead of Continue: that's take back, and okidoki carries on from that page"
+    },
+    {
+      "id": "pause-agent",
+      "items": [
+        "Bharat"
+      ],
+      "site": {
+        "slow": true
+      },
+      "modes": [
+        "agent"
+      ],
+      "pauseAfter": 8,
+      "why": "the person pauses a web task from the notch: the agent stops acting, waits, and finishes after play"
+    },
+    {
+      "id": "teach",
+      "items": [
+        "Bharat"
+      ],
+      "site": {
+        "newBox": true,
+        "slow": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "teach": {
+        "on": "form.html",
+        "js": "(function(){window.__okidoki.trustScripted(true);const t=setInterval(()=>{const b=document.querySelector('#confirm-details'); if(b){b.click(); clearInterval(t);}},150);})()",
+        "step": "click “I confirm these details are correct”"
+      },
+      "why": "the site added a required box; the person pauses, ticks it, takes it back and says 'add to skill': the next replay ticks it itself with no model"
     }
   ],
   "documents": {

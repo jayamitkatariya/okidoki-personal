@@ -65,3 +65,28 @@ final class SkillPromoterTests: XCTestCase {
         XCTAssertEqual(SkillPromoter.replacing([a, c], at: 1, with: [SkillStep(text: "x")]).map(\.text), ["a", "c"])
     }
 }
+
+final class SkillPromoterFromPersonTests: XCTestCase {
+    func testWhatThePersonDidBecomesStepsWithTheirValuesAsInputs() throws {
+        let near = SkillStep.browser("click", text: "click “Continue”", url: "https://tax.example/form", selectors: ["#continue"])
+        let inputs = [SkillInput(name: "pan", description: "PAN", kind: "text")]
+        let actions = [
+            SkillPromoter.Action(action: "click", selectors: ["#confirm-details"], label: "I confirm these details are correct", role: "checkbox"),
+            SkillPromoter.Action(action: "type", selectors: ["#pan-again"], label: "Repeat PAN", role: "textbox", input: "BHMPM5678L"),
+            SkillPromoter.Action(action: "type", selectors: ["#note"], label: "Note", role: "textbox", input: "filed by okidoki"),
+        ]
+        let steps = try XCTUnwrap(SkillPromoter.fromPerson(actions, values: ["pan": "BHMPM5678L"], inputs: inputs, near: near))
+        XCTAssertEqual(steps.map(\.action), ["click", "type", "type"])
+        XCTAssertEqual(steps[1].input, "{{pan}}", "a value of this pass becomes its input")
+        XCTAssertEqual(steps[2].input, "filed by okidoki", "anything else stays as they typed it")
+        XCTAssertEqual(steps[0].selectors, ["#confirm-details"])
+    }
+
+    func testNothingIsLearnedThatCantBeFoundAgainOrWasPickedForThisPass() {
+        let near = SkillStep.browser("click", text: "click “Search”", url: "https://shop.example", selectors: ["#go"])
+        let blind = [SkillPromoter.Action(action: "click", selectors: [], label: "somewhere")]
+        XCTAssertNil(SkillPromoter.fromPerson(blind, values: [:], inputs: [], near: near))
+        let picked = [SkillPromoter.Action(action: "click", selectors: ["a.result"], label: "Kindle Paperwhite 16GB")]
+        XCTAssertNil(SkillPromoter.fromPerson(picked, values: ["product": "Kindle Paperwhite"], inputs: [], near: near))
+    }
+}

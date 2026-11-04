@@ -122,29 +122,74 @@ extension AppEnvironment {
 
     /// "Your turn": the person does what only they can (a captcha, a code, anything while paused), then
     /// hands it back. The replay also takes it back by itself once the check is gone.
+    ///
+    /// The card never takes the keyboard: the person is about to type into the page (a one-time code),
+    /// and a key card would catch it as a new request. Closing it isn't an answer; the run keeps waiting
+    /// and still notices when the check is gone.
     func presentHandoff(runID: String, title: String, text: String, takeBack: @escaping () -> Void, stop: @escaping () -> Void) {
         var answered = false
         let once: (Bool) -> Void = { [weak self] back in
             guard !answered else { return }
             answered = true
-            self?.pendingHandoff = nil
-            self?.answerController.close(restoreApp: false)
+            if self?.handoffRunID == runID {
+                self?.pendingHandoff = nil
+                self?.handoffRunID = nil
+                self?.answerController.close(restoreApp: false)
+            }
             back ? takeBack() : stop()
         }
         let card = AnswerCardModel(title: title, text: text, actions: [
             CardAction(title: "take back", kind: .primary, glyph: "bolt") { once(true) },
             CardAction(title: "stop", kind: .secondary, glyph: "runs") { once(false) },
         ], threadTitle: nil, runID: runID, threadID: store.run(runID)?.threadID)
-        card.footnote = "smart replay · waiting for you"
+        card.footnote = "waiting for you · okidoki carries on by itself once it's done"
+        card.onClose = { [weak self] in
+            guard let self, self.handoffRunID == runID else { return }
+            self.answerController.close(restoreApp: false)
+        }
         pendingHandoff = { once(true) }
-        present(card, source: "followup")
-        speak("Your turn. I need you for a moment.")
+        handoffRunID = runID
+        present(card, source: "replay")
+        // Said once, not every time a second check follows the first.
+        if Date().timeIntervalSince(lastHandoffSpoken) > 45 {
+            lastHandoffSpoken = Date()
+            speak("Your turn. I need you for a moment.")
+        }
     }
 
-    /// Closes the "your turn" card once the replay has taken it back.
-    func closeHandoffCard() {
-        guard pendingHandoff != nil else { return }
+    /// The person stepped in on a paused replay and did something the skill doesn't: offer to add it, in
+    /// their words, before the step they stepped in at. Nothing changes unless they say so.
+    func offerPersonSteps(skillID: String, before index: Int, steps: [SkillStep], runID: String) {
+        guard let skill = store.skill(skillID), skill.steps.indices.contains(index) else { return }
+        let list = steps.map { "· \($0.text)" }.joined(separator: "\n")
+        let card = AnswerCardModel(title: "learn what you did?", text: "While it was paused you did:\n\(list)\n\n"
+                                   + "Add \(steps.count == 1 ? "it" : "these") to “\(skill.name)” before “\(skill.steps[index].text)”, so next time it does \(steps.count == 1 ? "it" : "them") itself?",
+                                   actions: [], threadTitle: nil, runID: runID, threadID: store.run(runID)?.threadID)
+        card.actions = [
+            CardAction(title: "add to skill", kind: .primary, glyph: "wand") { [weak self] in
+                guard let self, var current = self.store.skill(skillID), current.steps.indices.contains(index) else { return }
+                current.steps.insert(contentsOf: steps, at: index)
+                current.steps = SkillCompiler.deriveChecks(current.steps)
+                self.store.replaceSkill(current)
+                self.store.saveNow()
+                self.replayLog(runID, "→ added \(steps.count) \(steps.count == 1 ? "step" : "steps") you did to “\(current.name)”")
+                self.answerController.close(restoreApp: false)
+                self.toast(title: "learned", detail: "“\(current.name)” now does that itself", kind: .success,
+                           undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: runID)
+            },
+            CardAction(title: "not now", kind: .secondary, glyph: "runs") { [weak self] in self?.answerController.close(restoreApp: false) },
+        ]
+        card.footnote = "smart replay · learning from you"
+        pendingTeach = { [weak card] in card?.actions.first?.handler() }
+        present(card, source: "replay")
+    }
+
+    /// Closes the "your turn" card once the run has taken it back (or ended). Only that run's card:
+    /// whatever else is showing now stays.
+    func closeHandoffCard(runID: String) {
+        guard pendingHandoff != nil, handoffRunID == runID else { return }
         pendingHandoff = nil
+        handoffRunID = nil
         answerController.close(restoreApp: false)
     }
 

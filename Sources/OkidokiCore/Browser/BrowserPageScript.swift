@@ -428,6 +428,8 @@ public enum BrowserPageScript {
 
       // Recording: what the person does, as steps a replay can find again.
       let recording = false;
+      // Tests only: scripted clicks count as the person's (okidoki's own world can set it; a page can't reach it).
+      let trustScripted = false;
       const typed = new WeakMap();
       const post = (step) => { try { window.webkit.messageHandlers.okidokiRecord.postMessage(step); } catch {} };
       // The element itself, not the shadow host the event was retargeted to.
@@ -451,7 +453,7 @@ public enum BrowserPageScript {
         post(step(el, 'type', secret ? { secret: true, kind: el.type === 'password' ? 'password' : 'secret' } : { text: value }));
       }
       addEventListener('click', e => {
-        if (!recording || !e.isTrusted) return;
+        if (!recording || (!e.isTrusted && !trustScripted)) return;
         const el = target(e);
         if (!el || el === document.body) return;
         const r = role(el);
@@ -461,14 +463,14 @@ public enum BrowserPageScript {
         post(step(el, 'click'));
       }, true);
       addEventListener('change', e => {
-        if (!recording || !e.isTrusted) return;
+        if (!recording || (!e.isTrusted && !trustScripted)) return;
         const el = e.target;
         if (el.tagName === 'SELECT') post(step(el, 'select', { value: el.selectedOptions?.[0]?.text?.trim() ?? el.value }));
         else if (el.type === 'checkbox' || el.type === 'radio') return;
         else flushTyping(el);
       }, true);
       addEventListener('keydown', e => {
-        if (!recording || !e.isTrusted) return;
+        if (!recording || (!e.isTrusted && !trustScripted)) return;
         const el = origin(e);
         if (e.key === 'Enter' && el && 'value' in el && el.tagName !== 'TEXTAREA') {
           flushTyping(el);
@@ -476,10 +478,10 @@ public enum BrowserPageScript {
           enterAt = Date.now();
         }
       }, true);
-      addEventListener('blur', e => { if (recording && e.isTrusted) flushTyping(origin(e)); }, true);
+      addEventListener('blur', e => { if (recording && (e.isTrusted || trustScripted)) flushTyping(origin(e)); }, true);
       // A click elsewhere ends typing in a rich editor, which has no change event.
       addEventListener('pointerdown', e => {
-        if (!recording || !e.isTrusted) return;
+        if (!recording || (!e.isTrusted && !trustScripted)) return;
         const active = document.activeElement;
         if (active && active.isContentEditable && !active.contains(e.target)) flushTyping(active);
       }, true);
@@ -508,7 +510,7 @@ public enum BrowserPageScript {
       }
       function present(selector) { return candidates(selector).some(visible); }
       /** A dropdown's option texts, for matching a value written another way ("24(b)" → "24B"). */
-      function optionsOf(selectors) {
+      function optionsAt(selectors) {
         const hit = find(selectors || []);
         if (!hit || hit.el.tagName !== 'SELECT') return null;
         return [...hit.el.options].map(o => clean(o.text, 120)).filter(Boolean);
@@ -578,19 +580,45 @@ public enum BrowserPageScript {
        * {kind: "captcha" | "code", text} or null. By the widgets' own markers and their usual words.
        */
       function humanCheck() {
-        const frames = deepAll('iframe').filter(visible).map(f => f.src || '');
-        if (frames.some(src => /recaptcha|hcaptcha|challenges\.cloudflare\.com|turnstile|arkoselabs|funcaptcha|captcha/i.test(src)))
-          return { kind: 'captcha', text: 'a captcha' };
-        if (deepAll('.g-recaptcha,.h-captcha,.cf-turnstile,[data-sitekey],#challenge-form,#cf-challenge-running').some(visible))
-          return { kind: 'captcha', text: 'a captcha' };
-        const text = (document.body?.innerText || '').slice(0, 4000);
-        const said = text.match(/verify (that )?you('| a)re (a )?human|i'?m not a robot|are you a robot|checking (if the site connection is secure|your browser)|press (and|&) hold|unusual traffic|security check|prove you('| a)re human/i);
-        if (said) return { kind: 'captcha', text: said[0] };
-        const code = deepAll('input[autocomplete=one-time-code]').filter(visible);
-        const asks = text.match(/enter the (\d-digit |verification |security )?code|we (just )?sent (you )?a code|verification code|two-factor|2-step verification|authenticator app/i);
-        if (code.length || (asks && deepAll('input:not([type=hidden])').some(visible)))
-          return { kind: 'code', text: asks ? asks[0] : 'a one-time code' };
+        // A widget the person already passed (its token filled in) isn't in the way any more.
+        const solved = deepAll('textarea[name="g-recaptcha-response"],textarea[name="h-captcha-response"],input[name="cf-turnstile-response"]')
+          .some(el => (el.value || '').length > 20);
+        // Challenge frames big enough to be the thing in the way: not reCAPTCHA's corner badge, not an
+        // invisible widget waiting on a submit, not a 1px tracking frame.
+        const challenge = deepAll('iframe').filter(visible).filter(f => {
+          const src = f.src || '';
+          if (!/recaptcha|hcaptcha|challenges\.cloudflare\.com|turnstile|arkoselabs|funcaptcha|captcha/i.test(src)) return false;
+          if (f.closest('.grecaptcha-badge') || /[?&]size=invisible/i.test(src)) return false;
+          const r = f.getBoundingClientRect();
+          return r.width >= 60 && r.height >= 50;
+        });
+        // The challenge picture grid (reCAPTCHA's bframe, hCaptcha's challenge) is in the way even if solved before.
+        const grid = challenge.some(f => /bframe|hcaptcha.*challenge|frame=challenge/i.test(f.src || '') && f.getBoundingClientRect().height > 200);
+        if (grid || (challenge.length && !solved)) return { kind: 'captcha', text: 'a captcha' };
+        if (deepAll('#challenge-form,#cf-challenge-running,#challenge-stage').some(visible)) return { kind: 'captcha', text: 'a captcha' };
+        // Words count only where they're the point of the page: its title, a heading, a dialog, or a page
+        // short enough to be nothing but the check. A footer's "security check" isn't one.
+        const body = (document.body?.innerText || '');
+        const prominent = [document.title,
+          ...deepAll('h1,h2,h3,legend,[role=dialog],[role=alertdialog],dialog[open],[aria-modal=true]').filter(visible).map(el => (el.innerText || '').slice(0, 600))]
+          .join('\n');
+        const where = body.length < 1500 ? body : prominent;
+        const said = where.match(/verify (that )?you('| a)re (a )?human|i'?m not a robot|are you a robot|checking (if the site connection is secure|your browser)|press (and|&) hold|unusual traffic|security check|prove you('| a)re human|confirm you('| a)re (a )?human/i);
+        if (said && !solved) return { kind: 'captcha', text: said[0].toLowerCase() };
+        // A one-time code: the browser's own hint, or a code-shaped box under a heading asking for one.
+        const codeBoxes = deepAll('input[autocomplete=one-time-code]').filter(visible);
+        if (codeBoxes.length) return { kind: 'code', text: 'a one-time code' };
+        const asks = (body.length < 1500 ? body : prominent).match(/enter the (\d-digit |verification |security )?code|we (just )?sent (you )?a code|verification code|two-factor|2-step verification|authenticator app/i);
+        const codeShaped = deepAll('input:not([type=hidden]):not([type=password]):not([type=checkbox]):not([type=radio])').filter(visible)
+          .some(el => /code|otp|token|pin|2fa|mfa/i.test([el.name, el.id, el.placeholder, el.getAttribute('aria-label')].join(' '))
+            || el.inputMode === 'numeric' || (el.maxLength > 0 && el.maxLength <= 8));
+        if (asks && codeShaped) return { kind: 'code', text: asks[0].toLowerCase() };
         return null;
+      }
+
+      /** Where the page is, for knowing when a person has finished with it: still loading, and any check on it. */
+      function checkState() {
+        return { url: location.href, ready: document.readyState === 'complete' && !busy(), check: humanCheck() };
       }
 
       /** Something on the page says it's still loading. */
@@ -602,10 +630,11 @@ public enum BrowserPageScript {
       }
 
       window.__okidoki = {
-        headings, valueOf, present, clickText, optionsOf, dialogs, clickInDialog, inDialog, busy, humanCheck,
+        headings, valueOf, present, clickText, optionsOf: optionsAt, dialogs, clickInDialog, inDialog, busy, humanCheck, checkState,
         snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
         fillLogin, settle, pageText,
         record: (on) => { recording = !!on; return recording; },
+        trustScripted: (on) => { trustScripted = !!on; return trustScripted; },
       };
     })();
     """#

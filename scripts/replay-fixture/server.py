@@ -19,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent / "site"
-CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False, "captcha": False}
+CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False, "captcha": False, "decoys": False, "captchaSlow": False, "newBox": False}
 BUSY_SEEN = set()
 SUBMISSIONS = []
 
@@ -30,6 +30,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def end_headers(self):
+        # Never cached: a knob flipped between runs must change the very next page load.
+        if not any(h.lower().startswith(b"cache-control") for h in getattr(self, "_headers_buffer", [])):
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
     def send_json(self, obj, status=200, content_type="application/json"):
         body = (obj if isinstance(obj, str) else json.dumps(obj)).encode()

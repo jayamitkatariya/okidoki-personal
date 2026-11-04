@@ -152,6 +152,11 @@ final class BrowserPageScriptTests: XCTestCase {
         XCTAssertTrue(elements.contains(#"password "Password" (password field)"#), elements)
         XCTAssertTrue(elements.contains(#"button "Pay now""#), elements)
         XCTAssertFalse(elements.contains("Hidden"), "invisible elements aren't offered")
+        XCTAssertTrue(elements.contains(#"options: "Standard", "Express""#), "a dropdown lists its options: \(elements)")
+        XCTAssertFalse(elements.contains("null"), elements)
+        // Smart replay reads a dropdown's options by its selectors.
+        let options = try await call("return window.__okidoki.optionsOf(['select[name=ship]'])") as? [String]
+        XCTAssertEqual(options, ["Standard", "Express"])
         XCTAssertTrue((snap["text"] as? String ?? "").contains("Checkout"))
     }
 
@@ -223,5 +228,56 @@ final class BrowserPageScriptTests: XCTestCase {
         try await load(form)
         let fromPage = try await webView.callAsyncJavaScript("return typeof window.__okidoki", arguments: [:], in: nil, contentWorld: .page) as? String
         XCTAssertEqual(fromPage, "undefined")
+    }
+
+    // MARK: Hand-off: only a real check calls the person
+
+    private func check(_ html: String) async throws -> String? {
+        try await load(html)
+        let value = try await call("return window.__okidoki.humanCheck()")
+        return (value as? [String: Any])?["kind"] as? String
+    }
+
+    private let longPage = String(repeating: "<p>Your order history, invoices and saved addresses are below. Returns are free within 30 days.</p>", count: 30)
+
+    func testARealChallengeIsACheck() async throws {
+        let challenge = try await check("<html><head><title>Just a moment...</title></head><body><h1>Verify you are human</h1><p>Checking your browser.</p></body></html>")
+        XCTAssertEqual(challenge, "captcha")
+        let widget = try await check("<html><body>\(longPage)<div class='g-recaptcha'><iframe src='https://captcha.invalid/recaptcha/api2/anchor?k=x' width='304' height='78'></iframe></div><textarea name='g-recaptcha-response' style='display:none'></textarea></body></html>")
+        XCTAssertEqual(widget, "captcha")
+        let code = try await check("<html><body><h2>Enter the verification code</h2><input name='otp' inputmode='numeric' maxlength='6'></body></html>")
+        XCTAssertEqual(code, "code")
+    }
+
+    func testDecoysAreNotChecks() async throws {
+        // reCAPTCHA's invisible corner badge, on an ordinary long page.
+        let badge = try await check("<html><body>\(longPage)<div class='grecaptcha-badge' style='position:fixed;right:0;bottom:0;width:256px;height:60px'><iframe src='https://captcha.invalid/recaptcha/api2/anchor?k=x&size=invisible' width='256' height='60'></iframe></div></body></html>")
+        XCTAssertNil(badge)
+        // A footer that talks about security checks and verification codes.
+        let footer = try await check("<html><body><h1>Your orders</h1><input name='search'>\(longPage)<footer>We run a security check on every order and will never ask for a verification code by phone. Turn on two-factor sign-in.</footer></body></html>")
+        XCTAssertNil(footer)
+        // A tracking frame from a captcha vendor, too small to be in the way.
+        let pixel = try await check("<html><body>\(longPage)<iframe src='https://captcha.invalid/hcaptcha/1/api.js' width='1' height='1'></iframe></body></html>")
+        XCTAssertNil(pixel)
+    }
+
+    func testATickedWidgetIsNoLongerInTheWay() async throws {
+        let solved = try await check("<html><body>\(longPage)<div class='g-recaptcha'><iframe src='https://captcha.invalid/recaptcha/api2/anchor?k=x' width='304' height='78'></iframe></div><textarea name='g-recaptcha-response' style='display:none'>03AFcWeA\(String(repeating: "x", count: 40))</textarea></body></html>")
+        XCTAssertNil(solved)
+    }
+}
+
+final class BrowserDialogStepTests: XCTestCase {
+    func testDialogStepsSayHowTheNextPopUpIsAnswered() {
+        let cancel = BrowserSteps.dialog(accept: false, text: nil)
+        XCTAssertEqual(cancel.action, "dialog")
+        XCTAssertEqual(BrowserSteps.dialogAnswer(cancel.input).accept, false)
+        let typed = BrowserSteps.dialog(accept: true, text: "{{reason}}")
+        XCTAssertEqual(typed.input, "accept:{{reason}}")
+        let answer = BrowserSteps.dialogAnswer(ParameterFill.fill(typed.input ?? "", values: ["reason": "moved house"]).text)
+        XCTAssertTrue(answer.accept)
+        XCTAssertEqual(answer.text, "moved house")
+        XCTAssertEqual(BrowserSteps.dialogAnswer(nil).accept, true)
+        XCTAssertNil(BrowserSteps.dialogAnswer("accept").text)
     }
 }

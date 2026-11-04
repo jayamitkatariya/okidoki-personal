@@ -12,6 +12,8 @@ const gains = `<label><input type="checkbox" id="${id("has-gains")}" style="widt
   <div id="gains-box" class="hidden"><label for="${id("gains")}">Capital gains (₹)</label><input id="${id("gains")}" inputmode="numeric"></div>`;
 // Drift moves the PAN above the name and the regime above the income.
 $("#f").innerHTML = (F.drift ? [pan, name, regime, income, gains] : [name, pan, income, regime, gains]).join("")
+  // newBox: a required box the site added after the skill was recorded.
+  + (F.newBox ? `<label><input type="checkbox" id="confirm-details" style="width:auto"> I confirm these details are correct</label>` : "")
   + `<button type="submit">${L("Continue", "Next step")}</button>`;
 moneyMask($("#" + id("income"))); moneyMask($("#" + id("gains")));
 $("#" + id("has-gains")).onchange = (e) => $("#gains-box").classList.toggle("hidden", !e.target.checked);
@@ -21,6 +23,7 @@ $("#f").onsubmit = (e) => {
   const v = (n) => $("#" + id(n)).value.trim();
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v("pan"))) { $("#err").textContent = "PAN should look like ABCDE1234F"; return; }
   if (!v("fullname") || !digits(v("income")) || !v("regime")) { $("#err").textContent = "Fill every field"; return; }
+  if (F.newBox && !$("#confirm-details").checked) { $("#err").textContent = "Please confirm your details are correct"; return; }
   const hasGains = $("#" + id("has-gains")).checked;
   save({ name: v("fullname"), pan: v("pan"), income: digits(v("income")), regime: v("regime"),
          gains: hasGains ? digits(v("gains")) : "" });

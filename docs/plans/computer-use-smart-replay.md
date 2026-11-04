@@ -183,6 +183,27 @@ Today a computer-use run (`ComputerUseDriver`) can't become a skill. Build `Comp
 - **Missing values:** an item missing a required value isn't started; the others still run. This is already in `beginSmart`; keep it.
 - **Retry:** "retry those" offers only failed, safe passes (`failReplay(retry:)`).
 
+### 5.9b Pause, hand-off and learning from the person (match the browser exactly)
+
+The browser now has these; build the Mac pass loop around the same contract from day one.
+- **Pause is real.**
+  - Notch Pause sets the run to `.paused` (`AgentRun.waitingFor == nil`). The driver steps aside: no ghost, no glow, Escape is the person's, and no keys are typed.
+  - It waits at the top of its next step, and play carries on from wherever the screen is now. See `SkillReplayer.holdWhilePaused` and `ComputerUseDriver.holdWhilePaused`; copy their shape.
+  - A model turn that was in flight when Pause was pressed is thrown away, never acted on.
+- **Hand-off.**
+  - When something only the person can do appears (a password prompt from macOS, an "allow" dialog, a 2FA code), set `.paused` with `waitingFor` to what it is. The notch then shows "Your turn · …" and play means take back.
+  - Show the "your turn" card through `env.presentHandoff`. It never takes the keyboard.
+  - Detect "done" the way `PersonTurn.waitPast` does: the thing must be gone *and* the screen must have been quiet for 1.5 s. Never treat an unreadable or changing screen as done.
+- **One card at a time.** Gates and hand-offs queue (see `askGate`/`handOff` in `HybridBrowserReplayer`).
+- **Learning from the person.**
+  - While paused, record what the person does in the app. The `WatchRecorder` already does this for watch-me.
+  - When they take back and the pass finishes, offer to add what's new to the skill with `env.offerPersonSteps`, which is shared. `SkillPromoter.fromPerson` turns their typed values back into inputs.
+  - It is never added silently.
+- **Other agents.**
+  - `POST /tasks {mode: "computer"}`, `okidoki computer "…"` and the MCP `okidoki_do` already start computer-use runs.
+  - Mac replays will be reachable through `POST /skills/<id>/run` with no extra work, once `SkillReplayer.beginSmart` takes values per pass.
+  - Run JSON reports `needs` from `waitingFor`, so the hand-off above is all an agent needs.
+
 ### 5.10 Dispatch
 `dispatchToSkill` already includes `.computerUse` decisions and offers uninstalled library templates. Check that:
 - a Mac template is picked for "add these rows to my Numbers sheet"

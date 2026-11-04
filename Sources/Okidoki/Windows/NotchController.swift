@@ -28,6 +28,7 @@ struct NotchRunItem: Identifiable, Equatable {
     var summary: String
     var risk: RiskLevel
     var commands: [String]
+    var waitingFor: String?
 
     init(_ run: AgentRun) {
         id = run.id
@@ -40,6 +41,7 @@ struct NotchRunItem: Identifiable, Equatable {
         summary = run.preview?.summary ?? ""
         risk = run.preview?.risk ?? .low
         commands = run.preview?.commands ?? []
+        waitingFor = run.waitingFor
     }
 }
 

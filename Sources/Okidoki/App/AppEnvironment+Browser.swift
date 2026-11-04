@@ -78,6 +78,12 @@ extension AppEnvironment {
         let source = LearnedBrowserRun(title: run.title, goal: run.prompt, summary: summary, steps: learned,
                                        pages: learnedPages.removeValue(forKey: run.id) ?? [:])
         lastBrowserRun = success && !learned.isEmpty ? source : nil
+        if success, learned.contains(where: { $0.action != "navigate" }) {
+            savableRuns[run.id] = source
+            if savableRuns.count > 30, let oldest = savableRuns.keys.min(by: { (store.run($0)?.createdAt ?? .distantPast) < (store.run($1)?.createdAt ?? .distantPast) }) {
+                savableRuns[oldest] = nil
+            }
+        }
         // A template's first run: kept as the person's own skill straight away, and the rest replayed with it.
         // A lookup that only went to an address (npmjs.com/package/react) is a skill too: the address is
         // what changes per item, and the reading is a read step.
@@ -115,6 +121,14 @@ extension AppEnvironment {
         if success, !learned.isEmpty { card.footnote = "\(learned.count) steps · save it and next time it runs without the model" }
         present(card, source: "followup")
         speak(success ? "Done." : summary)
+    }
+
+    /// Keeps a finished web run as a skill (another agent teaching okidoki). Nil when that run can't be kept.
+    func saveRunAsSkill(_ runID: String, name: String?) -> String? {
+        guard let learned = savableRuns.removeValue(forKey: runID) else { return nil }
+        let title = (name?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? learned.title
+        saveBrowserSkill(name: title, steps: learned.steps, source: "act", learnedFrom: learned)
+        return title
     }
 
     func saveBrowserSkill(name: String, steps: [SkillStep], source: String, learnedFrom: LearnedBrowserRun? = nil,

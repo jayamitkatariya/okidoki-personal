@@ -5,6 +5,7 @@ build/
 web/dist/
 brain/dist/
 Resources/brain/
+Resources/cli/
 web/tsconfig.tsbuildinfo
 
 # dependencies

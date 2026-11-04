@@ -76,6 +76,14 @@ final class BrowserDriver {
         runs[runID]?.cancel(reason: reason)
     }
 
+    /// The notch's pause button on a web task: the page is the person's until they take it back.
+    func pauseOrTakeBack(runID: String) {
+        guard let agent = runs[runID] else { return }
+        if agent.personsTurn { agent.takeBack() } else { agent.pause() }
+    }
+
+    func takeBack(runID: String) { runs[runID]?.takeBack() }
+
     func cancelAll(reason: String) {
         for agent in runs.values { agent.cancel(reason: reason) }
     }
@@ -129,6 +137,8 @@ final class BrowserAgentRun {
         guard let env else { return }
         task?.cancel()
         task = nil
+        personHasIt = false
+        env.closeHandoffCard(runID: run.id)
         env.browser.endWork(runID: run.id)
         env.store.finishRun(run.id, status: .cancelled, summary: reason)
         env.store.saveNow()
@@ -136,37 +146,72 @@ final class BrowserAgentRun {
     }
 
     private var takeBackAsked = false
+    /// Paused by the person (the notch, the card, a script): the agent waits before its next turn.
+    private(set) var personHasIt = false
+    private var handingOff = false
+    var personsTurn: Bool { personHasIt || handingOff }
+
+    func pause() {
+        guard let env, !personHasIt else { return }
+        if handingOff { takeBack(); return }
+        personHasIt = true
+        takeBackAsked = false
+        env.store.updateRun(run.id) { $0.status = .paused; $0.waitingFor = nil }
+        log("→ paused — the page is yours")
+        env.browser.updateWork("paused — the page is yours", in: tab)
+        env.browser.show()
+        env.presentHandoff(runID: run.id, title: "paused · the page is yours",
+                           text: "Do what you need to on the page. When you take it back, okidoki looks again and carries on from there.",
+                           takeBack: { [weak self] in self?.takeBack() },
+                           stop: { [weak self] in self?.cancel(reason: "you stopped me") })
+    }
+
+    func takeBack() {
+        guard let env, personHasIt || handingOff else { return }
+        env.store.updateRun(run.id) { $0.status = .running; $0.waitingFor = nil }
+        if personHasIt { log("→ taken back — looking at the page again") }
+        personHasIt = false
+        takeBackAsked = true
+        env.closeHandoffCard(runID: run.id)
+        env.browser.updateWork("browsing · \(run.title)", in: tab)
+    }
 
     /// Hands the page to the person ("your turn") and waits until the check is gone or they take it back,
-    /// up to 10 minutes. False when stopped or timed out.
+    /// up to 10 minutes. False when stopped, timed out, or nobody is at this Mac (a routine).
     private func waitForPerson(_ why: String) async -> Bool {
         guard let env else { return false }
+        if env.unattendedRuns.contains(run.id) {
+            log("✗ needs a person (\(why)), and nobody is at this Mac")
+            return false
+        }
+        handingOff = true
+        defer { handingOff = false }
         takeBackAsked = false
+        env.store.updateRun(run.id) { $0.status = .paused; $0.waitingFor = why }
         log("→ your turn: \(why)")
         env.browser.updateWork("your turn: \(why) — okidoki carries on when it's done", in: tab)
         env.browser.show()
         env.browser.select(tab)
         env.presentHandoff(runID: run.id, title: "your turn · \(why)",
                            text: "This page needs a person: \(why). Do it in the browser; okidoki notices when it's done and carries on, or press take back.",
-                           takeBack: { [weak self] in self?.takeBackAsked = true },
+                           takeBack: { [weak self] in self?.takeBack() },
                            stop: { [weak self] in self?.cancel(reason: "you stopped me") })
-        let deadline = Date().addingTimeInterval(600)
-        var clearSince: Date?
-        while !takeBackAsked {
-            if Task.isCancelled { return false }
-            guard Date() < deadline else { env.closeHandoffCard(); return false }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if await tab.humanCheck() == nil {
-                clearSince = clearSince ?? Date()
-                if Date().timeIntervalSince(clearSince!) > 1.2 { break }
-            } else {
-                clearSince = nil
-            }
+        let watched = tab
+        let checkURL = tab.webView.url?.absoluteString ?? ""
+        let ending = await PersonTurn.waitPast(tab: watched, takenBack: { self.takeBackAsked }, alive: { !Task.isCancelled })
+        takeBackAsked = false
+        guard ending == .cleared || ending == .takenBack else {
+            env.closeHandoffCard(runID: run.id)
+            return false
         }
-        env.closeHandoffCard()
+        env.store.updateRun(run.id) { if $0.status == .paused { $0.status = .running }; $0.waitingFor = nil }
+        env.closeHandoffCard(runID: run.id)
         log("→ thanks — taking it from here")
         env.browser.updateWork("browsing · \(run.title)", in: tab)
         await tab.settle(limit: 4)
+        if let pressed = await PersonTurn.continuePast(on: watched, checkURL: checkURL) {
+            log("→ pressed “\(pressed)” on the check page")
+        }
         return true
     }
 
@@ -210,15 +255,22 @@ final class BrowserAgentRun {
                 if next.ownerRunID != run.id { claim(next) }
                 tab = next
             }
+            // Paused: the page is the person's. Once they hand it back the agent looks again, no turn spent.
+            if personHasIt {
+                while personHasIt, !Task.isCancelled { try? await Task.sleep(nanoseconds: 300_000_000) }
+                if Task.isCancelled { return }
+                results = [["ok": true, "detail": "the person paused you and used the page; it may have changed — look again before acting"]]
+                continue
+            }
             await tab.settle(limit: 6)
             // A check only a person can pass (a captcha, "I am human", a one-time code): theirs for a
             // moment, then the agent carries on from wherever the page is. No turn spent on it.
-            if let check = await tab.humanCheck() {
-                guard await waitForPerson(check.text) else {
-                    if !Task.isCancelled { finish(success: false, summary: "stopped at \(check.text) — it needs a person, and nobody got past it") }
+            if let check = await PersonTurn.confirmed(on: tab) {
+                guard await waitForPerson(check) else {
+                    if !Task.isCancelled { finish(success: false, summary: "stopped at \(check) — it needs a person, and nobody got past it") }
                     return
                 }
-                results = [["ok": true, "detail": "the person got past \(check.text); the page may have changed, look again"]]
+                results = [["ok": true, "detail": "the person got past \(check); the page may have changed, look again. If the check page is still there with its check passed, pressing its Continue button is fine."]]
                 continue
             }
             let page = await tab.snapshot()
@@ -253,6 +305,8 @@ final class BrowserAgentRun {
             // One action of this turn. False once the run is over (finished, asked, or stopped).
             let handle: ([String: Any]) async -> Bool = { action in
                 if Task.isCancelled { ended = true; return false }
+                // Paused while the model was writing: nothing it planned runs on a page that's the person's now.
+                if self.personHasIt { turnResults.append(["ok": false, "detail": "not run: the person paused you"]); return true }
                 if let haltReason { turnResults.append(["ok": false, "detail": haltReason]); return true }
                 let type = action["type"] as? String ?? ""
                 switch type {
@@ -281,6 +335,14 @@ final class BrowserAgentRun {
                     } else {
                         turnResults.append(["ok": false, "detail": "not kept: only lasting facts about the user"])
                     }
+                case "dialog":
+                    // The next confirm/prompt the page opens is answered this way (OK otherwise).
+                    let accept = action["accept"] as? Bool ?? true
+                    let text = action["text"] as? String
+                    self.tab.dialogAnswer = (accept, text)
+                    self.learned.append(BrowserSteps.dialog(accept: accept, text: text, delay: 0.2))
+                    self.log("→ the next pop-up gets \(accept ? (text.map { "“\($0)”" } ?? "OK") : "Cancel")")
+                    turnResults.append(["ok": true])
                 case "wait":
                     let seconds = min(10, max(1, (action["seconds"] as? NSNumber)?.doubleValue ?? 2))
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -474,6 +536,7 @@ final class BrowserAgentRun {
     private func finish(success: Bool, summary: String) {
         guard let env else { return }
         task = nil
+        env.closeHandoffCard(runID: run.id)
         env.browser.endWork(runID: run.id)
         // The tab it ended in is where a follow-up in this conversation carries on.
         if let threadID = run.threadID { env.browser.noteThreadTab(threadID, tab) }
@@ -488,6 +551,7 @@ final class BrowserAgentRun {
     private func ask(question: String) {
         guard let env else { return }
         task = nil
+        env.closeHandoffCard(runID: run.id)
         env.browser.endWork(runID: run.id)
         if let threadID = run.threadID {
             env.browserLearnedBeforeQuestion[threadID] = learned
@@ -557,6 +621,8 @@ final class BrowserReplayer {
                 for index in healed.indices {
                     // Later passes use what earlier ones repaired, so a fix is paid for once.
                     let step = healed[index]
+                    // Paused from the notch: the page is the person's until play; then on with the next step.
+                    while self.paused, !Task.isCancelled, self.runID == runID { try? await Task.sleep(nanoseconds: 300_000_000) }
                     if Task.isCancelled { return }
                     self.mark(index, .running, total: skill.steps.count, pass: pass, of: passes, text: ParameterFill.fill(step.text, values: given).text)
                     let outcome = await self.perform(step, values: given, tab: tab, pass: pass)
@@ -585,6 +651,15 @@ final class BrowserReplayer {
         }
     }
 
+    private(set) var paused = false
+
+    func pauseOrResume() {
+        guard let runID, let env else { return }
+        paused.toggle()
+        env.store.updateRun(runID) { $0.status = paused ? .paused : .running; $0.waitingFor = nil }
+        if paused, let tab { env.browser.updateWork("paused — the page is yours", in: tab) }
+    }
+
     func cancel(reason: String) {
         guard let runID, let env else { return }
         task?.cancel()
@@ -595,6 +670,7 @@ final class BrowserReplayer {
 
     private func end() {
         task = nil
+        paused = false
         if let runID { env?.browser.endWork(runID: runID) }
         runID = nil
         tab = nil
@@ -631,6 +707,9 @@ final class BrowserReplayer {
             guard let login = env.vaultLogin(for: site) else { return .failed("no unlocked vault login for \(site)") }
             let result = await browser.fillLogin(username: login.username, password: login.password)
             return result.ok ? .done : .failed(result.detail ?? "couldn't find the login fields")
+        case "dialog":
+            browser.dialogAnswer = BrowserSteps.dialogAnswer(ParameterFill.fill(step.input ?? "accept", values: values).text)
+            return .done
         default:
             var input = step.input
             if let raw = input {

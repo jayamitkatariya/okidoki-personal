@@ -485,6 +485,7 @@ public final class OkidokiStore: ObservableObject {
             run.status = status
             run.endedAt = Date()
             run.summary = summary
+            run.waitingFor = nil
             if let freedBytes { run.freedBytes = freedBytes }
             // Steps that finished stay done. On failure or a question, the first unfinished step is where
             // it stopped (failed, or needs your answer) and later ones never ran. Stopped: none of them ran on.

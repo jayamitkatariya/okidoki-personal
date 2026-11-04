@@ -37,6 +37,7 @@ install: app
 	@for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pgrep -xq OkidokiPersonal || break; sleep 0.25; done
 	rm -rf "/Applications/Okidoki Personal.app"
 	cp -R "build/Okidoki Personal.app" /Applications/
+	-./scripts/install-cli.sh
 	./scripts/launch-app.sh
 
 clean:

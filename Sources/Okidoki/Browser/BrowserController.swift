@@ -55,6 +55,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     fileprivate var currentNavigation: WKNavigation?
     fileprivate var failedURL: URL?
     fileprivate var dialogNotes: [String] = []
+    /// How the agent or a replay wants the page's next confirm or prompt answered (set just before the click
+    /// that opens it). Nil: OK, with the prompt's own default text.
+    var dialogAnswer: (accept: Bool, text: String?)?
     fileprivate var finishedDownloads: [String] = []
     fileprivate var interruptSettle: (() -> Void)?
     fileprivate var observations: [NSKeyValueObservation] = []
@@ -514,6 +517,11 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     }
 
     /// Reloads the pages nobody is working in, so they pick up new sign-ins.
+    /// Cached pages and files only (cookies and logins stay), for test scripts that change a site between runs.
+    func clearCache() async {
+        await dataStore.removeData(ofTypes: [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache], modifiedSince: .distantPast)
+    }
+
     func reloadIdleTabs() {
         for tab in model.tabs where !tab.isBlank && !tab.working && tab.ownerRunID == nil { tab.webView.reload() }
     }
@@ -607,6 +615,27 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         if let url = tab.webView.url?.absoluteString, !url.isEmpty, url != "about:blank" { record(BrowserSteps.navigate(url, delay: 0)) }
     }
 
+    /// The person's own actions in one tab while a run is paused there, so okidoki can learn what they did.
+    private weak var watchedTab: BrowserTab?
+    private var onPersonStep: ((SkillStep) -> Void)?
+
+    func watchPerson(in tab: BrowserTab, onStep: @escaping (SkillStep) -> Void) {
+        watchedTab = tab
+        onPersonStep = onStep
+        lastRecordedAt = Date()
+        // The field okidoki just filled still has focus: when the window loses focus the browser reports its
+        // change as if typed. Let that happen before watching, so only the person's own actions count.
+        Task { _ = await tab.call("const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); return window.__okidoki?.record(true)") }
+    }
+
+    func stopWatchingPerson() {
+        guard let tab = watchedTab else { onPersonStep = nil; return }
+        watchedTab = nil
+        onPersonStep = nil
+        // Unless a recording of the person's own is going on in that tab too.
+        if !(model.recording && recordingTab === tab) { Task { _ = await tab.call("return window.__okidoki?.record(false)") } }
+    }
+
     func stopRecording() {
         model.recording = false
         onRecordedStep = nil
@@ -627,6 +656,11 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == BrowserPageScript.recordHandler, let watchedTab, message.webView === watchedTab.webView,
+           let body = message.body as? [String: Any], let step = BrowserSteps.step(from: body, delay: sinceLastStep()) {
+            onPersonStep?(step)
+            if !(model.recording && recordingTab === watchedTab) { return }
+        }
         guard model.recording, message.name == BrowserPageScript.recordHandler,
               let recordingTab, message.webView === recordingTab.webView,
               let body = message.body as? [String: Any],
@@ -650,7 +684,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         tab.loadError = nil
         tab.failedURL = nil
         // A new page mid-recording keeps recording from its first moment, not once every image is in.
-        if model.recording, recordingTab === tab { Task { _ = await tab.call("return window.__okidoki?.record(true)") } }
+        if (model.recording && recordingTab === tab) || watchedTab === tab { Task { _ = await tab.call("return window.__okidoki?.record(true)") } }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -783,15 +817,27 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async -> Bool {
         // The person already approved the task the agent is doing; the agent hears what was confirmed.
-        if let tab = workedIn(webView) { tab.dialogNotes.append("confirm “\(Self.short(message))” → OK"); return true }
+        if let tab = workedIn(webView) {
+            let accept = tab.dialogAnswer?.accept ?? true
+            tab.dialogAnswer = nil
+            tab.dialogNotes.append("confirm “\(Self.short(message))” → \(accept ? "OK" : "Cancel")")
+            return accept
+        }
         return await ask(message, buttons: ["OK", "Cancel"], on: webView) == .alertFirstButtonReturn
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
         if let tab = workedIn(webView) {
-            tab.dialogNotes.append("prompt “\(Self.short(prompt))” → “\(defaultText ?? "")”")
-            return defaultText ?? ""
+            let answer = tab.dialogAnswer
+            tab.dialogAnswer = nil
+            guard answer?.accept ?? true else {
+                tab.dialogNotes.append("prompt “\(Self.short(prompt))” → Cancel")
+                return nil
+            }
+            let text = answer?.text ?? defaultText ?? ""
+            tab.dialogNotes.append("prompt “\(Self.short(prompt))” → “\(text)”")
+            return text
         }
         let field = NSTextField(string: defaultText ?? "")
         field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)

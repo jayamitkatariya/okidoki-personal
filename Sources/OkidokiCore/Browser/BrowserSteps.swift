@@ -33,6 +33,21 @@ public enum BrowserSteps {
         .browser("navigate", text: "open \(displayURL(url))", url: url, input: url, delay: delay)
     }
 
+    /// How to answer the page's next confirm or prompt: "accept", "dismiss", or "accept:<text>" for a prompt.
+    public static func dialog(accept: Bool, text: String?, delay: Double? = nil) -> SkillStep {
+        let input = accept ? (text.map { "accept:\($0)" } ?? "accept") : "dismiss"
+        let line = accept ? (text.map { "answer the next pop-up with “\($0)”" } ?? "answer the next pop-up with OK") : "answer the next pop-up with Cancel"
+        return .browser("dialog", text: line, url: "", input: input, delay: delay)
+    }
+
+    /// The answer a `dialog` step's input stands for.
+    public static func dialogAnswer(_ input: String?) -> (accept: Bool, text: String?) {
+        let raw = input ?? "accept"
+        if raw == "dismiss" { return (false, nil) }
+        if raw.hasPrefix("accept:") { return (true, String(raw.dropFirst("accept:".count))) }
+        return (true, nil)
+    }
+
     /// Filling a saved login. Kept as one step so the replay asks the vault, never the skill file.
     public static func login(site: String, url: String, delay: Double? = nil) -> SkillStep {
         .browser("login", text: "sign in to \(site) with your vault login", url: url,

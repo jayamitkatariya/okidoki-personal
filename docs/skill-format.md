@@ -41,6 +41,13 @@ A skill file is UTF-8 JSON. It's meant to be readable and hand-editable.
 | `window`, `winTitle` | the window it happened in, so replay can follow a moved window |
 | `frame*` | the picture's box around the click, used to find the control by sight |
 
+Browser steps (in okidoki's browser) use `navigate`, `click`, `hover`, `type`, `select`, `press`, `login` (filled from the vault), `read` (a capture), `think` (a bounded sub-goal for the model), and `dialog`.
+
+A `dialog` step says how the page's next confirm or prompt pop-up is answered:
+- `"input": "dismiss"` means Cancel.
+- `"accept:<text>"` types that text into a prompt; `{{params}}` work there too.
+- Without a `dialog` step, a confirm gets OK and a prompt keeps its default text.
+
 `{{name}}` anywhere in `input` is a parameter. It's filled from the request (`with city=Lisbon`), from a
 record in `records.json`, or from built-ins (`{{today}}`, `{{today_iso}}`).
 

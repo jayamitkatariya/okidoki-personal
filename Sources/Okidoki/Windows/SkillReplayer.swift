@@ -68,6 +68,7 @@ final class SkillReplayer {
                 let given = passValues[(pass - 1) % passValues.count]
                 let ref = values.isEmpty ? nil : given["ref"]
                 for (index, step) in steps.enumerated() {
+                    await self.holdWhilePaused()
                     if Task.isCancelled { break outer }
                     let text = (ref.map { "\($0) · " } ?? "") + ParameterFill.fill(step.text, values: given).text
                     self.markStep(index, status: .running, pass: pass, of: passes, total: steps.count, text: text)
@@ -145,6 +146,7 @@ final class SkillReplayer {
                 let prefix = bound.count > 1 ? "\(item.label) · " : ""
                 var index = 0
                 while index < plan.count {
+                    await self.holdWhilePaused()
                     if Task.isCancelled { break outer }
                     let planned = plan[index]
                     let step = planned.step
@@ -624,12 +626,43 @@ final class SkillReplayer {
         }
     }
 
+    /// Paused from the notch: the Mac is the person's (no ghost, Escape is theirs) until they press play.
+    private(set) var paused = false
+
+    func pauseOrResume() {
+        guard isActive, let runID, let env else { return }
+        paused.toggle()
+        env.store.updateRun(runID) { $0.status = paused ? .paused : .running; $0.waitingFor = nil }
+        env.replayLog(runID, paused ? "→ paused — the Mac is yours" : "→ taken back — carrying on")
+    }
+
+    /// Between steps: wait while paused, then carry on with the ghost back.
+    private func holdWhilePaused() async {
+        guard paused else { return }
+        EventActuator.stopTyping()
+        model.visible = false
+        panel?.orderOut(nil)
+        if let escMonitor { NSEvent.removeMonitor(escMonitor) }
+        if let globalEsc { NSEvent.removeMonitor(globalEsc) }
+        escMonitor = nil
+        globalEsc = nil
+        let label = model.label
+        model.label = "paused — the Mac is yours"
+        while paused, !Task.isCancelled { try? await Task.sleep(nanoseconds: 300_000_000) }
+        guard !Task.isCancelled else { return }
+        model.label = label
+        model.visible = true
+        panel?.orderFrontRegardless()
+        installMonitors()
+    }
+
     private func escPressed() {
         cancel(reason: "okay, stopping")
     }
 
     private func tearDown() {
         isActive = false
+        paused = false
         model.visible = false
         model.clicking = false
         panel?.orderOut(nil)

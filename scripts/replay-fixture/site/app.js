@@ -109,3 +109,21 @@ function noise() {
     setTimeout(() => toast.remove(), 4000);
   }, 300 + Math.random() * 900);
 }
+
+// Decoys: what real pages carry that is NOT a check in the way — reCAPTCHA's invisible corner badge, a
+// long legal footer that mentions security checks and two-factor sign-in. A replay must not stop for these.
+function decoys() {
+  if (!F.decoys || document.querySelector(".grecaptcha-badge")) return;
+  const badge = document.createElement("div");
+  badge.className = "grecaptcha-badge";
+  badge.style.cssText = "position:fixed;right:0;bottom:14px;width:256px;height:60px;z-index:5";
+  badge.innerHTML = `<iframe src="recaptcha-frame.html?k=fixture&size=invisible" width="256" height="60" title="reCAPTCHA" style="border:0"></iframe>`;
+  document.body.appendChild(badge);
+  const footer = document.createElement("footer");
+  footer.className = "legal";
+  footer.innerHTML = "<p>" + ("Acme Filing runs an automated security check on every return before it is accepted. "
+    + "Turn on two-factor sign-in in your profile to protect your account; we will never ask for a verification code by phone. "
+    + "Returns are processed in the order received and acknowledgements are sent to the email on file. ").repeat(6) + "</p>";
+  document.body.appendChild(footer);
+}
+document.addEventListener("DOMContentLoaded", decoys);

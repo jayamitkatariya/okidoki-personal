@@ -42,6 +42,8 @@ final class AppEnvironment: ObservableObject {
     var browserLearnedBeforeQuestion: [String: [SkillStep]] = [:]
     /// The last browser run that worked, with what it learned, until it's saved or replaced.
     var lastBrowserRun: LearnedBrowserRun?
+    /// Recent web runs that worked, by run id, so one can be kept as a skill later (the card, another agent).
+    var savableRuns: [String: LearnedBrowserRun] = [:]
     /// Page texts a finished browser run saw, by run id, until its card is gone (smart replay's compiler reads them).
     var learnedPages: [String: [String: String]] = [:]
     /// The tab a browser run was asked from (typed in that tab's address bar), until the run starts there.
@@ -99,6 +101,13 @@ final class AppEnvironment: ObservableObject {
     var lastFailedReplay: (() -> Void)?
     /// The "your turn" card's take back, while one is showing.
     var pendingHandoff: (() -> Void)?
+    /// Conversations other agents started through the control endpoint: their runs (and tabs) are theirs to read.
+    var controlThreads: Set<String> = []
+    /// "Add to skill" on the newest learn-what-you-did card, for scripts.
+    var pendingTeach: (() -> Void)?
+    /// Whose "your turn" card is showing.
+    var handoffRunID: String?
+    var lastHandoffSpoken = Date.distantPast
     /// Runs started with nobody at this Mac (routines): a hand-off there stops instead of waiting.
     var unattendedRuns: Set<String> = []
     /// The words a smart replay was asked with, for finding values the request states in passing.
@@ -384,15 +393,33 @@ final class AppEnvironment: ObservableObject {
         case "hybrid":
             store.settings.hybridReplay = arg == "on"
             store.saveNow()
+        // The notch's okay on a run waiting for one, for scripts (`approve <run id>`).
+        case "approve":
+            if let run = store.run(arg), [.waiting, .previewing].contains(run.status) { approveRun(run.id) }
         case "forget":
             for skill in store.activeSkills where skill.name == arg || skill.id == arg { store.deleteSkill(skill.id) }
             store.saveNow()
         // The person's side of a hand-off, for scripts: `takeback`, `pause`, and `tabjs <js>` (run in the
         // tab in front, as if the person did it there).
+        // `dropstep <skill name>|<step text>`: undoes a lesson, for scripts that teach a skill and then restore it.
+        case "dropstep":
+            let parts = arg.components(separatedBy: "|")
+            if parts.count == 2, var skill = store.activeSkills.first(where: { $0.name == parts[0] }) {
+                skill.steps.removeAll { $0.text == parts[1] }
+                store.replaceSkill(skill)
+                store.saveNow()
+            }
+        case "clearcache":
+            Task { await browser.clearCache() }
+        case "teach":
+            pendingTeach?()
+            pendingTeach = nil
         case "takeback":
             if let back = pendingHandoff { back() } else { hybridBrowserReplayer.takeBack() }
         case "pause":
-            if let id = hybridBrowserReplayer.runID { pauseRun(id, from: "script") }
+            // The notch's button on whatever is running: `pause` for the smart replay, `pause <run id>` for any.
+            if !arg.isEmpty { pauseRun(arg, from: "script") }
+            else if let id = hybridBrowserReplayer.runID { pauseRun(id, from: "script") }
         case "tabjs":
             let tab = browser.activeTab
             Task { @MainActor in _ = await tab.call(arg) }
@@ -708,6 +735,28 @@ final class AppEnvironment: ObservableObject {
                                 screenshot: nil, selection: nil, attachmentName: "",
                                 documentText: "", source: source)
         }
+    }
+
+    /// Another agent's request (the `okidoki` CLI, the MCP server): a conversation of its own unless it
+    /// continues one, in the mode it asked for (auto · browser · computer · chat). The thread id is how it
+    /// finds the run doing the work. Everything risky still waits for the person's okay in the notch.
+    func askFromControl(_ text: String, mode: String, threadID: String?) -> String {
+        let thread = threadID.flatMap { store.thread($0) } ?? store.createThread(title: String(text.prefix(60)), app: "agent", topic: "")
+        controlThreads.insert(thread.id)
+        // Continuing a conversation whose last task asked a question: this is the answer.
+        if let last = store.runs.first(where: { $0.threadID == thread.id && [.computerUse, .browser].contains($0.kind) }),
+           last.status == .asked {
+            answerDriveQuestion(runID: last.id, text: text)
+            return thread.id
+        }
+        let modes = ["browser": "browser", "computer": "act", "act": "act", "chat": "chat"]
+        noteSpokenInput(false)
+        Task {
+            await handleRequest(text: text, appName: "mac", bundleID: "", threadID: thread.id,
+                                screenshot: nil, selection: nil, attachmentName: "",
+                                documentText: "", source: "control", mode: modes[mode] ?? "auto")
+        }
+        return thread.id
     }
 
     func requestAsk() {
@@ -1317,12 +1366,17 @@ final class AppEnvironment: ObservableObject {
         guard let run = store.run(id) else { return }
         // A recording can't pause: the recorder either watches or it doesn't.
         if run.kind == .watch || run.kind == .connector { return }
-        // A replay can't resume mid-click either; pausing hands control back, like computer use.
-        if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "paused — control is yours"); return }
-        if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "paused — the page is yours"); return }
+        // A Mac replay pauses between steps: the ghost steps aside, and play carries on from the next step.
+        if replayer.isActive, replayer.runID == id { replayer.pauseOrResume(); return }
+        if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.pauseOrResume(); return }
         // Smart replay pauses for real: the page is the person's until they take it back, then it carries on.
         if hybridBrowserReplayer.isActive, hybridBrowserReplayer.runID == id {
-            if hybridBrowserReplayer.personHasIt { hybridBrowserReplayer.takeBack() } else { hybridBrowserReplayer.pauseForPerson(from: source) }
+            if hybridBrowserReplayer.personsTurn { hybridBrowserReplayer.takeBack() } else { hybridBrowserReplayer.pauseForPerson(from: source) }
+            return
+        }
+        // A web task pauses for real too: the agent waits, then looks at the page again.
+        if browserDriver.isRunning(id) {
+            browserDriver.pauseOrTakeBack(runID: id)
             return
         }
         if run.status == .paused {
@@ -1340,12 +1394,10 @@ final class AppEnvironment: ObservableObject {
             store.updateRun(id) { $0.status = .paused }
             return
         }
+        // Computer use: the driver steps aside (no pointer, no keys) at its next look and waits for play.
         if driver.isActive, run.kind == .computerUse {
-            driver.cancel(reason: "paused — control is yours")
-            return
-        }
-        if browserDriver.isRunning(id) {
-            browserDriver.cancel(runID: id, reason: "paused — the page is yours")
+            store.updateRun(id) { $0.status = .paused; $0.waitingFor = nil }
+            speak("Paused. The Mac is yours.")
             return
         }
         store.updateRun(id) { $0.status = .paused }

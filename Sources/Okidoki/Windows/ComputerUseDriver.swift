@@ -159,7 +159,7 @@ final class ComputerUseDriver {
         let maxSteps = 60
         for step in 0..<maxSteps {
             guard session == self.session, !cancelled, let env else { return }
-            guard let current = env.store.run(run.id), current.status == .running else { return }
+            guard await holdWhilePaused(run.id, session: session) else { return }
             model.kind = ""
             model.detail = ""
             if target.showsPointerOverlay, let screen = target.screen() {
@@ -212,8 +212,11 @@ final class ComputerUseDriver {
                                                  actions: act == nil ? 0 : 1, stopReason: meta?.stopReason, usage: meta?.usage))
             zoom = nil
             previous = shot?.png
-            // The user may have taken over while the model was thinking.
-            guard session == self.session, !cancelled, env.store.run(run.id)?.status == .running else { return }
+            // The user may have taken over while the model was thinking: a pause drops this action, and the
+            // next turn looks at the screen again once they hand it back.
+            guard session == self.session, !cancelled else { return }
+            if env.store.run(run.id)?.status == .paused { continue }
+            guard env.store.run(run.id)?.status == .running else { return }
             guard var act else {
                 let brain = env.sidecar.status
                 finish(success: false, summary: brain.isReady
@@ -384,7 +387,7 @@ final class ComputerUseDriver {
 
         for call in 0..<maxCalls {
             guard session == self.session, !cancelled else { return }
-            guard env.store.run(run.id)?.status == .running else { return }
+            guard await holdWhilePaused(run.id, session: session) else { return }
             model.kind = ""
             model.detail = ""
             if target.showsPointerOverlay, let screen = target.screen() { cursor.show(on: screen, label: "okidoki · thinking") }
@@ -482,7 +485,10 @@ final class ComputerUseDriver {
 
             /// Runs one action of the batch. False once the run is over.
             func handle(_ act: ComputerAction) async -> Bool {
-                guard session == self.session, !cancelled, env.store.run(run.id)?.status == .running else { ended = true; return false }
+                guard session == self.session, !cancelled else { ended = true; return false }
+                // Paused mid-turn: the rest of this turn was planned against a screen that's now the person's.
+                if env.store.run(run.id)?.status == .paused { halted = true; return false }
+                guard env.store.run(run.id)?.status == .running else { ended = true; return false }
                 handled += 1
                 let id = act.toolUseID ?? ""
                 if act.type == "done" || act.type == "fail" || act.type == "ask" {
@@ -649,7 +655,12 @@ final class ComputerUseDriver {
             let rest = envelope?.actions ?? []
             recordCall()
             if ended { return }
-            guard session == self.session, !cancelled, env.store.run(run.id)?.status == .running else { return }
+            guard session == self.session, !cancelled else { return }
+            if env.store.run(run.id)?.status == .paused {
+                notes.append("The person paused you and used the Mac; the screen may have changed. Look again before acting.")
+                continue
+            }
+            guard env.store.run(run.id)?.status == .running else { return }
             if envelope?.fallback == "v1" {
                 recorder?.setProtocol("v1")
                 await loop(run: run, session: session)
@@ -919,6 +930,42 @@ final class ComputerUseDriver {
         env.store.saveNow()
         self.runID = nil
         env.presentDriveQuestion(runID: runID, question: question)
+    }
+
+    /// Paused (the notch, a script): the Mac is the person's — no pointer, no glow, no keys — until they resume.
+    /// True when the run carries on; false when it was stopped or ended meanwhile.
+    private func holdWhilePaused(_ runID: String, session: Int) async -> Bool {
+        guard let env else { return false }
+        guard env.store.run(runID)?.status == .paused else { return env.store.run(runID)?.status == .running }
+        EventActuator.stopTyping()
+        await EventActuator.releaseHeldButton()
+        cursor.hide()
+        glow.hide()
+        let said = model.stepText
+        model.stepText = "paused — the Mac is yours"
+        model.kind = ""
+        model.detail = "press play in the notch to hand it back"
+        // The person needs the keyboard: Escape while paused is theirs, not a stop.
+        if let escLocal { NSEvent.removeMonitor(escLocal) }
+        if let escGlobal { NSEvent.removeMonitor(escGlobal) }
+        escLocal = nil; escGlobal = nil
+        restoreOwnWindows()
+        while session == self.session, !cancelled, env.store.run(runID)?.status == .paused {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        guard session == self.session, !cancelled, env.store.run(runID)?.status == .running else { return false }
+        model.stepText = said
+        model.detail = ""
+        if target.stopsOnUserEscape {
+            installMonitors()
+            clearOwnWindows()
+        }
+        if target.showsPointerOverlay, let screen = target.screen() {
+            cursor.show(on: screen, label: "okidoki · looking")
+            glow.show(on: screen)
+        }
+        env.speak("Got it back.")
+        return true
     }
 
     func cancel(reason: String = "control is yours") {

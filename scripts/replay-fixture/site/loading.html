@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Signing you in</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body><div class="spinner" aria-busy="true"></div><p>Signing you in…</p>
+<script>
+// Between the check and the return: a slow hop, the way real sites redirect through a session page.
+const next = new URLSearchParams(location.search).get("next") || "form.html";
+setTimeout(() => { location.href = next; }, 2500);
+</script></body></html>

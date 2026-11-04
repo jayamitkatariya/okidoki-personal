@@ -31,6 +31,14 @@ if command -v bun >/dev/null 2>&1 && [ -f brain/src/server.ts ]; then
   fi
 fi
 
+# --- the okidoki CLI and MCP server, for other agents (one file, run by bun) ---
+if command -v bun >/dev/null 2>&1 && [ -f mcp/okidoki.ts ]; then
+  echo "▸ Bundling the okidoki command…"
+  rm -rf Resources/cli
+  mkdir -p Resources/cli
+  bun build mcp/okidoki.ts --outfile Resources/cli/okidoki.js --target=bun >/dev/null
+fi
+
 # --- react control panel ---
 if command -v bun >/dev/null 2>&1 && [ -f web/package.json ]; then
   if [ ! -d web/node_modules ]; then
@@ -65,6 +73,9 @@ if [ -d Resources/skills ]; then cp -R Resources/skills "$APP/Contents/Resources
 # (Settings › Keys) and kept in a private file in Application Support.
 if [ -d Resources/brain ]; then
   cp -R Resources/brain "$APP/Contents/Resources/brain"
+fi
+if [ -d Resources/cli ]; then
+  cp -R Resources/cli "$APP/Contents/Resources/cli"
 fi
 if [ -d web/dist ]; then
   cp -R web/dist "$APP/Contents/Resources/web"

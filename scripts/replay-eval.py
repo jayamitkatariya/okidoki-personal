@@ -77,7 +77,7 @@ def start_fixture():
 
 GATE = {"answer": "carry"}
 # The person, for scenarios that need one: what they do when smart replay says "your turn".
-PERSON = {"solve": None, "seen": 0}
+PERSON = {"solve": None, "seen": 0, "then": None}
 
 
 def wait_run(before_ids, match, timeout):
@@ -95,6 +95,12 @@ def wait_run(before_ids, match, timeout):
                 PERSON["seen"] = turns
                 time.sleep(1.5)
                 browser("tabjs " + PERSON["solve"])
+                if PERSON["then"] == "notch":
+                    # Then the play button in the notch, on the run that's waiting for them.
+                    time.sleep(1.0)
+                    waiting = [r for r in load_state().get("runs", []) if r.get("id") not in before_ids and r.get("status") == "paused"]
+                    if waiting:
+                        browser("pause " + waiting[-1]["id"])
         runs = [r for r in load_state().get("runs", []) if r.get("id") not in before_ids and match(r)]
         if runs:
             run = runs[-1]
@@ -220,13 +226,16 @@ def write_documents(spec, names):
     time.sleep(2.5)  # the vault notices new files through FSEvents
 
 
-KNOBS = ["drift", "banner", "randomIds", "slow", "popups", "expire", "busy", "random", "wipe", "captcha"]
+KNOBS = ["drift", "banner", "randomIds", "slow", "popups", "expire", "busy", "random", "wipe", "captcha", "decoys", "captchaSlow", "newBox"]
 
 
 def configure(scenario):
     """The site as the scenario wants it: every hard-mode knob off unless the scenario turns it on."""
     knobs = {k: False for k in KNOBS} | {"drift": scenario.get("drift", False)} | scenario.get("site", {})
     fixture("/config", knobs)
+    # Pages the browser kept from an earlier setting would hide this one.
+    browser("clearcache")
+    time.sleep(0.5)
 
 
 def given(item):
@@ -250,7 +259,7 @@ def run_mode(spec, scenario, mode, timeout):
     configure(scenario)
     # How a person answers smart replay's "check before submitting" card in this scenario.
     GATE["answer"] = scenario.get("gate", "carry")
-    PERSON.update(solve=scenario.get("person"), seen=0)
+    PERSON.update(solve=scenario.get("person"), seen=0, then=scenario.get("personThen"))
     fixture("/reset", {})
     before = {r["id"] for r in load_state().get("runs", [])}
     started = time.time()
@@ -259,7 +268,11 @@ def run_mode(spec, scenario, mode, timeout):
         # One agent run per person: the agent has no skill to repeat.
         for item in items:
             goal = goal_for(spec["site"], item)
+            # Each agent run is a new run: the person hasn't seen its "your turn" yet.
+            PERSON["seen"] = 0
             post(f"{DOMAIN}.dev.browse", "[fresh] " + goal)
+            if scenario.get("pauseAfter"):
+                notes.extend(pause_midway(before, scenario["pauseAfter"], kinds=("browser", None)))
             run, error = wait_run(before, lambda r, g=goal: r.get("prompt") == g, timeout)
             runs.append(run)
             if error:
@@ -295,10 +308,33 @@ def run_mode(spec, scenario, mode, timeout):
                 notes.extend(stopped)
             if scenario.get("pauseAfter"):
                 notes.extend(pause_midway(before, scenario["pauseAfter"]))
+            if scenario.get("teach"):
+                notes.extend(teach_while_paused(before, scenario["teach"]))
             run, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
             runs.append(run)
             if error:
                 notes.append(error)
+            if scenario.get("teach"):
+                # The person said "add to skill": the same job again must now go by itself, no model.
+                time.sleep(1.5)
+                browser("teach")
+                time.sleep(1.5)
+                fixture("/reset", {})
+                before |= {r["id"] for r in load_state().get("runs", [])}
+                browser("replayjson " + json.dumps({"skill": skill, "values": values}))
+                again, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
+                runs.append(again)
+                if error:
+                    notes.append(error)
+                if again and again.get("modelCalls"):
+                    notes.append(f"after learning, the replay still needed the model {again['modelCalls']} times")
+                if again and "while paused you" in (again.get("output") or ""):
+                    notes.append("the second run was paused too")
+                fresh_runs = {r["id"]: r for r in load_state().get("runs", [])}
+                if not any("added 1 step" in (fresh_runs.get((r or {}).get("id"), {}).get("output") or "") for r in runs):
+                    notes.append("nothing was learned from the person")
+                # Put the skill back as it was for the other scenarios.
+                browser("dropstep " + skill + "|" + scenario["teach"]["step"])
     wall = round(time.time() - started, 1)
     submissions = fixture("/submissions")["submissions"]
     results = []
@@ -329,12 +365,18 @@ def run_mode(spec, scenario, mode, timeout):
         if not run or run.get("status") != "cancelled":
             notes.append(f"the run wasn't cancelled (status {(run or {}).get('status')})")
         results = [(ref, True, detail) if not ok and "nothing filed" in detail else (ref, ok, detail) for ref, ok, detail in results]
+    # Hand-offs: a check counts once per item, never a flicker of cards; decoys never count.
+    turns = sum((r or {}).get("output", "").count("your turn") for r in runs)
+    if scenario.get("maxTurns") is not None and turns > scenario["maxTurns"]:
+        notes.append(f"handed off {turns} times (at most {scenario['maxTurns']} expected)")
+        results = [(ref, False, detail + " · too many hand-offs") for ref, ok, detail in results]
     passed = sum(1 for _, ok, _ in results if ok)
     return {
         "scenario": scenario["id"], "mode": mode, "passed": passed, "total": len(items),
         "seconds": wall, "runSeconds": [seconds(r) for r in runs if r],
         "modelCalls": sum((r or {}).get("modelCalls") or 0 for r in runs),
         "pauses": sum((r or {}).get("output", "").count("paused before") for r in runs),
+        "handoffs": turns,
         "items": [{"item": ref, "ok": ok, "detail": detail} for ref, ok, detail in results],
         "runs": [{"id": r.get("id"), "status": r.get("status"), "summary": r.get("summary"), "log": (r.get("output") or "")[-1500:]} for r in runs if r],
         "notes": notes,
@@ -357,22 +399,59 @@ def stop_midway(before, after_seconds):
     return ["the replay never started"]
 
 
-def pause_midway(before, after_seconds):
-    """Takes the page over mid-run (the pause button), holds it a few seconds, then hands it back."""
+def pause_midway(before, after_seconds, kinds=("skill",)):
+    """Takes the page over mid-run (the notch's pause button), holds it a few seconds, then hands it back
+    (the same button). Nothing may be filed while paused, and the run must show as paused, then running."""
     deadline = time.time() + 60
+    while time.time() < deadline:
+        runs = [r for r in load_state().get("runs", []) if r.get("id") not in before and r.get("builtin") in kinds]
+        if runs and runs[-1].get("status") == "running":
+            run_id = runs[-1]["id"]
+            time.sleep(after_seconds)
+            browser("pause " + run_id)
+            time.sleep(1)
+            notes = []
+            now = next((r for r in load_state().get("runs", []) if r.get("id") == run_id), {})
+            if now.get("status") != "paused":
+                notes.append(f"pause didn't pause (status {now.get('status')})")
+            filed = len(fixture("/submissions")["submissions"])
+            time.sleep(5)
+            moved = len(fixture("/submissions")["submissions"]) - filed
+            browser("pause " + run_id)  # the same button again: take it back
+            time.sleep(1)
+            now = next((r for r in load_state().get("runs", []) if r.get("id") == run_id), {})
+            if now.get("status") not in ("running", "done"):
+                notes.append(f"play didn't resume (status {now.get('status')})")
+            if moved:
+                notes.append(f"{moved} filed while it was paused")
+            return notes
+        time.sleep(0.3)
+    return ["the run never started"]
+
+
+def teach_while_paused(before, teach):
+    """Pauses the replay once it's on `teach['on']` (a page path), does `teach['js']` there as the person, and
+    takes it back: the run should offer to learn what they did."""
+    deadline = time.time() + 90
     while time.time() < deadline:
         runs = [r for r in load_state().get("runs", []) if r.get("id") not in before and r.get("builtin") == "skill"]
         if runs and runs[-1].get("status") == "running":
-            time.sleep(after_seconds)
-            browser("pause")
-            time.sleep(1)
-            filed = len(fixture("/submissions")["submissions"])
-            time.sleep(4)
-            moved = len(fixture("/submissions")["submissions"]) - filed
-            browser("takeback")
-            return [f"{moved} filed while it was paused"] if moved else []
-        time.sleep(0.3)
-    return ["the replay never started"]
+            browser("tabs")
+            time.sleep(0.4)
+            try:
+                tabs = json.loads((SUPPORT / "dev-browser.json").read_text()).get("result", [])
+            except Exception:
+                tabs = []
+            front = next((t for t in tabs if t.get("active")), {})
+            if teach["on"] in (front.get("url") or ""):
+                browser("pause " + runs[-1]["id"])
+                time.sleep(1.0)
+                browser("tabjs " + teach["js"])
+                time.sleep(1.5)
+                browser("pause " + runs[-1]["id"])
+                return []
+        time.sleep(0.15)
+    return [f"never saw {teach['on']} to step in on"]
 
 
 def table(rows, baseline=None):

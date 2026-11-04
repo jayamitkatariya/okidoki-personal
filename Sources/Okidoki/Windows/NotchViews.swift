@@ -672,7 +672,8 @@ private struct NotchLiveRow: View {
     private var paused: Bool { run.status == .paused }
 
     private var liveDetail: String {
-        paused ? "Paused" : (run.step.isEmpty ? "Working on it" : run.step.notchSentence)
+        guard paused else { return run.step.isEmpty ? "Working on it" : run.step.notchSentence }
+        return run.waitingFor.map { "Your turn · \($0)" } ?? "Paused"
     }
 
     var body: some View {
@@ -701,7 +702,8 @@ private struct NotchLiveRow: View {
             .onTapGesture { env.openDashboard(.runs, runID: run.id) }
 
             HStack(spacing: 6) {
-                NotchIconButton(symbol: paused ? "play.fill" : "pause.fill", help: paused ? "Resume" : "Pause",
+                NotchIconButton(symbol: paused ? "play.fill" : "pause.fill",
+                                help: paused ? (run.waitingFor == nil ? "Resume" : "Take back") : "Pause",
                                 filled: true) { env.pauseRun(run.id, from: "notch") }
                 NotchIconButton(symbol: "stop.fill", help: "Stop", filled: true) { env.stopRun(run.id) }
             }

@@ -455,6 +455,9 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     /// Model calls this run made (agent turns, replay rescues, binds). Nil on runs that made none
     /// or were saved before it was counted; the replay eval compares it across modes.
     public var modelCalls: Int?
+    /// While paused: what the person is doing for the run ("a captcha", "a one-time code"), or nil when
+    /// they simply paused it. Cleared when they hand it back.
+    public var waitingFor: String?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,
