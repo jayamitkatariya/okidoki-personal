@@ -24,6 +24,13 @@ public enum SkillPromoter {
     public static func promote(_ think: SkillStep, actions: [Action], values: [String: String], inputs: [SkillInput]) -> [SkillStep]? {
         let acted = actions.filter { $0.action != "scroll" && $0.action != "hover" }
         guard !acted.isEmpty, acted.allSatisfy({ !$0.selectors.isEmpty || $0.action == "press" }) else { return nil }
+        // A click on something picked for this pass's data (the search result for "AirPods Pro 2") would
+        // be that same thing on every pass: it stays a look.
+        let picked = values.filter { key, value in !key.hasPrefix("today") && !key.hasPrefix("item.") && key != "ref" && value.count >= 3 }.map(\.value)
+        if acted.contains(where: { action in
+            action.action == "click" && picked.contains { value in (action.label ?? "").localizedCaseInsensitiveContains(value) }
+                && (action.label ?? "").count > 40
+        }) { return nil }
         let named = Set(ParameterFill.names(in: think.text + " " + (think.when ?? "")).map(ParameterFill.key))
         let lists = inputs.filter { $0.kind == "list" && named.contains(ParameterFill.key($0.name)) }
         if let list = lists.first {

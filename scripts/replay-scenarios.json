@@ -352,6 +352,7 @@
         "captcha": true
       },
       "modes": [
+        "agent",
         "hybrid"
       ],
       "person": "document.querySelector('#robot').click(); document.querySelector('#robot').dispatchEvent(new Event('change',{bubbles:true})); setTimeout(()=>document.querySelector('#human-continue').click(),400)",

@@ -135,6 +135,41 @@ final class BrowserAgentRun {
         ended(run.id)
     }
 
+    private var takeBackAsked = false
+
+    /// Hands the page to the person ("your turn") and waits until the check is gone or they take it back,
+    /// up to 10 minutes. False when stopped or timed out.
+    private func waitForPerson(_ why: String) async -> Bool {
+        guard let env else { return false }
+        takeBackAsked = false
+        log("→ your turn: \(why)")
+        env.browser.updateWork("your turn: \(why) — okidoki carries on when it's done", in: tab)
+        env.browser.show()
+        env.browser.select(tab)
+        env.presentHandoff(runID: run.id, title: "your turn · \(why)",
+                           text: "This page needs a person: \(why). Do it in the browser; okidoki notices when it's done and carries on, or press take back.",
+                           takeBack: { [weak self] in self?.takeBackAsked = true },
+                           stop: { [weak self] in self?.cancel(reason: "you stopped me") })
+        let deadline = Date().addingTimeInterval(600)
+        var clearSince: Date?
+        while !takeBackAsked {
+            if Task.isCancelled { return false }
+            guard Date() < deadline else { env.closeHandoffCard(); return false }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if await tab.humanCheck() == nil {
+                clearSince = clearSince ?? Date()
+                if Date().timeIntervalSince(clearSince!) > 1.2 { break }
+            } else {
+                clearSince = nil
+            }
+        }
+        env.closeHandoffCard()
+        log("→ thanks — taking it from here")
+        env.browser.updateWork("browsing · \(run.title)", in: tab)
+        await tab.settle(limit: 4)
+        return true
+    }
+
     /// The run's tabs for the agent, the one it's in marked.
     private func tabList() -> String {
         guard let env else { return "" }
@@ -176,6 +211,16 @@ final class BrowserAgentRun {
                 tab = next
             }
             await tab.settle(limit: 6)
+            // A check only a person can pass (a captcha, "I am human", a one-time code): theirs for a
+            // moment, then the agent carries on from wherever the page is. No turn spent on it.
+            if let check = await tab.humanCheck() {
+                guard await waitForPerson(check.text) else {
+                    if !Task.isCancelled { finish(success: false, summary: "stopped at \(check.text) — it needs a person, and nobody got past it") }
+                    return
+                }
+                results = [["ok": true, "detail": "the person got past \(check.text); the page may have changed, look again"]]
+                continue
+            }
             let page = await tab.snapshot()
             await noteObservation(text: page.text)
             var observation: [String: Any] = ["url": page.url, "title": page.title, "elements": page.elements, "text": page.text]

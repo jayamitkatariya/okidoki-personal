@@ -428,7 +428,12 @@ public enum HybridReplay {
         guard let input else { return true }
         if let pattern = input.pattern, !pattern.isEmpty { return false }
         guard let example = input.example?.trimmingCharacters(in: .whitespaces), !example.isEmpty else { return true }
-        return example.contains(" ") || example.count > 24
+        if example.contains(" ") || example.count > 24 { return true }
+        // Only identifiers have a shape worth matching (REF-448990, ABCPR1234K, 112-3456789-1234567); a price,
+        // a rating or a count ("$189.05", "8.8/10") looks like every other number on the page.
+        let letters = example.contains(where: \.isLetter), digits = example.filter(\.isNumber).count
+        let identifier = (letters && digits > 0) || (digits >= 8 && !example.contains(where: { "$€£₹.,/%".contains($0) }))
+        return !identifier
     }
 
     /// A regex for strings shaped like `example`: runs of digits and letters keep their length (letters

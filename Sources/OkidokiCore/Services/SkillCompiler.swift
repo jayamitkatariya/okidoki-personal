@@ -129,6 +129,18 @@ public enum SkillCompiler {
             guard let example = input.example, example.count >= 3 else { continue }
             for index in steps.indices where ["click", "hover"].contains(steps[index].action ?? "click") {
                 guard let label = steps[index].label, label.localizedCaseInsensitiveContains(example) else { continue }
+                // A search result named after the value plus details of that one product ("Apple AirPods Pro 2
+                // Wireless Earbuds, Active Noise…"): another product's result shares none of those details. It's
+                // "open the result that matches", which takes a look, not a fixed label.
+                let rest = label.replacingOccurrences(of: example, with: "", options: .caseInsensitive).filter(\.isLetter)
+                if rest.count > max(24, example.count * 2) {
+                    var think = thinkStep(goal: "Open the result that best matches {{\(input.name)}} (skip sponsored results and ads). "
+                                          + "When this was learned it was “\(label.prefix(80))”. Do only that.", when: steps[index].when, near: steps[index])
+                    think.maxTurns = 3
+                    think.url = steps[index].url
+                    steps[index] = think
+                    continue
+                }
                 steps[index].label = label.replacingOccurrences(of: example, with: "{{\(input.name)}}", options: .caseInsensitive)
                 steps[index].selectors = steps[index].selectors?.map {
                     $0.replacingOccurrences(of: example, with: "{{\(input.name)}}", options: .caseInsensitive)

@@ -390,7 +390,7 @@ final class AppEnvironment: ObservableObject {
         // The person's side of a hand-off, for scripts: `takeback`, `pause`, and `tabjs <js>` (run in the
         // tab in front, as if the person did it there).
         case "takeback":
-            hybridBrowserReplayer.takeBack()
+            if let back = pendingHandoff { back() } else { hybridBrowserReplayer.takeBack() }
         case "pause":
             if let id = hybridBrowserReplayer.runID { pauseRun(id, from: "script") }
         case "tabjs":

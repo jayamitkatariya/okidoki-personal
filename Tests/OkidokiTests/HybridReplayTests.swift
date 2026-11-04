@@ -166,6 +166,10 @@ final class HybridReplayTests: XCTestCase {
         XCTAssertTrue(HybridReplay.needsReading(SkillInput(name: "fact_value", example: "658,236 for the city (2025 estimate)")))
         XCTAssertTrue(HybridReplay.needsReading(SkillInput(name: "answer")))
         XCTAssertFalse(HybridReplay.needsReading(SkillInput(name: "x", pattern: "[0-9]+")))
+        XCTAssertTrue(HybridReplay.needsReading(SkillInput(name: "price", example: "$189.05")))
+        XCTAssertTrue(HybridReplay.needsReading(SkillInput(name: "rating", example: "8.8/10")))
+        XCTAssertFalse(HybridReplay.needsReading(SkillInput(name: "pan", example: "ABCPR1234K")))
+        XCTAssertFalse(HybridReplay.needsReading(SkillInput(name: "order", example: "112-3456789-1234567")))
     }
 
     func testARefusalIsANewLineAskingForSomething() {

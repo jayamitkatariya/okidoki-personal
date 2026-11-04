@@ -128,6 +128,7 @@ extension AppEnvironment {
             guard !answered else { return }
             answered = true
             self?.pendingHandoff = nil
+            self?.answerController.close(restoreApp: false)
             back ? takeBack() : stop()
         }
         let card = AnswerCardModel(title: title, text: text, actions: [

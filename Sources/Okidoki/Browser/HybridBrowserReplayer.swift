@@ -232,7 +232,7 @@ final class HybridBrowserReplayer {
             env.replayLog(runID, "✗ \(label): needs a person (\(why)), and nobody is at this Mac")
             return false
         }
-        while handingOff {
+        while handingOff || gate != nil {
             if Task.isCancelled || self.runID != runID { return false }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
@@ -911,6 +911,25 @@ final class HybridBrowserReplayer {
     private func readByModel(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
                              tab: BrowserTab) async -> String? {
         guard let env, let runID, env.hasKey("anthropic") else { return nil }
+        // The page it was learned on (a results page), built: a search's results arrive after the address.
+        if let want = step.url.flatMap({ URLComponents(string: $0)?.path }), !want.isEmpty {
+            for _ in 0..<25 where URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path != want {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+        for _ in 0..<40 where await tab.isBusy() { try? await Task.sleep(nanoseconds: 200_000_000) }
+        await tab.settle(limit: 3)
+        for attempt in 0..<2 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+            if let value = await readOnce(step, input: input, name: name, values: values, label: label, tab: tab, env: env, runID: runID) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func readOnce(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
+                          tab: BrowserTab, env: AppEnvironment, runID: String) async -> String? {
         let page = await tab.pageText()
         guard !page.isEmpty else { return nil }
         let what = ParameterFill.fill(input?.description.isEmpty == false ? input!.description : step.text, values: values).text
@@ -934,6 +953,12 @@ final class HybridBrowserReplayer {
 
     private func askGate(item: SkillBinder.Bound, step: SkillStep, reasons: [String], tab: BrowserTab) async -> GateAnswer {
         guard let env, let runID else { return .stop }
+        // One question to the person at a time: passes running side by side queue here, so no answer is lost.
+        while gate != nil || handingOff {
+            if Task.isCancelled || self.runID != runID { return .stop }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        if Task.isCancelled || self.runID != runID { return .stop }
         env.replayLog(runID, "→ \(item.label): paused before “\(step.text)” · \(reasons.joined(separator: "; "))")
         status("\(item.label) · waiting for your okay", in: tab)
         let shown = item.values.filter { key, _ in !key.hasPrefix("today") && key != "ref" && key != "id" }
