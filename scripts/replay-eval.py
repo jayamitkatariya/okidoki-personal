@@ -76,6 +76,8 @@ def start_fixture():
 
 
 GATE = {"answer": "carry"}
+# The person, for scenarios that need one: what they do when smart replay says "your turn".
+PERSON = {"solve": None, "seen": 0}
 
 
 def wait_run(before_ids, match, timeout):
@@ -86,6 +88,13 @@ def wait_run(before_ids, match, timeout):
         time.sleep(1.0)
         # Smart replay's "check before submitting" card, answered the way a person who agrees would.
         browser("gate " + GATE["answer"])
+        if PERSON["solve"]:
+            # Each new "your turn" in the log: do what a person would on that page.
+            turns = sum((r.get("output") or "").count("your turn") for r in load_state().get("runs", []) if r.get("id") not in before_ids)
+            if turns > PERSON["seen"]:
+                PERSON["seen"] = turns
+                time.sleep(1.5)
+                browser("tabjs " + PERSON["solve"])
         runs = [r for r in load_state().get("runs", []) if r.get("id") not in before_ids and match(r)]
         if runs:
             run = runs[-1]
@@ -211,7 +220,7 @@ def write_documents(spec, names):
     time.sleep(2.5)  # the vault notices new files through FSEvents
 
 
-KNOBS = ["drift", "banner", "randomIds", "slow", "popups", "expire", "busy", "random", "wipe"]
+KNOBS = ["drift", "banner", "randomIds", "slow", "popups", "expire", "busy", "random", "wipe", "captcha"]
 
 
 def configure(scenario):
@@ -241,6 +250,7 @@ def run_mode(spec, scenario, mode, timeout):
     configure(scenario)
     # How a person answers smart replay's "check before submitting" card in this scenario.
     GATE["answer"] = scenario.get("gate", "carry")
+    PERSON.update(solve=scenario.get("person"), seen=0)
     fixture("/reset", {})
     before = {r["id"] for r in load_state().get("runs", [])}
     started = time.time()
@@ -283,6 +293,8 @@ def run_mode(spec, scenario, mode, timeout):
             if scenario.get("stopAfter"):
                 stopped = stop_midway(before, scenario["stopAfter"])
                 notes.extend(stopped)
+            if scenario.get("pauseAfter"):
+                notes.extend(pause_midway(before, scenario["pauseAfter"]))
             run, error = wait_run(before, lambda r: r.get("builtin") == "skill", timeout * len(items))
             runs.append(run)
             if error:
@@ -341,6 +353,24 @@ def stop_midway(before, after_seconds):
             time.sleep(6)
             filed_after = len(fixture("/submissions")["submissions"])
             return [] if filed_after == filed_before else [f"{filed_after - filed_before} filed after the stop"]
+        time.sleep(0.3)
+    return ["the replay never started"]
+
+
+def pause_midway(before, after_seconds):
+    """Takes the page over mid-run (the pause button), holds it a few seconds, then hands it back."""
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        runs = [r for r in load_state().get("runs", []) if r.get("id") not in before and r.get("builtin") == "skill"]
+        if runs and runs[-1].get("status") == "running":
+            time.sleep(after_seconds)
+            browser("pause")
+            time.sleep(1)
+            filed = len(fixture("/submissions")["submissions"])
+            time.sleep(4)
+            moved = len(fixture("/submissions")["submissions"]) - filed
+            browser("takeback")
+            return [f"{moved} filed while it was paused"] if moved else []
         time.sleep(0.3)
     return ["the replay never started"]
 

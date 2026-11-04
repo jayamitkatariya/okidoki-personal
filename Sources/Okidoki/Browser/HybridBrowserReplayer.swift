@@ -190,7 +190,92 @@ final class HybridBrowserReplayer {
         gate = nil
     }
 
+    // MARK: - Hand-off: the person steps in, then hands it back
+
+    /// The person took over (pause): every pass waits at its next step until they take it back.
+    private(set) var personHasIt = false
+    /// Set by "take back" (the card, the notch, a script): whoever is waiting carries on.
+    private var takeBackAsked = false
+    /// One "your turn" card at a time; other passes needing the person queue behind it.
+    private var handingOff = false
+
+    /// Pause: the page is the person's until they take it back. The run stays alive.
+    func pauseForPerson(from source: String = "") {
+        guard let env, let runID, !personHasIt else { return }
+        personHasIt = true
+        takeBackAsked = false
+        env.store.updateRun(runID) { $0.status = .paused }
+        env.replayLog(runID, "→ paused — the page is yours" + (source.isEmpty ? "" : " (\(source))"))
+        env.browser.show()
+        env.presentHandoff(runID: runID, title: "paused · the page is yours",
+                           text: "Do what you need to on the page. When you take it back, okidoki picks up from wherever the page is.",
+                           takeBack: { [weak self] in self?.takeBack() }, stop: { [weak self] in self?.cancel(reason: "you stopped me") })
+    }
+
+    /// The person is done: carry on from wherever the page is now.
+    func takeBack() {
+        guard personHasIt || handingOff else { return }
+        if personHasIt, let runID {
+            env?.store.updateRun(runID) { $0.status = .running }
+            env?.replayLog(runID, "→ taken back — carrying on from where the page is")
+        }
+        personHasIt = false
+        takeBackAsked = true
+        env?.closeHandoffCard()
+    }
+
+    /// A check only the person can pass (a captcha, a code): bring the tab to them, wait until the check
+    /// is gone (or they take it back), then carry on. False when stopped, timed out, or nobody is here.
+    private func handOff(_ why: String, label: String, tab: BrowserTab) async -> Bool {
+        guard let env, let runID else { return false }
+        if env.unattendedRuns.contains(runID) {
+            env.replayLog(runID, "✗ \(label): needs a person (\(why)), and nobody is at this Mac")
+            return false
+        }
+        while handingOff {
+            if Task.isCancelled || self.runID != runID { return false }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        handingOff = true
+        defer { handingOff = false }
+        takeBackAsked = false
+        let who = label.isEmpty ? "" : "\(label) · "
+        env.replayLog(runID, "→ \(who)your turn: \(why)")
+        status("\(who)your turn: \(why) — okidoki carries on when it's done", in: tab)
+        env.browser.show()
+        env.browser.select(tab)
+        env.presentHandoff(runID: runID, title: "your turn · \(why)",
+                           text: "\(label.isEmpty ? "This page" : label + "'s page") needs a person: \(why). Do it in the browser; "
+                               + "okidoki notices when it's done and carries on, or press take back.",
+                           takeBack: { [weak self] in self?.takeBack() }, stop: { [weak self] in self?.cancel(reason: "you stopped me") })
+        let deadline = Date().addingTimeInterval(600)
+        var clearSince: Date?
+        while !takeBackAsked {
+            if Task.isCancelled || self.runID != runID { return false }
+            guard Date() < deadline else {
+                env.closeHandoffCard()
+                env.replayLog(runID, "✗ \(who)waited 10 minutes for you")
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            // Done when the check has been gone a moment (the page moved on).
+            if await tab.humanCheck() == nil {
+                clearSince = clearSince ?? Date()
+                if Date().timeIntervalSince(clearSince!) > 1.2 { break }
+            } else {
+                clearSince = nil
+            }
+        }
+        env.closeHandoffCard()
+        takeBackAsked = false
+        env.replayLog(runID, "→ \(who)thanks — taking it from here")
+        await tab.settle(limit: 4)
+        return true
+    }
+
     private func end() {
+        personHasIt = false
+        handingOff = false
         task = nil
         if let runID { env?.browser.endWork(runID: runID) }
         runID = nil
@@ -236,6 +321,19 @@ final class HybridBrowserReplayer {
 
         while cursor < plan.count {
             if Task.isCancelled || self.runID != runID { result.note = "stopped"; return result }
+            // The person has the page (paused): wait for them to hand it back, then pick up from where it is.
+            if personHasIt {
+                while personHasIt, !Task.isCancelled, self.runID == runID { try? await Task.sleep(nanoseconds: 300_000_000) }
+                continue
+            }
+            // A check only a person can pass: theirs for a moment.
+            if plan[cursor].step.action != "navigate", let check = await tab.humanCheck() {
+                guard await handOff(check.text, label: item.label, tab: tab) else {
+                    result.note = "needed you for \(check.text)"
+                    return result
+                }
+                continue
+            }
             let planned = plan[cursor]
             let step = planned.step
             let action = step.action ?? "click"
@@ -270,6 +368,15 @@ final class HybridBrowserReplayer {
             // of this pass's details are there, something was lost on the way (a reset, an undo), and it
             // isn't submitted without asking.
             if step.irreversible == true {
+                // The page has to be built before it can be read (a slow review page fills in late).
+                for _ in 0..<40 where await tab.isBusy() {
+                    if Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+                for _ in 0..<25 where await tab.label(of: step.selectors ?? []) == nil {
+                    if Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
                 let page = await tab.pageText() + "\n" + (await tab.fieldValues())
                 let seen = HybridReplay.shownValues(values, inputs: skill.inputs ?? [], on: page)
                 let key = "\(skill.id)#\(planned.source)"
@@ -292,7 +399,14 @@ final class HybridBrowserReplayer {
             }
 
             var outcome = await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item)
-            if case .lost(let why) = outcome, step.irreversible == true,
+            if case .lost = outcome, let human = await tab.humanCheck() {
+                // Not lost: a person is needed. Once they're through, the page tells where to pick up.
+                guard await handOff(human.text, label: item.label, tab: tab) else {
+                    result.note = "needed you for \(human.text)"
+                    return result
+                }
+                continue
+            } else if case .lost(let why) = outcome, step.irreversible == true,
                let expect = step.expect, !expect.isEmpty, (await check(expect, tab: tab)).isEmpty {
                 // A rescue that pressed it, then gave up: it's done, and must not be done twice.
                 outcome = .done
@@ -455,7 +569,7 @@ final class HybridBrowserReplayer {
             })
         case "read":
             guard let name = step.capture else { return .done }
-            if let value = await read(step, inputs: inputs, tab: tab) { return .captured(name, value) }
+            if let value = await read(step, inputs: inputs, tab: tab, values: scoped, label: item.label) { return .captured(name, value) }
             return .doubt("couldn't read the \(name.replacingOccurrences(of: "_", with: " "))")
         default:
             break
@@ -481,7 +595,23 @@ final class HybridBrowserReplayer {
         }
         // Loop rows find their own element: `#amount-{{item.index}}` → `#amount-2`.
         let templated = (step.selectors ?? []).contains { $0.contains("{{") } || (step.label ?? "").contains("{{")
-        let selectors = (step.selectors ?? []).map { $0.contains("{{") ? ParameterFill.fill($0, values: scoped).text : $0 }
+        var selectors = (step.selectors ?? []).map { $0.contains("{{") ? ParameterFill.fill($0, values: scoped).text : $0 }
+        // A click named after a value ("Friday, December 18, 2026", "Seville"): selectors kept from the run
+        // it was learned on point at that run's element ("the cell that says 10"). Only ones whose element
+        // carries this pass's values are tried; none fitting means the model finds it, never the old one.
+        if action == "click", let label = step.label, label.contains("{{") {
+            let wanted = ParameterFill.names(in: label).compactMap { name -> String? in
+                let raw = scoped[name] ?? scoped[ParameterFill.key(name)]
+                return raw.map { render("{{\(name)}}", values: [name: $0], inputs: inputs) }
+            }.filter { !$0.isEmpty }
+            var kept: [String] = []
+            for (n, raw) in (step.selectors ?? []).enumerated() {
+                if raw.contains("{{") { kept.append(selectors[n]); continue }
+                guard let found = await tab.label(of: [raw]) else { continue }
+                if HybridReplay.carries(found, all: wanted) { kept.append(raw) }
+            }
+            selectors = kept
+        }
         var payload: [String: Any] = ["action": action, "selectors": selectors]
         if action == "type" { payload["text"] = input ?? "" }
         if action == "type", let kind = BrowserReplayer.secretKind(step) { payload["secret"] = kind }
@@ -616,6 +746,7 @@ final class HybridBrowserReplayer {
                 // Slow page, or a popup in the way.
                 let deadline = Date().addingTimeInterval(4)
                 while !unmet.isEmpty, !Task.isCancelled {
+                    if await tab.humanCheck() != nil { break }
                     if Date() >= deadline {
                         let loading = await tab.isBusy()
                         guard loading, Date() < deadline.addingTimeInterval(8) else { break }
@@ -759,15 +890,44 @@ final class HybridBrowserReplayer {
                                   allowModel: boxes.contains(where: \.modal))
     }
 
-    private func read(_ step: SkillStep, inputs: [String: SkillInput], tab: BrowserTab) async -> String? {
+    /// The value a read step captures. A token with a shape (a reference number) is matched in code; an
+    /// answer (a population, a price with its context) is read by the model from the page, in one call.
+    private func read(_ step: SkillStep, inputs: [String: SkillInput], tab: BrowserTab,
+                      values: [String: String] = [:], label: String = "") async -> String? {
         guard let name = step.capture else { return nil }
         let input = inputs[ParameterFill.key(name)]
-        let text = await tab.pageText()
+        if HybridReplay.needsReading(input) {
+            await tab.settle(limit: 4)
+            return await readByModel(step, input: input, name: name, values: values, label: label, tab: tab)
+        }
         for _ in 0..<10 {
-            if let value = HybridReplay.capture(in: text, example: input?.example, pattern: input?.pattern) { return value }
+            if let value = HybridReplay.capture(in: await tab.pageText(), example: input?.example, pattern: input?.pattern) { return value }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
-        return HybridReplay.capture(in: await tab.pageText(), example: input?.example, pattern: input?.pattern)
+        // The page writes it another way ("9.2" and "/10" on separate lines): the model reads it instead.
+        return await readByModel(step, input: input, name: name, values: values, label: label, tab: tab)
+    }
+
+    private func readByModel(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
+                             tab: BrowserTab) async -> String? {
+        guard let env, let runID, env.hasKey("anthropic") else { return nil }
+        let page = await tab.pageText()
+        guard !page.isEmpty else { return nil }
+        let what = ParameterFill.fill(input?.description.isEmpty == false ? input!.description : step.text, values: values).text
+        let given = values.filter { !$0.key.hasPrefix("today") && !$0.key.hasPrefix("item.") && $0.key != "ref" && !$0.value.isEmpty }
+            .sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "; ")
+        let payload: [String: Any] = [
+            "item": label.isEmpty ? name : label,
+            "inputs": [["name": name, "description": what, "kind": "text", "required": true,
+                        "hint": "Answer it the way a person would tell someone: the value with its unit and context, one or two short sentences, exactly as the page says."]],
+            "documents": [["name": "the page (\(tab.webView.title ?? ""))", "text": String(page.prefix(18_000))]],
+            "request": "Read from this page: \(what)" + (given.isEmpty ? "" : " (for \(given))"),
+        ]
+        env.store.countModelCall(runID)
+        guard let reply = await BrainClient.shared.smartReplay("skill/resolve", body: payload),
+              let found = (reply["values"] as? [String: [String: Any]])?[name], let value = found["value"] as? String,
+              !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return value
     }
 
     // MARK: - The gate
@@ -844,6 +1004,12 @@ final class HybridBrowserReplayer {
                 case "finish":
                     return (action["success"] as? Bool ?? false, action["summary"] as? String ?? "", touched)
                 case "ask":
+                    // The model is stuck on a check only a person can pass: theirs for a moment, then on.
+                    if let human = await tab.humanCheck(), await handOff(human.text, label: "", tab: tab) {
+                        results.append(["ok": true, "detail": "the person got past \(human.text); look again"])
+                        halted = true
+                        continue
+                    }
                     return (false, action["question"] as? String ?? "it needed to ask something", touched)
                 case "wait":
                     try? await Task.sleep(nanoseconds: 1_000_000_000)

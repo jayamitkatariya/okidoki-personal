@@ -176,7 +176,17 @@ public enum SkillCompiler {
                 && !(steps[index].input ?? "").contains("{{vault:")
         })
         var out: [SkillStep] = []
-        let thinks = Dictionary(grouping: compiled.thinkSteps, by: \.before)
+        // A think step at the end that only reads ("read the top five results and report…") is a capture:
+        // one look at the page, and a partial answer is still an answer.
+        var capture = compiled.capture
+        var thinkSteps = compiled.thinkSteps
+        if let last = thinkSteps.last(where: { $0.before >= steps.count }), Self.onlyReads(last.goal), capture == nil || capture?.name.isEmpty == true {
+            capture = CompiledSkill.Capture(name: "answer", example: "", description: last.goal)
+            thinkSteps.removeAll { $0.before >= steps.count && Self.onlyReads($0.goal) }
+        } else if capture != nil {
+            thinkSteps.removeAll { $0.before >= steps.count && Self.onlyReads($0.goal) }
+        }
+        let thinks = Dictionary(grouping: thinkSteps, by: \.before)
         for index in 0...steps.count {
             for think in thinks[index] ?? [] {
                 guard ParameterFill.names(in: think.goal + " " + (think.when ?? "")).allSatisfy({ known($0, at: nil) }) else { return nil }
@@ -187,7 +197,7 @@ public enum SkillCompiler {
         }
 
         var inputs = compiled.inputs
-        if let capture = compiled.capture, !capture.name.isEmpty {
+        if let capture, !capture.name.isEmpty {
             let last = out.last
             var read = SkillStep(text: "read the \(capture.description ?? capture.name.replacingOccurrences(of: "_", with: " "))",
                                  app: last?.app ?? "", action: "read")
@@ -220,6 +230,15 @@ public enum SkillCompiler {
         smart.itemNoun = compiled.itemNoun
         smart.alwaysConfirm = compiled.alwaysConfirm == true ? true : nil
         return smart
+    }
+
+    /// A goal that only reads or reports what's on the page, with nothing to click, type or choose.
+    static func onlyReads(_ goal: String) -> Bool {
+        let g = goal.lowercased()
+        let reads = ["read", "report", "list ", "note ", "find out", "look up", "tell me", "extract"].contains { g.contains($0) }
+        let acts = ["click", "type ", "choose", "select", "enter ", "fill", "press", "tick", "add ", "submit", "open ", "scroll", "sort", "filter"]
+            .contains { g.contains($0) }
+        return reads && !acts
     }
 
     static func thinkStep(goal: String, when: String?, near: SkillStep?) -> SkillStep {

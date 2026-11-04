@@ -47,6 +47,13 @@ extension BrowserTab {
         await call("return window.__okidoki ? window.__okidoki.clickInDialog(l) : false", ["l": label]) as? Bool ?? false
     }
 
+    /// A check only a person can pass (captcha, "verify you're human", a one-time code), or nil.
+    func humanCheck() async -> (kind: String, text: String)? {
+        guard let raw = await call("return window.__okidoki ? window.__okidoki.humanCheck() : null") as? [String: Any],
+              let kind = raw["kind"] as? String else { return nil }
+        return (kind, raw["text"] as? String ?? kind)
+    }
+
     /// The page says it's still loading (a spinner, "Loading…", a busy region).
     func isBusy() async -> Bool {
         await call("return window.__okidoki ? window.__okidoki.busy() : true") as? Bool ?? false

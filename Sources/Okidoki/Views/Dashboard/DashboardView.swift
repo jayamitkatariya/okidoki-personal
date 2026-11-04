@@ -658,7 +658,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         case "stopRun":
             if let id = payload["id"] as? String { env.stopRun(id) }
         case "pauseRun":
-            if let id = payload["id"] as? String { env.pauseRun(id) }
+            if let id = payload["id"] as? String { env.pauseRun(id, from: "dashboard") }
         case "redirectRun":
             if let id = payload["id"] as? String, let text = payload["text"] as? String {
                 env.redirectRun(id, instruction: text)

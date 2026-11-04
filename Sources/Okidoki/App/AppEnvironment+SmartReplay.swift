@@ -120,6 +120,33 @@ extension AppEnvironment {
         speak("One check before I submit.")
     }
 
+    /// "Your turn": the person does what only they can (a captcha, a code, anything while paused), then
+    /// hands it back. The replay also takes it back by itself once the check is gone.
+    func presentHandoff(runID: String, title: String, text: String, takeBack: @escaping () -> Void, stop: @escaping () -> Void) {
+        var answered = false
+        let once: (Bool) -> Void = { [weak self] back in
+            guard !answered else { return }
+            answered = true
+            self?.pendingHandoff = nil
+            back ? takeBack() : stop()
+        }
+        let card = AnswerCardModel(title: title, text: text, actions: [
+            CardAction(title: "take back", kind: .primary, glyph: "bolt") { once(true) },
+            CardAction(title: "stop", kind: .secondary, glyph: "runs") { once(false) },
+        ], threadTitle: nil, runID: runID, threadID: store.run(runID)?.threadID)
+        card.footnote = "smart replay · waiting for you"
+        pendingHandoff = { once(true) }
+        present(card, source: "followup")
+        speak("Your turn. I need you for a moment.")
+    }
+
+    /// Closes the "your turn" card once the replay has taken it back.
+    func closeHandoffCard() {
+        guard pendingHandoff != nil else { return }
+        pendingHandoff = nil
+        answerController.close(restoreApp: false)
+    }
+
     // MARK: - Bind: every pass's values before anything is touched
 
     /// Each pass's values, final: given values matched to the skill's inputs in code, and whatever is

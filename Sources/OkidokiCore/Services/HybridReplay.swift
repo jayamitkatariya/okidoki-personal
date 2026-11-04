@@ -421,6 +421,16 @@ public enum HybridReplay {
         return String(text[r])
     }
 
+    /// Whether a value read off the screen is an answer only reading can find ("658,236 for the city,
+    /// 2025 estimate"), not a token with a fixed shape (a reference number). No pattern, and an example
+    /// that's a phrase, long, or missing.
+    public static func needsReading(_ input: SkillInput?) -> Bool {
+        guard let input else { return true }
+        if let pattern = input.pattern, !pattern.isEmpty { return false }
+        guard let example = input.example?.trimmingCharacters(in: .whitespaces), !example.isEmpty else { return true }
+        return example.contains(" ") || example.count > 24
+    }
+
     /// A regex for strings shaped like `example`: runs of digits and letters keep their length (letters
     /// keep their case), other characters stay literal. Bounded by non-word characters.
     public static func shape(of example: String) -> String {
@@ -488,6 +498,16 @@ public enum HybridReplay {
             if forms.contains(where: { haystack.contains($0) }) { shown += 1 }
         }
         return (checked, shown)
+    }
+
+    /// Whether an element's label carries every one of `values` ("Seville Andalusia, Spain" carries
+    /// "Seville"; "Thursday, December 10, 2026" doesn't carry "Friday, December 18, 2026").
+    public static func carries(_ label: String, all values: [String]) -> Bool {
+        guard !values.isEmpty else { return false }
+        let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ") }
+        let have = fold(label)
+        return values.allSatisfy { have.contains(fold($0)) }
     }
 
     /// Below this, a value found in a document is doubtful.

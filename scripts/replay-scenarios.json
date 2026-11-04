@@ -341,6 +341,37 @@
         "Chandra"
       ],
       "why": "the site loses Chandra's details before review: replay must notice and ask, not file an empty return"
+    },
+    {
+      "id": "captcha",
+      "items": [
+        "Bharat",
+        "Chandra"
+      ],
+      "site": {
+        "captcha": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "person": "document.querySelector('#robot').click(); document.querySelector('#robot').dispatchEvent(new Event('change',{bubbles:true})); setTimeout(()=>document.querySelector('#human-continue').click(),400)",
+      "why": "a 'verify you are human' check after signing in: replay hands the page to the person, then takes it back and finishes"
+    },
+    {
+      "id": "pause",
+      "items": [
+        "Bharat",
+        "Chandra",
+        "Divya"
+      ],
+      "site": {
+        "slow": true
+      },
+      "modes": [
+        "hybrid"
+      ],
+      "pauseAfter": 3,
+      "why": "the person presses pause mid-run, holds the page, then takes it back: nothing done while paused, everything finished after"
     }
   ],
   "documents": {

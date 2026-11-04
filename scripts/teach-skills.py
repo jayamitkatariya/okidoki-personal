@@ -95,11 +95,15 @@ def ask(text, timeout):
         time.sleep(1.5)
         # Read-only tasks never reach the gate, but answer it the way an agreeing person would.
         post("dev.browser", "gate carry")
-        fresh = [r for r in state()["runs"] if r["id"] not in before and r.get("kind") != "answer"]
-        if fresh:
+        fresh = [r for r in state()["runs"] if r["id"] not in before]
+        # The brain answering in words ("model unavailable", or a reply instead of doing it) ends it too.
+        work = [r for r in fresh if r.get("kind") != "answer"]
+        if work and work[-1].get("status") in TERMINAL:
+            return work[-1]
+        if fresh and not work and fresh[-1].get("status") == "done":
             run = fresh[-1]
-            if run.get("status") in TERMINAL:
-                return run
+            run["builtin"] = "answer: " + (run.get("title") or "")
+            return run
     post("dev.stop")
     return run
 

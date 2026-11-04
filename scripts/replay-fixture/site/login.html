@@ -17,6 +17,8 @@ $("#f").onsubmit = (e) => {
   const next = params.get("next");
   if (next) { location.href = next; return; }
   sessionStorage.removeItem("filing");
+  // Captcha: a human check after signing in, once per tab.
+  if (F.captcha && !sessionStorage.getItem("human")) { location.href = "check.html?next=form.html"; return; }
   location.href = "form.html";
 };
 banner(); noise();

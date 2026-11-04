@@ -97,6 +97,10 @@ final class AppEnvironment: ObservableObject {
     var pendingReplayValues: [String: [[String: String]]] = [:]
     /// The last partly failed replay's "retry those" (its toast button), for scripts too.
     var lastFailedReplay: (() -> Void)?
+    /// The "your turn" card's take back, while one is showing.
+    var pendingHandoff: (() -> Void)?
+    /// Runs started with nobody at this Mac (routines): a hand-off there stops instead of waiting.
+    var unattendedRuns: Set<String> = []
     /// The words a smart replay was asked with, for finding values the request states in passing.
     var pendingReplayRequests: [String: String] = [:]
     /// Runs following a library template: which template, and the passes still to replay once it's learned.
@@ -381,8 +385,17 @@ final class AppEnvironment: ObservableObject {
             store.settings.hybridReplay = arg == "on"
             store.saveNow()
         case "forget":
-            for skill in store.activeSkills where skill.name == arg { store.deleteSkill(skill.id) }
+            for skill in store.activeSkills where skill.name == arg || skill.id == arg { store.deleteSkill(skill.id) }
             store.saveNow()
+        // The person's side of a hand-off, for scripts: `takeback`, `pause`, and `tabjs <js>` (run in the
+        // tab in front, as if the person did it there).
+        case "takeback":
+            hybridBrowserReplayer.takeBack()
+        case "pause":
+            if let id = hybridBrowserReplayer.runID { pauseRun(id, from: "script") }
+        case "tabjs":
+            let tab = browser.activeTab
+            Task { @MainActor in _ = await tab.call(arg) }
         case "retryfailed":
             lastFailedReplay?()
             lastFailedReplay = nil
@@ -1300,14 +1313,18 @@ final class AppEnvironment: ObservableObject {
               undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: id)
     }
 
-    func pauseRun(_ id: String) {
+    func pauseRun(_ id: String, from source: String = "button") {
         guard let run = store.run(id) else { return }
         // A recording can't pause: the recorder either watches or it doesn't.
         if run.kind == .watch || run.kind == .connector { return }
         // A replay can't resume mid-click either; pausing hands control back, like computer use.
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "paused — control is yours"); return }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "paused — the page is yours"); return }
-        if hybridBrowserReplayer.isActive, hybridBrowserReplayer.runID == id { hybridBrowserReplayer.cancel(reason: "paused — the page is yours"); return }
+        // Smart replay pauses for real: the page is the person's until they take it back, then it carries on.
+        if hybridBrowserReplayer.isActive, hybridBrowserReplayer.runID == id {
+            if hybridBrowserReplayer.personHasIt { hybridBrowserReplayer.takeBack() } else { hybridBrowserReplayer.pauseForPerson(from: source) }
+            return
+        }
         if run.status == .paused {
             if pausedStarts.remove(id) != nil {
                 execute(run)
@@ -1941,6 +1958,7 @@ final class AppEnvironment: ObservableObject {
         if hybridBrowserReplayer.isActive { hybridBrowserReplayer.cancel(reason: "replaying \(skill.name) instead") }
         let passes = max(1, min(times, 10_000))
         let run = makeReplayRun(skill, times: passes, threadID: threadID, values: values)
+        if Self.isUnattended(source) { unattendedRuns.insert(run.id) }
         if !request.isEmpty { pendingReplayRequests[run.id] = request }
         let refs = values.compactMap { $0["ref"] }
         let count = !refs.isEmpty ? "for \(refs.joined(separator: ", "))" : passes == 1 ? "once" : "\(passes) times"

@@ -153,6 +153,21 @@ final class HybridReplayTests: XCTestCase {
         XCTAssertEqual(HybridReplay.shownValues(values, inputs: inputs, on: empty).checked, 3)
     }
 
+    func testAKeptSelectorMustCarryThisPassesValue() {
+        XCTAssertTrue(HybridReplay.carries("Seville Andalusia, Spain", all: ["Seville"]))
+        XCTAssertFalse(HybridReplay.carries("Thursday, December 10, 2026", all: ["Friday, December 18, 2026"]))
+        XCTAssertTrue(HybridReplay.carries("Friday, December 18, 2026", all: ["Friday, December 18, 2026"]))
+        XCTAssertFalse(HybridReplay.carries("10", all: ["Friday, December 18, 2026"]))
+        XCTAssertFalse(HybridReplay.carries("anything", all: []))
+    }
+
+    func testAnswersAreReadAndTokensAreMatched() {
+        XCTAssertFalse(HybridReplay.needsReading(SkillInput(name: "ref", example: "REF-448990")))
+        XCTAssertTrue(HybridReplay.needsReading(SkillInput(name: "fact_value", example: "658,236 for the city (2025 estimate)")))
+        XCTAssertTrue(HybridReplay.needsReading(SkillInput(name: "answer")))
+        XCTAssertFalse(HybridReplay.needsReading(SkillInput(name: "x", pattern: "[0-9]+")))
+    }
+
     func testARefusalIsANewLineAskingForSomething() {
         let before = "Review your return\nAsha Rao · ABCPR1234K\nI declare that the information above is correct\nSubmit return"
         XCTAssertEqual(HybridReplay.refusal(before: before, after: before + "\nPlease confirm the declaration before filing."),

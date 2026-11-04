@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Filing · Security check</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body><h1>Security check</h1><p>Verify you are human to continue to your return.</p>
+<div class="captcha" data-sitekey="fixture-key"><label><input type="checkbox" id="robot" style="width:auto"> I'm not a robot</label></div>
+<button type="button" id="human-continue" disabled>Continue</button>
+<script>
+// Only a person passes this: the replay hands the page over and takes it back once it's gone.
+const next = new URLSearchParams(location.search).get("next") || "form.html";
+$("#robot").onchange = (e) => { $("#human-continue").disabled = !e.target.checked; };
+$("#human-continue").onclick = () => { sessionStorage.setItem("human", "1"); location.href = next; };
+</script></body></html>

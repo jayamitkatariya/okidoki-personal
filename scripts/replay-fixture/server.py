@@ -19,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent / "site"
-CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False}
+CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False, "captcha": False}
 BUSY_SEEN = set()
 SUBMISSIONS = []
 

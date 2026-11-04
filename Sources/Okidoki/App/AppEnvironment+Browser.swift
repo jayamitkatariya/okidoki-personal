@@ -79,8 +79,12 @@ extension AppEnvironment {
                                        pages: learnedPages.removeValue(forKey: run.id) ?? [:])
         lastBrowserRun = success && !learned.isEmpty ? source : nil
         // A template's first run: kept as the person's own skill straight away, and the rest replayed with it.
-        if let template = templateRuns.removeValue(forKey: run.id), success, learned.contains(where: { $0.action != "navigate" }),
-           let outline = store.skill(template.templateID) {
+        // A lookup that only went to an address (npmjs.com/package/react) is a skill too: the address is
+        // what changes per item, and the reading is a read step.
+        if let template = templateRuns.removeValue(forKey: run.id), success, !learned.isEmpty,
+           let outline = store.skill(template.templateID),
+           // Two first runs at once (both started before either was learned): the first one kept wins.
+           !store.activeSkills.contains(where: { $0.learned == true && $0.templateID == outline.id }) {
             saveBrowserSkill(name: outline.name, steps: learned, source: "template:\(outline.id)", learnedFrom: source) { [weak self] id in
                 guard let self, var made = self.store.skill(id) else { return }
                 made.templateID = outline.id

@@ -183,4 +183,9 @@ final class SkillCompilerTests: XCTestCase {
         let smart = try XCTUnwrap(SkillCompiler.apply(compiled(), to: ashaRun()))
         XCTAssertEqual(SkillCompiler.describe(smart), "6 values change per person · 2 steps only when needed · 2 parts it works out each time")
     }
+
+    func testAReadingThinkStepAtTheEndBecomesACapture() {
+        XCTAssertTrue(SkillCompiler.onlyReads("On the YouTube results page for {{query}}, read the top five organic results (skip ads) and report each one's title"))
+        XCTAssertFalse(SkillCompiler.onlyReads("For each entry in {{deductions}}, click 'Add deduction' and type its amount"))
+    }
 }

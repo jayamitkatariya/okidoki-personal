@@ -573,6 +573,26 @@ public enum BrowserPageScript {
         if (!hit) return false;
         return dialogBoxes().some(box => box.contains(hit.el));
       }
+      /**
+       * A check only a person can pass: a captcha, a "verify you're human" wall, a one-time code box.
+       * {kind: "captcha" | "code", text} or null. By the widgets' own markers and their usual words.
+       */
+      function humanCheck() {
+        const frames = deepAll('iframe').filter(visible).map(f => f.src || '');
+        if (frames.some(src => /recaptcha|hcaptcha|challenges\.cloudflare\.com|turnstile|arkoselabs|funcaptcha|captcha/i.test(src)))
+          return { kind: 'captcha', text: 'a captcha' };
+        if (deepAll('.g-recaptcha,.h-captcha,.cf-turnstile,[data-sitekey],#challenge-form,#cf-challenge-running').some(visible))
+          return { kind: 'captcha', text: 'a captcha' };
+        const text = (document.body?.innerText || '').slice(0, 4000);
+        const said = text.match(/verify (that )?you('| a)re (a )?human|i'?m not a robot|are you a robot|checking (if the site connection is secure|your browser)|press (and|&) hold|unusual traffic|security check|prove you('| a)re human/i);
+        if (said) return { kind: 'captcha', text: said[0] };
+        const code = deepAll('input[autocomplete=one-time-code]').filter(visible);
+        const asks = text.match(/enter the (\d-digit |verification |security )?code|we (just )?sent (you )?a code|verification code|two-factor|2-step verification|authenticator app/i);
+        if (code.length || (asks && deepAll('input:not([type=hidden])').some(visible)))
+          return { kind: 'code', text: asks ? asks[0] : 'a one-time code' };
+        return null;
+      }
+
       /** Something on the page says it's still loading. */
       function busy() {
         if (document.readyState === 'loading') return true;
@@ -582,7 +602,7 @@ public enum BrowserPageScript {
       }
 
       window.__okidoki = {
-        headings, valueOf, present, clickText, optionsOf, dialogs, clickInDialog, inDialog, busy,
+        headings, valueOf, present, clickText, optionsOf, dialogs, clickInDialog, inDialog, busy, humanCheck,
         snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
         fillLogin, settle, pageText,
         record: (on) => { recording = !!on; return recording; },

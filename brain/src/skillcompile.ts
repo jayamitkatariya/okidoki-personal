@@ -200,6 +200,7 @@ Rules:
 - A step that applies only to some items (a checkbox for capital gains) gets a "when".
 - Mark steps that submit, file, pay, send, post or delete as irreversible. alwaysConfirm only when money is spent or something is deleted.
 - If the last page showed a value worth keeping (a reference, an order number, a confirmation id), give capture with its example from the run.
+- If the task's point is to find something out (a price, a rating, a definition, a list of results), give capture: a short snake_case name, a description of exactly what to read as the task asked it ("the top five video results: title, channel, length, views"), and the run's answer as example. Never make a thinkStep that only reads or reports: reading the page is what capture does, in one look.
 - drop only true detours (a wrong click that was undone). Never drop signing in, typing or choosing.
 - An optional amount (capital gains, a bonus) is a money input that's empty when absent, used in "when": "{{capital_gains}}", and the think step types the amount; not a yes/no choice.
 - Step numbers are the "i" values given. Keep names short, snake_case.`;

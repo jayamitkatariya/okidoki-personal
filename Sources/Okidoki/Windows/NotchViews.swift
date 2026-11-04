@@ -702,7 +702,7 @@ private struct NotchLiveRow: View {
 
             HStack(spacing: 6) {
                 NotchIconButton(symbol: paused ? "play.fill" : "pause.fill", help: paused ? "Resume" : "Pause",
-                                filled: true) { env.pauseRun(run.id) }
+                                filled: true) { env.pauseRun(run.id, from: "notch") }
                 NotchIconButton(symbol: "stop.fill", help: "Stop", filled: true) { env.stopRun(run.id) }
             }
         }
