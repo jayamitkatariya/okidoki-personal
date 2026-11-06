@@ -1,0 +1,597 @@
+{
+  "format": "okidoki-skill",
+  "version": 2,
+  "name": "acmedesk filing smart",
+  "summary": "file an income tax return in AcmeDesk",
+  "steps": [
+    {
+      "id": "ea6bfc12-5d1b-5425-9e59-51829e95fc99",
+      "text": "open AcmeDesk",
+      "app": "AcmeDesk",
+      "action": "switch",
+      "delay": 0.4
+    },
+    {
+      "id": "570a1995-49b0-5ca6-9617-8d07e82975ff",
+      "text": "in AcmeDesk, click “Username”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Username",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Sign in",
+        "role": "AXTextField",
+        "label": "Username",
+        "identifier": "username",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Sign in"
+      }
+    },
+    {
+      "id": "f510354d-c4d6-5e8f-a4b7-129f9f8c6999",
+      "text": "type “eval”",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "eval",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Sign in"
+      }
+    },
+    {
+      "id": "ba7cfec2-bd52-5999-81a7-8ee35d97bfcd",
+      "text": "in AcmeDesk, click “Password”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Password",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Sign in",
+        "role": "AXTextField",
+        "label": "Password",
+        "identifier": "password",
+        "subrole": "AXSecureTextField",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Sign in"
+      }
+    },
+    {
+      "id": "be9e3b38-10a8-549d-8132-10b7c6898a07",
+      "text": "type the password",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "eval",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Sign in"
+      }
+    },
+    {
+      "id": "91123b03-600d-51ae-8289-3eca069bded1",
+      "text": "in AcmeDesk, click “Sign in”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Sign in",
+      "role": "AXButton",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Sign in",
+        "role": "AXButton",
+        "label": "Sign in",
+        "identifier": "sign-in",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "expect": {
+        "windowTitleContains": "Return details"
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Sign in"
+      }
+    },
+    {
+      "id": "ac180acc-29e0-528e-b44d-9df1ebcee96d",
+      "text": "in AcmeDesk, click “Full name”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Full name",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "Full name",
+        "identifier": "name",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "6c223d12-4a33-5bb2-bc6a-50366ba2e715",
+      "text": "type {{name}}",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "{{name}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "921ea1c6-fa59-5c16-b988-655fccfdb6d2",
+      "text": "in AcmeDesk, click “PAN”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "PAN",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "PAN",
+        "identifier": "pan",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "2d5f9923-b408-5869-aa1a-61e020fe8507",
+      "text": "type {{pan}}",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "{{pan}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "81ed1553-483b-5a0b-aee5-7a15660713dd",
+      "text": "in AcmeDesk, click “Income”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Income",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "Income",
+        "identifier": "income",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "72918214-2a3f-58d9-92ee-1c5aa0143cdc",
+      "text": "type {{income}}",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "{{income}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "cf93635a-aaf0-5e94-930a-fa14ed124abd",
+      "text": "choose {{regime}} for “Regime”",
+      "app": "AcmeDesk",
+      "action": "select",
+      "delay": 0.4,
+      "label": "Regime",
+      "role": "AXPopUpButton",
+      "input": "{{regime}}",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXPopUpButton",
+        "label": "Regime",
+        "identifier": "regime",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "a97fe4c3-1b42-5d6d-995f-78f56a93923f",
+      "text": "in AcmeDesk, tick “I have capital gains”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "I have capital gains",
+      "role": "AXCheckBox",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXCheckBox",
+        "label": "I have capital gains",
+        "identifier": "has-gains",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "when": "{{gains}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "87284e89-0550-5dae-8cff-f9a9366a3b80",
+      "text": "in AcmeDesk, click “Capital gains”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Capital gains",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "Capital gains",
+        "identifier": "gains",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "when": "{{gains}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "3a790a6d-7b7c-599b-80ad-e0ae98909f71",
+      "text": "type {{gains}}",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "{{gains}}",
+      "when": "{{gains}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "623672b1-8db7-5920-bbb0-782bd7d15ebb",
+      "text": "in AcmeDesk, click “Next”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Next",
+      "role": "AXButton",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXButton",
+        "label": "Next",
+        "identifier": "details-next",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "expect": {
+        "windowTitleContains": "Deductions"
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Return details"
+      }
+    },
+    {
+      "id": "978bac5d-cb22-510f-a8b3-a189dcf56153",
+      "text": "in AcmeDesk, click “Add row”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Add row",
+      "role": "AXButton",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXButton",
+        "label": "Add row",
+        "identifier": "add-row",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "repeatOver": "deductions",
+      "repeatLength": 4,
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Deductions"
+      }
+    },
+    {
+      "id": "2c82c699-a88d-5ccb-9a77-5f817fe0d2b9",
+      "text": "choose {{item.section}} for “Section {{item.index}}”",
+      "app": "AcmeDesk",
+      "action": "select",
+      "delay": 0.4,
+      "label": "Section {{item.index}}",
+      "role": "AXPopUpButton",
+      "input": "{{item.section}}",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXPopUpButton",
+        "label": "Section {{item.index}}",
+        "identifier": "section-{{item.index}}",
+        "path": [
+          "AXWindow",
+          "AXGroup[1]",
+          "AXGroup[{{item.index}}]"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Deductions"
+      }
+    },
+    {
+      "id": "1c45de54-d62f-52b9-be75-7bd9666f6624",
+      "text": "in AcmeDesk, click “Amount {{item.index}}”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Amount {{item.index}}",
+      "role": "AXTextField",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXTextField",
+        "label": "Amount {{item.index}}",
+        "identifier": "amount-{{item.index}}",
+        "path": [
+          "AXWindow",
+          "AXGroup[1]",
+          "AXGroup[{{item.index}}]"
+        ]
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Deductions"
+      }
+    },
+    {
+      "id": "2045d19d-d4cd-566b-a595-4af243980133",
+      "text": "type {{item.amount}}",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "{{item.amount}}",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Deductions"
+      }
+    },
+    {
+      "id": "623672b1-8db7-5920-bbb0-782bd7d15ebb",
+      "text": "in AcmeDesk, click “Next”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Next",
+      "role": "AXButton",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXButton",
+        "label": "Next",
+        "identifier": "deductions-next",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "expect": {
+        "labelPresent": "Review your return"
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Deductions"
+      }
+    },
+    {
+      "id": "1554b604-75eb-5e36-ba80-bdc0c5f3a0c7",
+      "text": "in AcmeDesk, click “Submit”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Submit",
+      "role": "AXButton",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXButton",
+        "label": "Submit",
+        "identifier": "submit",
+        "inSheet": true,
+        "path": [
+          "AXWindow",
+          "AXSheet[1]"
+        ]
+      },
+      "irreversible": true,
+      "expect": {
+        "textContains": "Your return has been filed"
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Deductions",
+        "landmark": "Review your return"
+      }
+    },
+    {
+      "id": "8e0aecff-837b-5cb1-920c-9d8c6d3b93cc",
+      "text": "read the reference number",
+      "app": "AcmeDesk",
+      "action": "read",
+      "delay": 0.4,
+      "capture": "reference",
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Filed"
+      }
+    },
+    {
+      "id": "bbfb6250-920a-5f76-b008-7b60e05ae927",
+      "text": "in AcmeDesk, click “Done”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Done",
+      "role": "AXButton",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Filed",
+        "role": "AXButton",
+        "label": "Done",
+        "identifier": "done",
+        "path": [
+          "AXWindow"
+        ]
+      },
+      "expect": {
+        "windowTitleContains": "Sign in"
+      },
+      "anchor": {
+        "app": "AcmeDesk",
+        "window": "Filed"
+      }
+    }
+  ],
+  "frames": {},
+  "exportedAt": "2026-11-05T00:00:00Z",
+  "skill": {
+    "inputs": [
+      {
+        "name": "name",
+        "description": "the person's full name",
+        "kind": "text",
+        "source": "request",
+        "example": "Asha Rao"
+      },
+      {
+        "name": "pan",
+        "description": "the person's PAN (Indian tax id)",
+        "kind": "text",
+        "pattern": "[A-Z]{5}[0-9]{4}[A-Z]",
+        "format": "upper",
+        "source": "document",
+        "example": "ABCPR1234K"
+      },
+      {
+        "name": "income",
+        "description": "annual income in rupees",
+        "kind": "money",
+        "format": "plain",
+        "source": "document",
+        "example": "1250000"
+      },
+      {
+        "name": "regime",
+        "description": "the tax regime",
+        "kind": "choice",
+        "choices": [
+          "New",
+          "Old"
+        ],
+        "source": "document",
+        "example": "New"
+      },
+      {
+        "name": "gains",
+        "description": "capital gains in rupees, if any",
+        "kind": "money",
+        "format": "plain",
+        "source": "document",
+        "required": false
+      },
+      {
+        "name": "deductions",
+        "description": "deductions claimed: section and amount",
+        "kind": "list",
+        "fields": [
+          "section",
+          "amount"
+        ],
+        "source": "document",
+        "required": false
+      },
+      {
+        "name": "reference",
+        "description": "the reference number shown after filing",
+        "kind": "text",
+        "source": "page",
+        "required": false,
+        "example": "REF-448990"
+      }
+    ],
+    "intent": "file a person's income tax return in the AcmeDesk app",
+    "itemNoun": "person",
+    "startApp": "AcmeDesk"
+  }
+}

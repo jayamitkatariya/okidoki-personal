@@ -212,7 +212,12 @@ extension AppEnvironment {
     func importSkill(at url: URL) {
         do {
             let bundle = try SkillBundle.decode(try Data(contentsOf: url))
-            let skill = store.createSkill(name: bundle.name, summary: bundle.summary, steps: bundle.installableSteps(), source: "file")
+            var skill = store.createSkill(name: bundle.name, summary: bundle.summary, steps: bundle.installableSteps(), source: "file")
+            // A v2 file's inputs, popup rules and the rest come along; without them its {{placeholders}} mean nothing.
+            if let extras = bundle.skill, !extras.isEmpty {
+                extras.apply(to: &skill)
+                store.replaceSkill(skill)
+            }
             store.saveNow()
             toast(title: "skill added", detail: "“\(skill.name)” · \(skill.steps.count) steps", kind: .success,
                   undoLabel: "replay", onUndo: { [weak self] in self?.replaySkill(skill) },

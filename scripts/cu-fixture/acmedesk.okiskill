@@ -1,0 +1,383 @@
+{
+  "format": "okidoki-skill",
+  "version": 1,
+  "name": "acmedesk filing",
+  "summary": "18 steps in AcmeDesk",
+  "steps": [
+    {
+      "id": "ea6bfc12-5d1b-5425-9e59-51829e95fc99",
+      "text": "open AcmeDesk",
+      "app": "AcmeDesk",
+      "action": "switch",
+      "delay": 0.4
+    },
+    {
+      "id": "570a1995-49b0-5ca6-9617-8d07e82975ff",
+      "text": "in AcmeDesk, click “Username”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Username",
+      "role": "AXTextField",
+      "x": 420,
+      "y": 262,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Sign in",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Sign in",
+        "role": "AXTextField",
+        "label": "Username",
+        "identifier": "username",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "f510354d-c4d6-5e8f-a4b7-129f9f8c6999",
+      "text": "type “eval”",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "eval"
+    },
+    {
+      "id": "ba7cfec2-bd52-5999-81a7-8ee35d97bfcd",
+      "text": "in AcmeDesk, click “Password”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Password",
+      "role": "AXTextField",
+      "x": 420,
+      "y": 292,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Sign in",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Sign in",
+        "role": "AXTextField",
+        "label": "Password",
+        "identifier": "password",
+        "subrole": "AXSecureTextField",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "f510354d-c4d6-5e8f-a4b7-129f9f8c6999",
+      "text": "type “eval”",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "eval"
+    },
+    {
+      "id": "91123b03-600d-51ae-8289-3eca069bded1",
+      "text": "in AcmeDesk, click “Sign in”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Sign in",
+      "role": "AXButton",
+      "x": 262,
+      "y": 326,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Sign in",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Sign in",
+        "role": "AXButton",
+        "label": "Sign in",
+        "identifier": "sign-in",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "ac180acc-29e0-528e-b44d-9df1ebcee96d",
+      "text": "in AcmeDesk, click “Full name”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Full name",
+      "role": "AXTextField",
+      "x": 430,
+      "y": 262,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Return details",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "Full name",
+        "identifier": "name",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "544eb7e8-1aa7-5ae8-ac5d-e0000f679179",
+      "text": "type “Asha Rao”",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "Asha Rao"
+    },
+    {
+      "id": "921ea1c6-fa59-5c16-b988-655fccfdb6d2",
+      "text": "in AcmeDesk, click “PAN”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "PAN",
+      "role": "AXTextField",
+      "x": 430,
+      "y": 292,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Return details",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "PAN",
+        "identifier": "pan",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "bbca9222-73e8-53b8-bdd3-6636528bb447",
+      "text": "type “ABCPR1234K”",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "ABCPR1234K"
+    },
+    {
+      "id": "81ed1553-483b-5a0b-aee5-7a15660713dd",
+      "text": "in AcmeDesk, click “Income”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Income",
+      "role": "AXTextField",
+      "x": 430,
+      "y": 322,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Return details",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXTextField",
+        "label": "Income",
+        "identifier": "income",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "faa23058-2045-52c9-b860-3cf7eec2a344",
+      "text": "type “1250000”",
+      "app": "AcmeDesk",
+      "action": "type",
+      "delay": 0.4,
+      "input": "1250000"
+    },
+    {
+      "id": "b6321729-9216-581d-9d0c-6c3af053d27c",
+      "text": "in AcmeDesk, click “Regime”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Regime",
+      "role": "AXPopUpButton",
+      "x": 300,
+      "y": 352,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Return details",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXPopUpButton",
+        "label": "Regime",
+        "identifier": "regime",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "bf73a19b-1b4b-5466-acca-113ca7b60135",
+      "text": "in AcmeDesk, click “New”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "New",
+      "role": "AXMenuItem",
+      "x": 300,
+      "y": 352,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Return details",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXMenuItem",
+        "label": "New",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "623672b1-8db7-5920-bbb0-782bd7d15ebb",
+      "text": "in AcmeDesk, click “Next”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Next",
+      "role": "AXButton",
+      "x": 262,
+      "y": 440,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Return details",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Return details",
+        "role": "AXButton",
+        "label": "Next",
+        "identifier": "details-next",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "623672b1-8db7-5920-bbb0-782bd7d15ebb",
+      "text": "in AcmeDesk, click “Next”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Next",
+      "role": "AXButton",
+      "x": 262,
+      "y": 330,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Deductions",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXButton",
+        "label": "Next",
+        "identifier": "deductions-next",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    },
+    {
+      "id": "1554b604-75eb-5e36-ba80-bdc0c5f3a0c7",
+      "text": "in AcmeDesk, click “Submit”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Submit",
+      "role": "AXButton",
+      "x": 520,
+      "y": 470,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Deductions",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Deductions",
+        "role": "AXButton",
+        "label": "Submit",
+        "identifier": "submit",
+        "inSheet": true,
+        "path": [
+          "AXWindow",
+          "AXSheet[1]"
+        ]
+      }
+    },
+    {
+      "id": "bbfb6250-920a-5f76-b008-7b60e05ae927",
+      "text": "in AcmeDesk, click “Done”",
+      "app": "AcmeDesk",
+      "action": "click",
+      "delay": 0.4,
+      "label": "Done",
+      "role": "AXButton",
+      "x": 262,
+      "y": 330,
+      "winX": 200.0,
+      "winY": 180.0,
+      "winW": 560.0,
+      "winH": 520.0,
+      "winTitle": "AcmeDesk — Filed",
+      "axLocator": {
+        "bundleID": "dev.okidoki.acmedesk",
+        "app": "AcmeDesk",
+        "window": "AcmeDesk — Filed",
+        "role": "AXButton",
+        "label": "Done",
+        "identifier": "done",
+        "path": [
+          "AXWindow"
+        ]
+      }
+    }
+  ],
+  "frames": {},
+  "exportedAt": "2026-11-05T00:00:00Z"
+}

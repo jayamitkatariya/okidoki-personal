@@ -396,6 +396,9 @@ final class AppEnvironment: ObservableObject {
         // The notch's okay on a run waiting for one, for scripts (`approve <run id>`).
         case "approve":
             if let run = store.run(arg), [.waiting, .previewing].contains(run.status) { approveRun(run.id) }
+        // `importskill <path to .okiskill>`: adds a skill file the way "import" does (scripts/cu-replay-eval.py).
+        case "importskill":
+            importSkill(at: URL(fileURLWithPath: arg))
         case "forget":
             for skill in store.activeSkills where skill.name == arg || skill.id == arg { store.deleteSkill(skill.id) }
             store.saveNow()

@@ -1,0 +1,24 @@
+{
+  "_comment": "Scenarios for scripts/cu-replay-eval.py against the AcmeDesk fixture app (scripts/cu-fixture). People come from scripts/replay-scenarios.json, so the Mac and the browser replay the same returns. `site` sets the fixture's hard modes; `twice` runs a scenario again right after, to check what the first run learned (the second run's model calls are reported on their own).",
+  "skill": "acmedesk filing",
+  "smartSkill": "acmedesk filing smart",
+  "learnItem": "Asha",
+  "scenarios": [
+    {"id": "same-data", "items": ["Asha"], "why": "the skill's own data, app unchanged: no model at all"},
+    {"id": "new-data", "items": ["Bharat", "Chandra", "Divya"], "why": "other people: different values, the capital gains part only when needed, 2–3 deduction rows"},
+    {"id": "drift", "items": ["Bharat"], "site": {"drift": true}, "twice": true, "why": "renamed buttons and fields, new identifiers, fields in another order"},
+    {"id": "hard-ids", "items": ["Bharat"], "site": {"randomIds": true}, "modes": ["hybrid"], "why": "every identifier is new on each launch: found by role and label"},
+    {"id": "hard-slow", "items": ["Chandra", "Divya"], "site": {"slow": true}, "modes": ["hybrid"], "why": "controls arrive 0.7–2.4s late behind a spinner; Submit takes 2.5s"},
+    {"id": "hard-popups", "items": ["Bharat", "Divya"], "site": {"popups": true}, "modes": ["hybrid"], "twice": true, "why": "an unknown “What's new” sheet, and “Stay signed in?” mid-typing that swallows input"},
+    {"id": "hard-expire", "items": ["Bharat"], "site": {"expire": true}, "modes": ["hybrid"], "twice": true, "why": "the session expires on the way to deductions: sign in again, carry on"},
+    {"id": "hard-busy", "items": ["Chandra"], "site": {"busy": true}, "modes": ["hybrid"], "why": "the first Submit says “busy, try again”: retry once, never file twice"},
+    {"id": "move-window", "items": ["Divya"], "site": {"moveWindow": true}, "modes": ["hybrid"], "why": "the window opens at a different place and size"},
+    {"id": "edge-data", "items": ["Ezra", "Zoe"], "modes": ["hybrid"], "why": "5 deduction rows; a name with ë and an apostrophe; money with commas, “Old”, “24(b)”"},
+    {"id": "missing", "items": ["Bharat", "Farah"], "modes": ["hybrid"], "expectNotFiled": ["Farah"], "why": "Farah's PAN isn't given: Bharat is filed, Farah is reported, not guessed"},
+    {"id": "random", "items": ["Bharat", "Chandra", "Divya", "Ezra", "Zoe", "Asha"], "site": {"random": true}, "modes": ["hybrid"], "twice": true, "why": "a “Verify email” screen nobody recorded, a required declaration box, a decoy “Save draft”, a toast with Undo"},
+    {"id": "wipe", "items": ["Bharat", "Chandra"], "site": {"wipe": true}, "modes": ["hybrid"], "gate": "skip", "expectNotFiled": ["Chandra"], "why": "the app loses Chandra's details before review: replay must notice and ask, not file an empty return"},
+    {"id": "chaos", "items": ["Ezra", "Zoe", "Divya"], "site": {"randomIds": true, "slow": true, "popups": true, "expire": true, "busy": true}, "modes": ["hybrid"], "why": "everything at once"},
+    {"id": "stop", "items": ["Bharat", "Chandra", "Divya"], "site": {"slow": true}, "modes": ["hybrid"], "stopAfter": 4, "why": "stopped mid-run: nothing after the stop, nothing half-filed"},
+    {"id": "pause", "items": ["Bharat", "Chandra"], "site": {"slow": true}, "modes": ["hybrid"], "pauseAfter": 3, "why": "the person pauses, holds the Mac a few seconds, then takes it back: nothing done while paused, everything finished after"}
+  ]
+}
