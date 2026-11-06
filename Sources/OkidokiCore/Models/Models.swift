@@ -557,6 +557,10 @@ public struct SkillStep: Identifiable, Codable, Equatable, Sendable {
     /// The page an irreversible step is on shows what the pass entered (a review page). Learned on a
     /// replay; once true, a pass whose details don't show there is paused, not submitted.
     public var echoes: Bool?
+    /// Mac steps: how to find the control again through Accessibility (identifier, role and label in its
+    /// window, its containers, its spot). Nil for browser steps and older recordings, which fall back to
+    /// `label`, `role` and the window-relative point.
+    public var axLocator: AXLocator?
 
     public init(id: String = UUID().uuidString, text: String, app: String = "",
                 x: Double? = nil, y: Double? = nil, action: String? = nil, label: String? = nil,

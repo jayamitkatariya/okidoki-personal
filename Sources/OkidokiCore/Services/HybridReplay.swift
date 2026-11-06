@@ -212,7 +212,7 @@ public enum HybridReplay {
     /// Which expectation fields failed; empty when all hold. `present` answers a selector question
     /// (browser) or a label question (Mac) and is only asked for the fields that need it.
     public static func unmet(_ expect: StepExpectation?, _ seen: Observation, present: (String) -> Bool = { _ in true },
-                             focusedRole: String? = nil) -> [String] {
+                             focusedRole: String? = nil, sheets: [String] = [], fileExists: (String) -> Bool = { _ in true }) -> [String] {
         guard let expect, !expect.isEmpty else { return [] }
         var failed: [String] = []
         if let want = expect.urlContains, !want.isEmpty, !seen.url.lowercased().contains(want.lowercased()) { failed.append("the page isn't \(want)") }
@@ -222,6 +222,8 @@ public enum HybridReplay {
         if let want = expect.elementGone, !want.isEmpty, present(want) { failed.append("\(want) is still there") }
         if let want = expect.labelPresent, !want.isEmpty, !present(want), !contains(seen.text, want) { failed.append("“\(want)” isn't showing") }
         if let want = expect.focusedRole, !want.isEmpty, let role = focusedRole, role != want { failed.append("focus is on \(role), not \(want)") }
+        if let want = expect.sheetGone, !want.isEmpty, sheets.contains(where: { contains($0, want) }) { failed.append("“\(want)” is still open") }
+        if let want = expect.fileExists, !want.isEmpty, !fileExists(want) { failed.append("there's no file at \(want)") }
         return failed
     }
 

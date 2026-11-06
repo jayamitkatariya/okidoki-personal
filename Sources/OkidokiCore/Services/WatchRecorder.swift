@@ -13,8 +13,12 @@ public struct WatchedTarget: Equatable, Sendable {
     /// The control's window, Quartz space. Nil for things without one (Dock items).
     public var window: CGRect?
     public var windowTitle: String
-    public init(label: String = "", owner: String = "", role: String = "", window: CGRect? = nil, windowTitle: String = "") {
+    /// How to find it again through Accessibility (see `MacLocator`).
+    public var locator: AXLocator?
+    public init(label: String = "", owner: String = "", role: String = "", window: CGRect? = nil, windowTitle: String = "",
+                locator: AXLocator? = nil) {
         self.label = label; self.owner = owner; self.role = role; self.window = window; self.windowTitle = windowTitle
+        self.locator = locator
     }
 }
 
@@ -37,21 +41,26 @@ public struct WatchedStep: Identifiable, Sendable {
     public var windowTitle: String
     /// Screen region saved as a picture for this step (see `SkillFrames`), once the capture lands.
     public var frame: CGRect?
+    /// The clicked control's accessibility locator.
+    public var locator: AXLocator?
     public init(app: String, action: String, detail: String, label: String = "", input: String = "",
                 x: Double? = nil, y: Double? = nil, toX: Double? = nil, toY: Double? = nil,
                 delay: Double = 0, at: Date = Date(), owner: String = "", role: String = "", window: CGRect? = nil,
-                windowTitle: String = "", frame: CGRect? = nil) {
+                windowTitle: String = "", frame: CGRect? = nil, locator: AXLocator? = nil) {
         self.app = app; self.action = action; self.detail = detail; self.label = label; self.input = input
         self.x = x; self.y = y; self.toX = toX; self.toY = toY; self.delay = delay; self.at = at
         self.owner = owner; self.role = role; self.window = window; self.windowTitle = windowTitle; self.frame = frame
+        self.locator = locator
     }
 
     public var step: SkillStep {
-        SkillStep(id: id.uuidString, text: detail.isEmpty ? action : detail, app: app, x: x, y: y, action: action,
-                  label: label.isEmpty ? nil : label, input: input.isEmpty ? nil : input,
-                  toX: toX, toY: toY, delay: delay,
-                  owner: owner.isEmpty || owner == app ? nil : owner, role: role.isEmpty ? nil : role, window: window,
-                  windowTitle: windowTitle, frame: frame)
+        var step = SkillStep(id: id.uuidString, text: detail.isEmpty ? action : detail, app: app, x: x, y: y, action: action,
+                             label: label.isEmpty ? nil : label, input: input.isEmpty ? nil : input,
+                             toX: toX, toY: toY, delay: delay,
+                             owner: owner.isEmpty || owner == app ? nil : owner, role: role.isEmpty ? nil : role, window: window,
+                             windowTitle: windowTitle, frame: frame)
+        step.axLocator = locator
+        return step
     }
 }
 
@@ -322,7 +331,7 @@ public final class WatchRecorder: ObservableObject {
         let shown = SkillReplayGeometry.isSystemSurface(target.owner) ? target.owner : app
         let step = WatchedStep(app: shown, action: action, detail: "in \(shown), \(action) \(where_)",
                                label: label, x: point.x, y: point.y, owner: target.owner, role: target.role,
-                               window: target.window, windowTitle: target.windowTitle)
+                               window: target.window, windowTitle: target.windowTitle, locator: target.locator)
         append(step)
         takePicture(for: step.id, at: point)
         if type == .leftMouseDown {
@@ -504,7 +513,8 @@ public final class WatchRecorder: ObservableObject {
             title = AXSearch.stringAttribute(kAXTitleAttribute, of: windowElement)
         }
         return WatchedTarget(label: AccessibilityLabel.of(element), owner: owner,
-                             role: AXSearch.stringAttribute(kAXRoleAttribute, of: element), window: window, windowTitle: title)
+                             role: AXSearch.stringAttribute(kAXRoleAttribute, of: element), window: window, windowTitle: title,
+                             locator: MacAXReader.locator(for: element))
     }
 
     nonisolated static func specialKeyName(_ keyCode: UInt16) -> String? {

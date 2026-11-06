@@ -57,17 +57,21 @@ public struct StepExpectation: Codable, Equatable, Sendable {
     public var windowTitleContains: String?
     public var labelPresent: String?
     public var focusedRole: String?
+    /// A sheet or dialog whose title or first line contains this is gone (the step closed it).
+    public var sheetGone: String?
+    /// A file exists at this path (`~` allowed): Finder, a save, an export.
+    public var fileExists: String?
 
     public init(urlContains: String? = nil, textContains: String? = nil, elementPresent: String? = nil,
                 elementGone: String? = nil, windowTitleContains: String? = nil, labelPresent: String? = nil,
-                focusedRole: String? = nil) {
+                focusedRole: String? = nil, sheetGone: String? = nil, fileExists: String? = nil) {
         self.urlContains = urlContains; self.textContains = textContains; self.elementPresent = elementPresent
         self.elementGone = elementGone; self.windowTitleContains = windowTitleContains
-        self.labelPresent = labelPresent; self.focusedRole = focusedRole
+        self.labelPresent = labelPresent; self.focusedRole = focusedRole; self.sheetGone = sheetGone; self.fileExists = fileExists
     }
 
     public var isEmpty: Bool {
-        [urlContains, textContains, elementPresent, elementGone, windowTitleContains, labelPresent, focusedRole]
+        [urlContains, textContains, elementPresent, elementGone, windowTitleContains, labelPresent, focusedRole, sheetGone, fileExists]
             .allSatisfy { ($0 ?? "").isEmpty }
     }
 }
