@@ -23,6 +23,8 @@ import { Palette } from "./Palette";
 import { CoverProvider } from "./media";
 import { LIBRARY, parseView, viewKey, type LibraryPage, type View } from "./model";
 import "../styles/shell.css";
+// Inlined: a CSS mask is a CORS load, which a page opened from the app's files can't make.
+import brandMark from "../../public/brand.png?inline";
 
 const SIDEBAR_KEY = "okidoki.shell.sidebar";
 
@@ -31,6 +33,7 @@ export function Shell() {
   useEffect(() => {
     const root = document.documentElement;
     root.classList.add("shell2-on");
+    root.style.setProperty("--mark", `url("${brandMark}")`);
     if (isNative()) root.classList.add("is-native");
     return () => root.classList.remove("shell2-on", "is-native");
   }, []);

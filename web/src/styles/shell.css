@@ -11,6 +11,7 @@
 
 html.shell2-on {
   --side-w: 268px;
+  --mark: none;
   --gutter: 8px;
 
   --tint-top: rgba(214, 234, 244, 0.62);
@@ -1284,8 +1285,9 @@ html.shell2-on:not(.is-native) body::before {
   width: 76px;
   height: 76px;
   background: var(--c-line-strong);
-  -webkit-mask: url("/brand.png") center / contain no-repeat;
-  mask: url("/brand.png") center / contain no-repeat;
+  /* The image comes from --mark (set inline), so it resolves next to the page in the app's file bundle too. */
+  -webkit-mask: var(--mark) center / contain no-repeat;
+  mask: var(--mark) center / contain no-repeat;
   transition: background-color 600ms ease;
 }
 /* While okidoki works the mark takes a breath of green: a cue, not a banner. */
@@ -1678,8 +1680,9 @@ html.shell2-on:not(.is-native) body::before {
   height: 20px;
   margin-top: 2px;
   background: var(--green-bright);
-  -webkit-mask: url("/brand.png") center / contain no-repeat;
-  mask: url("/brand.png") center / contain no-repeat;
+  /* The image comes from --mark (set inline), so it resolves next to the page in the app's file bundle too. */
+  -webkit-mask: var(--mark) center / contain no-repeat;
+  mask: var(--mark) center / contain no-repeat;
 }
 .shell2 .msg-system {
   text-align: center;

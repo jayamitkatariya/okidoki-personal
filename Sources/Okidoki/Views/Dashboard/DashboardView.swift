@@ -10,12 +10,26 @@ struct DashboardView: View {
     // No store observation or preferred scheme here: the web view must keep a stable identity
     // (it is never rebuilt on a theme flip), and the controller already pushes state on change.
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            WebDashboardView(environment: env)
-            BrowserSlot(environment: env, store: env.store)
+        DashboardLayout(store: env.store) {
+            ZStack(alignment: .topLeading) {
+                WebDashboardView(environment: env)
+                BrowserSlot(environment: env, store: env.store)
+            }
         }
         .frame(minWidth: 900, minHeight: 600)
         .background(DashboardBackdrop(store: env.store))
+    }
+}
+
+/// The new shell runs edge to edge, under the transparent title bar, with the traffic lights over its
+/// sidebar; the original dashboard keeps its place below the bar. Only the safe area changes, so the
+/// web view inside is never rebuilt.
+private struct DashboardLayout<Content: View>: View {
+    @ObservedObject var store: OkidokiStore
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content.ignoresSafeArea(.container, edges: store.settings.newShell ? .top : [])
     }
 }
 
