@@ -21,7 +21,7 @@ html.shell2-on {
   --s-ink: #111613;
   --s-ink-2: #2a312d;
   --s-muted: #5f6964;
-  --s-faint: #8a938e;
+  --s-faint: #6f7873;
   --s-hover: rgba(17, 22, 19, 0.05);
   --s-press: rgba(17, 22, 19, 0.08);
   --s-active: rgba(255, 255, 255, 0.78);
@@ -73,7 +73,7 @@ html.shell2-on[data-theme="dark"] {
   --s-ink: #eef2ef;
   --s-ink-2: #d4dad6;
   --s-muted: #9ba49f;
-  --s-faint: #6f7873;
+  --s-faint: #8d968f;
   --s-hover: rgba(255, 255, 255, 0.06);
   --s-press: rgba(255, 255, 255, 0.09);
   --s-active: rgba(255, 255, 255, 0.1);
@@ -232,6 +232,20 @@ html.shell2-on:not(.is-native) body::before {
   .shell2 .pin[data-tip]:hover::after {
     top: calc(100% + 4px);
     bottom: auto;
+  }
+  /* The toolbar sits right above the native page, which would hide a tip hanging below it:
+     toolbar tips open beside their button instead. */
+  .shell2 .toolbar [data-tip]:hover::after {
+    top: 50%;
+    left: calc(100% + 6px);
+    right: auto;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+  .shell2 .toolbar .tool-trailing [data-tip]:hover::after {
+    left: auto;
+    right: calc(100% + 6px);
+    transform: translateY(-50%);
   }
 }
 @keyframes tip-in {
@@ -1430,6 +1444,25 @@ html.shell2-on:not(.is-native) body::before {
     box-shadow 150ms ease,
     transform 120ms var(--ease-out);
 }
+.shell2 .task-card {
+  position: relative;
+  cursor: pointer;
+}
+.shell2 .task-card-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border-radius: inherit;
+  cursor: pointer;
+}
+.shell2 .task-card-hit:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
 @media (hover: hover) and (pointer: fine) {
   .shell2 .task-card:hover {
     box-shadow: var(--ring-hover);
@@ -1910,6 +1943,12 @@ html.shell2-on:not(.is-native) body::before {
 
 .shell2-on .toast-stack {
   font-family: var(--ui);
+  /* Over the sidebar, never over the native page, which would draw on top of it. */
+  left: 12px;
+  right: auto;
+  bottom: 12px;
+  width: calc(var(--side-w) - 24px);
+  max-width: calc(var(--side-w) - 24px);
 }
 
 /* ---------- narrow windows ---------- */

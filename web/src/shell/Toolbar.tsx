@@ -6,6 +6,7 @@ import type { BrowserTab } from "../types";
 import { Favicon, useCover } from "./media";
 import { MenuItem } from "./Popover";
 import { hostOf, looksLikeAddress, looksLikeTask } from "./model";
+import { askAndOpen } from "./ask";
 import { AnimatePresence, motion } from "motion/react";
 
 type Choice = "open" | "search" | "ask";
@@ -29,11 +30,14 @@ export function Toolbar({
   sidebarHidden,
   onShowSidebar,
   onSearched,
+  onAsked,
   focusTick,
   assistantOpen,
   onToggleAssistant,
   trailing,
 }: {
+  /** A task typed into the address bar with no page to do it on: its conversation opens. */
+  onAsked: (threadID: string) => void;
   tab: BrowserTab | null;
   /** Shown instead of the address when the view isn't the browser. */
   crumb?: { icon: string; title: string } | null;
@@ -68,7 +72,7 @@ export function Toolbar({
           <span>{crumb.title}</span>
         </div>
       ) : (
-        <Address tab={tab} focusTick={focusTick} onSearched={onSearched} />
+        <Address tab={tab} focusTick={focusTick} onSearched={onSearched} onAsked={onAsked} />
       )}
 
       <div className="tool-trailing">
@@ -101,7 +105,17 @@ function AgentPill({ tab }: { tab: BrowserTab }) {
   );
 }
 
-function Address({ tab, focusTick, onSearched }: { tab: BrowserTab | null; focusTick: number; onSearched: () => void }) {
+function Address({
+  tab,
+  focusTick,
+  onSearched,
+  onAsked,
+}: {
+  tab: BrowserTab | null;
+  focusTick: number;
+  onSearched: () => void;
+  onAsked: (threadID: string) => void;
+}) {
   const { invoke } = useDashboard();
   const [focused, setFocused] = useState(false);
   const [text, setText] = useState("");
@@ -113,8 +127,11 @@ function Address({ tab, focusTick, onSearched }: { tab: BrowserTab | null; focus
     if (!focused) setText(address);
   }, [address, focused]);
 
+  // Only a fresh ⌘L focuses: coming back to a tab later must not grab the keyboard again.
+  const seenTick = useRef(focusTick);
   useEffect(() => {
-    if (!focusTick) return;
+    if (focusTick === seenTick.current) return;
+    seenTick.current = focusTick;
     input.current?.focus();
     input.current?.select();
   }, [focusTick]);
@@ -140,12 +157,14 @@ function Address({ tab, focusTick, onSearched }: { tab: BrowserTab | null; focus
   const go = (choice: Choice) => {
     if (!typed) return;
     const inTab = tab && !tab.blank && !tab.status ? tab.id : undefined;
-    if (choice === "ask") {
-      invoke("shellAsk", { text: typed, mode: "tab", tabID: inTab });
-    } else {
-      invoke("browserGo", { text: typed, choice, tabID: inTab, newTab: !inTab });
-    }
     input.current?.blur();
+    if (choice === "ask" && !inTab) {
+      // No page to work on: an ordinary request, in a conversation of its own, which opens.
+      askAndOpen(invoke, { text: typed, mode: "auto" }, onAsked);
+      return;
+    }
+    if (choice === "ask") invoke("shellAsk", { text: typed, mode: "tab", tabID: inTab });
+    else invoke("browserGo", { text: typed, choice, tabID: inTab, newTab: !inTab });
     onSearched();
   };
 

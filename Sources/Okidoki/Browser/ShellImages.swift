@@ -33,7 +33,8 @@ enum RunThumbs {
     static func capture(_ tab: BrowserTab, runID: String, final: Bool = false) {
         let now = Date()
         if !final, let last = lastAt[runID], now.timeIntervalSince(last) < 4 { return }
-        lastAt[runID] = now
+        // A finished run takes no more stills, so its entry goes rather than piling up for good.
+        if final { lastAt[runID] = nil } else { lastAt[runID] = now }
         guard !tab.isBlank else { return }
         let config = WKSnapshotConfiguration()
         config.snapshotWidth = NSNumber(value: Double(width))
@@ -48,8 +49,16 @@ enum RunThumbs {
         let now = Date()
         if let last = lastAt[runID], now.timeIntervalSince(last) < 4 { return }
         lastAt[runID] = now
-        guard let image = NSImage(data: data) else { return }
-        save(image: image, runID: runID)
+        // Decoding a full-screen PNG and scaling it down is real work; it happens off the main thread.
+        let target = url(runID)
+        Task.detached(priority: .utility) {
+            guard let image = NSImage(data: data), let jpeg = image.okJPEG(maxWidth: width) else { return }
+            try? jpeg.write(to: target, options: .atomic)
+            await MainActor.run {
+                trim()
+                ShellImages.changed()
+            }
+        }
     }
 
     private static func save(image: NSImage, runID: String) {
@@ -79,7 +88,13 @@ enum RunThumbs {
 /// Site icons, fetched from the site itself (never a third-party icon service) and kept as 64px PNGs.
 @MainActor
 enum FaviconCache {
-    private static var missing = Set<String>()
+    /// Hosts with no icon, and when that was found. Tried again after an hour; a network failure
+    /// (offline, a timeout) isn't remembered at all.
+    private static var missing: [String: Date] = [:]
+    private static func isMissing(_ host: String) -> Bool {
+        guard let at = missing[host] else { return false }
+        return Date().timeIntervalSince(at) < 3600
+    }
     private static var inFlight: [String: Task<Data?, Never>] = [:]
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -109,13 +124,20 @@ enum FaviconCache {
         let host = key(host)
         guard !host.isEmpty else { return nil }
         if let data = cached(host) { return data }
-        if missing.contains(host) { return nil }
+        if isMissing(host) { return nil }
         if let running = inFlight[host] { return await running.value }
+        var offline = false
         let task = Task<Data?, Never> {
             for path in ["/apple-touch-icon.png", "/favicon.ico"] {
-                if let url = URL(string: "https://\(host)\(path)"), let png = await fetch(url) { return png }
+                guard let url = URL(string: "https://\(host)\(path)") else { continue }
+                switch await fetchResult(url) {
+                case .icon(let png): return png
+                case .unreachable: offline = true; return nil
+                case .none: continue
+                }
             }
-            if host.split(separator: ".").count == 2, let url = URL(string: "https://www.\(host)/favicon.ico"), let png = await fetch(url) {
+            if host.split(separator: ".").count == 2, let url = URL(string: "https://www.\(host)/favicon.ico"),
+               case .icon(let png) = await fetchResult(url) {
                 return png
             }
             return nil
@@ -123,13 +145,14 @@ enum FaviconCache {
         inFlight[host] = task
         let data = await task.value
         inFlight[host] = nil
-        if let data { try? data.write(to: file(host), options: .atomic) } else { missing.insert(host) }
+        if let data { try? data.write(to: file(host), options: .atomic) } else if !offline { missing[host] = Date() }
         return data
     }
 
     /// The page told us its icon: read `<link rel=icon>` from a page that just finished loading.
     static func learn(from tab: BrowserTab) {
-        guard let pageURL = tab.webView.url, let host = pageURL.host, cached(host) == nil else { return }
+        guard let pageURL = tab.webView.url, let host = pageURL.host, cached(host) == nil, !isMissing(key(host)),
+              inFlight[key(host)] == nil else { return }
         let script = """
         (() => {
           const links = [...document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="shortcut icon"]')];
@@ -140,10 +163,11 @@ enum FaviconCache {
         """
         tab.webView.evaluateJavaScript(script) { result, _ in
             Task { @MainActor in
-                let href = (result as? String).flatMap(URL.init(string:))
-                if let href, let png = await fetch(href) {
+                // Only an icon on the web: a page must not point this at a file on the Mac.
+                let href = (result as? String).flatMap(URL.init(string:)).flatMap { ["https", "http"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+                if let href, case .icon(let png) = await fetchResult(href) {
                     try? png.write(to: file(host), options: .atomic)
-                    missing.remove(key(host))
+                    missing[key(host)] = nil
                     ShellImages.changed()
                 } else {
                     _ = await icon(host)
@@ -152,11 +176,23 @@ enum FaviconCache {
         }
     }
 
-    private static func fetch(_ url: URL) async -> Data? {
-        guard let (data, response) = try? await session.data(from: url),
-              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
-              data.count > 60, let image = NSImage(data: data), image.size.width >= 8 else { return nil }
-        return image.okPNG(side: 64)
+    private enum Fetched { case icon(Data), none, unreachable }
+
+    private static func fetchResult(_ url: URL) async -> Fetched {
+        guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return .none }
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await session.data(from: url)
+        } catch let error as URLError where [.notConnectedToInternet, .timedOut, .networkConnectionLost,
+                                             .cannotConnectToHost, .dnsLookupFailed].contains(error.code) {
+            return .unreachable
+        } catch {
+            return .none
+        }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              data.count > 60, let image = NSImage(data: data), image.size.width >= 8,
+              let png = image.okPNG(side: 64) else { return .none }
+        return .icon(png)
     }
 }
 
@@ -164,6 +200,8 @@ enum FaviconCache {
 @MainActor
 enum BrowserFreeze {
     private(set) static var image: Data?
+    /// The overlay closed: the still isn't needed and it's a big picture to keep.
+    static func release() { image = nil }
     private(set) static var serial = 0
 
     static func capture(_ tab: BrowserTab, done: @escaping (String?) -> Void) {

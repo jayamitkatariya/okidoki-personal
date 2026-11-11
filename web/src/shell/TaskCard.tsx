@@ -44,7 +44,10 @@ export function TaskCard({ run, now, thumbVersion, onOpen }: { run: Run; now: nu
   const active = ACTIVE.has(run.status);
 
   return (
-    <button type="button" className={cx("task-card", active && "is-active")} onClick={onOpen} aria-label={`${run.title}. ${status.text}${unread ? ". Unread" : ""}`}>
+    // A card, not a button wrapping headings and lists: one stretched button opens it, and the
+    // steps stay readable on their own.
+    <div className={cx("task-card", active && "is-active")}>
+      <button type="button" className="task-card-hit" onClick={onOpen} aria-label={`Open ${run.title || run.prompt}. ${status.text}${unread ? ". Unread" : ""}`} />
       <div className="task-head">
         <span className={cx("task-status", `tone-${status.tone}`)}>
           {status.tone === "live" ? <span className="pulse-dot" aria-hidden="true" /> : null}
@@ -65,6 +68,6 @@ export function TaskCard({ run, now, thumbVersion, onOpen }: { run: Run; now: nu
       ) : null}
       {excerpt ? <p className="task-excerpt">{excerpt}</p> : null}
       {thumb ? <Thumb src={thumb} title={run.title} /> : null}
-    </button>
+    </div>
   );
 }

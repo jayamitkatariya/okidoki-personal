@@ -21,7 +21,7 @@ import { AssistantPanel } from "./AssistantPanel";
 import { PageSlot } from "./PageSlot";
 import { Palette } from "./Palette";
 import { CoverProvider } from "./media";
-import { LIBRARY, parseView, viewKey, type LibraryPage, type View } from "./model";
+import { hostOf, LIBRARY, parseView, viewKey, type LibraryPage, type View } from "./model";
 import "../styles/shell.css";
 // Inlined: a CSS mask is a CORS load, which a page opened from the app's files can't make.
 import brandMark from "../../public/brand.png?inline";
@@ -132,7 +132,7 @@ function ShellBody() {
 
   // A chat that's been deleted or archived goes Home.
   useEffect(() => {
-    if (view.kind === "chat" && state.threads.length && !state.threads.some((thread) => thread.id === view.id)) setView({ kind: "home" });
+    if (view.kind === "chat" && state.threads.length && !state.threads.some((thread) => thread.id === view.id && !thread.archived)) setView({ kind: "home" });
   }, [state.threads, view, setView]);
 
   const newTab = useCallback(() => {
@@ -174,8 +174,9 @@ function ShellBody() {
           newTab();
           break;
         case "l":
-          if (view.kind === "home") setFocusTick((value) => value + 1);
-          else setAddressTick((value) => value + 1);
+          // Chats and pages have no address bar: ⌘L starts somewhere new, as in a browser.
+          if (view.kind === "tab" && tab && !tab.blank) setAddressTick((value) => value + 1);
+          else newTab();
           break;
         case "k":
           setPaletteOpen(true);
@@ -189,15 +190,26 @@ function ShellBody() {
         case "w":
           if (tab) invoke("browserClose", { tabID: tab.id });
           break;
+        default:
+          if (/^[1-9]$/.test(k)) {
+            const pins = state.pins ?? [];
+            const pin = k === "9" ? pins[pins.length - 1] : pins[Number(k) - 1];
+            if (!pin) break;
+            // Like clicking the pin: back to that site's tab if one's open.
+            const open = tabs.find((item) => !item.ownerRunID && !item.status && item.host === hostOf(pin.url));
+            if (open) openTab(open.id);
+            else openURL(pin.url);
+          }
       }
     },
-    [newTab, view.kind, toggleAssistant, tab, invoke],
+    [newTab, view.kind, toggleAssistant, tab, invoke, state.pins, openURL, openTab, tabs],
   );
 
   // Shortcuts while the page here has the keyboard, and from the Mac while the browser's page has it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      // ⌘ only: ⌃K, ⌃B, ⌃N, ⌃T and ⌃L are text editing keys on the Mac.
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
       const k = event.key.toLowerCase();
       if (["t", "n", "l", "k", "b", "j", "w"].includes(k)) {
         event.preventDefault();
@@ -205,12 +217,8 @@ function ShellBody() {
         return;
       }
       if (/^[1-9]$/.test(k)) {
-        const pins = state.pins ?? [];
-        const pin = k === "9" ? pins[pins.length - 1] : pins[Number(k) - 1];
-        if (pin) {
-          event.preventDefault();
-          openURL(pin.url);
-        }
+        event.preventDefault();
+        key(k);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -220,7 +228,31 @@ function ShellBody() {
       window.removeEventListener("keydown", onKey);
       delete bridge.okidokiShellKey;
     };
-  }, [key, state.pins, openURL]);
+  }, [key]);
+
+  // The Mac points at a run (a notch row, a card's "preview"): its conversation, where its live card is.
+  const runsRef = useRef({ runs: state.runs, threads: state.threads, tabs });
+  runsRef.current = { runs: state.runs, threads: state.threads, tabs };
+  useEffect(() => {
+    const bridge = window as unknown as { okidokiOpenRun?: (id: string) => void };
+    bridge.okidokiOpenRun = (id: string) => {
+      const { runs, threads, tabs: open } = runsRef.current;
+      const run = runs.find((item) => item.id === id);
+      invoke("markSeen", { runID: id });
+      if (run?.threadID && threads.some((thread) => thread.id === run.threadID)) {
+        setView({ kind: "chat", id: run.threadID });
+        return;
+      }
+      const agentTab = open.find((item) => item.ownerRunID === id);
+      if (agentTab) {
+        invoke("browserSelect", { tabID: agentTab.id });
+        setView({ kind: "tab", id: agentTab.id });
+      } else setView({ kind: "page", page: "runs" });
+    };
+    return () => {
+      delete bridge.okidokiOpenRun;
+    };
+  }, [invoke, setView]);
 
   // The Mac asks for a place: Home, the browser (the agent opened a page), a page, or the ask box.
   useEffect(() => {
@@ -292,6 +324,7 @@ function ShellBody() {
           sidebarHidden={sidebarHidden}
           onShowSidebar={() => setSidebarHidden(false)}
           onSearched={() => setView({ kind: "tab", id: "@active" })}
+          onAsked={(id) => setView({ kind: "chat", id })}
           focusTick={addressTick}
           assistantOpen={assistantOpen}
           onToggleAssistant={toggleAssistant}
@@ -343,7 +376,7 @@ function ShellBody() {
                 {view.page === "runs" ? (
                   <ComputerPage />
                 ) : view.page === "history" ? (
-                  <HistoryPage go={go} />
+                  <HistoryPage go={go} onOpenThread={(id) => setView({ kind: "chat", id })} />
                 ) : view.page === "memory" ? (
                   <MemoryPage />
                 ) : view.page === "skills" ? (

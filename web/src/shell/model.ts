@@ -39,6 +39,8 @@ export function parseView(raw: string): View | "browser" | { settingsSection: st
   if (!route || route === "home") return { kind: "home" };
   if (route === "browser") return "browser";
   if (route === "keys") return { settingsSection: "keys" };
+  // Live is a tab of the Computer page in the new shell.
+  if (route === "live") return { kind: "page", page: "runs" };
   const [head, ...rest] = route.split("/");
   const id = rest.join("/");
   if (head === "chat" && id) return { kind: "chat", id };

@@ -8,6 +8,10 @@ extension AppEnvironment {
     /// The dashboard window is the one taking the keyboard.
     var dashboardWindowIsKey: Bool { dashboard?.window?.isKeyWindow == true }
 
+    /// The new shell is the window in use: it already shows runs, approvals and answers in place, so
+    /// nothing else (the notch, a card at the cursor, a jump to another tab) should repeat them.
+    var shellInFront: Bool { store.settings.newShell && dashboardWindowIsKey }
+
     /// A request from the composer. Returns the conversation it lands in, so the shell can open it.
     /// `mode` is the Where chip: auto, browser, act or chat. A conversation whose last task asked
     /// a question takes this as the answer.

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { motion } from "motion/react";
 import { useDashboard } from "../store";
 import { IconButton, PixelIcon } from "../components/ui";
@@ -6,15 +6,24 @@ import type { BrowserTab, Run } from "../types";
 import { Composer } from "./Composer";
 import { MessageBubble, RunCard } from "./ChatView";
 import { Favicon, useNow } from "./media";
+import { runUnread, threadUnread } from "./model";
 
 /**
  * okidoki beside the page: the tab's own conversation, its tasks live, and a composer that works in
  * this tab. The page shrinks to make room rather than being covered.
  */
 export function AssistantPanel({ tab, onClose, onOpenTab }: { tab: BrowserTab; onClose: () => void; onOpenTab: (id: string) => void }) {
-  const { state } = useDashboard();
+  const { state, invoke } = useDashboard();
   const thread = state.threads.find((item) => item.id === tab.threadID) ?? null;
   const runs = useMemo<Run[]>(() => (thread ? state.runs.filter((run) => run.threadID === thread.id) : []), [state.runs, thread]);
+
+  // Watching the conversation here reads it, the same as opening it as a chat.
+  const unreadRuns = runs.filter(runUnread).map((run) => run.id).join(",");
+  const unread = thread ? threadUnread(thread) : false;
+  useEffect(() => {
+    if (thread && unread) invoke("markSeen", { threadID: thread.id });
+    for (const id of unreadRuns ? unreadRuns.split(",") : []) invoke("markSeen", { runID: id });
+  }, [thread, unread, unreadRuns, invoke]);
   const now = useNow(runs.some((run) => run.status === "running"));
   const scroller = useRef<HTMLDivElement>(null);
 

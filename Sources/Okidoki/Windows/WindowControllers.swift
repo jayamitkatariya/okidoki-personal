@@ -26,7 +26,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         window.isOpaque = !newShell
         window.backgroundColor = newShell ? .clear : .okDashboardBackground
         window.invalidateShadow()
-        env?.browser.model.chromeless = newShell
+        if newShell || env?.browserMade == true { env?.browser.model.chromeless = newShell }
     }
 
     private func build() {

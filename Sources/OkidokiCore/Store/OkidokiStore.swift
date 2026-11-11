@@ -742,9 +742,11 @@ public final class OkidokiStore: ObservableObject {
     /// Puts the pins in the order given; ids not listed keep their place at the end.
     public func reorderPins(_ ids: [String]) {
         let list = pins ?? []
-        let byID = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
-        var ordered = ids.compactMap { byID[$0] }
-        ordered += list.filter { !ids.contains($0.id) }
+        // Repeated ids (a stray drag) must never duplicate a pin, nor crash on one saved twice.
+        let byID = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<String>()
+        var ordered = ids.filter { seen.insert($0).inserted }.compactMap { byID[$0] }
+        ordered += list.filter { seen.insert($0.id).inserted }
         pins = ordered
     }
 

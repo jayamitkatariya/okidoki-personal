@@ -12,12 +12,18 @@ const TABS: Array<{ value: Tab; label: string }> = [
   { value: "threads", label: "Threads" },
 ];
 
-export function HistoryPage({ go }: { go: (page: Page) => void }) {
+/** `onOpenThread`: the new shell opens a conversation as its own chat instead of the overlay here. */
+export function HistoryPage({ go, onOpenThread }: { go: (page: Page) => void; onOpenThread?: (id: string) => void }) {
   const { state } = useDashboard();
   const [tab, setTab] = useState<Tab>("requests");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [openThread, setOpenThread] = useState<string | null>(null);
+  const [openThreadHere, setOpenThreadHere] = useState<string | null>(null);
+  const openThread = openThreadHere;
+  const setOpenThread = (id: string | null) => {
+    if (id && onOpenThread) onOpenThread(id);
+    else setOpenThreadHere(id);
+  };
   const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {

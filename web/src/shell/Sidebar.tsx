@@ -65,9 +65,11 @@ export function Sidebar({
   const bookmarks = state.bookmarks ?? [];
   const viewingTab = view.kind === "tab" ? tabs.find((tab) => tab.id === (view.id === "@active" ? activeTabID : view.id)) : null;
 
-  const openSite = (url: string) => {
+  /** A pin goes back to its site's tab if one is open; a bookmark only to that exact page. */
+  const openSite = (url: string, exact = false) => {
     const host = hostOf(url);
-    const existing = tabs.find((tab) => !tab.ownerRunID && !tab.status && tab.host === host);
+    const same = (address: string) => address.replace(/\/$/, "") === url.replace(/\/$/, "");
+    const existing = tabs.find((tab) => !tab.ownerRunID && !tab.status && (exact ? same(tab.address) : tab.host === host));
     if (existing) {
       onOpenTab(existing.id);
       return;
@@ -122,7 +124,7 @@ export function Sidebar({
                 label={siteLabel(bookmark.title, bookmark.url)}
                 title={bookmark.url}
                 active={Boolean(viewingTab && viewingTab.address === bookmark.url)}
-                onClick={() => openSite(bookmark.url)}
+                onClick={() => openSite(bookmark.url, true)}
                 onClose={() => invoke("removeBookmark", { id: bookmark.id })}
                 closeLabel="Remove bookmark"
               />
@@ -338,14 +340,13 @@ function PinGrid({
   if (!pins.length && !canPin) return null;
 
   return (
-    <div className="pins" role="list" aria-label="Pinned sites">
+    <div className="pins" role="group" aria-label="Pinned sites">
       {shown.map((pin) => {
         const host = hostOf(pin.url);
         return (
           <button
             key={pin.id}
             type="button"
-            role="listitem"
             className={cx("pin", viewingHost === host && "is-active", openHosts.has(host) && "is-open", dragging === pin.id && "is-dragging")}
             aria-label={pin.title || host}
             data-tip={pin.title || host}
@@ -367,9 +368,14 @@ function PinGrid({
               next.splice(next.indexOf(pin.id) + (order.indexOf(dragging) < order.indexOf(pin.id) ? 1 : 0), 0, dragging);
               setOrder(next);
             }}
-            onDragOver={(event) => event.preventDefault()}
-            onDragEnd={() => {
-              if (order) invoke("reorderPins", { ids: order });
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+            }}
+            onDrop={(event) => event.preventDefault()}
+            onDragEnd={(event) => {
+              // Escape, or dropped outside the pins: nothing moves.
+              if (order && event.dataTransfer.dropEffect !== "none") invoke("reorderPins", { ids: order });
               setDragging(null);
               window.setTimeout(() => setOrder(null), 400);
             }}

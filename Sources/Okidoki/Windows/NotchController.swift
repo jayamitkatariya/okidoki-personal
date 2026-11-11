@@ -29,6 +29,8 @@ struct NotchRunItem: Identifiable, Equatable {
     var risk: RiskLevel
     var commands: [String]
     var waitingFor: String?
+    /// When it started working, for "Working for 1m 7s".
+    var startedAt: Date?
 
     init(_ run: AgentRun) {
         id = run.id
@@ -42,7 +44,17 @@ struct NotchRunItem: Identifiable, Equatable {
         risk = run.preview?.risk ?? .low
         commands = run.preview?.commands ?? []
         waitingFor = run.waitingFor
+        startedAt = run.startedAt
     }
+}
+
+/// A task that finished (or stopped on a question), for the open island's Recent tasks.
+struct NotchRecent: Identifiable, Equatable {
+    var id: String
+    var title: String
+    var kind: RunKind
+    var status: RunStatus
+    var at: Date
 }
 
 /// A skill being recorded right now. Replaces the generic live row for the `.watch` run.
@@ -110,6 +122,9 @@ final class NotchModel: ObservableObject {
     @Published var live: [NotchRunItem] = []
     @Published var recording: NotchRecording?
     @Published var metrics: NotchMetrics
+    /// The new look (settings.newShell): the shell's green, a composer and Recent tasks when open.
+    @Published var newLook = false
+    @Published var recent: [NotchRecent] = []
 
     var undoActions: [String: () -> Void] = [:]
     var editActions: [String: () -> Void] = [:]
@@ -214,6 +229,7 @@ final class NotchModel: ObservableObject {
             + toasts.map(\.id)
             + waiting.map(\.id)
             + live.map { $0.id + $0.status.rawValue }
+            + (expanded && newLook ? recent.map(\.id) + ["n"] : [])
     }
 }
 
@@ -443,6 +459,12 @@ final class NotchController {
                 self.scheduleRefresh()
             }
             .store(in: &cancellables)
+        // Which window has the keyboard decides whether the shell already shows a run (see refresh).
+        NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+            .merge(with: NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.scheduleRefresh() }
+            .store(in: &cancellables)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.screensChanged() }
@@ -465,7 +487,11 @@ final class NotchController {
         syncRuns()
         let enabled = env.store.settings.notchEnabled
         if !enabled, model.expanded { setExpanded(false, refreshAfter: false) }
-        let shouldShow = enabled && (model.expanded || (!model.quiet && model.hasContent))
+        // Runs waiting or working are already in the new shell when its window is in front; the island
+        // only comes out for them once the person is somewhere else.
+        let onlyRuns = model.toasts.isEmpty && model.recording == nil && !model.listening && model.caption == nil
+        let covered = onlyRuns && env.shellInFront
+        let shouldShow = enabled && (model.expanded || (!model.quiet && model.hasContent && !covered))
         if shouldShow { present() } else { dismiss() }
         // The hover strip sits over the menu bar; with the notch off it must not eat clicks there.
         if enabled { hotZone?.orderFrontRegardless() } else { hotZone?.orderOut(nil) }
@@ -499,6 +525,16 @@ final class NotchController {
             .map(NotchRunItem.init)
         if model.waiting != waiting { model.waiting = waiting }
         if model.live != live { model.live = live }
+        let newLook = env.store.settings.newShell
+        if model.newLook != newLook { model.newLook = newLook }
+        let recent: [NotchRecent] = newLook
+            ? env.store.runs
+                .filter { [.done, .failed, .cancelled, .asked].contains($0.status) && $0.kind != .watch }
+                .prefix(3)
+                .map { NotchRecent(id: $0.id, title: $0.title, kind: $0.kind, status: $0.status,
+                                   at: $0.endedAt ?? $0.updatedAt ?? $0.createdAt) }
+            : []
+        if model.recent != recent { model.recent = recent }
         let recording: NotchRecording? = env.watch.isRecording
             ? NotchRecording(name: env.watch.pendingName, startedAt: env.watch.startedAt ?? Date(), steps: env.watch.steps.count)
             : nil

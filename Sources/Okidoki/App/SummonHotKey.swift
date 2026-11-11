@@ -18,9 +18,8 @@ final class SummonHotKey {
     @discardableResult
     func set(_ spec: String) -> Bool {
         let spec = spec.lowercased().trimmingCharacters(in: .whitespaces)
-        guard spec != registered else { return ref != nil || spec.isEmpty }
+        if spec == registered, ref != nil { return true }
         unregister()
-        registered = spec
         guard !spec.isEmpty, let (code, modifiers) = Self.parse(spec) else { return spec.isEmpty }
         installHandlerIfNeeded()
         var hotKey: EventHotKeyRef?
@@ -28,6 +27,7 @@ final class SummonHotKey {
         let status = RegisterEventHotKey(code, modifiers, id, GetApplicationEventTarget(), 0, &hotKey)
         guard status == noErr, let hotKey else { return false }
         ref = hotKey
+        registered = spec
         Self.current = self
         return true
     }
@@ -35,6 +35,7 @@ final class SummonHotKey {
     func unregister() {
         if let ref { UnregisterEventHotKey(ref) }
         ref = nil
+        registered = ""
     }
 
     private func installHandlerIfNeeded() {

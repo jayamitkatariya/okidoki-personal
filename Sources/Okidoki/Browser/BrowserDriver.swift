@@ -122,12 +122,11 @@ final class BrowserAgentRun {
         let browser = env.browser
         // A run that continues after the person answered a question keeps what the first part learned.
         learned = run.threadID.flatMap { env.browserLearnedBeforeQuestion.removeValue(forKey: $0) } ?? []
-        browser.showQuietly()
         browser.beginWork("browsing · \(run.title)", in: tab, runID: run.id, threadID: run.threadID) { [weak self] in
             self?.cancel(reason: "you stopped me")
         }
         // The person watches the work, unless they're recording in the tab in front.
-        if browser.activeTab !== tab, !browser.model.recording { browser.select(tab) }
+        browser.presentForWork(tab)
         task = Task { [weak self] in
             await self?.drive()
         }
@@ -612,11 +611,10 @@ final class BrowserReplayer {
         let browser = env.browser
         let tab = browser.tabForRun(runID: runID, threadID: nil)
         self.tab = tab
-        browser.showQuietly()
         browser.beginWork("replaying “\(skill.name)”", in: tab, runID: runID, threadID: nil) { [weak self] in
             self?.cancel(reason: "you stopped me")
         }
-        if browser.activeTab !== tab, !browser.model.recording { browser.select(tab) }
+        browser.presentForWork(tab)
         let passes = values.isEmpty ? max(1, times) : values.count
         task = Task { [weak self] in
             guard let self else { return }

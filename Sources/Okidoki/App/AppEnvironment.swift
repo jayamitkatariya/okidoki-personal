@@ -29,7 +29,12 @@ final class AppEnvironment: ObservableObject {
     private(set) var notch: NotchController!
     private(set) var driver: ComputerUseDriver!
     /// okidoki's own browser window, made the first time it's needed.
-    private(set) lazy var browser = BrowserController(environment: self)
+    private(set) lazy var browser: BrowserController = {
+        browserMade = true
+        return BrowserController(environment: self)
+    }()
+    /// The browser exists (it's made on first use); the original look never makes it at launch.
+    private(set) var browserMade = false
     private(set) lazy var browserDriver = BrowserDriver(environment: self)
     private(set) lazy var browserReplayer = BrowserReplayer(environment: self)
     /// Smart replay in the browser (settings.hybridReplay). Off, `browserReplayer` runs as it always has.
@@ -236,8 +241,8 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] on in self?.applyShake(on) }
             .store(in: &cancellables)
         summonHotKey.onPress = { [weak self] in self?.handleSummonHotKey() }
-        applySummonHotKey(store.settings.summonHotkey)
-        store.$settings.map(\.summonHotkey).removeDuplicates().dropFirst()
+        applySummonHotKey(Self.activeHotkey(store.settings), announce: false)
+        store.$settings.map(Self.activeHotkey).removeDuplicates().dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] spec in self?.applySummonHotKey(spec) }
             .store(in: &cancellables)
@@ -546,17 +551,34 @@ final class AppEnvironment: ObservableObject {
         NSLog("okidoki: shake to summon %@", on ? "on" : "off (mouse monitor removed)")
     }
 
-    private func applySummonHotKey(_ spec: String) {
-        if !summonHotKey.set(spec), !spec.isEmpty {
-            toast(title: "that shortcut is taken", detail: "\(SummonHotKey.label(spec)) belongs to another app — pick another in Settings › Summon",
-                  kind: .warning, undoLabel: nil, onUndo: nil, editLabel: "settings",
-                  onEdit: { [weak self] in self?.openDashboard(.settings) }, runID: nil)
-        }
+    /// Settings is recording a new shortcut: let go of the current one meanwhile, so pressing it records.
+    func holdSummonHotKey(_ hold: Bool) {
+        if hold { summonHotKey.unregister() } else { applySummonHotKey(Self.activeHotkey(store.settings), announce: false) }
+    }
+
+    /// The shortcut that should be registered now. The original look keeps the original way in (shake
+    /// only) until shake is turned off, so ⌥Space is never taken from other apps behind anyone's back;
+    /// with okidoki off nothing is held at all.
+    static func activeHotkey(_ settings: AppSettings) -> String {
+        guard settings.okidokiEnabled, settings.newShell || !settings.shakeToSummon else { return "" }
+        return settings.summonHotkey
+    }
+
+    /// Registers the shortcut. Only a change the person made says so when it can't be had; a launch
+    /// with a taken shortcut stays quiet (Settings › Summon shows it).
+    private func applySummonHotKey(_ spec: String, announce: Bool = true) {
+        guard !summonHotKey.set(spec), !spec.isEmpty, announce else { return }
+        let readable = SummonHotKey.parse(spec) != nil
+        toast(title: readable ? "that shortcut is taken" : "that shortcut can't be used",
+              detail: readable ? "\(SummonHotKey.label(spec)) belongs to another app — pick another in Settings › Summon"
+                               : "use a key with ⌘, ⌥ or ⌃ — pick another in Settings › Summon",
+              kind: .warning, undoLabel: nil, onUndo: nil, editLabel: "settings",
+              onEdit: { [weak self] in self?.openDashboard(.settings) }, runID: nil)
     }
 
     /// "Shake your mouse", "Press ⌥ Space", or both, for copy that tells people how to call okidoki.
     static func summonHint(_ settings: AppSettings) -> String {
-        let key = SummonHotKey.label(settings.summonHotkey)
+        let key = SummonHotKey.label(activeHotkey(settings))
         switch (settings.shakeToSummon, key.isEmpty) {
         case (true, true): return "Shake your mouse"
         case (true, false): return "Shake your mouse or press \(key)"
@@ -1132,7 +1154,7 @@ final class AppEnvironment: ObservableObject {
         }
         // Asked from the new shell's composer with the window in front: the answer is already in the chat
         // they're looking at, so a card at the cursor would only say it twice.
-        if source == "shell", dashboardWindowIsKey { return }
+        if shellInFront, source == "shell" || card.runID.map({ store.run($0)?.threadID != nil }) == true { return }
         let cursor = summon.model.isVisible ? NSEvent.mouseLocation : nil
         // Only an answer the user is waiting on at the capsule takes the keyboard; one that arrives
         // from the dashboard or a replay must not pull typing away from the app they're in.
@@ -2625,6 +2647,9 @@ final class AppEnvironment: ObservableObject {
     func toast(title: String, detail: String, kind: ToastKind,
                undoLabel: String?, onUndo: (() -> Void)?,
                editLabel: String?, onEdit: (() -> Void)?, runID: String?) {
+        // A run's progress while the new shell is in front is already on screen in its chat; the notch
+        // opening over the window for it reads as the app jumping somewhere else.
+        if runID != nil, kind != .warning, shellInFront { return }
         let toast = NotchToast(title: title, detail: detail, kind: kind,
                                undoLabel: undoLabel, editLabel: editLabel,
                                runID: runID, expiresAt: Date().addingTimeInterval(6.5))

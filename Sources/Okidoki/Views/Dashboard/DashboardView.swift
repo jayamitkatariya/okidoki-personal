@@ -358,6 +358,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         // The new shell's sidebar and toolbar follow the browser's tabs; thumbnails and favicons as they land.
         environment.browser.changes
             .receive(on: RunLoop.main)
+            .filter { [weak environment] _ in environment?.store.settings.newShell == true }
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
         ShellImages.onChange = { [weak self] in self?.schedulePush() }
@@ -495,10 +496,13 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('\(event)', { detail: '\(escaped)' }));", completionHandler: nil)
     }
 
-    private func sendNavigation() {
+    private func sendNavigation(onLoad: Bool = false) {
         guard let webView, let env else { return }
-        webView.evaluateJavaScript("window.okidokiNavigate && window.okidokiNavigate('\(env.dashboardRoute.rawValue)');", completionHandler: nil)
-        if let id = env.dashboardRunID { focusRun(id) }
+        // A reload of the new shell keeps the place in its address (#/chat/…); only a fresh page is sent somewhere.
+        let guardHash = onLoad && env.store.settings.newShell ? "(!location.hash || location.hash === '#/' || location.hash === '#/home') && " : ""
+        webView.evaluateJavaScript("\(guardHash)window.okidokiNavigate && window.okidokiNavigate('\(env.dashboardRoute.rawValue)');", completionHandler: nil)
+        // The new shell is pointed at a run only when asked to, not again at every load.
+        if let id = env.dashboardRunID, !(onLoad && env.store.settings.newShell) { focusRun(id) }
     }
 
     private func focusRun(_ id: String) {
@@ -506,6 +510,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         let escaped = id.replacingOccurrences(of: "'", with: "\\'")
         webView.evaluateJavaScript("""
         (function(){
+          if (window.okidokiOpenRun) { window.okidokiOpenRun('\(escaped)'); return; }
           window.__okidokiFocusRun = '\(escaped)';
           window.okidokiNavigate && window.okidokiNavigate('runs');
           window.dispatchEvent(new CustomEvent('okidoki-focus-run', { detail: '\(escaped)' }));
@@ -710,7 +715,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             // The page's listeners are live once it says so — usually before didFinish fires.
             didLoad = true
             sendState()
-            sendNavigation()
+            sendNavigation(onLoad: true)
             if pendingAsk {
                 pendingAsk = false
                 webView?.evaluateJavaScript("window.okidokiOpenAsk && window.okidokiOpenAsk();", completionHandler: nil)
@@ -1033,11 +1038,14 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.seedShellPins()
         case "markSeen":
             env.store.markSeen(threadID: payload["threadID"] as? String, runID: payload["runID"] as? String)
+        case "hotkeyRecording":
+            env.holdSummonHotKey(payload["on"] as? Bool == true)
         case "browserFrame":
             if payload["hidden"] as? Bool == true { env.browserFrame = nil }
             else if let x = payload["x"] as? Double, let y = payload["y"] as? Double,
                     let width = payload["width"] as? Double, let height = payload["height"] as? Double, width > 0, height > 0 {
                 env.browserFrame = CGRect(x: x, y: y, width: width, height: height)
+                BrowserFreeze.release()
             }
         case "openBrowser":
             env.openBrowser(url: (payload["url"] as? String).flatMap(URL.init(string:)))

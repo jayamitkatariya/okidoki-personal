@@ -166,7 +166,9 @@ export function Composer({
   };
 
   const trimmed = text.trim();
-  const opensSite = trimmed !== "" && looksLikeAddress(trimmed);
+  // Only Home's box doubles as an address bar. In a chat or a tab's panel, "jay@example.com" or
+  // "README.md" is a reply, never a page to load over the one in front.
+  const opensSite = variant === "home" && trimmed !== "" && looksLikeAddress(trimmed);
   const effective: ComposerMode = variant === "home" ? mode : "ask";
 
   const submit = () => {
@@ -223,7 +225,8 @@ export function Composer({
         return;
       }
     }
-    if (event.key === "Tab" && variant === "home" && !event.shiftKey) {
+    // Tab flips Search/Ask only while there's something typed; an empty box lets focus move on.
+    if (event.key === "Tab" && variant === "home" && !event.shiftKey && text.trim() !== "") {
       event.preventDefault();
       setMode((value) => (value === "ask" ? "search" : "ask"));
       return;
@@ -332,7 +335,7 @@ export function Composer({
             </button>
           )}
         </div>
-        <MentionList anchor={box} open={mentionQuery !== null && matches.length > 0} items={matches} index={mentionIndex} onPick={pick} onHover={setMentionIndex} onClose={() => setMentionQuery(null)} />
+        <MentionList anchor={box} open={mentionQuery !== null && matches.length > 0} items={matches} index={mentionIndex} onPick={pick} onHover={setMentionIndex} onClose={() => setMentionQuery(null)} side={variant === "home" ? "bottom" : "top"} />
       </div>
       {variant === "home" ? (
         <div className="composer-chips">
@@ -356,7 +359,9 @@ function MentionList({
   onPick,
   onHover,
   onClose,
+  side,
 }: {
+  side: "bottom" | "top";
   anchor: React.RefObject<HTMLElement | null>;
   open: boolean;
   items: Mention[];
@@ -367,7 +372,7 @@ function MentionList({
 }) {
   const groups: Record<Mention["kind"], string> = { tab: "Tabs", skill: "Skills", file: "Vault", memory: "Memory" };
   return (
-    <Popover open={open} onClose={onClose} anchor={anchor} width={360} className="mention-pop">
+    <Popover open={open} onClose={onClose} anchor={anchor} width={360} side={side} className="mention-pop">
       {items.map((item, at) => (
         <div key={item.id}>
           {at === 0 || items[at - 1].kind !== item.kind ? <div className="pop-group">{groups[item.kind]}</div> : null}
@@ -454,7 +459,7 @@ function GuardChip({ settings, onChange }: { settings: Settings; onChange: (patc
         <span>Guard</span>
         <PixelIcon name="chevron" size={11} className="chip-caret" />
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={320} className="guard-pop">
+      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={320} className="guard-pop" role="dialog">
         <p className="pop-note">okidoki always asks before it sends, buys, deletes, installs or runs anything risky.</p>
         <label className="pop-toggle">
           <span>

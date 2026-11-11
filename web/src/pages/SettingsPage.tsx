@@ -75,7 +75,8 @@ export function SettingsPage() {
   // smooth scroll passes the others.
   const jumping = useRef<number | null>(null);
   useEffect(() => {
-    const root = document.querySelector<HTMLElement>(".content");
+    // The original dashboard scrolls `.content`; the new shell scrolls its card.
+    const root = document.querySelector<HTMLElement>(".content") ?? document.querySelector<HTMLElement>(".card-scroll");
     if (!root) return;
     let frame = 0;
     const update = () => {
@@ -407,7 +408,7 @@ export function SettingsPage() {
                 title="Shake sensitivity"
                 detail={(settings.shakeToSummon ?? true) ? "Lower is easier to trigger" : "Turn on Shake to summon to tune this"}
               >
-                <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)}>
+                <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)} inert={!(settings.shakeToSummon ?? true)}>
                   <Slider
                     min={0.2}
                     max={1}
@@ -1211,39 +1212,64 @@ export function hotkeyLabel(value: string): string {
 
 /** Records a global shortcut: at least one modifier and one key. */
 function HotkeyField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { invoke } = useDashboard();
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
+  // While recording, the Mac lets go of the current shortcut so pressing it records instead of summoning.
   useEffect(() => {
     if (!recording) return;
-    const onKey = (event: KeyboardEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === "Escape") {
-        setRecording(false);
-        return;
-      }
-      if (["Meta", "Alt", "Control", "Shift"].includes(event.key)) return;
-      const mods = [event.metaKey && "command", event.altKey && "option", event.ctrlKey && "control", event.shiftKey && "shift"].filter(Boolean) as string[];
-      if (!mods.length || (mods.length === 1 && mods[0] === "shift")) {
-        setError("Add ⌘, ⌥ or ⌃ so it doesn't fire while you type");
-        return;
-      }
-      const code = event.code;
-      const key = code === "Space" ? "space" : code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : code === "Enter" ? "return" : "";
-      if (!key) {
-        setError("Use a letter, a number or Space");
-        return;
-      }
-      setError("");
-      setRecording(false);
-      onChange([...mods, key].join("+"));
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, onChange]);
+    invoke("hotkeyRecording", { on: true });
+    return () => invoke("hotkeyRecording", { on: false });
+  }, [recording, invoke]);
+  const stop = () => {
+    setRecording(false);
+    setError("");
+  };
+  // Only the field itself listens, so typing anywhere else in Settings is never swallowed.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!recording) return;
+    if (event.key === "Tab") {
+      stop();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      stop();
+      return;
+    }
+    if (["Meta", "Alt", "Control", "Shift"].includes(event.key)) return;
+    const mods = [event.metaKey && "command", event.altKey && "option", event.ctrlKey && "control", event.shiftKey && "shift"].filter(Boolean) as string[];
+    if (!mods.length || (mods.length === 1 && mods[0] === "shift")) {
+      setError("Add ⌘, ⌥ or ⌃ so it doesn't fire while you type");
+      return;
+    }
+    const code = event.code;
+    const key = code === "Space" ? "space" : code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : code === "Enter" ? "return" : "";
+    if (!key) {
+      setError("Use a letter, a number or Space");
+      return;
+    }
+    if (mods.length === 1 && mods[0] === "command" && ["q", "w", "h", "m", "c", "v", "x", "z", "a"].includes(key)) {
+      setError("That one belongs to every Mac app — try adding ⌥ or ⌃");
+      return;
+    }
+    stop();
+    onChange([...mods, key].join("+"));
+  };
   return (
     <span className="hotkey-field">
-      <button type="button" className={cx("hotkey-keys", recording && "is-recording")} onClick={() => { setError(""); setRecording((v) => !v); }} aria-label="Record a shortcut">
+      <button
+        type="button"
+        className={cx("hotkey-keys", recording && "is-recording")}
+        onClick={() => {
+          setError("");
+          setRecording((v) => !v);
+        }}
+        onKeyDown={onKeyDown}
+        onBlur={stop}
+        aria-label={recording ? "Press the new shortcut, or Escape to cancel" : "Record a shortcut"}
+      >
         {recording ? "Press keys…" : hotkeyLabel(value)}
       </button>
       {value && !recording ? (

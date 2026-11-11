@@ -28,6 +28,23 @@ private enum NotchInk {
     static let coral = Color(hex: 0xFF6B5E)
 }
 
+/// The island's one colour: the original neon mint, or the new shell's green.
+private struct NotchAccentKey: EnvironmentKey {
+    static let defaultValue = OKBrand.mint
+}
+
+extension EnvironmentValues {
+    var notchAccent: Color {
+        get { self[NotchAccentKey.self] }
+        set { self[NotchAccentKey.self] = newValue }
+    }
+}
+
+extension NotchInk {
+    /// The new shell's okidoki green, lifted a touch so it reads on black.
+    static let green = Color(hex: 0x3DDC6A)
+}
+
 private extension String {
     /// Sentence case for copy that arrives lowercase from the brain ("not now" → "Not now").
     var notchSentence: String {
@@ -51,6 +68,7 @@ struct NotchRootView: View {
             .padding(.top, m.topGap)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .environment(\.colorScheme, .dark)
+            .environment(\.notchAccent, model.newLook ? NotchInk.green : OKBrand.mint)
     }
 
     private var openRadius: CGFloat {
@@ -83,7 +101,7 @@ struct NotchRootView: View {
             .blur(radius: presented ? 0 : 3)
             .animation(presented ? NotchMotion.wordsIn : NotchMotion.wordsOut, value: presented)
             .frame(width: width, height: height, alignment: .top)
-            .background(NotchIslandBackground(clearTop: m.bandHeight))
+            .background(NotchIslandBackground(clearTop: m.bandHeight, dots: !model.newLook))
             .clipShape(shape)
             .overlay {
                 // A lip only on the floating pill. The hardware notch stays flush with the menu bar.
@@ -143,12 +161,15 @@ struct NotchIslandShape: Shape {
 /// still reads as a continuation of the hardware notch; the dots fade in below it.
 private struct NotchIslandBackground: View {
     var clearTop: CGFloat
+    /// The new look is plain black, like the shell's quiet surfaces.
+    var dots = true
     private static let spacing: CGFloat = 11
     private static let dot: CGFloat = 1.3
 
     var body: some View {
         ZStack {
             Color.black
+            if dots {
             Canvas { context, size in
                 let s = Self.spacing
                 // Centre the grid so the dots sit symmetrically around the camera.
@@ -172,6 +193,7 @@ private struct NotchIslandBackground: View {
                     Color.black
                 }
             }
+            }
         }
         .allowsHitTesting(false)
     }
@@ -182,6 +204,7 @@ private struct NotchIslandBackground: View {
 private struct NotchContent: View {
     @ObservedObject var model: NotchModel
     let env: AppEnvironment
+    @Environment(\.notchAccent) private var accent
 
     private var m: NotchMetrics { model.metrics }
     private var inset: CGFloat { m.shoulder + 14 }
@@ -314,7 +337,7 @@ private struct NotchContent: View {
         if model.quiet {
             EmptyView()
         } else if model.listening {
-            WaveformView(level: 0.5, active: model.presented, color: OKBrand.mint, bars: 7, height: 12)
+            WaveformView(level: 0.5, active: model.presented, color: accent, bars: 7, height: 12)
                 .frame(width: 28)
         } else if let recording = model.recording {
             HStack(spacing: 5) {
@@ -337,11 +360,11 @@ private struct NotchContent: View {
             }
         } else if !model.live.isEmpty {
             HStack(spacing: 5) {
-                NotchSpinner(tint: OKBrand.mint, size: 11, active: model.presented)
+                NotchSpinner(tint: accent, size: 11, active: model.presented)
                 if model.live.count > 1 {
                     Text("\(model.live.count)")
                         .font(.okBody(12, .semibold))
-                        .foregroundStyle(OKBrand.mint)
+                        .foregroundStyle(accent)
                         .monospacedDigit()
                 }
             }
@@ -409,15 +432,29 @@ private struct NotchContent: View {
                         moreLink("\(model.live.count - shownLive.count) more working") { env.openDashboard(.runs) }
                     }
                     if model.expanded && isEmpty && model.caption == nil {
-                        openOnly(greeting)
+                        openOnly(model.newLook ? AnyView(newGreeting) : AnyView(greeting))
+                            .transition(wordsTransition)
+                    }
+                    if model.expanded && model.newLook && !model.recent.isEmpty {
+                        openOnly(recentTasks)
+                            .padding(.top, isEmpty ? 0 : 6)
                             .transition(wordsTransition)
                     }
                 }
             }
             if model.expanded {
-                openOnly(footer)
-                    .padding(.top, isEmpty && model.caption == nil ? 2 : 12)
-                    .transition(wordsTransition)
+                if model.newLook {
+                    openOnly(composer)
+                        .padding(.top, isEmpty && model.caption == nil && model.recent.isEmpty ? 2 : 12)
+                        .transition(wordsTransition)
+                    openOnly(newFooter)
+                        .padding(.top, 10)
+                        .transition(wordsTransition)
+                } else {
+                    openOnly(footer)
+                        .padding(.top, isEmpty && model.caption == nil ? 2 : 12)
+                        .transition(wordsTransition)
+                }
             }
         }
     }
@@ -451,6 +488,81 @@ private struct NotchContent: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 10)
         .padding(.bottom, 18)
+    }
+
+    // MARK: New look
+
+    /// Who it's for, left-aligned like the shell's headings; the composer below is the way in.
+    private var newGreeting: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(greetingTitle)
+                .font(.okBody(17, .semibold))
+                .tracking(-0.2)
+                .foregroundStyle(NotchInk.primary)
+                .lineLimit(1)
+            Text(model.quiet ? "Quiet is on. I'll hold everything until you're back." : "What should I take off your plate?")
+                .font(.okBody(12.5))
+                .foregroundStyle(NotchInk.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    /// The shell's composer, in the island: one press opens the summon box.
+    private var composer: some View {
+        NotchComposer(hint: SummonHotKey.label(env.store.settings.summonHotkey)) {
+            model.onClose?()
+            env.startSummon()
+        }
+    }
+
+    private var recentTasks: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("Recent tasks")
+                    .font(.okBody(11.5, .semibold))
+                    .foregroundStyle(NotchInk.tertiary)
+                Spacer(minLength: 0)
+                NotchButton(title: "See all", trailingSymbol: "chevron.right", kind: .plain, height: 24) {
+                    model.onClose?()
+                    env.openDashboard(.history)
+                }
+            }
+            .padding(.leading, 4)
+            ForEach(model.recent) { item in
+                NotchRecentRow(item: item) {
+                    model.onClose?()
+                    env.openDashboard(.runs, runID: item.id)
+                }
+            }
+        }
+    }
+
+    /// Ways into the window: a new tab, Replay, the Mac, and the window itself.
+    private var newFooter: some View {
+        HStack(spacing: 6) {
+            NotchButton(title: "New tab", symbol: "plus", kind: .secondary, height: 28) {
+                model.onClose?()
+                env.openDashboard(.home)
+                env.requestAsk()
+            }
+            NotchButton(title: "Replay", symbol: "arrow.trianglehead.2.clockwise", kind: .secondary, height: 28) {
+                model.onClose?()
+                env.openDashboard(.skills)
+            }
+            NotchButton(title: "Computer", symbol: "macwindow", kind: .secondary, height: 28) {
+                model.onClose?()
+                env.openDashboard(.runs)
+            }
+            Spacer(minLength: 0)
+            NotchButton(title: "Open okidoki", trailingSymbol: "arrow.up.right", kind: .plain, height: 28) {
+                model.onClose?()
+                env.openDashboard(.home)
+            }
+        }
     }
 
     private var greetingTitle: String {
@@ -542,11 +654,12 @@ private struct NotchToastRow: View {
     var toast: NotchToast
     let model: NotchModel
     let env: AppEnvironment
+    @Environment(\.notchAccent) private var accent
     @State private var hovering = false
 
     private var badge: (String, Color) {
         switch toast.kind {
-        case .success: return ("checkmark", OKBrand.mint)
+        case .success: return ("checkmark", accent)
         case .warning: return ("exclamationmark", NotchInk.amber)
         case .approval: return ("hand.raised.fill", NotchInk.amber)
         case .info: return ("sparkle", NotchInk.primary)
@@ -676,6 +789,7 @@ private struct NotchLiveRow: View {
     var run: NotchRunItem
     let env: AppEnvironment
     var animating: Bool
+    @Environment(\.notchAccent) private var accent
     @State private var hovering = false
 
     private var paused: Bool { run.status == .paused }
@@ -691,8 +805,8 @@ private struct NotchLiveRow: View {
                 NotchBadge(symbol: "pause.fill", tint: NotchInk.secondary)
             } else {
                 ZStack {
-                    Circle().fill(OKBrand.mint.opacity(0.12))
-                    NotchSpinner(tint: OKBrand.mint, size: 16, active: animating)
+                    Circle().fill(accent.opacity(0.12))
+                    NotchSpinner(tint: accent, size: 16, active: animating)
                 }
                 .frame(width: NotchBadge.size, height: NotchBadge.size)
             }
@@ -701,10 +815,21 @@ private struct NotchLiveRow: View {
                     .font(.okBody(13, .medium))
                     .foregroundStyle(NotchInk.primary)
                     .lineLimit(1)
-                Text(liveDetail)
-                    .font(.okBody(12))
-                    .foregroundStyle(paused ? NotchInk.tertiary : NotchInk.secondary)
-                    .lineLimit(1)
+                if let started = run.startedAt, !paused, accent != OKBrand.mint {
+                    // The new look says how long, like the shell's task cards.
+                    TimelineView(.periodic(from: started, by: 1)) { context in
+                        Text("Working for \(NotchRecentRow.span(since: started, now: context.date)) · \(liveDetail)")
+                            .font(.okBody(12))
+                            .foregroundStyle(NotchInk.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text(liveDetail)
+                        .font(.okBody(12))
+                        .foregroundStyle(paused ? NotchInk.tertiary : NotchInk.secondary)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -727,12 +852,13 @@ private struct NotchApprovalCard: View {
     var run: NotchRunItem
     let env: AppEnvironment
     var compact: Bool
+    @Environment(\.notchAccent) private var accent
     @State private var showCommands = false
     @State private var hovering = false
 
     private var riskColor: Color {
         switch run.risk {
-        case .low: return OKBrand.mint
+        case .low: return accent
         case .medium: return NotchInk.amber
         case .high: return NotchInk.coral
         }
@@ -823,6 +949,131 @@ private struct NotchApprovalCard: View {
     }
 }
 
+/// The shell's composer, inside the island: a field to press, the shortcut that opens it from
+/// anywhere, and a send mark in the shell's green.
+private struct NotchComposer: View {
+    var hint: String
+    var action: () -> Void
+    @Environment(\.notchAccent) private var accent
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(accent)
+                Text("Ask okidoki a task")
+                    .font(.okBody(13.5))
+                    .foregroundStyle(hovering ? NotchInk.primary : NotchInk.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if !hint.isEmpty {
+                    Text(hint)
+                        .font(.okBody(11, .medium))
+                        .foregroundStyle(NotchInk.tertiary)
+                        .padding(.horizontal, 6)
+                        .frame(height: 20)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.07)))
+                }
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(NotchInk.onMint)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(accent))
+                    .brightness(hovering ? 0.06 : 0)
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 7)
+            .frame(height: 42)
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(hovering ? 0.09 : 0.065))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.white.opacity(hovering ? 0.14 : 0.09), lineWidth: 1)
+                    }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(NotchPressStyle())
+        .onHover { hovering = $0 }
+        .animation(NotchMotion.hover, value: hovering)
+        .accessibilityLabel("Ask okidoki a task")
+    }
+}
+
+/// One finished task: what it was, how it ended, when.
+private struct NotchRecentRow: View {
+    var item: NotchRecent
+    var action: () -> Void
+    @Environment(\.notchAccent) private var accent
+    @State private var hovering = false
+
+    private var mark: (String, Color) {
+        switch item.status {
+        case .done: return ("checkmark", accent)
+        case .asked: return ("questionmark", NotchInk.amber)
+        case .failed: return ("exclamationmark", NotchInk.coral)
+        default: return ("minus", NotchInk.tertiary)
+        }
+    }
+
+    private var when: String {
+        if item.status == .asked { return "Needs your answer" }
+        if item.status == .failed { return "Didn't finish" }
+        if item.status == .cancelled { return "Stopped" }
+        return Self.ago(item.at)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: mark.0)
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(mark.1)
+                    .frame(width: 20, height: 20)
+                    .background(Circle().fill(mark.1.opacity(0.14)))
+                Text(item.title.notchSentence)
+                    .font(.okBody(13, .medium))
+                    .foregroundStyle(NotchInk.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(when)
+                    .font(.okBody(11.5))
+                    .foregroundStyle(item.status == .asked ? NotchInk.amber : NotchInk.tertiary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 34)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(hovering ? 0.06 : 0)))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(NotchPressStyle())
+        .onHover { hovering = $0 }
+        .animation(NotchMotion.hover, value: hovering)
+    }
+
+    /// "1m 7s", "12m", "2h 5m": steady width with monospaced digits.
+    static func span(since start: Date, now: Date) -> String {
+        let total = max(0, Int(now.timeIntervalSince(start)))
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return "\(total / 60)m \(total % 60)s" }
+        return "\(total / 3600)h \(total % 3600 / 60)m"
+    }
+
+    static func ago(_ date: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        if seconds < 60 { return "Just now" }
+        if seconds < 3600 { return "\(seconds / 60)m ago" }
+        if seconds < 86_400 { return "\(seconds / 3600)h ago" }
+        let days = seconds / 86_400
+        return days == 1 ? "Yesterday" : "\(days)d ago"
+    }
+}
+
 // MARK: - Controls
 
 enum NotchButtonKind { case primary, accent, secondary, plain }
@@ -839,6 +1090,7 @@ struct NotchButton: View {
     var kind: NotchButtonKind = .secondary
     var height: CGFloat = 28
     var action: () -> Void
+    @Environment(\.notchAccent) private var accent
     @State private var hovering = false
 
     private var foreground: Color {
@@ -880,13 +1132,14 @@ struct NotchButton: View {
         switch kind {
         case .primary:
             Capsule()
-                .fill(hovering ? OKBrand.mint : Color.white)
-                .shadow(color: (hovering ? OKBrand.mint : Color.white).opacity(hovering ? 0.45 : 0.12),
+                .fill(hovering ? accent : Color.white)
+                .shadow(color: (hovering ? accent : Color.white).opacity(hovering ? 0.45 : 0.12),
                         radius: hovering ? 10 : 4, y: 1)
         case .accent:
             Capsule()
-                .fill(hovering ? OKBrand.greenBright : OKBrand.mint)
-                .shadow(color: OKBrand.mint.opacity(hovering ? 0.45 : 0.22), radius: hovering ? 12 : 6, y: 1)
+                .fill(accent)
+                .brightness(hovering ? 0.08 : 0)
+                .shadow(color: accent.opacity(hovering ? 0.45 : 0.22), radius: hovering ? 12 : 6, y: 1)
         case .secondary:
             Capsule()
                 .fill(Color.white.opacity(hovering ? 0.14 : 0.08))
@@ -905,15 +1158,16 @@ struct NotchIconButton: View {
     /// A toggle that's on: lit in mint.
     var active: Bool = false
     var action: () -> Void
+    @Environment(\.notchAccent) private var accent
     @State private var hovering = false
 
     private var ink: Color {
-        if active { return OKBrand.mint }
+        if active { return accent }
         return hovering ? NotchInk.primary : Color.white.opacity(0.7)
     }
 
     private var plate: Color {
-        if active { return OKBrand.mint.opacity(hovering ? 0.22 : 0.15) }
+        if active { return accent.opacity(hovering ? 0.22 : 0.15) }
         if filled { return Color.white.opacity(hovering ? 0.15 : 0.08) }
         return Color.white.opacity(hovering ? 0.12 : 0)
     }

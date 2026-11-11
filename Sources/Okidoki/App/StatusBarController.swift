@@ -34,7 +34,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// Says how to summon, given what's turned on.
     static func tooltip(_ settings: AppSettings?) -> String {
         guard let settings else { return "Okidoki" }
-        let key = SummonHotKey.label(settings.summonHotkey)
+        let key = SummonHotKey.label(AppEnvironment.activeHotkey(settings))
         switch (settings.shakeToSummon, key.isEmpty) {
         case (true, true): return "Okidoki — shake your mouse to summon"
         case (true, false): return "Okidoki — shake your mouse or press \(key) to summon"
@@ -57,11 +57,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         dashboard.target = self
         menu.addItem(dashboard)
 
-        let summon = NSMenuItem(title: "summon okidoki", action: #selector(summonNow), keyEquivalent: "")
-        summon.target = self
-        let key = SummonHotKey.label(env.store.settings.summonHotkey)
-        if !key.isEmpty { summon.toolTip = key }
-        menu.addItem(summon)
+        // The original look keeps its original menu while shake is the way in.
+        if env.store.settings.newShell || !env.store.settings.shakeToSummon {
+            let summon = NSMenuItem(title: "summon okidoki", action: #selector(summonNow), keyEquivalent: "")
+            summon.target = self
+            let key = SummonHotKey.label(AppEnvironment.activeHotkey(env.store.settings))
+            if !key.isEmpty { summon.toolTip = key }
+            menu.addItem(summon)
+        }
 
         let ask = NSMenuItem(title: "ask okidoki", action: #selector(ask), keyEquivalent: "")
         ask.target = self

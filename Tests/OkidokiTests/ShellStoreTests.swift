@@ -19,6 +19,18 @@ final class ShellStoreTests: XCTestCase {
         XCTAssertEqual(decoded.summonHotkey, "option+space")
     }
 
+    func testReorderWithRepeatedIDsNeverDuplicatesPins() async throws {
+        try await withStore { store, _ in
+            store.seedPinsIfNeeded(loginSites: [])
+            let ids = (store.pins ?? []).map(\.id)
+            store.reorderPins([ids[1], ids[1], ids[0], ids[1]])
+            let after = (store.pins ?? []).map(\.id)
+            XCTAssertEqual(after.count, ids.count)
+            XCTAssertEqual(Set(after), Set(ids))
+            XCTAssertEqual(Array(after.prefix(2)), [ids[1], ids[0]])
+        }
+    }
+
     func testPinsSeedOnceDedupeByHostAndReorder() async throws {
         try await withStore { store, url in
             XCTAssertNil(store.pins)

@@ -15,6 +15,7 @@ export function Popover({
   anchor,
   align = "start",
   side = "bottom",
+  role = "menu",
   width,
   className,
   children,
@@ -24,6 +25,8 @@ export function Popover({
   anchor: React.RefObject<HTMLElement | null>;
   align?: "start" | "end";
   side?: "bottom" | "top";
+  /** "dialog" for a popover of controls (switches) rather than a list of choices. */
+  role?: "menu" | "dialog";
   width?: number;
   className?: string;
   children: React.ReactNode;
@@ -73,7 +76,7 @@ export function Popover({
       {open && place ? (
         <motion.div
           ref={panel}
-          role="menu"
+          role={role}
           className={cx("pop", className)}
           style={{
             left: place.left,

@@ -453,7 +453,8 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             if flags == [.control, .shift], event.keyCode == 48 { self.select(offset: -1); return nil }    // ⌃⇧⇥
             guard flags == .command || flags == [.command, .shift] else { return event }
             if self.model.chromeless, flags == .command, let key = event.charactersIgnoringModifiers,
-               ["l", "t", "k", "j", "b", "n"].contains(key) {
+               ["l", "t", "k", "j", "b", "n", "w", "1", "2", "3", "4", "5", "6", "7", "8", "9"].contains(key) {
+                // In the new shell these mean what the sidebar says: ⌘1–9 are the pins, ⌘W closes the tab shown.
                 self.onShellKey?(key)
                 return nil
             }
@@ -509,6 +510,18 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// keyboard from the app they're in.
     func showQuietly() {
         env?.showDashboardQuietly(.browser)
+    }
+
+    /// The agent or a replay starts working in `tab`: put it in front so the person can watch. Not in
+    /// the new shell while its window is the one in use: the person stays where they are (usually the
+    /// task's chat), and the tab shows up under Agent tabs with its live card in the chat.
+    /// Thumbnails and favicons are for the new shell only; the original look keeps nothing on disk.
+    private var shellLook: Bool { env?.store.settings.newShell == true }
+
+    func presentForWork(_ tab: BrowserTab) {
+        if env?.shellInFront == true { return }
+        showQuietly()
+        if activeTab !== tab, !model.recording { select(tab) }
     }
 
     /// What the address bar does with what was typed: open it, search for it, or hand it to the agent.
@@ -600,14 +613,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         tab.onEscape = onEscape
         objectChanged()
         refreshGlow()
-        RunThumbs.capture(tab, runID: runID)
+        if shellLook { RunThumbs.capture(tab, runID: runID) }
     }
 
     func updateWork(_ line: String, in tab: BrowserTab) {
         guard tab.status != nil else { return }
         tab.status = line
         if tab.id == model.activeID { refreshGlow(pulse: true) }
-        if let runID = tab.ownerRunID { RunThumbs.capture(tab, runID: runID) }
+        if shellLook, let runID = tab.ownerRunID { RunThumbs.capture(tab, runID: runID) }
     }
 
     /// The tab each conversation's last run ended in, where its follow-ups carry on.
@@ -621,7 +634,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// The run is done with every tab it had.
     func endWork(runID: String) {
         for tab in model.tabs where tab.ownerRunID == runID {
-            RunThumbs.capture(tab, runID: runID, final: true)
+            if shellLook { RunThumbs.capture(tab, runID: runID, final: true) }
             tab.status = nil
             tab.ownerRunID = nil
             tab.onEscape = nil
@@ -721,7 +734,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tab = tab(for: webView) else { return }
         tab.navigationEnded(navigation)
-        FaviconCache.learn(from: tab)
+        if shellLook { FaviconCache.learn(from: tab) }
         if model.recording, recordingTab === tab { Task { _ = await tab.call("return window.__okidoki?.record(true)") } }
     }
 

@@ -40,11 +40,10 @@ final class HybridBrowserReplayer {
         let browser = env.browser
         // One tab per item, so items can run side by side; the first is the one in front.
         let first = browser.tabForRun(runID: runID, threadID: nil)
-        browser.showQuietly()
         browser.beginWork("replaying “\(skill.name)”", in: first, runID: runID, threadID: nil) { [weak self] in
             self?.cancel(reason: "you stopped me")
         }
-        if browser.activeTab !== first, !browser.model.recording { browser.select(first) }
+        browser.presentForWork(first)
 
         task = Task { [weak self] in
             guard let self else { return }
