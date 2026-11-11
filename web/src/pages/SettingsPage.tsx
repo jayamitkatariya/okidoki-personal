@@ -47,6 +47,7 @@ const SECTIONS = [
   { id: "mcp", label: "MCP servers", icon: "grid" },
   { id: "other-agents", label: "Use from other agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
+  { id: "summon", label: "Summon", icon: "spark" },
   { id: "notch", label: "Notch", icon: "bell" },
   { id: "appearance", label: "Appearance", icon: "sun" },
   { id: "account", label: "Profile", icon: "user" },
@@ -397,6 +398,32 @@ export function SettingsPage() {
             />
           </SettingsSection>
 
+          <SettingsSection id="summon" title="Summon" description="How you call okidoki from anywhere on your Mac. The notch's Ask button and the menu bar always work too.">
+            <div className="pref-group">
+              <PrefRow title="Shake to summon" detail="Shake the pointer and okidoki opens beside it. Off stops watching the mouse entirely.">
+                <Switch label="Shake to summon" checked={settings.shakeToSummon ?? true} onChange={(value) => updateSettings({ shakeToSummon: value })} />
+              </PrefRow>
+              <PrefRow
+                title="Shake sensitivity"
+                detail={(settings.shakeToSummon ?? true) ? "Lower is easier to trigger" : "Turn on Shake to summon to tune this"}
+              >
+                <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)}>
+                  <Slider
+                    min={0.2}
+                    max={1}
+                    step={0.05}
+                    value={settings.shakeSensitivity}
+                    onChange={(value) => updateSettings({ shakeSensitivity: value })}
+                    format={(value) => `${Math.round(value * 100)}%`}
+                  />
+                </span>
+              </PrefRow>
+              <PrefRow title="Summon shortcut" detail="Works in any app. Click, then press the keys you want.">
+                <HotkeyField value={settings.summonHotkey ?? "option+space"} onChange={(value) => updateSettings({ summonHotkey: value })} />
+              </PrefRow>
+            </div>
+          </SettingsSection>
+
           <SettingsSection id="notch" title="Notch" description="Your status center. On Macs without a notch it floats at the top.">
             <div className="pref-group">
               <PrefRow title="Show in the notch" detail="Toasts, progress and approvals">
@@ -410,6 +437,9 @@ export function SettingsPage() {
 
           <SettingsSection id="appearance" title="Appearance" description="How the panel and the pointer behave.">
             <div className="pref-group">
+              <PrefRow title="New look" detail="One window for everything: your tabs, chats and agent tabs in a sidebar, and Home as the new tab. Off brings back the classic dashboard.">
+                <Switch label="New look" checked={settings.newShell ?? false} onChange={(value) => updateSettings({ newShell: value })} />
+              </PrefRow>
               <PrefRow title="Theme">
                 <Segmented
                   options={[
@@ -430,16 +460,6 @@ export function SettingsPage() {
                   value={settings.drivePace ?? "fast"}
                   onChange={(value) => updateSettings({ drivePace: value as typeof settings.drivePace })}
                   compact
-                />
-              </PrefRow>
-              <PrefRow title="Shake sensitivity" detail="Lower is easier to trigger">
-                <Slider
-                  min={0.2}
-                  max={1}
-                  step={0.05}
-                  value={settings.shakeSensitivity}
-                  onChange={(value) => updateSettings({ shakeSensitivity: value })}
-                  format={(value) => `${Math.round(value * 100)}%`}
                 />
               </PrefRow>
             </div>
@@ -1175,6 +1195,64 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
         </Button>
       </footer>
     </Modal>
+  );
+}
+
+const KEY_GLYPH: Record<string, string> = { command: "⌘", option: "⌥", control: "⌃", shift: "⇧", space: "Space", return: "↩", escape: "esc", tab: "⇥" };
+
+/** "option+space" → "⌥ Space". */
+export function hotkeyLabel(value: string): string {
+  if (!value) return "Off";
+  return value
+    .split("+")
+    .map((part) => KEY_GLYPH[part] ?? part.toUpperCase())
+    .join(" ");
+}
+
+/** Records a global shortcut: at least one modifier and one key. */
+function HotkeyField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecording(false);
+        return;
+      }
+      if (["Meta", "Alt", "Control", "Shift"].includes(event.key)) return;
+      const mods = [event.metaKey && "command", event.altKey && "option", event.ctrlKey && "control", event.shiftKey && "shift"].filter(Boolean) as string[];
+      if (!mods.length || (mods.length === 1 && mods[0] === "shift")) {
+        setError("Add ⌘, ⌥ or ⌃ so it doesn't fire while you type");
+        return;
+      }
+      const code = event.code;
+      const key = code === "Space" ? "space" : code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : code === "Enter" ? "return" : "";
+      if (!key) {
+        setError("Use a letter, a number or Space");
+        return;
+      }
+      setError("");
+      setRecording(false);
+      onChange([...mods, key].join("+"));
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, onChange]);
+  return (
+    <span className="hotkey-field">
+      <button type="button" className={cx("hotkey-keys", recording && "is-recording")} onClick={() => { setError(""); setRecording((v) => !v); }} aria-label="Record a shortcut">
+        {recording ? "Press keys…" : hotkeyLabel(value)}
+      </button>
+      {value && !recording ? (
+        <button type="button" className="hotkey-clear" onClick={() => onChange("")}>
+          Turn off
+        </button>
+      ) : null}
+      {error ? <em className="hotkey-error" role="alert">{error}</em> : null}
+    </span>
   );
 }
 

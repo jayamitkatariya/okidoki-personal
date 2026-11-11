@@ -60,6 +60,12 @@ export interface Settings {
   vaultFolder?: string;
   /** Hybrid replay: skills bind values from documents, check steps, pick themselves, and hand off to the agent. */
   hybridReplay?: boolean;
+  /** The new browser shell (frosted sidebar, Home as the new tab). Off keeps the original dashboard. */
+  newShell?: boolean;
+  /** Shaking the mouse opens summon. */
+  shakeToSummon?: boolean;
+  /** Global summon shortcut, like "option+space". Empty turns it off. */
+  summonHotkey?: string;
 }
 
 export type PrivateMacPhase = "unsupported" | "notSetUp" | "downloading" | "installing" | "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -174,6 +180,11 @@ export interface Run {
   pickedPath?: string | null;
   /** The user's reply when the run had paused on a question. */
   answer?: string | null;
+  /** When the person last looked at it; a run that ended after this is unread. */
+  seenAt?: string | null;
+  updatedAt?: string | null;
+  /** While paused: what the person is doing for the run. */
+  waitingFor?: string | null;
 }
 
 export interface Message {
@@ -194,6 +205,8 @@ export interface Thread {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  /** When the person last opened it. */
+  seenAt?: string | null;
 }
 
 export interface Memory {
@@ -380,6 +393,53 @@ export interface NativeState {
   vault?: VaultState | null;
   /** Browsers to import passwords from, and the last import. Missing in older builds. */
   vaultImport?: VaultImportState | null;
+  /** okidoki's browser, for the new shell's sidebar and toolbar. Missing on older builds. */
+  browser?: BrowserState | null;
+  /** Sites pinned in the sidebar, in order. */
+  pins?: Pin[];
+  bookmarks?: Bookmark[];
+  /** Runs with a thumbnail: id → when it was last taken, in seconds. */
+  thumbs?: Record<string, number>;
+}
+
+export interface BrowserTab {
+  id: string;
+  number: number;
+  title: string;
+  address: string;
+  host: string;
+  loading: boolean;
+  blank: boolean;
+  /** The agent's or a replay's line while one works here; null when it's the person's tab. */
+  status?: string | null;
+  ownerRunID?: string | null;
+  threadID?: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  hasLogin: boolean;
+  loadError?: string | null;
+  bookmarked: boolean;
+}
+
+export interface BrowserState {
+  activeID?: string | null;
+  recording: boolean;
+  recordedSteps: number;
+  tabs: BrowserTab[];
+}
+
+export interface Pin {
+  id: string;
+  url: string;
+  title: string;
+  createdAt: string;
+}
+
+export interface Bookmark {
+  id: string;
+  url: string;
+  title: string;
+  createdAt: string;
 }
 
 /** A Chromium-family browser found on this Mac. Counts only, never a secret. */

@@ -12,10 +12,26 @@ struct DashboardView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             WebDashboardView(environment: env)
-            BrowserSlot(environment: env)
+            BrowserSlot(environment: env, store: env.store)
         }
         .frame(minWidth: 900, minHeight: 600)
-        .background(Color(nsColor: .okDashboardBackground))
+        .background(DashboardBackdrop(store: env.store))
+    }
+}
+
+/// The window's ground. The original look is an opaque fill; the new shell is the desktop seen through
+/// sidebar vibrancy, with the web page painting the frosted tint and the white content card on top.
+/// Kept apart from `DashboardView` so a settings change redraws only this, never the web view.
+private struct DashboardBackdrop: View {
+    @ObservedObject var store: OkidokiStore
+
+    var body: some View {
+        if store.settings.newShell {
+            VisualEffectBlur(material: .sidebar, blending: .behindWindow, state: .followsWindowActiveState)
+                .ignoresSafeArea()
+        } else {
+            Color(nsColor: .okDashboardBackground)
+        }
     }
 }
 
@@ -23,12 +39,15 @@ struct DashboardView: View {
 /// in the window, invisible and out of the way, so a run or a replay keeps its page.
 private struct BrowserSlot: View {
     @ObservedObject var environment: AppEnvironment
+    @ObservedObject var store: OkidokiStore
 
     var body: some View {
         let frame = environment.browserFrame
+        // The new shell's content card is r=12 with the page flush to its bottom edge: concentric corners.
+        let radius: CGFloat = store.settings.newShell ? 12 : 19
         HostedView(view: environment.browser.view, hidden: frame == nil)
             .frame(width: max(frame?.width ?? 1000, 1), height: max(frame?.height ?? 700, 1))
-            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 19, bottomTrailingRadius: 19))
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius))
             .offset(x: frame?.minX ?? 0, y: frame?.minY ?? 0)
             .opacity(frame == nil ? 0 : 1)
             .allowsHitTesting(frame != nil)
@@ -123,6 +142,38 @@ struct DashboardPayload: Encodable {
     var vaultImport: VaultImportStatus
     /// The skill library's templates, and whether each is already among the person's skills.
     var library: [DashboardLibraryEntry]
+    /// okidoki's browser as the new shell's sidebar and toolbar show it.
+    var browser: DashboardBrowserPayload
+    var pins: [BrowserPin]
+    var bookmarks: [Bookmark]
+    /// Runs with a thumbnail, id → when it was last taken (seconds), so the page can ask for the new one.
+    var thumbs: [String: Double]
+}
+
+struct DashboardBrowserTabPayload: Encodable {
+    var id: String
+    var number: Int
+    var title: String
+    var address: String
+    var host: String
+    var loading: Bool
+    var blank: Bool
+    /// The agent's or a replay's line while one works here; nil when it's the person's tab.
+    var status: String?
+    var ownerRunID: String?
+    var threadID: String?
+    var canGoBack: Bool
+    var canGoForward: Bool
+    var hasLogin: Bool
+    var loadError: String?
+    var bookmarked: Bool
+}
+
+struct DashboardBrowserPayload: Encodable {
+    var activeID: String?
+    var recording: Bool
+    var recordedSteps: Int
+    var tabs: [DashboardBrowserTabPayload]
 }
 
 struct DashboardLibraryEntry: Encodable {
@@ -290,6 +341,15 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 self?.focusRun(id)
             }
             .store(in: &cancellables)
+        // The new shell's sidebar and toolbar follow the browser's tabs; thumbnails and favicons as they land.
+        environment.browser.changes
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.schedulePush() }
+            .store(in: &cancellables)
+        ShellImages.onChange = { [weak self] in self?.schedulePush() }
+        environment.browser.onShellKey = { [weak self] key in
+            self?.webView?.evaluateJavaScript("window.okidokiShellKey && window.okidokiShellKey('\(key)');", completionHandler: nil)
+        }
         // Permissions are granted in System Settings; refresh their labels when the user comes back.
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .receive(on: RunLoop.main)
@@ -518,6 +578,35 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         }
     }
 
+    private func browserPayload(_ env: AppEnvironment) -> DashboardBrowserPayload {
+        let browser = env.browser
+        let saved = Set(env.store.bookmarks.map(\.url))
+        return DashboardBrowserPayload(
+            activeID: browser.model.active?.id.uuidString,
+            recording: browser.model.recording,
+            recordedSteps: browser.model.recordedSteps,
+            tabs: browser.model.tabs.map { tab in
+                DashboardBrowserTabPayload(id: tab.id.uuidString, number: tab.number, title: tab.title, address: tab.address,
+                                           host: BrowserPin.host(of: tab.address), loading: tab.loading, blank: tab.isBlank,
+                                           status: tab.status, ownerRunID: tab.ownerRunID, threadID: tab.threadID,
+                                           canGoBack: tab.canGoBack, canGoForward: tab.canGoForward, hasLogin: tab.hasLogin,
+                                           loadError: tab.loadError, bookmarked: saved.contains(tab.address))
+            })
+    }
+
+    /// Thumbnails for the runs the page can show (the newest few dozen).
+    private func thumbs(_ env: AppEnvironment) -> [String: Double] {
+        guard env.store.settings.newShell else { return [:] }
+        var out: [String: Double] = [:]
+        for run in env.store.activeRuns.sorted(by: { $0.createdAt > $1.createdAt }).prefix(40) {
+            let url = RunThumbs.url(run.id)
+            if let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+                out[run.id] = date.timeIntervalSince1970.rounded()
+            }
+        }
+        return out
+    }
+
     private func payloadJSON() -> String? {
         guard let env else { return nil }
         let payload = DashboardPayload(
@@ -585,7 +674,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 salt: env.vault.salt,
                 rememberedPassphrase: KeyStore.get(LocalVault.passphraseKey) ?? ""),
             vaultImport: env.vaultImport,
-            library: libraryEntries(env)
+            library: libraryEntries(env),
+            browser: browserPayload(env),
+            pins: env.store.pins ?? [],
+            bookmarks: env.store.bookmarks,
+            thumbs: thumbs(env)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -882,6 +975,50 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.signOut()
         case "signIn":
             if let id = payload["id"] as? String { env.signIn(accountID: id) }
+        // MARK: The new shell
+        case "shellAsk":
+            let text = payload["text"] as? String ?? ""
+            let mode = payload["mode"] as? String ?? "auto"
+            let thread: String?
+            if let tab = payload["tabID"] as? String, mode == "tab" {
+                thread = env.askInTab(text, tabID: tab)
+            } else {
+                thread = env.askFromShell(text, mode: mode, threadID: payload["threadID"] as? String)
+            }
+            if let thread, let ref = payload["ref"] as? String {
+                replyToPage("okidoki-asked", "\(ref)|\(thread)")
+            }
+        case "browserGo":
+            env.shellBrowserGo(payload["text"] as? String ?? "", tabID: payload["tabID"] as? String,
+                               choice: payload["choice"] as? String ?? "open", newTab: payload["newTab"] as? Bool ?? false)
+        case "browserNav":
+            env.shellBrowserNav(payload["action"] as? String ?? "", tabID: payload["tabID"] as? String)
+        case "browserSelect":
+            if let id = payload["tabID"] as? String { env.shellSelectTab(id) }
+        case "browserClose":
+            if let id = payload["tabID"] as? String { env.shellCloseTab(id) }
+        case "browserOpen":
+            if let url = payload["url"] as? String { env.shellOpenURL(url, newTab: payload["newTab"] as? Bool ?? true) }
+        case "browserRecord":
+            if env.browser.model.recording { env.stopBrowserRecording() } else { env.startBrowserRecording() }
+        case "browserFreeze":
+            env.shellFreeze { [weak self] url in self?.replyToPage("okidoki-freeze", url ?? "") }
+        case "toggleBookmark":
+            env.shellToggleBookmark(tabID: payload["tabID"] as? String)
+        case "removeBookmark":
+            if let id = payload["id"] as? String { env.store.removeBookmark(id) }
+        case "pinTab":
+            env.shellPinTab(tabID: payload["tabID"] as? String)
+        case "pinSite":
+            if let url = payload["url"] as? String { env.store.pin(url: url, title: payload["title"] as? String ?? "") }
+        case "unpin":
+            if let id = payload["id"] as? String { env.store.unpin(id) }
+        case "reorderPins":
+            if let ids = payload["ids"] as? [String] { env.store.reorderPins(ids) }
+        case "seedPins":
+            env.seedShellPins()
+        case "markSeen":
+            env.store.markSeen(threadID: payload["threadID"] as? String, runID: payload["runID"] as? String)
         case "browserFrame":
             if payload["hidden"] as? Bool == true { env.browserFrame = nil }
             else if let x = payload["x"] as? Double, let y = payload["y"] as? Double,

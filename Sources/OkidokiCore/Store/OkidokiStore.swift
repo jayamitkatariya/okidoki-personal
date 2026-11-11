@@ -13,6 +13,9 @@ public final class OkidokiStore: ObservableObject {
     @Published public var skills: [Skill]
     @Published public var routines: [Routine]
     @Published public var connectors: [Connector]
+    /// Sidebar pins, in order. Nil until the new shell seeds them the first time it opens.
+    @Published public var pins: [BrowserPin]?
+    @Published public var bookmarks: [Bookmark]
     @Published public private(set) var lastSavedAt: Date?
     @Published public private(set) var loadError: String?
     /// The saved file had items this build couldn't read. They're kept in a copy beside it.
@@ -123,6 +126,8 @@ public final class OkidokiStore: ObservableObject {
         self.skills = state.skills
         self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)
+        self.pins = state.pins
+        self.bookmarks = state.bookmarks
         self.deletions = state.deletions
         self.syncCursors = state.syncCursors
         var unreadable = state.unreadable
@@ -714,6 +719,84 @@ public final class OkidokiStore: ObservableObject {
         }
     }
 
+    // MARK: - Pins, bookmarks, seen
+
+    public static let maxPins = 12
+
+    /// Pins a site, or does nothing when its host is already pinned. Returns false when the grid is full.
+    @discardableResult
+    public func pin(url: String, title: String) -> Bool {
+        var list = pins ?? []
+        let host = BrowserPin.host(of: url)
+        if list.contains(where: { $0.host == host }) { return true }
+        guard list.count < Self.maxPins else { return false }
+        list.append(BrowserPin(url: url, title: title.isEmpty ? host : title))
+        pins = list
+        return true
+    }
+
+    public func unpin(_ id: String) {
+        pins = (pins ?? []).filter { $0.id != id }
+    }
+
+    /// Puts the pins in the order given; ids not listed keep their place at the end.
+    public func reorderPins(_ ids: [String]) {
+        let list = pins ?? []
+        let byID = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+        var ordered = ids.compactMap { byID[$0] }
+        ordered += list.filter { !ids.contains($0.id) }
+        pins = ordered
+    }
+
+    /// The pins seeded the first time the new shell opens, from sites the person already uses:
+    /// vault logins first, then the sites their skills start on, then a few everyday ones.
+    public func seedPinsIfNeeded(loginSites: [String]) {
+        guard pins == nil else { return }
+        var seen = Set<String>()
+        var list: [BrowserPin] = []
+        func add(_ url: String, _ title: String) {
+            let full = url.contains("://") ? url : "https://\(url)"
+            let host = BrowserPin.host(of: full)
+            guard !host.isEmpty, !seen.contains(host), list.count < 6 else { return }
+            seen.insert(host)
+            list.append(BrowserPin(url: full, title: title))
+        }
+        for site in loginSites { add(site, BrowserPin.host(of: site)) }
+        for skill in skills { if let url = skill.startURL, !url.isEmpty { add(url, BrowserPin.host(of: url)) } }
+        for (url, title) in [("https://mail.google.com", "Gmail"), ("https://www.google.com", "Google"),
+                             ("https://calendar.google.com", "Calendar"), ("https://github.com", "GitHub"),
+                             ("https://www.youtube.com", "YouTube"), ("https://www.notion.so", "Notion")] {
+            add(url, title)
+        }
+        pins = list
+    }
+
+    /// Bookmarks a page, or removes the bookmark when the page is already saved. Returns true when saved.
+    @discardableResult
+    public func toggleBookmark(url: String, title: String) -> Bool {
+        if let existing = bookmarks.firstIndex(where: { $0.url == url }) {
+            bookmarks.remove(at: existing)
+            return false
+        }
+        bookmarks.insert(Bookmark(url: url, title: title.isEmpty ? BrowserPin.host(of: url) : title), at: 0)
+        return true
+    }
+
+    public func removeBookmark(_ id: String) {
+        bookmarks.removeAll { $0.id == id }
+    }
+
+    /// The person looked at a thread or a run: its unread dot goes away.
+    public func markSeen(threadID: String? = nil, runID: String? = nil) {
+        let now = Date()
+        if let threadID, let index = threads.firstIndex(where: { $0.id == threadID }) {
+            threads[index].seenAt = now
+        }
+        if let runID, let index = runs.firstIndex(where: { $0.id == runID }) {
+            runs[index].seenAt = now
+        }
+    }
+
     // MARK: - Persistence
 
     private func scheduleSave() {
@@ -730,7 +813,8 @@ public final class OkidokiStore: ObservableObject {
         let state = AppState(accounts: accounts, currentAccountID: currentAccountID,
                              settings: settings, threads: threads, memories: memories, runs: runs,
                              skills: skills, routines: routines, connectors: connectors,
-                             deletions: deletions, syncCursors: syncCursors, unreadable: unreadable)
+                             deletions: deletions, syncCursors: syncCursors, unreadable: unreadable,
+                             pins: pins, bookmarks: bookmarks)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // Fractional seconds: two edits a moment apart stay apart, so they shouldn't round off on save.

@@ -442,7 +442,7 @@ private struct NotchContent: View {
                 .lineLimit(1)
             Text(model.quiet
                  ? "Quiet is on. I'll hold everything until you're back."
-                 : "Shake your mouse and tell me what to take off your plate.")
+                 : "\(model.summonHint) and tell me what to take off your plate.")
                 .font(.okBody(13.5))
                 .foregroundStyle(NotchInk.secondary)
                 .multilineTextAlignment(.center)
@@ -478,9 +478,18 @@ private struct NotchContent: View {
                 model.onClose?()
                 env.openDashboard(.skills)
             }
-            NotchButton(title: "Browser", symbol: "globe", kind: .secondary, height: 30) {
-                model.onClose?()
-                env.openBrowser()
+            // In the new look the browser is Home, a new tab away.
+            if env.store.settings.newShell {
+                NotchButton(title: "New tab", symbol: "plus", kind: .secondary, height: 30) {
+                    model.onClose?()
+                    env.openDashboard(.home)
+                    env.requestAsk()
+                }
+            } else {
+                NotchButton(title: "Browser", symbol: "globe", kind: .secondary, height: 30) {
+                    model.onClose?()
+                    env.openBrowser()
+                }
             }
         }
     }

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import OkidokiCore
 import SwiftUI
 import WebKit
@@ -13,6 +14,8 @@ final class BrowserModel: ObservableObject {
     @Published var recordedSteps = 0
     /// Bumped by ⌘L and ⌘T to put the cursor in the address bar.
     @Published var focusAddress = 0
+    /// The new shell draws the tabs and the toolbar itself; the browser is just the page.
+    @Published var chromeless = false
 
     var active: BrowserTab? { tabs.first { $0.id == activeID } ?? tabs.first }
 }
@@ -61,6 +64,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     fileprivate var finishedDownloads: [String] = []
     fileprivate var interruptSettle: (() -> Void)?
     fileprivate var observations: [NSKeyValueObservation] = []
+    /// What the dashboard listens to on this tab: everything it shows except load progress.
+    fileprivate var watchers = Set<AnyCancellable>()
     private let world: WKContentWorld
 
     var working: Bool { status != nil }
@@ -238,6 +243,10 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     static let maxTabs = 24
 
     let model = BrowserModel()
+    /// Fires when anything the new shell's sidebar or toolbar shows changes: tabs coming and going, the
+    /// one in front, and each tab's title, address, loading, owner and buttons. Not load progress.
+    let changes = PassthroughSubject<Void, Never>()
+    private var modelWatch: AnyCancellable?
     /// The tabs and the page, for the dashboard to place over its Browser page.
     private(set) var view: NSView!
     private weak var env: AppEnvironment?
@@ -247,6 +256,9 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     private let processPool = WKProcessPool()
     private var escMonitor: Any?
     private var shortcutMonitor: Any?
+    /// The new shell's own shortcuts (⌘L, ⌘T, ⌘K, ⌘J, ⌘B, ⌘N), passed to the dashboard page when the
+    /// keyboard is in the browser's page and the page would otherwise swallow them.
+    var onShellKey: ((String) -> Void)?
     private var nextNumber = 1
     /// Holds every tab's page, the one in front on top.
     private let stack = TabStackView()
@@ -273,6 +285,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         installShortcuts()
         installEscape()
         view = NSHostingView(rootView: BrowserView(model: model, stack: stack, controller: self))
+        modelWatch = model.objectWillChange.sink { [weak self] _ in self?.changes.send() }
         _ = openTab(activate: true)
     }
 
@@ -323,6 +336,15 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             webView.observe(\.isLoading) { [weak tab] view, _ in Task { @MainActor in tab?.loading = view.isLoading } },
             webView.observe(\.estimatedProgress) { [weak tab] view, _ in Task { @MainActor in tab?.progress = view.estimatedProgress } },
         ]
+        let ping: (Any) -> Void = { [weak self] _ in self?.changes.send() }
+        tab.$title.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$address.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$loading.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$status.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$canGoBack.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$canGoForward.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$hasLogin.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
+        tab.$loadError.dropFirst().removeDuplicates().sink(receiveValue: ping).store(in: &tab.watchers)
         let anchor = openedBy ?? model.active
         if let anchor, let index = model.tabs.firstIndex(where: { $0.id == anchor.id }) {
             // After the opener and any tabs it already opened, the way browsers line them up.
@@ -378,6 +400,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         let wasActive = model.activeID == tab.id
         model.tabs.remove(at: index)
         tab.observations = []
+        tab.watchers = []
         tab.interruptSettle?()
         tab.webView.stopLoading()
         tab.webView.navigationDelegate = nil
@@ -429,6 +452,11 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             if flags == .control, event.keyCode == 48 { self.select(offset: 1); return nil }               // ⌃⇥
             if flags == [.control, .shift], event.keyCode == 48 { self.select(offset: -1); return nil }    // ⌃⇧⇥
             guard flags == .command || flags == [.command, .shift] else { return event }
+            if self.model.chromeless, flags == .command, let key = event.charactersIgnoringModifiers,
+               ["l", "t", "k", "j", "b", "n"].contains(key) {
+                self.onShellKey?(key)
+                return nil
+            }
             let tab = self.activeTab
             switch event.charactersIgnoringModifiers {
             case "l": self.model.focusAddress += 1
@@ -572,12 +600,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         tab.onEscape = onEscape
         objectChanged()
         refreshGlow()
+        RunThumbs.capture(tab, runID: runID)
     }
 
     func updateWork(_ line: String, in tab: BrowserTab) {
         guard tab.status != nil else { return }
         tab.status = line
         if tab.id == model.activeID { refreshGlow(pulse: true) }
+        if let runID = tab.ownerRunID { RunThumbs.capture(tab, runID: runID) }
     }
 
     /// The tab each conversation's last run ended in, where its follow-ups carry on.
@@ -591,6 +621,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// The run is done with every tab it had.
     func endWork(runID: String) {
         for tab in model.tabs where tab.ownerRunID == runID {
+            RunThumbs.capture(tab, runID: runID, final: true)
             tab.status = nil
             tab.ownerRunID = nil
             tab.onEscape = nil
@@ -690,6 +721,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tab = tab(for: webView) else { return }
         tab.navigationEnded(navigation)
+        FaviconCache.learn(from: tab)
         if model.recording, recordingTab === tab { Task { _ = await tab.call("return window.__okidoki?.record(true)") } }
     }
 
@@ -1107,10 +1139,12 @@ private struct BrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BrowserTabStrip(model: model, controller: controller)
-            if let tab = model.active {
-                BrowserToolbar(tab: tab, model: model, controller: controller)
-                    .id(tab.id)
+            if !model.chromeless {
+                BrowserTabStrip(model: model, controller: controller)
+                if let tab = model.active {
+                    BrowserToolbar(tab: tab, model: model, controller: controller)
+                        .id(tab.id)
+                }
             }
             ZStack(alignment: .top) {
                 TabStackRepresentable(stack: stack)

@@ -73,14 +73,22 @@ final class LiveFrameSchemeHandler: NSObject, WKURLSchemeHandler {
         let url = task.request.url
         let id = url?.lastPathComponent ?? ""
         let key = ObjectIdentifier(task)
+        let kind = url?.host ?? "frame"
         Task { @MainActor in
+            // Frames are in memory; thumbnails, favicons and the browser still come from the new shell's caches.
+            let found: Data? = kind == "frame" ? LiveFrames.shared.data(for: id) : await ShellImages.serve(kind: kind, id: id)
             guard !self.stopped.contains(key) else { self.stopped.remove(key); return }
-            guard let url, let data = LiveFrames.shared.data(for: id) else {
+            guard let url, let data = found else {
                 task.didFailWithError(URLError(.fileDoesNotExist))
                 return
             }
             let jpeg = data.count > 2 && data[data.startIndex] == 0xFF && data[data.startIndex + 1] == 0xD8
-            let response = URLResponse(url: url, mimeType: jpeg ? "image/jpeg" : "image/png", expectedContentLength: data.count, textEncodingName: nil)
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+                "Content-Type": jpeg ? "image/jpeg" : "image/png",
+                "Content-Length": "\(data.count)",
+                // Favicons barely change; everything else is addressed by a fresh URL when it does.
+                "Cache-Control": kind == "favicon" ? "max-age=86400" : "no-store",
+            ]) ?? URLResponse(url: url, mimeType: jpeg ? "image/jpeg" : "image/png", expectedContentLength: data.count, textEncodingName: nil)
             task.didReceive(response)
             task.didReceive(data)
             task.didFinish()

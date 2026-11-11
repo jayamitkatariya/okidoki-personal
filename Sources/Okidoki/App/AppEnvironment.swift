@@ -55,6 +55,10 @@ final class AppEnvironment: ObservableObject {
     private(set) var dashboard: DashboardWindowController!
     private(set) var onboarding: OnboardingWindowController!
     private var shake: ShakeDetector!
+    /// The global summon shortcut. Works whether or not shake is on.
+    let summonHotKey = SummonHotKey()
+    /// The shake's mouse monitor is running (it's removed entirely while Shake to summon is off).
+    private var shakeRunning = false
     private var scheduler: RoutineScheduler!
 
     @Published var dashboardOpen = false
@@ -178,10 +182,12 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] settings in
                 guard let self else { return }
                 self.shake.sensitivity = settings.shakeSensitivity
-                self.shake.isEnabled = settings.okidokiEnabled
+                self.shake.isEnabled = settings.okidokiEnabled && settings.shakeToSummon
                 // A false shake in voice mode opens the mic, so it takes one more turn to be sure.
                 self.shake.deliberate = settings.defaultInput == .voice
                 self.notch.model.quiet = settings.quietMode || self.inCall
+                let hint = Self.summonHint(settings)
+                if self.notch.model.summonHint != hint { self.notch.model.summonHint = hint }
                 self.applyAppearance(settings.appearance)
             }
             .store(in: &cancellables)
@@ -224,7 +230,17 @@ final class AppEnvironment: ObservableObject {
         onboarding = OnboardingWindowController(environment: self)
         notch.install()
         glows.install()
-        shake.start()
+        applyShake(store.settings.shakeToSummon)
+        store.$settings.map(\.shakeToSummon).removeDuplicates().dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] on in self?.applyShake(on) }
+            .store(in: &cancellables)
+        summonHotKey.onPress = { [weak self] in self?.handleSummonHotKey() }
+        applySummonHotKey(store.settings.summonHotkey)
+        store.$settings.map(\.summonHotkey).removeDuplicates().dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] spec in self?.applySummonHotKey(spec) }
+            .store(in: &cancellables)
         if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] != "1" { sidecar.start() }
 
         scheduler = RoutineScheduler(store: store)
@@ -498,6 +514,8 @@ final class AppEnvironment: ObservableObject {
         speech.stop()
         speaker.stop()
         shake.stop()
+        shakeRunning = false
+        summonHotKey.unregister()
         glows.hide()
         ShellRunner.shared.cancelAll()
         sidecar.stop()
@@ -516,10 +534,51 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Summon
 
+    /// Shake to summon on: the mouse monitor runs. Off: it's gone, so okidoki isn't watching the pointer at all.
+    private func applyShake(_ on: Bool) {
+        if on, !shakeRunning {
+            shake.start()
+            shakeRunning = true
+        } else if !on, shakeRunning {
+            shake.stop()
+            shakeRunning = false
+        }
+        NSLog("okidoki: shake to summon %@", on ? "on" : "off (mouse monitor removed)")
+    }
+
+    private func applySummonHotKey(_ spec: String) {
+        if !summonHotKey.set(spec), !spec.isEmpty {
+            toast(title: "that shortcut is taken", detail: "\(SummonHotKey.label(spec)) belongs to another app — pick another in Settings › Summon",
+                  kind: .warning, undoLabel: nil, onUndo: nil, editLabel: "settings",
+                  onEdit: { [weak self] in self?.openDashboard(.settings) }, runID: nil)
+        }
+    }
+
+    /// "Shake your mouse", "Press ⌥ Space", or both, for copy that tells people how to call okidoki.
+    static func summonHint(_ settings: AppSettings) -> String {
+        let key = SummonHotKey.label(settings.summonHotkey)
+        switch (settings.shakeToSummon, key.isEmpty) {
+        case (true, true): return "Shake your mouse"
+        case (true, false): return "Shake your mouse or press \(key)"
+        case (false, false): return "Press \(key)"
+        case (false, true): return "Tap Ask in the notch"
+        }
+    }
+
+    /// The shortcut toggles summon the way a shake does, minus the pointer checks.
+    private func handleSummonHotKey() {
+        guard store.settings.okidokiEnabled, !suspendSummonForTour else { return }
+        if summon.model.isVisible || answerControllerVisible {
+            dismissSummon()
+            return
+        }
+        startSummon()
+    }
+
     private func handleShake() {
         shakePulse += 1
         if suspendSummonForTour { return }
-        guard store.settings.okidokiEnabled else { return }
+        guard store.settings.okidokiEnabled, store.settings.shakeToSummon else { return }
         // Pointer movement must never interrupt an active action, recording, or replay.
         // Use the session's explicit controls or Escape to stop it.
         guard !driver.isActive, !watch.isRecording, !replayer.isActive,
@@ -640,7 +699,7 @@ final class AppEnvironment: ObservableObject {
                 title: "Here’s what I found",
                 text: "Okidoki wakes up when you reach for it. The capsule leads with the mark, "
                     + "the composer glows when it has focus, and every control answers the pointer.",
-                footnote: "shake the pointer to summon · esc to dismiss",
+                footnote: "\(Self.summonHint(store.settings).lowercased()) to summon · esc to dismiss",
                 actions: [
                     CardAction(title: "Do it", kind: .primary, handler: {}),
                     CardAction(title: "Copy link", kind: .secondary, handler: {}),
@@ -743,6 +802,13 @@ final class AppEnvironment: ObservableObject {
     /// Another agent's request (the `okidoki` CLI, the MCP server): a conversation of its own unless it
     /// continues one, in the mode it asked for (auto · browser · computer · chat). The thread id is how it
     /// finds the run doing the work. Everything risky still waits for the person's okay in the notch.
+    /// The new shell's composer, in a conversation it already opened.
+    func handleRequestFromShell(text: String, threadID: String, mode: String) async {
+        await handleRequest(text: text, appName: "mac", bundleID: "", threadID: threadID,
+                            screenshot: nil, selection: nil, attachmentName: "",
+                            documentText: "", source: "shell", mode: mode)
+    }
+
     func askFromControl(_ text: String, mode: String, threadID: String?) -> String {
         let thread = threadID.flatMap { store.thread($0) } ?? store.createThread(title: String(text.prefix(60)), app: "agent", topic: "")
         controlThreads.insert(thread.id)
@@ -1064,6 +1130,9 @@ final class AppEnvironment: ObservableObject {
                 self.followUp(card: card, text: text)
             }
         }
+        // Asked from the new shell's composer with the window in front: the answer is already in the chat
+        // they're looking at, so a card at the cursor would only say it twice.
+        if source == "shell", dashboardWindowIsKey { return }
         let cursor = summon.model.isVisible ? NSEvent.mouseLocation : nil
         // Only an answer the user is waiting on at the capsule takes the keyboard; one that arrives
         // from the dashboard or a replay must not pull typing away from the app they're in.
@@ -2520,7 +2589,7 @@ final class AppEnvironment: ObservableObject {
         store.saveNow()
         onboarding.hide()
         openDashboard(.home)
-        toast(title: "you're in", detail: "shake your mouse anywhere. that's the only way in.",
+        toast(title: "you're in", detail: "\(Self.summonHint(store.settings).lowercased()) anywhere to call me.",
               kind: .success, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
     }
 

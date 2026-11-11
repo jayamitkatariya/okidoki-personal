@@ -240,6 +240,7 @@ final class ComputerUseDriver {
             var frameURL: String?
             if let shot {
                 frameURL = LiveFrames.shared.put(shot.png, id: "\(run.id)-\(step)")
+                RunThumbs.note(shot.png, runID: run.id)
             }
             let scriptSource = ["script", "shell", "applescript", "jxa"].contains(act.type) ? (act.script ?? act.text) : nil
             model.steps.append(LiveStep(index: step, say: act.say ?? act.type, kind: model.kind, detail: model.detail,

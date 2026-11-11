@@ -1,15 +1,32 @@
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class DashboardWindowController: NSObject, NSWindowDelegate {
     private weak var env: AppEnvironment?
     private(set) var window: NSWindow?
+    private var lookSub: AnyCancellable?
 
     init(environment: AppEnvironment) {
         self.env = environment
         super.init()
         build()
+        lookSub = environment.store.$settings
+            .map(\.newShell)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] on in self?.applyLook(newShell: on) }
+    }
+
+    /// The new shell lets the desktop through the sidebar (vibrancy behind a clear window); the original
+    /// dashboard is an opaque window. Flipping the setting changes the window in place.
+    private func applyLook(newShell: Bool) {
+        guard let window else { return }
+        window.isOpaque = !newShell
+        window.backgroundColor = newShell ? .clear : .okDashboardBackground
+        window.invalidateShadow()
+        env?.browser.model.chromeless = newShell
     }
 
     private func build() {

@@ -137,6 +137,15 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// as before, so the two can be compared on the same build.
     public var hybridReplay: Bool = false
 
+    /// The new look: one browser shell with a frosted sidebar (pins, chats, tabs, agent tabs) and Home as
+    /// the new tab. Off keeps the original dashboard, untouched, so the two can be compared.
+    public var newShell: Bool = false
+    /// Shaking the mouse opens summon. Off removes the global mouse monitor entirely; the hotkey, the
+    /// notch and the menu bar still summon.
+    public var shakeToSummon: Bool = true
+    /// Global summon shortcut, written like "option+space". Empty turns it off.
+    public var summonHotkey: String = "option+space"
+
     /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Mac's key file, not here.
     public var mcpServers: [MCPServer] = []
 
@@ -152,7 +161,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case onboardingComplete, tourComplete, showedWelcome
         case claudeModel, mcpServers, drivePace, computerTarget
         case screenContext, summonMode, vaultFolder
-        case hybridReplay
+        case hybridReplay, newShell, shakeToSummon, summonHotkey
     }
 
     public init(from decoder: Decoder) throws {
@@ -202,6 +211,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
         screenContext = bool(.screenContext, true)
         hybridReplay = bool(.hybridReplay, false)
+        newShell = bool(.newShell, false)
+        shakeToSummon = bool(.shakeToSummon, true)
+        summonHotkey = string(.summonHotkey, "option+space")
     }
 }
 
@@ -329,6 +341,9 @@ public struct ChatThread: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
     public var archived: Bool
+    /// When the person last opened the thread. A reply after it shows as unread. Nil means never opened,
+    /// which only counts as unread once okidoki has answered.
+    public var seenAt: Date?
 
     public init(id: String = UUID().uuidString, accountID: String, title: String,
                 app: String = "mac", topic: String = "", messages: [ChatMessage] = [],
@@ -458,6 +473,9 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     /// While paused: what the person is doing for the run ("a captcha", "a one-time code"), or nil when
     /// they simply paused it. Cleared when they hand it back.
     public var waitingFor: String?
+    /// When the person last looked at the run (opened its card, chat or tab). A run that finished after
+    /// it is unread.
+    public var seenAt: Date?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,
@@ -1002,6 +1020,40 @@ public struct UnreadableItem: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Browser pins and bookmarks
+
+/// A site pinned to the top of the sidebar, as a favicon tile.
+public struct BrowserPin: Identifiable, Codable, Equatable, Sendable {
+    public var id: String
+    public var url: String
+    public var title: String
+    public var createdAt: Date
+
+    public init(id: String = UUID().uuidString, url: String, title: String, createdAt: Date = Date()) {
+        self.id = id; self.url = url; self.title = title; self.createdAt = createdAt
+    }
+
+    /// "github.com" for "https://www.github.com/x": what the tile and the favicon cache key on.
+    public var host: String { BrowserPin.host(of: url) }
+
+    public static func host(of url: String) -> String {
+        let host = URL(string: url)?.host ?? URL(string: "https://\(url)")?.host ?? url
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+}
+
+/// A saved page in the sidebar's Bookmarks.
+public struct Bookmark: Identifiable, Codable, Equatable, Sendable {
+    public var id: String
+    public var url: String
+    public var title: String
+    public var createdAt: Date
+
+    public init(id: String = UUID().uuidString, url: String, title: String, createdAt: Date = Date()) {
+        self.id = id; self.url = url; self.title = title; self.createdAt = createdAt
+    }
+}
+
 public struct AppState: Codable, Sendable {
     /// 2: memories belong to an account, and runs and routines know which Mac they came from.
     public static let currentVersion = 2
@@ -1022,6 +1074,9 @@ public struct AppState: Codable, Sendable {
     public var syncCursors: [String: Int]
     /// Items this build couldn't read, kept as they came so nothing is lost.
     public var unreadable: [UnreadableItem]
+    /// Sites pinned in the sidebar, in order. Nil until the new shell seeds them once.
+    public var pins: [BrowserPin]?
+    public var bookmarks: [Bookmark]
     /// Items in the saved file that couldn't be read (a newer build's data, say). Not saved.
     public private(set) var droppedItems = 0
 
@@ -1029,16 +1084,18 @@ public struct AppState: Codable, Sendable {
                 settings: AppSettings = AppSettings(), threads: [ChatThread] = [],
                 memories: [MemoryItem] = [], runs: [AgentRun] = [], skills: [Skill] = [],
                 routines: [Routine] = [], connectors: [Connector] = [],
-                deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = []) {
+                deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = [],
+                pins: [BrowserPin]? = nil, bookmarks: [Bookmark] = []) {
         self.version = version; self.accounts = accounts; self.currentAccountID = currentAccountID
         self.settings = settings; self.threads = threads; self.memories = memories; self.runs = runs
         self.skills = skills; self.routines = routines; self.connectors = connectors
         self.deletions = deletions; self.syncCursors = syncCursors; self.unreadable = unreadable
+        self.pins = pins; self.bookmarks = bookmarks
     }
 
     enum CodingKeys: String, CodingKey {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
-        case deletions, syncCursors, unreadable
+        case deletions, syncCursors, unreadable, pins, bookmarks
     }
 
     /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
@@ -1074,6 +1131,8 @@ public struct AppState: Codable, Sendable {
         deletions = (try? c.decodeIfPresent([String: Date].self, forKey: .deletions)).flatMap { $0 } ?? [:]
         syncCursors = (try? c.decodeIfPresent([String: Int].self, forKey: .syncCursors)).flatMap { $0 } ?? [:]
         unreadable = Self.items(UnreadableItem.self, c, .unreadable, dropped: &dropped) ?? []
+        pins = Self.items(BrowserPin.self, c, .pins, dropped: &dropped)
+        bookmarks = Self.items(Bookmark.self, c, .bookmarks, dropped: &dropped) ?? []
         droppedItems = dropped
     }
 }

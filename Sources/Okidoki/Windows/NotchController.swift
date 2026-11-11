@@ -97,6 +97,8 @@ final class NotchModel: ObservableObject {
     @Published var expanded = false
     @Published var listening = false
     @Published var quiet = false
+    /// How to call okidoki right now ("Shake your mouse", "Press ⌥ Space"), for the greeting.
+    @Published var summonHint = "Shake your mouse"
     /// Mirrors `settings.defaultInput` so the mode switch can render without observing the store.
     @Published var inputMode: InputMode = .typing
     /// What okidoki is saying right now, while captions are on.

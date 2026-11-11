@@ -228,7 +228,7 @@ export function RunsPage() {
 }
 
 /** The run paused on a question only the user can answer; the reply picks the task back up. */
-function AskedReply({ run }: { run: Run }) {
+export function AskedReply({ run }: { run: Run }) {
   const { invoke, notify } = useDashboard();
   const [text, setText] = useState("");
   const send = () => {

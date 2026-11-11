@@ -569,9 +569,27 @@ struct OnboardingView: View {
             title("Try it")
             subtitle("Two gestures are all you need.")
             VStack(spacing: 10) {
-                tourCard(symbol: "cursorarrow.motionlines", title: "Shake your mouse",
-                         detail: didShake ? "That's it. Shake again or press Esc to dismiss." : "Anywhere on screen, like scribbling out a mistake.",
-                         done: didShake) { EmptyView() }
+                if env.store.settings.shakeToSummon {
+                    tourCard(symbol: "cursorarrow.motionlines", title: "Shake your mouse",
+                             detail: didShake ? "That's it. Shake again or press Esc to dismiss." : "Anywhere on screen, like scribbling out a mistake.",
+                             done: didShake) {
+                        if !didShake {
+                            // Shaking isn't for everyone: the shortcut does the same, and the mouse is left alone.
+                            Button("Use \(SummonHotKey.label(env.store.settings.summonHotkey.isEmpty ? "option+space" : env.store.settings.summonHotkey)) instead") {
+                                if env.store.settings.summonHotkey.isEmpty { env.store.settings.summonHotkey = "option+space" }
+                                env.store.settings.shakeToSummon = false
+                                env.store.saveNow()
+                                withAnimation(OKMotion.spring) { didShake = true }
+                            }
+                            .buttonStyle(OKButtonStyle(kind: .ghost, compact: true))
+                            .padding(.top, 8)
+                        }
+                    }
+                } else {
+                    tourCard(symbol: "keyboard", title: "Press \(SummonHotKey.label(env.store.settings.summonHotkey))",
+                             detail: "Your shortcut opens okidoki in any app. Shake to summon is off; turn it on in Settings › Summon.",
+                             done: true) { EmptyView() }
+                }
                 tourCard(symbol: "lasso", title: "Circle something",
                          detail: didCircle ? "Nice. That's how you point at things." : "Draw around the dot to show what you mean.",
                          done: didCircle) {
@@ -596,7 +614,7 @@ struct OnboardingView: View {
             title("You're all set\(name.isEmpty ? "" : ", \(firstName)").")
             subtitle("okidoki lives in your notch. It's there whenever you need it.")
             VStack(spacing: 0) {
-                hintRow(keys: "Shake", detail: "Summon okidoki")
+                hintRow(keys: env.store.settings.shakeToSummon ? "Shake" : SummonHotKey.label(env.store.settings.summonHotkey), detail: "Summon okidoki")
                 divider
                 hintRow(keys: "Esc", detail: "Dismiss")
                 divider
@@ -613,7 +631,7 @@ struct OnboardingView: View {
         switch step {
         case .welcome: return "Get started"
         case .brain: return "Continue"
-        case .tour: return (didShake && didCircle) ? "Continue" : "Skip"
+        case .tour: return ((didShake || !env.store.settings.shakeToSummon) && didCircle) ? "Continue" : "Skip"
         case .done: return "Start using okidoki"
         default: return "Continue"
         }

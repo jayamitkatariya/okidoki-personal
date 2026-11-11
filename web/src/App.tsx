@@ -13,6 +13,7 @@ import { SkillsPage } from "./pages/SkillsPage";
 import { BrowserPage } from "./pages/BrowserPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ToastStack } from "./components/ui";
+import { Shell } from "./shell/Shell";
 
 export default function App() {
   return (
@@ -24,7 +25,14 @@ export default function App() {
   );
 }
 
+/** The new look is its own shell; off, the original dashboard renders exactly as before. */
 function Root() {
+  const { state, settings } = useDashboard();
+  if (settings.newShell && !state.signedOut) return <Shell />;
+  return <LegacyRoot />;
+}
+
+function LegacyRoot() {
   const { state, toasts, dismissToast } = useDashboard();
   const raw = window.location.hash.replace("#/", "");
   const initial = resolveRoute(raw);
