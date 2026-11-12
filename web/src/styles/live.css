@@ -39,7 +39,7 @@
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ok-muted);
   text-transform: capitalize;
 }
 .live-dot {
@@ -70,7 +70,7 @@
 .live-summary {
   margin: 4px 0 0;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .live-head-actions {
   display: flex;
@@ -162,7 +162,7 @@
   font-weight: 600;
 }
 .live-detail {
-  color: var(--muted);
+  color: var(--ok-muted);
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -176,7 +176,7 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
-  background: var(--card);
+  background: var(--ok-card);
   max-width: 560px;
 }
 .live-zoom-label {
@@ -209,7 +209,7 @@
 .live-result {
   margin: 0;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--ok-muted);
   line-height: 1.5;
 }
 
@@ -219,7 +219,7 @@
   flex: 0 0 320px;
   overflow-y: auto;
   border-left: 1px solid var(--line);
-  background: color-mix(in srgb, var(--card) 28%, transparent);
+  background: color-mix(in srgb, var(--ok-card) 28%, transparent);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -244,7 +244,7 @@
   border-color: var(--line);
 }
 .live-step-active {
-  background: var(--card);
+  background: var(--ok-card);
   border-color: var(--line-strong);
 }
 .live-step .live-frame {
@@ -274,7 +274,7 @@
 .live-step-index {
   font-family: var(--mono);
   font-size: 10.5px;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .live-step-kind {
   display: inline-flex;
@@ -294,14 +294,14 @@
 }
 .live-step-detail {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ok-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .live-step-result {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ok-muted);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;

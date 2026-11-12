@@ -48,7 +48,7 @@
 .memory-nudges-copy {
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--ok-muted);
   margin: -2px 0 8px;
 }
 .memory-setting {
@@ -63,7 +63,7 @@
 }
 .memory-setting .kind-icon {
   background: var(--well-strong);
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 
 /* import from other assistants */
@@ -73,7 +73,7 @@
 .memory-import-copy {
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--ok-muted);
   margin: -2px 0 6px;
 }
 .memory-import-list {
@@ -183,7 +183,7 @@
   padding: 4px 0;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .memory-empty strong {
   color: var(--ink);
@@ -199,7 +199,7 @@
   border-radius: 10px;
   border: 1px dashed var(--line-strong);
   font-size: 12.5px;
-  color: var(--muted);
+  color: var(--ok-muted);
   text-align: left;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -249,7 +249,7 @@
   font-weight: 550;
   white-space: nowrap;
   background: var(--well-strong);
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .memory-index i {
   width: 6px;

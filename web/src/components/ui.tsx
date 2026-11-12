@@ -214,7 +214,7 @@ export function IconButton({
 export function Switch({
   checked,
   onChange,
-  tint = "var(--accent)",
+  tint = "var(--ok-accent)",
   label,
 }: {
   checked: boolean;

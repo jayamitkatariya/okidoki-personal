@@ -42,8 +42,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
-      document.documentElement.dataset.theme = resolveTheme(settings.appearance);
-      document.documentElement.style.colorScheme = resolveTheme(settings.appearance);
+      const theme = resolveTheme(settings.appearance);
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.colorScheme = theme;
+      // Kobra components key their dark styles off a `dark` class.
+      document.documentElement.classList.toggle("dark", theme === "dark");
     };
     apply();
     media.addEventListener("change", apply);

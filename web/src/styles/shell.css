@@ -41,8 +41,8 @@ html.shell2-on {
   --wait-soft: rgba(214, 145, 30, 0.12);
   --fail: #c93c3c;
 
-  --ring: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.06), 0 2px 4px 0 rgba(0, 0, 0, 0.04);
-  --ring-hover: 0 0 0 1px rgba(0, 0, 0, 0.09), 0 2px 4px -1px rgba(0, 0, 0, 0.07), 0 6px 14px -4px rgba(0, 0, 0, 0.08);
+  --ring-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.06), 0 2px 4px 0 rgba(0, 0, 0, 0.04);
+  --ring-shadow-hover: 0 0 0 1px rgba(0, 0, 0, 0.09), 0 2px 4px -1px rgba(0, 0, 0, 0.07), 0 6px 14px -4px rgba(0, 0, 0, 0.08);
   --lift: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.04), 0 12px 32px -12px rgba(16, 32, 24, 0.16);
   --float: 0 0 0 1px rgba(0, 0, 0, 0.07), 0 8px 18px -6px rgba(0, 0, 0, 0.14), 0 28px 60px -24px rgba(16, 32, 24, 0.28);
   --focus: 0 0 0 3px rgba(54, 209, 88, 0.35);
@@ -94,8 +94,8 @@ html.shell2-on[data-theme="dark"] {
   --fail: #f07070;
 
   /* Lift is invisible on dark ground: one ring does the work. */
-  --ring: 0 0 0 1px rgba(255, 255, 255, 0.08);
-  --ring-hover: 0 0 0 1px rgba(255, 255, 255, 0.14);
+  --ring-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --ring-shadow-hover: 0 0 0 1px rgba(255, 255, 255, 0.14);
   --lift: 0 0 0 1px rgba(255, 255, 255, 0.07);
   --float: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 24px 60px -20px rgba(0, 0, 0, 0.6);
 }
@@ -356,7 +356,7 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2 .pin.is-active {
   background: var(--c-bg);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2 .pin.is-open::before {
   content: "";
@@ -437,7 +437,7 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2 .srow.is-active {
   background: var(--s-active);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2-on[data-theme="dark"] .shell2 .srow.is-active {
   box-shadow: none;
@@ -594,7 +594,7 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .lib-btn.is-active {
   background: var(--c-bg);
   color: var(--s-ink);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2 .lib-badge {
   position: absolute;
@@ -866,7 +866,7 @@ html.shell2-on:not(.is-native) body::before {
   color: var(--s-ink);
   font-weight: 500;
   white-space: nowrap;
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
   transition: transform 120ms var(--ease-out);
 }
 .shell2 .agent-pill button:active {
@@ -1063,7 +1063,7 @@ html.shell2-on:not(.is-native) body::before {
   z-index: -1;
   border-radius: 8px;
   background: var(--c-bg);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2-on .mode-switch button {
   isolation: isolate;
@@ -1388,7 +1388,7 @@ html.shell2-on:not(.is-native) body::before {
   padding: 10px 10px 10px 12px;
   border-radius: 14px;
   background: var(--c-bg);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2 .need-icon {
   display: grid;
@@ -1437,7 +1437,7 @@ html.shell2-on:not(.is-native) body::before {
   padding: 14px 16px 0;
   border-radius: 18px;
   background: var(--c-bg);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
   text-align: left;
   overflow: hidden;
   transition:
@@ -1465,7 +1465,7 @@ html.shell2-on:not(.is-native) body::before {
 }
 @media (hover: hover) and (pointer: fine) {
   .shell2 .task-card:hover {
-    box-shadow: var(--ring-hover);
+    box-shadow: var(--ring-shadow-hover);
   }
 }
 .shell2 .task-card:active {
@@ -1473,7 +1473,7 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2 .task-card:focus-visible {
   outline: none;
-  box-shadow: var(--ring-hover), var(--focus);
+  box-shadow: var(--ring-shadow-hover), var(--focus);
 }
 .shell2 .task-head {
   display: flex;
@@ -1607,7 +1607,7 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .replay-chip.is-template .replay-play {
   background: var(--c-bg);
   color: var(--s-muted);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2 .replay-text {
   display: grid;
@@ -1734,7 +1734,7 @@ html.shell2-on:not(.is-native) body::before {
   padding: 14px 16px;
   border-radius: 16px;
   background: var(--c-bg);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 .shell2 .run-card.run-running {
   box-shadow: 0 0 0 1px rgba(54, 209, 88, 0.35), 0 6px 20px -10px rgba(54, 209, 88, 0.35);
@@ -1880,7 +1880,7 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .page-tabs button.is-on {
   background: var(--c-bg);
   color: var(--s-ink);
-  box-shadow: var(--ring);
+  box-shadow: var(--ring-shadow);
 }
 
 /* ---------- palette ---------- */

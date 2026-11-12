@@ -58,7 +58,7 @@
   font-style: normal;
   font-size: 12px;
   line-height: 1.45;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .pref-copy em::first-letter {
   text-transform: uppercase;
@@ -94,7 +94,7 @@
   font-weight: 550;
   white-space: nowrap;
   background: var(--well-strong);
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .pref-status::first-letter {
   text-transform: uppercase;
@@ -112,7 +112,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12.5px;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .pref-value::first-letter {
   text-transform: uppercase;
@@ -182,7 +182,7 @@
   color: var(--ink-2);
 }
 .pref-action .icon {
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .pref-action.is-danger,
 .pref-action.is-danger .icon {
@@ -203,7 +203,7 @@
   font-style: normal;
   font-size: 12.5px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--ok-muted);
   min-width: 42px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -289,7 +289,7 @@
   border-radius: 9px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--ok-muted);
   text-align: left;
   transition: background 0.15s, color 0.15s;
 }
@@ -336,7 +336,7 @@
   margin-top: 2px;
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 
 /* voice picker */
@@ -361,7 +361,7 @@
   background: var(--well-strong);
 }
 .voice-card.is-selected {
-  background: var(--card);
+  background: var(--ok-card);
   border-color: color-mix(in srgb, var(--accent-bright) 55%, transparent);
   box-shadow: var(--shadow-sm), 0 0 0 3px var(--accent-soft);
 }
@@ -395,7 +395,7 @@
 .voice-copy em {
   font-style: normal;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ok-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -411,8 +411,8 @@
   color: #fff;
 }
 .voice-radio.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--ok-accent);
+  border-color: var(--ok-accent);
 }
 
 /* lists of chips */
@@ -474,7 +474,7 @@
   transform: scale(1.12);
 }
 .swatch.is-selected {
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1), 0 0 0 2px var(--card), 0 0 0 4px var(--accent-bright);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1), 0 0 0 2px var(--ok-card), 0 0 0 4px var(--accent-bright);
 }
 .swatch-row.small {
   gap: 7px;
@@ -528,7 +528,7 @@
 .mcp-copy em {
   font-style: normal;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .mcp-copy em.mcp-error {
   color: var(--red);
@@ -551,7 +551,7 @@
 }
 .mcp-hint {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .mcp-form .mcp-field {
   display: flex;
@@ -625,7 +625,7 @@
 }
 .hotkey-clear {
   font-size: 12.5px;
-  color: var(--muted);
+  color: var(--ok-muted);
 }
 .hotkey-error {
   flex-basis: 100%;
