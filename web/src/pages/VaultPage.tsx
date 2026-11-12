@@ -5,7 +5,7 @@ import type { Page } from "../nav";
 import type { VaultFile, VaultImportState, VaultLogin, VaultState } from "../types";
 import { browserDetail, cookieSummary, importSummary } from "../vaultImport";
 import { decryptSecret, deriveVaultKey, encryptSecret, rememberPassphrase, rememberedPassphrase, VAULT_KEY_VERSION } from "../vaultCrypto";
-import { Button, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
+import { Button, Choice, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 type Tab = "documents" | "credentials";
 
@@ -154,17 +154,15 @@ function Documents({ vault, invoke }: { vault: VaultState; invoke: (type: string
             }}
           />
         </div>
-        <label className="vault-drop-target">
+        <div className="vault-drop-target">
           <span>Into</span>
-          <select value={uploadTo} onChange={(event) => setUploadTo(event.target.value)} aria-label="Which folder the files go in">
-            <option value="">The vault folder</option>
-            {topFolders.map((folder) => (
-              <option key={folder} value={folder}>
-                {folder}
-              </option>
-            ))}
-          </select>
-        </label>
+          <Choice
+            label="Which folder the files go in"
+            value={uploadTo}
+            onChange={setUploadTo}
+            options={[{ value: "", label: "The vault folder" }, ...topFolders.map((folder) => ({ value: folder, label: folder }))]}
+          />
+        </div>
         {uploading.length ? <em className="vault-uploading">Adding {uploading.join(", ")}…</em> : null}
       </div>
 

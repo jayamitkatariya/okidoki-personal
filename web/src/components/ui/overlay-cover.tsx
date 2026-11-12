@@ -8,7 +8,8 @@ import { useCover } from '@/shell/media'
  * Portals stay mounted through their exit animation, so the cover lifts only once the overlay
  * has actually gone, and the page never snaps back over a fading menu.
  */
-export function OverlayCover() {
+/** `deep` measures the portal's grandchildren, for full-width rows that hold a smaller card. */
+export function OverlayCover({ deep = false }: { deep?: boolean } = {}) {
   const marker = useRef<HTMLSpanElement>(null)
   const id = useId()
   const [over, setOver] = useState(false)
@@ -22,7 +23,10 @@ export function OverlayCover() {
       if (!slot || !host) return setOver(false)
       const s = slot.getBoundingClientRect()
       let hit = false
-      for (const child of Array.from(host.children)) {
+      const parts = deep
+        ? Array.from(host.children).flatMap((child) => Array.from(child.children))
+        : Array.from(host.children)
+      for (const child of parts) {
         if (child === marker.current) continue
         const r = child.getBoundingClientRect()
         if (r.width === 0 && r.height === 0) {

@@ -65,6 +65,29 @@ html.shell2-on {
   --canvas: transparent;
 }
 
+/* Library pages pick up the shell's surfaces, lines and inks, so pages and shell are one system.
+   The [data-theme] form outranks theme.css's :root[data-theme="dark"]. */
+html.shell2-on,
+html.shell2-on[data-theme] {
+  --tile: var(--c-bg);
+  --tile-hover: var(--c-soft);
+  --tile-line: var(--c-line-strong);
+  --ok-card: var(--c-bg);
+  --ok-card-soft: var(--c-soft);
+  --line: var(--c-line);
+  --line-strong: var(--c-line-strong);
+  --ink: var(--s-ink);
+  --ink-2: var(--s-ink-2);
+  --ok-muted: var(--s-muted);
+  --faint: var(--s-faint);
+  --well: var(--s-hover);
+}
+html.shell2-on[data-theme="dark"] {
+  --tile: var(--c-soft);
+  --tile-hover: var(--c-well);
+  --ok-card: var(--c-soft);
+}
+
 html.shell2-on[data-theme="dark"] {
   --tint-top: rgba(14, 22, 24, 0.5);
   --tint-bottom: rgba(12, 20, 16, 0.55);
@@ -1881,6 +1904,90 @@ html.shell2-on:not(.is-native) body::before {
   background: var(--c-bg);
   color: var(--s-ink);
   box-shadow: var(--ring-shadow);
+}
+
+/* Runs and Live are split views with their own scrolling panes: they take the whole card. */
+.shell2 .page-host:has(.computer-page) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shell2 .page-host:has(.computer-page) .page-inner {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.shell2 .computer-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.shell2 .computer-page > .runs,
+.shell2 .computer-page > .live {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+.shell2 .computer-tabs {
+  padding: 12px 20px 10px;
+  border-bottom: 1px solid var(--c-line);
+}
+
+/* Settings: a quiet left rail on the card's edge with its own scroll, and a compact title. */
+.shell2 .settings-page .page-title {
+  font-size: 24px;
+}
+.shell2 .settings-layout {
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 28px;
+}
+.shell2 .settings-nav {
+  top: 0;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  padding: 2px 14px 12px 0;
+  border-right: 1px solid var(--c-line);
+}
+.shell2 .settings-nav-item:hover {
+  background: var(--s-hover);
+  color: var(--s-ink);
+}
+.shell2 .settings-nav-item.is-active {
+  background: var(--c-well);
+  color: var(--s-ink);
+  box-shadow: none;
+}
+.shell2 .settings-nav-item.is-active .icon {
+  color: var(--green);
+}
+
+/* Archived chat, read-only until unarchived. */
+.shell2 .chat-archived {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-tile);
+  background: var(--c-well);
+  color: var(--s-muted);
+  font-size: 13px;
+}
+.shell2 .chat-archived span {
+  flex: 1;
+}
+
+/* Kobra's plan card inside a conversation sits on the column like a run card. */
+.shell2 .run-plan {
+  max-width: none;
+}
+.shell2 .run-plan .run-commands {
+  display: block;
+  margin-top: 8px;
 }
 
 /* ---------- palette ---------- */

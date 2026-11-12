@@ -30,6 +30,7 @@ import { StatusBadge } from '@/components/ui/spinner'
 import { joinsLetters } from '@/lib/joined-script'
 import { dissolve } from '@/lib/smoky-dissolve'
 import { cn } from '@/lib/utils'
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 const EVENT = 'kobra:toast'
 const DISMISS = 'kobra:toast-dismiss'
@@ -721,6 +722,8 @@ function ToastStack({
         side === 'top' ? 'top-4' : 'bottom-4',
       )}
     >
+      {/* okidoki: step the native page aside while a toast overlaps it. */}
+      {cards.length > 0 ? <OverlayCover key={cards.map((card) => card.id).join()} deep /> : null}
       <AnimatePresence initial={false}>
         {cards.map((card, index) => {
           const slot = piled ? pileSlot(index) : fanSlot(index, heights)

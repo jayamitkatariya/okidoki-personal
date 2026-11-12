@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
 import { clamp, cx, futureTime, relativeTime, scheduleLabel } from "../lib";
 import type { Cadence, LibraryEntry, Routine, Skill, SkillStep, Watching } from "../types";
-import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
+import { Button, Chip, Choice, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -195,6 +195,7 @@ export function SkillsPage() {
     setWeekday(routine.weekday);
     setHour(routine.hour);
     setMinute(routine.minute);
+    setNatural("");
     setRoutineOpen(true);
   };
 
@@ -323,13 +324,6 @@ export function SkillsPage() {
           <p className="recording-foot">Press Save in the notch at the top of your screen, or click Stop & save here.</p>
         </section>
       ) : null}
-
-      <LibrarySection
-        entries={state.library ?? []}
-        onAdd={(entry) => {
-          invoke("installTemplate", { id: entry.id });
-        }}
-      />
 
       <section className="skills-section">
         <div className="section-head">
@@ -490,6 +484,14 @@ export function SkillsPage() {
           </div>
         ) : null}
       </section>
+
+      {/* Your own skills first; the library offers what you haven't added yet. */}
+      <LibrarySection
+        entries={(state.library ?? []).filter((entry) => !entry.added && !entry.learned)}
+        onAdd={(entry) => {
+          invoke("installTemplate", { id: entry.id });
+        }}
+      />
 
 
       <section className="skills-section routines-section">
@@ -669,6 +671,7 @@ export function SkillsPage() {
               onEnter={() => {
                 if (renaming && renameValue.trim()) {
                   invoke("renameSkill", { id: renaming.id, name: renameValue.trim() });
+                  notify("Renamed", renameValue.trim());
                   setRenaming(null);
                 }
               }}
@@ -736,26 +739,20 @@ export function SkillsPage() {
           {cadence !== "manual" ? (
             <div className="routine-time">
               {cadence === "weekly" ? (
-                <label className="routine-cell is-day">
+                <div className="routine-cell is-day">
                   <span className="form-label">Day</span>
-                  <select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>
-                    {DAYS.map((day, index) => (
-                      <option key={day} value={index + 1}>
-                        {DAY_LABELS[index]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <Choice label="Day" value={weekday} onChange={setWeekday} options={DAYS.map((_, index) => ({ value: index + 1, label: DAY_LABELS[index] }))} />
+                </div>
               ) : null}
               {cadence !== "hourly" ? (
                 <label className="routine-cell">
                   <span className="form-label">Hour</span>
-                  <input type="number" min={0} max={23} value={hour} onChange={(event) => setHour(clamp(Math.round(Number(event.target.value) || 0), 0, 23))} />
+                  <NumberCell value={hour} min={0} max={23} onChange={setHour} />
                 </label>
               ) : null}
               <label className="routine-cell">
                 <span className="form-label">Minute</span>
-                <input type="number" min={0} max={59} value={minute} onChange={(event) => setMinute(clamp(Math.round(Number(event.target.value) || 0), 0, 59))} />
+                <NumberCell value={minute} min={0} max={59} onChange={setMinute} />
               </label>
             </div>
           ) : null}
@@ -775,5 +772,25 @@ export function SkillsPage() {
       </Modal>
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
+  );
+}
+
+/** A number box you can clear and retype: it keeps what you type, and settles to a valid value on blur. */
+function NumberCell({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      value={draft}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        const next = Number(event.target.value);
+        if (event.target.value !== "" && Number.isFinite(next)) onChange(clamp(Math.round(next), min, max));
+      }}
+      onBlur={() => setDraft(String(value))}
+    />
   );
 }

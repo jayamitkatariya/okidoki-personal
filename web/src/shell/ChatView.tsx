@@ -5,6 +5,8 @@ import { Button, Markdown, PixelIcon, RiskBadge } from "../components/ui";
 import { AskedReply } from "../pages/RunsPage";
 import type { Message, Run, Thread } from "../types";
 import { Composer } from "./Composer";
+import { PlanCard } from "@/components/ui/plan-card";
+import { Button as KButton } from "@/components/ui/button";
 import { ACTIVE, actionLines, runUnread, threadUnread, workingFor } from "./model";
 import { thumbURL, useNow } from "./media";
 
@@ -38,11 +40,13 @@ export function ChatView({
   runs,
   onOpenTab,
   onAsked,
+  onUnarchive,
 }: {
   thread: Thread;
   runs: Run[];
   onOpenTab: (tabID: string) => void;
   onAsked: (threadID: string) => void;
+  onUnarchive?: () => void;
 }) {
   const { state, invoke } = useDashboard();
   const scroller = useRef<HTMLDivElement>(null);
@@ -86,13 +90,23 @@ export function ChatView({
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
         }}
       >
-        <div className="chat-column">
+        <div className="chat-column" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation">
           <header className="chat-head">
             <h1>{thread.title || "New chat"}</h1>
             <p>
               <span>Started {relativeTime(thread.createdAt)}</span>
               {thread.app && thread.app !== "mac" && thread.app !== "okidoki" ? <span> · {thread.app}</span> : null}
             </p>
+            {thread.archived ? (
+              <div className="chat-archived" role="status">
+                <span>This chat is archived. Unarchive it to keep going.</span>
+                {onUnarchive ? (
+                  <Button size="sm" variant="secondary" icon="folder" onClick={onUnarchive}>
+                    Unarchive
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             {threadTab ? (
               <Button size="sm" variant="secondary" icon="globe" onClick={() => onOpenTab(threadTab.id)}>
                 Open its tab
@@ -109,9 +123,11 @@ export function ChatView({
           {items.length === 0 ? <p className="chat-empty">Ask anything below. okidoki answers here, and anything it does shows up as it happens.</p> : null}
         </div>
       </div>
-      <div className="chat-dock">
-        <Composer variant="dock" threadID={thread.id} autoFocus onAsked={onAsked} />
-      </div>
+      {thread.archived ? null : (
+        <div className="chat-dock">
+          <Composer variant="dock" threadID={thread.id} autoFocus onAsked={onAsked} />
+        </div>
+      )}
     </div>
   );
 }
@@ -162,6 +178,40 @@ export function RunCard({ run, now, thumbVersion, tabID, onOpenTab }: { run: Run
                 ? "Didn't finish"
                 : "Stopped";
 
+  // Waiting for an OK with a plan: Kobra's plan card carries the steps and the decision.
+  if (waiting && run.preview) {
+    const preview = run.preview;
+    return (
+      <PlanCard
+        className="run-plan"
+        icon={<PixelIcon name={KIND_ICON[run.kind]} size={16} />}
+        title={run.title || run.prompt || "Waiting for your OK"}
+        description={
+          <>
+            {preview.summary} <RiskBadge risk={preview.risk} />
+            {preview.commands.length ? <code className="run-commands">{preview.commands.join("\n")}</code> : null}
+          </>
+        }
+        steps={preview.steps.map((step) => ({ label: step.text }))}
+        visibleSteps={4}
+        showView={preview.steps.length > 4}
+        hotkey={false}
+        approveLabel="Do it"
+        onApprove={() => invoke("approveRun", { id: run.id })}
+        extraActions={
+          <>
+            <KButton variant="ghost" onClick={() => invoke("denyRun", { id: run.id })}>
+              Not now
+            </KButton>
+            <KButton variant="secondary" onClick={() => invoke("allowAlways", { id: run.id })}>
+              Always allow
+            </KButton>
+          </>
+        }
+      />
+    );
+  }
+
   return (
     <article className={cx("run-card", `run-${run.status}`)}>
       <header className="run-card-head">
@@ -174,7 +224,7 @@ export function RunCard({ run, now, thumbVersion, tabID, onOpenTab }: { run: Run
           <span className="tnum">{state}</span>
         </span>
       </header>
-      <h3>{run.title}</h3>
+      <h3>{run.title || run.prompt || KIND_NAME[run.kind]}</h3>
 
       {waiting && run.preview ? (
         <div className="run-preview">

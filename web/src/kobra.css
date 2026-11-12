@@ -15,6 +15,7 @@
 @layer theme, okbase, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -352,7 +353,24 @@
     rotate: 360deg;
     }
   }
-}
+  --digit-dur: 500ms;
+  --digit-distance: 8px;
+  --digit-stagger: 70ms;
+  --digit-blur: 2px;
+  --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1)
+;
+  @keyframes digit-pop-in {
+  from {
+    translate: 0 var(--digit-distance);
+    opacity: 0;
+    filter: blur(var(--digit-blur));
+    }
+  to {
+    translate: 0 0;
+    opacity: 1;
+    filter: blur(0);
+    }
+  }}
 
 /* The bits of preflight Kobra components lean on, scoped to them (they all carry data-slot). */
 @layer base {
@@ -396,6 +414,9 @@
     transition-property: color, background-color, border-color, box-shadow, outline-color, outline-offset;
     transition-duration: var(--ring-duration);
     transition-timing-function: var(--ease-out);
+  @media (prefers-reduced-motion: reduce) {
+    transition-duration: 0ms;
+  }
   @media (prefers-reduced-motion: reduce) {
     transition-duration: 0ms;
   }
@@ -493,6 +514,12 @@
     transition: none;
   }
   .task-glyph[data-state='active'] .task-spin {
+    animation: none;
+  }
+  [data-slot='download-icon'] > path {
+    transition: none;
+  }
+  .t-digit.is-animating {
     animation: none;
   }
 }
@@ -1434,4 +1461,27 @@
 }
   .task-glyph {
     transition: opacity var(--task-morph) var(--ease-out);
+}
+  [data-slot='download-icon'] > path:not(:first-child) {
+    transition: translate 160ms var(--ease-out);
+}
+  :where(button, a, [role='button']):not(:disabled, [aria-disabled='true']):hover [data-slot='download-icon'] > path:not(:first-child) {
+    translate: 0 2px;
+}
+  .t-digit-group {
+    display: inline-flex;
+    align-items: baseline;
+}
+  .t-digit {
+    display: inline-block;
+    will-change: translate, opacity, filter;
+}
+  .t-digit.is-animating {
+    animation: digit-pop-in var(--digit-dur) var(--digit-ease) both;
+}
+  .t-digit.is-animating[data-stagger='1'] {
+    animation-delay: var(--digit-stagger);
+}
+  .t-digit.is-animating[data-stagger='2'] {
+    animation-delay: calc(var(--digit-stagger) * 2);
 }

@@ -3,7 +3,10 @@ import { AnimatePresence, motion } from "motion/react";
 import { useDashboard } from "../store";
 import { isNative } from "../bridge";
 import { cx } from "../lib";
-import { Empty, PixelIcon, ToastStack } from "../components/ui";
+import { Empty, KobraToastBridge } from "../components/ui";
+import { Toasts } from "@/components/ui/toast";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PixelIcon } from "../components/ui";
 import { jumpToSettingsSection, type Page } from "../nav";
 import { RunsPage } from "../pages/RunsPage";
 import { LivePage } from "../pages/LivePage";
@@ -53,7 +56,7 @@ function initialView(): View {
 }
 
 function ShellBody() {
-  const { state, toasts, dismissToast, invoke } = useDashboard();
+  const { state, toasts, invoke } = useDashboard();
   const [view, setViewState] = useState<View>(initialView);
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     try {
@@ -67,6 +70,8 @@ function ShellBody() {
   const [focusTick, setFocusTick] = useState(0);
   const [addressTick, setAddressTick] = useState(0);
   const firstHome = useRef(true);
+  // A chat opened on purpose from History may be archived; it stays open (read-only) instead of bouncing Home.
+  const [archivedOK, setArchivedOK] = useState<string | null>(null);
 
   const tabs = state.browser?.tabs ?? [];
   const activeTabID = state.browser?.activeID ?? null;
@@ -130,10 +135,21 @@ function ShellBody() {
     }
   }, [tabs, view, setView]);
 
-  // A chat that's been deleted or archived goes Home.
+  // A chat that's been deleted, or archived while you weren't looking at it on purpose, goes Home.
   useEffect(() => {
-    if (view.kind === "chat" && state.threads.length && !state.threads.some((thread) => thread.id === view.id && !thread.archived)) setView({ kind: "home" });
-  }, [state.threads, view, setView]);
+    if (view.kind !== "chat" || !state.threads.length) return;
+    const found = state.threads.find((thread) => thread.id === view.id);
+    if (!found || (found.archived && archivedOK !== view.id)) setView({ kind: "home" });
+  }, [state.threads, view, setView, archivedOK]);
+
+  // Each tab's assistant panel state goes when the tab does.
+  useEffect(() => {
+    setAssistantFor((current) => {
+      const ids = new Set(tabs.map((item) => item.id));
+      const kept = Object.entries(current).filter(([id]) => ids.has(id));
+      return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+    });
+  }, [tabs]);
 
   const newTab = useCallback(() => {
     setView({ kind: "home" });
@@ -206,7 +222,11 @@ function ShellBody() {
   );
 
   // Shortcuts while the page here has the keyboard, and from the Mac while the browser's page has it.
+  // Registered once; the handler reads the latest state through a ref.
+  const keyRef = useRef(key);
+  keyRef.current = key;
   useEffect(() => {
+    const key = (k: string) => keyRef.current(k);
     const onKey = (event: KeyboardEvent) => {
       // ⌘ only: ⌃K, ⌃B, ⌃N, ⌃T and ⌃L are text editing keys on the Mac.
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -228,7 +248,7 @@ function ShellBody() {
       window.removeEventListener("keydown", onKey);
       delete bridge.okidokiShellKey;
     };
-  }, [key]);
+  }, []);
 
   // The Mac points at a run (a notch row, a card's "preview"): its conversation, where its live card is.
   const runsRef = useRef({ runs: state.runs, threads: state.threads, tabs });
@@ -264,8 +284,7 @@ function ShellBody() {
       else if ("settingsSection" in parsed) {
         setView({ kind: "page", page: "settings" });
         jumpToSettingsSection(parsed.settingsSection);
-      } else if (parsed.kind === "page" && (parsed.page as string) === "live") setView({ kind: "page", page: "runs" });
-      else setView(parsed);
+      } else setView(parsed);
     };
     bridge.okidokiOpenAsk = () => newTab();
     // Back and forward in the page's own history, and hand-typed links.
@@ -360,7 +379,7 @@ function ShellBody() {
 
           {view.kind === "chat" ? (
             thread ? (
-              <ChatView key={thread.id} thread={thread} runs={threadRuns} onOpenTab={openTab} onAsked={(id) => setView({ kind: "chat", id })} />
+              <ChatView key={thread.id} thread={thread} runs={threadRuns} onOpenTab={openTab} onAsked={(id) => setView({ kind: "chat", id })} onUnarchive={() => invoke("archiveThread", { id: thread.id })} />
             ) : (
               <div className="card-scroll">
                 <Empty icon="chat" title="This chat is gone">
@@ -376,7 +395,13 @@ function ShellBody() {
                 {view.page === "runs" ? (
                   <ComputerPage />
                 ) : view.page === "history" ? (
-                  <HistoryPage go={go} onOpenThread={(id) => setView({ kind: "chat", id })} />
+                  <HistoryPage
+                    go={go}
+                    onOpenThread={(id) => {
+                      setArchivedOK(id);
+                      setView({ kind: "chat", id });
+                    }}
+                  />
                 ) : view.page === "memory" ? (
                   <MemoryPage />
                 ) : view.page === "skills" ? (
@@ -393,7 +418,8 @@ function ShellBody() {
       </main>
 
       <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={setView} onOpenTab={openTab} onOpenURL={openURL} />
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      <KobraToastBridge toasts={toasts} />
+      <Toasts position="bottom-start" />
     </div>
   );
 }
@@ -402,25 +428,46 @@ function ShellBody() {
 function ComputerPage() {
   const { state } = useDashboard();
   const driving = Boolean(state.live?.active);
-  const [tab, setTab] = useState<"runs" | "live">(driving ? "live" : "runs");
+  const [tab, setTab] = useState<"runs" | "live">(() => {
+    // A run asked for from History or Home shows in Runs, even while something else is driving.
+    if ((window as unknown as { __okidokiFocusRun?: string }).__okidokiFocusRun) return "runs";
+    return driving ? "live" : "runs";
+  });
+  // Once you've picked a tab here, a run starting doesn't yank you to Live.
+  const picked = useRef(false);
   useEffect(() => {
-    if (driving) setTab("live");
+    if (driving && !picked.current) setTab("live");
   }, [driving]);
+  useEffect(() => {
+    const onFocus = () => {
+      picked.current = true;
+      setTab("runs");
+    };
+    window.addEventListener("okidoki-focus-run", onFocus);
+    return () => window.removeEventListener("okidoki-focus-run", onFocus);
+  }, []);
   const hasLive = driving || Boolean(state.live?.steps?.length);
   return (
-    <>
+    <div className="computer-page">
       {hasLive ? (
-        <div className="page-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected={tab === "runs"} className={cx(tab === "runs" && "is-on")} onClick={() => setTab("runs")}>
-            Runs
-          </button>
-          <button type="button" role="tab" aria-selected={tab === "live"} className={cx(tab === "live" && "is-on")} onClick={() => setTab("live")}>
-            {driving ? <span className="pulse-dot" aria-hidden="true" /> : <PixelIcon name="eye" size={13} />}
-            Live
-          </button>
-        </div>
+        <Tabs
+          value={tab}
+          onValueChange={(value) => {
+            picked.current = true;
+            setTab(value as "runs" | "live");
+          }}
+          className="computer-tabs"
+        >
+          <TabsList>
+            <TabsTrigger value="runs">Runs</TabsTrigger>
+            <TabsTrigger value="live">
+              {driving ? <span className="pulse-dot" aria-hidden="true" /> : <PixelIcon name="eye" size={13} />}
+              Live
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       ) : null}
       {tab === "live" && hasLive ? <LivePage /> : <RunsPage />}
-    </>
+    </div>
   );
 }
