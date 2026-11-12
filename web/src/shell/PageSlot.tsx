@@ -11,7 +11,7 @@ export function PageSlot({ children }: { children?: React.ReactNode }) {
   const slot = useRef<HTMLDivElement>(null);
   const covered = useCovered();
   const [still, setStill] = useState<string | null>(null);
-  // Every overlay in the new shell registers a cover (Kobra ones through OverlayCover), so this is all.
+  // Every overlay in the shell registers a cover (Kobra ones through OverlayCover), so this is all.
   const hidden = covered;
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;

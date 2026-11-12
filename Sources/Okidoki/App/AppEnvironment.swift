@@ -29,12 +29,7 @@ final class AppEnvironment: ObservableObject {
     private(set) var notch: NotchController!
     private(set) var driver: ComputerUseDriver!
     /// okidoki's own browser window, made the first time it's needed.
-    private(set) lazy var browser: BrowserController = {
-        browserMade = true
-        return BrowserController(environment: self)
-    }()
-    /// The browser exists (it's made on first use); the original look never makes it at launch.
-    private(set) var browserMade = false
+    private(set) lazy var browser: BrowserController = BrowserController(environment: self)
     private(set) lazy var browserDriver = BrowserDriver(environment: self)
     private(set) lazy var browserReplayer = BrowserReplayer(environment: self)
     /// Smart replay in the browser (settings.hybridReplay). Off, `browserReplayer` runs as it always has.
@@ -567,11 +562,10 @@ final class AppEnvironment: ObservableObject {
         if hold { summonHotKey.unregister() } else { applySummonHotKey(Self.activeHotkey(store.settings), announce: false) }
     }
 
-    /// The shortcut that should be registered now. The original look keeps the original way in (shake
-    /// only) until shake is turned off, so ⌥Space is never taken from other apps behind anyone's back;
-    /// with okidoki off nothing is held at all.
+    /// The shortcut that should be registered now: the one in Settings › Summon, or none while okidoki
+    /// is off.
     static func activeHotkey(_ settings: AppSettings) -> String {
-        guard settings.okidokiEnabled, settings.newShell || !settings.shakeToSummon else { return "" }
+        guard settings.okidokiEnabled else { return "" }
         return settings.summonHotkey
     }
 
@@ -835,7 +829,7 @@ final class AppEnvironment: ObservableObject {
     /// Another agent's request (the `okidoki` CLI, the MCP server): a conversation of its own unless it
     /// continues one, in the mode it asked for (auto · browser · computer · chat). The thread id is how it
     /// finds the run doing the work. Everything risky still waits for the person's okay in the notch.
-    /// The new shell's composer, in a conversation it already opened.
+    /// the shell's composer, in a conversation it already opened.
     func handleRequestFromShell(text: String, threadID: String, mode: String) async {
         await handleRequest(text: text, appName: "mac", bundleID: "", threadID: threadID,
                             screenshot: nil, selection: nil, attachmentName: "",
@@ -1163,7 +1157,7 @@ final class AppEnvironment: ObservableObject {
                 self.followUp(card: card, text: text)
             }
         }
-        // Asked from the new shell's composer with the window in front: the answer is already in the chat
+        // Asked from the shell's composer with the window in front: the answer is already in the chat
         // they're looking at, so a card at the cursor would only say it twice.
         if shellInFront, source == "shell" || card.runID.map({ store.run($0)?.threadID != nil }) == true { return }
         let cursor = summon.model.isVisible ? NSEvent.mouseLocation : nil
@@ -2667,7 +2661,7 @@ final class AppEnvironment: ObservableObject {
     func toast(title: String, detail: String, kind: ToastKind,
                undoLabel: String?, onUndo: (() -> Void)?,
                editLabel: String?, onEdit: (() -> Void)?, runID: String?) {
-        // A run's progress while the new shell is in front is already on screen in its chat; the notch
+        // A run's progress while the shell is in front is already on screen in its chat; the notch
         // opening over the window for it reads as the app jumping somewhere else.
         if runID != nil, kind != .warning, shellInFront { return }
         let toast = NotchToast(title: title, detail: detail, kind: kind,

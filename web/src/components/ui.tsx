@@ -1,9 +1,6 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal, flushSync } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useRef } from "react";
 import type { Account, Risk, RunStatus, Toast } from "../types";
 import { cx } from "../lib";
-import { useDialog } from "./useDialog";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -24,20 +21,6 @@ import { Kbd } from "@/components/ui/kbd";
 import { Empty as KEmpty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { toast as kobraToast } from "@/components/ui/toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-/** True while the new shell is on (it marks <html>); shared pieces switch to Kobra parts then. */
-function subscribeShell(onChange: () => void) {
-  const observer = new MutationObserver(onChange);
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-  return () => observer.disconnect();
-}
-export function useNewShell(): boolean {
-  return useSyncExternalStore(
-    subscribeShell,
-    () => document.documentElement.classList.contains("shell2-on"),
-    () => false,
-  );
-}
 
 // 24px line icons, drawn on a 1.75 stroke so they sit with SF Pro text.
 const ICONS: Record<string, string[]> = {
@@ -167,64 +150,6 @@ export function Button({ variant = "secondary", size = "md", icon, className, ch
   );
 }
 
-/** Eases a number up from zero once, the first time it scrolls into view. Later changes
- *  glide from the shown value to the new one instead of restarting at zero. */
-export function CountUp({ end, duration = 1100, prefix = "", suffix = "" }: { end: number; duration?: number; prefix?: string; suffix?: string }) {
-  const [value, setValue] = useState(0);
-  const shown = useRef(0);
-  const seen = useRef(false);
-  const ref = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let frame = 0;
-    const animate = (from: number, length: number) => {
-      if (reduced || from === end) {
-        shown.current = end;
-        setValue(end);
-        return;
-      }
-      let started = -1;
-      const tick = (now: number) => {
-        if (started < 0) started = now;
-        const progress = Math.min((now - started) / length, 1);
-        const next = progress < 1 ? from + (1 - Math.pow(1 - progress, 4)) * (end - from) : end;
-        shown.current = next;
-        setValue(next);
-        if (progress < 1) frame = requestAnimationFrame(tick);
-      };
-      frame = requestAnimationFrame(tick);
-    };
-    if (seen.current) {
-      animate(shown.current, Math.min(duration, 500));
-      return () => cancelAnimationFrame(frame);
-    }
-    // first showing: hold at zero until visible, then count up
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) return;
-        observer.disconnect();
-        seen.current = true;
-        animate(0, duration);
-      },
-      { threshold: 0.3 },
-    );
-    observer.observe(el);
-    return () => {
-      observer.disconnect();
-      cancelAnimationFrame(frame);
-    };
-  }, [end, duration]);
-  return (
-    <span ref={ref} className="count-up">
-      {prefix}
-      {Math.round(value).toLocaleString("en-US")}
-      {suffix}
-    </span>
-  );
-}
-
 export function IconButton({
   icon,
   label,
@@ -248,28 +173,13 @@ export function IconButton({
 export function Switch({
   checked,
   onChange,
-  tint = "var(--ok-accent)",
   label,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
-  tint?: string;
   label?: string;
 }) {
-  const kobra = useNewShell();
-  if (kobra) return <KSwitch checked={checked} onCheckedChange={onChange} aria-label={label} />;
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className={cx("switch", checked && "switch-on")}
-      style={{ ["--switch-tint" as string]: tint }}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="switch-thumb" />
-    </button>
-  );
+  return <KSwitch checked={checked} onCheckedChange={onChange} aria-label={label} />;
 }
 
 export function Chip({
@@ -549,66 +459,17 @@ export function Modal({
   children: React.ReactNode;
   width?: number;
 }) {
-  const kobra = useNewShell();
-  const dialogRef = useDialog(open && !kobra, onClose);
-  const titleId = useId();
-  const descriptionId = useId();
-
-  if (kobra) {
-    const size = width <= 400 ? "default" : width <= 540 ? "sm" : width <= 700 ? "md" : "lg";
-    return (
-      <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-        <DialogContent size={size}>
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            {subtitle ? <DialogDescription>{subtitle}</DialogDescription> : null}
-          </DialogHeader>
-          <div className="modal-body is-kobra">{children}</div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
-  // portal to <body> so the scrim covers the whole window, not just the panel the page lives in
-  return createPortal(
-    <AnimatePresence>
-      {open ? (
-        <motion.div
-          className="modal-scrim"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) onClose();
-          }}
-        >
-          <motion.div
-            ref={dialogRef}
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            aria-describedby={subtitle ? descriptionId : undefined}
-            tabIndex={-1}
-            style={{ width }}
-            initial={{ opacity: 0, y: 18, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.98 }}
-            transition={{ type: "spring", stiffness: 380, damping: 32 }}
-          >
-            <header className="modal-head">
-              <div>
-                <h2 id={titleId}>{title}</h2>
-                {subtitle ? <p id={descriptionId}>{subtitle}</p> : null}
-              </div>
-              <IconButton icon="x" label="close" onClick={onClose} />
-            </header>
-            <div className="modal-body">{children}</div>
-          </motion.div>
-        </motion.div>
-      ) : null}
-    </AnimatePresence>,
-    document.body,
+  const size = width <= 400 ? "default" : width <= 540 ? "sm" : width <= 700 ? "md" : "lg";
+  return (
+    <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent size={size}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {subtitle ? <DialogDescription>{subtitle}</DialogDescription> : null}
+        </DialogHeader>
+        <div className="modal-body is-kobra">{children}</div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -621,57 +482,36 @@ export interface ConfirmRequest {
 }
 
 export function ConfirmModal({ request, onClose }: { request: ConfirmRequest | null; onClose: () => void }) {
-  const kobra = useNewShell();
   // Keep the last request while the dialog animates out, so its text doesn't blank mid-exit.
   const shown = useRef<ConfirmRequest | null>(request);
   if (request) shown.current = request;
-  if (kobra) {
-    const current = shown.current;
-    return (
-      <AlertDialog open={Boolean(request)} onOpenChange={(next) => (next ? undefined : onClose())}>
-        <AlertDialogContent showCloseButton={false}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{current?.title ?? ""}</AlertDialogTitle>
-            {current?.detail ? <AlertDialogDescription>{current.detail}</AlertDialogDescription> : null}
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            {/* Cancel takes focus, so a stray Enter never deletes. */}
-            <AlertDialogCancel autoFocus>Cancel</AlertDialogCancel>
-            <KButton
-              variant="destructive"
-              onClick={() => {
-                request?.onConfirm();
-                onClose();
-              }}
-            >
-              {current?.action ?? "Delete"}
-            </KButton>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    );
-  }
+  const current = shown.current;
   return (
-    <Modal open={Boolean(request)} onClose={onClose} title={request?.title ?? ""} subtitle={request?.detail} width={420}>
-      <footer className="modal-actions">
-        <Button variant="ghost" autoFocus onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          variant="danger"
-          onClick={() => {
-            request?.onConfirm();
-            onClose();
-          }}
-        >
-          {request?.action ?? "Delete"}
-        </Button>
-      </footer>
-    </Modal>
+    <AlertDialog open={Boolean(request)} onOpenChange={(next) => (next ? undefined : onClose())}>
+      <AlertDialogContent showCloseButton={false}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{current?.title ?? ""}</AlertDialogTitle>
+          {current?.detail ? <AlertDialogDescription>{current.detail}</AlertDialogDescription> : null}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          {/* Cancel takes focus, so a stray Enter never deletes. */}
+          <AlertDialogCancel autoFocus>Cancel</AlertDialogCancel>
+          <KButton
+            variant="destructive"
+            onClick={() => {
+              request?.onConfirm();
+              onClose();
+            }}
+          >
+            {current?.action ?? "Delete"}
+          </KButton>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
-/** The new shell hands okidoki's toasts to Kobra's stack (Toasts is mounted by the shell). */
+/** Hands okidoki's toasts to Kobra's stack (<Toasts /> is mounted by the shell and the sign-in screen). */
 export function KobraToastBridge({ toasts }: { toasts: Toast[] }) {
   const sent = useRef(new Set<string>());
   useEffect(() => {
@@ -689,34 +529,6 @@ export function KobraToastBridge({ toasts }: { toasts: Toast[] }) {
   return null;
 }
 
-export function ToastStack({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
-  return (
-    <div className="toast-stack">
-      <AnimatePresence>
-        {toasts.map((toast) => (
-          <motion.button
-            key={toast.id}
-            className={cx("toast", `toast-${toast.kind ?? "success"}`)}
-            initial={{ opacity: 0, y: 24, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.97 }}
-            transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            onClick={() => onDismiss(toast.id)}
-          >
-            <span className="toast-icon">
-              <PixelIcon name={toast.kind === "warning" ? "bolt" : toast.kind === "approval" ? "hand" : "check"} size={14} />
-            </span>
-            <span>
-              <strong>{toast.title}</strong>
-              {toast.detail ? <em>{toast.detail}</em> : null}
-            </span>
-          </motion.button>
-        ))}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 export function Empty({
   icon,
   title,
@@ -728,28 +540,17 @@ export function Empty({
   children: React.ReactNode;
   action?: React.ReactNode;
 }) {
-  const kobra = useNewShell();
-  if (kobra) {
-    return (
-      <KEmpty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <PixelIcon name={icon} size={20} />
-          </EmptyMedia>
-          <EmptyTitle>{title}</EmptyTitle>
-          <EmptyDescription>{children}</EmptyDescription>
-        </EmptyHeader>
-        {action ? <EmptyContent>{action}</EmptyContent> : null}
-      </KEmpty>
-    );
-  }
   return (
-    <div className="empty">
-      <PixelIcon name={icon} size={24} />
-      <h3>{title}</h3>
-      <p>{children}</p>
-      {action}
-    </div>
+    <KEmpty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <PixelIcon name={icon} size={20} />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{children}</EmptyDescription>
+      </EmptyHeader>
+      {action ? <EmptyContent>{action}</EmptyContent> : null}
+    </KEmpty>
   );
 }
 
@@ -763,49 +564,10 @@ export function Progress({ value, tint }: { value: number; tint?: string }) {
 }
 
 export function KeyHint({ children }: { children: React.ReactNode }) {
-  const kobra = useNewShell();
-  if (kobra) return <Kbd size="sm">{children}</Kbd>;
-  return <kbd className="kbd">{children}</kbd>;
+  return <Kbd size="sm">{children}</Kbd>;
 }
 
-function subscribeTheme(onChange: () => void) {
-  const observer = new MutationObserver(onChange);
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-  return () => observer.disconnect();
-}
-
-/** Follow native, system and local theme changes, including reduced-motion toggles. */
-export function ThemeToggle({ onToggle }: { onToggle: (next: "light" | "dark") => void }) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const root = document.documentElement;
-  const dark = useSyncExternalStore(subscribeTheme, () => root.dataset.theme === "dark", () => false);
-  const next = dark ? "light" : "dark";
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  const handle = () => {
-    const rect = ref.current?.getBoundingClientRect();
-    root.style.setProperty("--toggle-x", `${rect ? rect.left + rect.width / 2 : 0}px`);
-    root.style.setProperty("--toggle-y", `${rect ? rect.top + rect.height / 2 : 0}px`);
-    if (!("startViewTransition" in document) || document.hidden || reduced) {
-      onToggle(next);
-      return;
-    }
-    const transition = (document as Document & { startViewTransition: (cb: () => void) => { ready: Promise<void> } }).startViewTransition(() => {
-      // set the attribute now too, so the "after" snapshot is the new theme before effects run
-      root.dataset.theme = next;
-      flushSync(() => onToggle(next));
-    });
-    transition.ready.catch(() => {});
-  };
-
-  return (
-    <button ref={ref} className="theme-toggle" onClick={handle} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"} data-tip={dark ? "Light mode" : "Dark mode"}>
-      <PixelIcon name={dark ? "sun" : "moon"} size={14} />
-    </button>
-  );
-}
-
-/** A pick-one menu: Kobra's select in the new shell, the native control in the original UI. */
+/** A pick-one menu (Kobra's select). */
 export function Choice<T extends string | number>({
   value,
   options,
@@ -819,43 +581,24 @@ export function Choice<T extends string | number>({
   onChange: (value: T) => void;
   label: string;
 }) {
-  const kobra = useNewShell();
-  if (kobra) {
-    return (
-      <Select
-        value={value}
-        items={options}
-        onValueChange={(next) => {
-          if (next !== null) onChange(next as T);
-        }}
-      >
-        <SelectTrigger aria-label={label} size={size}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={String(option.value)} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    );
-  }
   return (
-    <select
-      value={String(value)}
-      aria-label={label}
-      onChange={(event) => {
-        const picked = options.find((option) => String(option.value) === event.target.value);
-        if (picked) onChange(picked.value);
+    <Select
+      value={value}
+      items={options}
+      onValueChange={(next) => {
+        if (next !== null) onChange(next as T);
       }}
     >
-      {options.map((option) => (
-        <option key={String(option.value)} value={String(option.value)}>
-          {option.label}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger aria-label={label} size={size}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={String(option.value)} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

@@ -28,7 +28,7 @@ private enum NotchInk {
     static let coral = Color(hex: 0xFF6B5E)
 }
 
-/// The island's one colour: the original neon mint, or the new shell's green.
+/// The island's one colour: okidoki green.
 private struct NotchAccentKey: EnvironmentKey {
     static let defaultValue = OKBrand.mint
 }
@@ -41,7 +41,7 @@ extension EnvironmentValues {
 }
 
 extension NotchInk {
-    /// The new shell's okidoki green, lifted a touch so it reads on black.
+    /// the shell's okidoki green, lifted a touch so it reads on black.
     static let green = Color(hex: 0x3DDC6A)
 }
 
@@ -68,7 +68,7 @@ struct NotchRootView: View {
             .padding(.top, m.topGap)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .environment(\.colorScheme, .dark)
-            .environment(\.notchAccent, model.newLook ? NotchInk.green : OKBrand.mint)
+            .environment(\.notchAccent, NotchInk.green)
     }
 
     private var openRadius: CGFloat {
@@ -101,7 +101,7 @@ struct NotchRootView: View {
             .blur(radius: presented ? 0 : 3)
             .animation(presented ? NotchMotion.wordsIn : NotchMotion.wordsOut, value: presented)
             .frame(width: width, height: height, alignment: .top)
-            .background(NotchIslandBackground(clearTop: m.bandHeight, dots: !model.newLook))
+            .background(NotchIslandBackground(clearTop: m.bandHeight, dots: false))
             .clipShape(shape)
             .overlay {
                 // A lip only on the floating pill. The hardware notch stays flush with the menu bar.
@@ -161,7 +161,7 @@ struct NotchIslandShape: Shape {
 /// still reads as a continuation of the hardware notch; the dots fade in below it.
 private struct NotchIslandBackground: View {
     var clearTop: CGFloat
-    /// The new look is plain black, like the shell's quiet surfaces.
+    /// The island is plain black, like the shell's quiet surfaces.
     var dots = true
     private static let spacing: CGFloat = 11
     private static let dot: CGFloat = 1.3
@@ -432,10 +432,10 @@ private struct NotchContent: View {
                         moreLink("\(model.live.count - shownLive.count) more working") { env.openDashboard(.runs) }
                     }
                     if model.expanded && isEmpty && model.caption == nil {
-                        openOnly(model.newLook ? AnyView(newGreeting) : AnyView(greeting))
+                        openOnly(newGreeting)
                             .transition(wordsTransition)
                     }
-                    if model.expanded && model.newLook && !model.recent.isEmpty {
+                    if model.expanded && !model.recent.isEmpty {
                         openOnly(recentTasks)
                             .padding(.top, isEmpty ? 0 : 6)
                             .transition(wordsTransition)
@@ -443,18 +443,12 @@ private struct NotchContent: View {
                 }
             }
             if model.expanded {
-                if model.newLook {
-                    openOnly(composer)
-                        .padding(.top, isEmpty && model.caption == nil && model.recent.isEmpty ? 2 : 12)
-                        .transition(wordsTransition)
-                    openOnly(newFooter)
-                        .padding(.top, 10)
-                        .transition(wordsTransition)
-                } else {
-                    openOnly(footer)
-                        .padding(.top, isEmpty && model.caption == nil ? 2 : 12)
-                        .transition(wordsTransition)
-                }
+                openOnly(composer)
+                    .padding(.top, isEmpty && model.caption == nil && model.recent.isEmpty ? 2 : 12)
+                    .transition(wordsTransition)
+                openOnly(newFooter)
+                    .padding(.top, 10)
+                    .transition(wordsTransition)
             }
         }
     }
@@ -469,28 +463,8 @@ private struct NotchContent: View {
 
     // MARK: Home
 
-    /// The island at rest, open: who it's for and how to reach for it.
-    private var greeting: some View {
-        VStack(spacing: 6) {
-            Text(greetingTitle)
-                .font(.okBody(22, .semibold))
-                .tracking(-0.3)
-                .foregroundStyle(NotchInk.primary)
-                .lineLimit(1)
-            Text(model.quiet
-                 ? "Quiet is on. I'll hold everything until you're back."
-                 : "\(model.summonHint) and tell me what to take off your plate.")
-                .font(.okBody(13.5))
-                .foregroundStyle(NotchInk.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 10)
-        .padding(.bottom, 18)
-    }
 
-    // MARK: New look
+    // MARK: Home
 
     /// Who it's for, left-aligned like the shell's headings; the composer below is the way in.
     private var newGreeting: some View {
@@ -578,33 +552,6 @@ private struct NotchContent: View {
         return name.isEmpty ? "\(part)." : "\(part), \(name)."
     }
 
-    /// Quick ways in: ask on the left, the places okidoki keeps its tricks on the right.
-    private var footer: some View {
-        HStack(spacing: 8) {
-            NotchButton(title: "Ask okidoki", symbol: "sparkle", kind: .accent, height: 30) {
-                model.onClose?()
-                env.startSummon()
-            }
-            Spacer(minLength: 0)
-            NotchButton(title: "Replay", symbol: "wand.and.stars", kind: .secondary, height: 30) {
-                model.onClose?()
-                env.openDashboard(.skills)
-            }
-            // In the new look the browser is Home, a new tab away.
-            if env.store.settings.newShell {
-                NotchButton(title: "New tab", symbol: "plus", kind: .secondary, height: 30) {
-                    model.onClose?()
-                    env.openDashboard(.home)
-                    env.requestAsk()
-                }
-            } else {
-                NotchButton(title: "Browser", symbol: "globe", kind: .secondary, height: 30) {
-                    model.onClose?()
-                    env.openBrowser()
-                }
-            }
-        }
-    }
 
     // MARK: Helpers
 
@@ -816,7 +763,7 @@ private struct NotchLiveRow: View {
                     .foregroundStyle(NotchInk.primary)
                     .lineLimit(1)
                 if let started = run.startedAt, !paused, accent != OKBrand.mint {
-                    // The new look says how long, like the shell's task cards.
+                    // It says how long, like the shell's task cards.
                     TimelineView(.periodic(from: started, by: 1)) { context in
                         Text("Working for \(NotchRecentRow.span(since: started, now: context.date)) · \(liveDetail)")
                             .font(.okBody(12))

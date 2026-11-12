@@ -163,15 +163,6 @@ enum OKMotion {
     static let snappy = Animation.spring(response: 0.3, dampingFraction: 0.86)
 }
 
-extension NSColor {
-    /// Matches the web control panel's `--bg` in both themes so the window never flashes a
-    /// different colour while the page loads or when the theme flips.
-    static let okDashboardBackground = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x07 / 255, green: 0x09 / 255, blue: 0x08 / 255, alpha: 1)
-            : NSColor(srgbRed: 0xF1 / 255, green: 0xF2 / 255, blue: 0xF1 / 255, alpha: 1)
-    }
-}
 
 // MARK: - Glass
 

@@ -4,7 +4,7 @@ import { useDashboard } from "../store";
 import { cx, clockLabel, dayLabel, formatBytes, relativeTime } from "../lib";
 import type { Run, Thread } from "../types";
 import { Button, Empty, Logo, Markdown, Modal, PageTitle, PixelIcon, Segmented, StatusBadge, TextField, isComposing } from "../components/ui";
-import type { Page } from "../components/Layout";
+import type { Page } from "../nav";
 
 type Tab = "requests" | "threads";
 
@@ -13,7 +13,7 @@ const TABS: Array<{ value: Tab; label: string }> = [
   { value: "threads", label: "Threads" },
 ];
 
-/** `onOpenThread`: the new shell opens a conversation as its own chat instead of the overlay here. */
+/** `onOpenThread`: opens a conversation as its own chat in the shell instead of the overlay here. */
 export function HistoryPage({ go, onOpenThread }: { go: (page: Page) => void; onOpenThread?: (id: string) => void }) {
   const { state } = useDashboard();
   const [tab, setTab] = useState<Tab>("requests");

@@ -99,17 +99,16 @@ enum NotchSnapshots {
         var timed = live
         timed.startedAt = Date().addingTimeInterval(-67)
         return [
-            ("20-new-home", model { $0.newLook = true; $0.expanded = true; $0.recent = recent }),
-            ("21-new-home-empty", model { $0.newLook = true; $0.expanded = true }),
+            ("20-new-home", model { $0.expanded = true; $0.recent = recent }),
+            ("21-new-home-empty", model { $0.expanded = true }),
             ("22-new-busy", model {
-                $0.newLook = true
                 $0.expanded = true
                 $0.waiting = [approval]
                 $0.live = [timed]
                 $0.recent = Array(recent.prefix(2))
             }),
-            ("23-new-compact-live", model { $0.newLook = true; $0.live = [timed] }),
-            ("24-new-compact-toast", model { $0.newLook = true; $0.toasts = [toast("done", "Sent \"hi\" to Dad on WhatsApp.")] }),
+            ("23-new-compact-live", model { $0.live = [timed] }),
+            ("24-new-compact-toast", model { $0.toasts = [toast("done", "Sent \"hi\" to Dad on WhatsApp.")] }),
             ("1-home", model { $0.expanded = true }),
             ("2-home-voice-quiet", model { $0.expanded = true; $0.inputMode = .voice; $0.quiet = true }),
             ("3-expanded-busy", model {

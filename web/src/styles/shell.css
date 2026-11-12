@@ -1,6 +1,5 @@
 /* ==========================================================================
-   The new shell. Everything is scoped under html.shell2-on, so the original
-   dashboard is untouched when the flag is off.
+   The shell: the app's whole UI. Everything is scoped under html.shell2-on (set at startup).
 
    Look: the desktop through a frosted sidebar with a faint sky-to-mint tint,
    a white content card floating on it, okidoki green as the only colour.
@@ -8,7 +7,6 @@
    symmetric curve for exits, ≤300ms for anything interactive, 0.97 press,
    concentric corners, ring shadows instead of decorative borders.
    ========================================================================== */
-
 html.shell2-on {
   --side-w: 268px;
   --mark: none;
@@ -87,7 +85,6 @@ html.shell2-on[data-theme="dark"] {
   --tile-hover: var(--c-well);
   --ok-card: var(--c-soft);
 }
-
 html.shell2-on[data-theme="dark"] {
   --tint-top: rgba(14, 22, 24, 0.5);
   --tint-bottom: rgba(12, 20, 16, 0.55);
@@ -124,7 +121,6 @@ html.shell2-on[data-theme="dark"] {
 }
 
 /* ---------- ground ---------- */
-
 html.shell2-on,
 html.shell2-on body {
   background: var(--desk);
@@ -132,6 +128,7 @@ html.shell2-on body {
   letter-spacing: -0.006em;
   font-feature-settings: normal;
 }
+
 /* In the Mac app the desktop shows through the window's vibrancy; the page only tints it. */
 html.shell2-on.is-native,
 html.shell2-on.is-native body {
@@ -147,7 +144,6 @@ html.shell2-on body::before {
 html.shell2-on:not(.is-native) body::before {
   background: none;
 }
-
 .shell2 {
   position: relative;
   display: flex;
@@ -160,7 +156,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- shared bits ---------- */
-
 .shell2-on .pulse-dot {
   width: 6px;
   height: 6px;
@@ -223,7 +218,6 @@ html.shell2-on:not(.is-native) body::before {
 /* Tooltips are Kobra's (shell/Tip.tsx): portaled, so the sidebar can't clip them. */
 
 /* ---------- sidebar ---------- */
-
 .shell2 .side-wrap {
   flex: none;
   width: var(--side-w);
@@ -279,11 +273,11 @@ html.shell2-on:not(.is-native) body::before {
   opacity: 0.35;
   cursor: default;
 }
-
 .shell2 .side-top {
   position: relative;
   z-index: 1;
 }
+
 /* Once the list has scrolled, a hairline marks where it passes under the header, so pins don't look
    cut off by it. */
 .shell2 .side-top::after {
@@ -641,7 +635,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- content card ---------- */
-
 .shell2 .card {
   position: relative;
   flex: 1;
@@ -674,7 +667,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- toolbar ---------- */
-
 .shell2 .toolbar {
   position: relative;
   display: flex;
@@ -773,7 +765,6 @@ html.shell2-on:not(.is-native) body::before {
     transform: translateX(260%);
   }
 }
-
 .shell2 .address {
   position: relative;
   flex: 1;
@@ -826,7 +817,6 @@ html.shell2-on:not(.is-native) body::before {
   background: var(--c-bg);
   box-shadow: var(--float);
 }
-
 .shell2 .agent-pill {
   display: flex;
   align-items: center;
@@ -872,7 +862,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- tab view: the page, and okidoki beside it ---------- */
-
 .shell2 .tab-view {
   flex: 1;
   min-height: 0;
@@ -898,7 +887,6 @@ html.shell2-on:not(.is-native) body::before {
   display: grid;
   place-items: center;
 }
-
 .shell2 .assistant {
   flex: none;
   overflow: hidden;
@@ -964,7 +952,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- composer ---------- */
-
 .shell2-on .composer {
   width: 100%;
 }
@@ -1172,7 +1159,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- popovers ---------- */
-
 .shell2-on .pop {
   position: fixed;
   z-index: 200;
@@ -1275,14 +1261,8 @@ html.shell2-on:not(.is-native) body::before {
   font-size: 12px;
   color: var(--s-muted);
 }
-.shell2-on .pop-value {
-  font-variant-numeric: tabular-nums;
-  font-size: 13px;
-  color: var(--s-muted);
-}
 
 /* ---------- Home: the new tab ---------- */
-
 .shell2 .nt {
   width: min(880px, 100% - 64px);
   margin: 0 auto;
@@ -1303,6 +1283,7 @@ html.shell2-on:not(.is-native) body::before {
   mask: var(--mark) center / contain no-repeat;
   transition: background-color 600ms ease;
 }
+
 /* While okidoki works the mark takes a breath of green: a cue, not a banner. */
 .shell2 .nt-mark.is-working {
   background: color-mix(in srgb, var(--green-bright) 55%, var(--c-line-strong));
@@ -1627,7 +1608,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- chat ---------- */
-
 .shell2 .chat {
   flex: 1;
   min-height: 0;
@@ -1848,7 +1828,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- library pages inside the card ---------- */
-
 .shell2 .page-host {
   background: var(--c-bg);
 }
@@ -1856,30 +1835,6 @@ html.shell2-on:not(.is-native) body::before {
   width: min(1080px, 100% - 48px);
   margin: 0 auto;
   padding: 20px 0 48px;
-}
-.shell2 .page-tabs {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  margin-bottom: 14px;
-  border-radius: 10px;
-  background: var(--c-well);
-}
-.shell2 .page-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--s-muted);
-}
-.shell2 .page-tabs button.is-on {
-  background: var(--c-bg);
-  color: var(--s-ink);
-  box-shadow: var(--ring-shadow);
 }
 
 /* Runs and Live are split views with their own scrolling panes: they take the whole card. */
@@ -2004,7 +1959,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- palette ---------- */
-
 .shell2-on .palette2-scrim {
   position: fixed;
   inset: 0;
@@ -2067,18 +2021,7 @@ html.shell2-on:not(.is-native) body::before {
 
 /* ---------- toasts sit above the card's corner ---------- */
 
-.shell2-on .toast-stack {
-  font-family: var(--ui);
-  /* Over the sidebar, never over the native page, which would draw on top of it. */
-  left: 12px;
-  right: auto;
-  bottom: 12px;
-  width: calc(var(--side-w) - 24px);
-  max-width: calc(var(--side-w) - 24px);
-}
-
 /* ---------- narrow windows ---------- */
-
 @media (max-width: 960px) {
   html.shell2-on {
     --side-w: 232px;
@@ -2089,7 +2032,6 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* ---------- reduced motion keeps colour and opacity, drops travel ---------- */
-
 @media (prefers-reduced-motion: reduce) {
   .shell2-on .pulse-dot,
   .shell2 .tab-glow,
@@ -2104,7 +2046,6 @@ html.shell2-on:not(.is-native) body::before {
     transform: none;
   }
 }
-
 .shell2 .tool-spacer {
   flex: 1;
 }
@@ -2118,6 +2059,7 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .srow.has-close:has(.srow-close[aria-expanded="true"]) .srow-trailing {
   opacity: 0;
 }
+
 /* A chat's own ⋯ menu, top right of its header. */
 .shell2 .chat-head {
   position: relative;

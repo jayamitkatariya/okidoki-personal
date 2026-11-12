@@ -75,8 +75,8 @@ export function SettingsPage() {
   // smooth scroll passes the others.
   const jumping = useRef<number | null>(null);
   useEffect(() => {
-    // The original dashboard scrolls `.content`; the new shell scrolls its card.
-    const root = document.querySelector<HTMLElement>(".content") ?? document.querySelector<HTMLElement>(".card-scroll");
+    // The page scrolls inside the shell's card.
+    const root = document.querySelector<HTMLElement>(".page-host");
     if (!root) return;
     let frame = 0;
     const update = () => {
@@ -442,9 +442,6 @@ export function SettingsPage() {
 
           <SettingsSection id="appearance" title="Appearance" description="How the panel and the pointer behave.">
             <div className="pref-group">
-              <PrefRow title="New look" detail="One window for everything: your tabs, chats and agent tabs in a sidebar, and Home as the new tab. Off brings back the classic dashboard.">
-                <Switch label="New look" checked={settings.newShell ?? false} onChange={(value) => updateSettings({ newShell: value })} />
-              </PrefRow>
               <PrefRow title="Theme">
                 <Segmented
                   options={[

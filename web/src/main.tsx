@@ -10,7 +10,11 @@ import "./styles/memory.css";
 import "./styles/skills.css";
 import "./styles/settings.css";
 import "./styles/vault.css";
+import "./styles/shell.css";
 import "./styles/dashboard.css";
+
+// The whole window is the shell's look; its tokens and styles are scoped to this class.
+document.documentElement.classList.add("shell2-on");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

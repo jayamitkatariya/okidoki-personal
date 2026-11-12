@@ -21,31 +21,25 @@ struct DashboardView: View {
     }
 }
 
-/// The new shell runs edge to edge, under the transparent title bar, with the traffic lights over its
-/// sidebar; the original dashboard keeps its place below the bar. Only the safe area changes, so the
-/// web view inside is never rebuilt.
+/// The shell runs edge to edge, under the transparent title bar, with the traffic lights over its
+/// sidebar. Only the safe area changes, so the web view inside is never rebuilt.
 private struct DashboardLayout<Content: View>: View {
     @ObservedObject var store: OkidokiStore
     @ViewBuilder var content: Content
 
     var body: some View {
-        content.ignoresSafeArea(.container, edges: store.settings.newShell ? .top : [])
+        content.ignoresSafeArea(.container, edges: .top)
     }
 }
 
-/// The window's ground. The original look is an opaque fill; the new shell is the desktop seen through
-/// sidebar vibrancy, with the web page painting the frosted tint and the white content card on top.
+/// The window's ground: the desktop seen through sidebar vibrancy, with the web page painting the frosted tint and the white content card on top.
 /// Kept apart from `DashboardView` so a settings change redraws only this, never the web view.
 private struct DashboardBackdrop: View {
     @ObservedObject var store: OkidokiStore
 
     var body: some View {
-        if store.settings.newShell {
-            VisualEffectBlur(material: .sidebar, blending: .behindWindow, state: .followsWindowActiveState)
-                .ignoresSafeArea()
-        } else {
-            Color(nsColor: .okDashboardBackground)
-        }
+        VisualEffectBlur(material: .sidebar, blending: .behindWindow, state: .followsWindowActiveState)
+            .ignoresSafeArea()
     }
 }
 
@@ -57,8 +51,8 @@ private struct BrowserSlot: View {
 
     var body: some View {
         let frame = environment.browserFrame
-        // The new shell's content card is r=14 (--r-card) with the page flush to its bottom edge: concentric corners.
-        let radius: CGFloat = store.settings.newShell ? 14 : 19
+        // The shell's content card is r=14 (--r-card) with the page flush to its bottom edge: concentric corners.
+        let radius: CGFloat = 14
         let trailing: CGFloat = environment.browserSquareRight ? 0 : radius
         HostedView(view: environment.browser.view, hidden: frame == nil)
             .frame(width: max(frame?.width ?? 1000, 1), height: max(frame?.height ?? 700, 1))
@@ -157,7 +151,7 @@ struct DashboardPayload: Encodable {
     var vaultImport: VaultImportStatus
     /// The skill library's templates, and whether each is already among the person's skills.
     var library: [DashboardLibraryEntry]
-    /// okidoki's browser as the new shell's sidebar and toolbar show it.
+    /// okidoki's browser as the shell's sidebar and toolbar show it.
     var browser: DashboardBrowserPayload
     var pins: [BrowserPin]
     var bookmarks: [Bookmark]
@@ -356,10 +350,9 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 self?.focusRun(id)
             }
             .store(in: &cancellables)
-        // The new shell's sidebar and toolbar follow the browser's tabs; thumbnails and favicons as they land.
+        // the shell's sidebar and toolbar follow the browser's tabs; thumbnails and favicons as they land.
         environment.browser.changes
             .receive(on: RunLoop.main)
-            .filter { [weak environment] _ in environment?.store.settings.newShell == true }
             .sink { [weak self] _ in self?.schedulePush() }
             .store(in: &cancellables)
         ShellImages.onChange = { [weak self] in self?.schedulePush() }
@@ -499,11 +492,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
 
     private func sendNavigation(onLoad: Bool = false) {
         guard let webView, let env else { return }
-        // A reload of the new shell keeps the place in its address (#/chat/…); only a fresh page is sent somewhere.
-        let guardHash = onLoad && env.store.settings.newShell ? "(!location.hash || location.hash === '#/' || location.hash === '#/home') && " : ""
+        // A reload of the shell keeps the place in its address (#/chat/…); only a fresh page is sent somewhere.
+        let guardHash = onLoad ? "(!location.hash || location.hash === '#/' || location.hash === '#/home') && " : ""
         webView.evaluateJavaScript("\(guardHash)window.okidokiNavigate && window.okidokiNavigate('\(env.dashboardRoute.rawValue)');", completionHandler: nil)
-        // The new shell is pointed at a run only when asked to, not again at every load.
-        if let id = env.dashboardRunID, !(onLoad && env.store.settings.newShell) { focusRun(id) }
+        // The shell is pointed at a run only when asked to, not again at every load.
+        if let id = env.dashboardRunID, !onLoad { focusRun(id) }
     }
 
     private func focusRun(_ id: String) {
@@ -616,7 +609,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
 
     /// Thumbnails for the runs the page can show (the newest few dozen).
     private func thumbs(_ env: AppEnvironment) -> [String: Double] {
-        guard env.store.settings.newShell else { return [:] }
         var out: [String: Double] = [:]
         for run in env.store.activeRuns.sorted(by: { $0.createdAt > $1.createdAt }).prefix(40) {
             let url = RunThumbs.url(run.id)
@@ -995,7 +987,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.signOut()
         case "signIn":
             if let id = payload["id"] as? String { env.signIn(accountID: id) }
-        // MARK: The new shell
+        // MARK: The shell
         case "shellAsk":
             let text = payload["text"] as? String ?? ""
             let mode = payload["mode"] as? String ?? "auto"

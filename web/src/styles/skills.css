@@ -1,5 +1,4 @@
 /* ---------- skills & routines ---------- */
-
 .skills-page {
   display: flex;
   flex-direction: column;
@@ -571,62 +570,6 @@
 }
 
 /* ---------- shared skills (enterprise) ---------- */
-
-.shared-section .section-head .segmented {
-  margin-left: 12px;
-}
-.shared-needs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.shared-needs:empty {
-  display: none;
-}
-.share-targets {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.share-target {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--line);
-  background: var(--ok-card);
-  text-align: left;
-  transition: border-color 0.15s, background 0.15s;
-}
-.share-target:hover {
-  background: var(--card-hover);
-}
-.share-target.is-selected {
-  border-color: var(--ok-accent);
-  background: var(--accent-soft);
-}
-.share-target svg {
-  color: var(--accent-ink);
-  flex: 0 0 auto;
-}
-.share-target span {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.share-target strong {
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--ink);
-}
-.share-target em {
-  font-style: normal;
-  font-size: 11.5px;
-  color: var(--ok-muted);
-}
-
 .skills-head-actions {
   display: inline-flex;
   gap: 8px;
@@ -641,8 +584,10 @@
   flex-wrap: wrap;
   margin: 0 0 14px;
 }
-.library-search { flex: 1 1 220px; max-width: 320px; }
-.library-empty { color: var(--ok-muted); margin: 6px 0 0; }
+.library-search { flex: 1 1 220px; max-width: 320px;
+}
+.library-empty { color: var(--ok-muted); margin: 6px 0 0;
+}
 .skill-inputs {
   display: flex;
   flex-wrap: wrap;
@@ -650,11 +595,12 @@
   gap: 6px;
   margin: 2px 0 10px;
 }
-.skill-inputs-note { color: var(--ok-muted); font-size: 12px; }
-@media (max-width: 640px) {
-  .library-search { max-width: none; }
+.skill-inputs-note { color: var(--ok-muted); font-size: 12px;
 }
-
+@media (max-width: 640px) {
+  .library-search { max-width: none;
+  }
+}
 .skill-meta-part {
   white-space: nowrap;
 }

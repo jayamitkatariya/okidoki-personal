@@ -30,19 +30,6 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${Math.round(bytes / 1024)} KB`;
 }
 
-export function timeOfDay(): string {
-  const hour = new Date().getHours();
-  if (hour < 5) return "night";
-  if (hour < 12) return "morning";
-  if (hour < 17) return "afternoon";
-  if (hour < 22) return "evening";
-  return "night";
-}
-
-export function todayLabel(): string {
-  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-}
-
 export function clockLabel(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });

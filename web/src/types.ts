@@ -60,8 +60,6 @@ export interface Settings {
   vaultFolder?: string;
   /** Hybrid replay: skills bind values from documents, check steps, pick themselves, and hand off to the agent. */
   hybridReplay?: boolean;
-  /** The new browser shell (frosted sidebar, Home as the new tab). Off keeps the original dashboard. */
-  newShell?: boolean;
   /** Shaking the mouse opens summon. */
   shakeToSummon?: boolean;
   /** Global summon shortcut, like "option+space". Empty turns it off. */
@@ -393,7 +391,7 @@ export interface NativeState {
   vault?: VaultState | null;
   /** Browsers to import passwords from, and the last import. Missing in older builds. */
   vaultImport?: VaultImportState | null;
-  /** okidoki's browser, for the new shell's sidebar and toolbar. Missing on older builds. */
+  /** okidoki's browser, for the shell's sidebar and toolbar. Missing on older builds. */
   browser?: BrowserState | null;
   /** Sites pinned in the sidebar, in order. */
   pins?: Pin[];

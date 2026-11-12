@@ -137,9 +137,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// as before, so the two can be compared on the same build.
     public var hybridReplay: Bool = false
 
-    /// The new look: one browser shell with a frosted sidebar (pins, chats, tabs, agent tabs) and Home as
-    /// the new tab. Off keeps the original dashboard, untouched, so the two can be compared.
-    public var newShell: Bool = false
     /// Shaking the mouse opens summon. Off removes the global mouse monitor entirely; the hotkey, the
     /// notch and the menu bar still summon.
     public var shakeToSummon: Bool = true
@@ -161,7 +158,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case onboardingComplete, tourComplete, showedWelcome
         case claudeModel, mcpServers, drivePace, computerTarget
         case screenContext, summonMode, vaultFolder
-        case hybridReplay, newShell, shakeToSummon, summonHotkey
+        case hybridReplay, shakeToSummon, summonHotkey
     }
 
     public init(from decoder: Decoder) throws {
@@ -211,7 +208,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
         screenContext = bool(.screenContext, true)
         hybridReplay = bool(.hybridReplay, false)
-        newShell = bool(.newShell, false)
         shakeToSummon = bool(.shakeToSummon, true)
         summonHotkey = string(.summonHotkey, "option+space")
     }
@@ -1074,7 +1070,7 @@ public struct AppState: Codable, Sendable {
     public var syncCursors: [String: Int]
     /// Items this build couldn't read, kept as they came so nothing is lost.
     public var unreadable: [UnreadableItem]
-    /// Sites pinned in the sidebar, in order. Nil until the new shell seeds them once.
+    /// Sites pinned in the sidebar, in order. Nil until the shell seeds them once.
     public var pins: [BrowserPin]?
     public var bookmarks: [Bookmark]
     /// Items in the saved file that couldn't be read (a newer build's data, say). Not saved.

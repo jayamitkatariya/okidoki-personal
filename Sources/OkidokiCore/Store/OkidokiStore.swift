@@ -13,7 +13,7 @@ public final class OkidokiStore: ObservableObject {
     @Published public var skills: [Skill]
     @Published public var routines: [Routine]
     @Published public var connectors: [Connector]
-    /// Sidebar pins, in order. Nil until the new shell seeds them the first time it opens.
+    /// Sidebar pins, in order. Nil until the shell seeds them the first time it opens.
     @Published public var pins: [BrowserPin]?
     @Published public var bookmarks: [Bookmark]
     @Published public private(set) var lastSavedAt: Date?
@@ -750,7 +750,7 @@ public final class OkidokiStore: ObservableObject {
         pins = ordered
     }
 
-    /// The pins seeded the first time the new shell opens, from sites the person already uses:
+    /// The pins seeded the first time the shell opens, from sites the person already uses:
     /// vault logins first, then the sites their skills start on, then a few everyday ones.
     public func seedPinsIfNeeded(loginSites: [String]) {
         guard pins == nil else { return }

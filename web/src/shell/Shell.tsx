@@ -26,20 +26,19 @@ import { PageSlot } from "./PageSlot";
 import { Palette } from "./Palette";
 import { CoverProvider } from "./media";
 import { hostOf, LIBRARY, parseView, viewKey, type LibraryPage, type View } from "./model";
-import "../styles/shell.css";
 // Inlined: a CSS mask is a CORS load, which a page opened from the app's files can't make.
 import brandMark from "../../public/brand.png?inline";
 
 const SIDEBAR_KEY = "okidoki.shell.sidebar";
 
 export function Shell() {
-  // The look is scoped to this class, so the original dashboard never sees any of it.
+  // html.shell2-on (set at startup in main.tsx) scopes the look; the Mac app's window also lets the
+  // desktop show through, which is-native marks.
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.add("shell2-on");
     root.style.setProperty("--mark", `url("${brandMark}")`);
     if (isNative()) root.classList.add("is-native");
-    return () => root.classList.remove("shell2-on", "is-native");
+    return () => root.classList.remove("is-native");
   }, []);
   return (
     <CoverProvider>
@@ -100,7 +99,7 @@ function ShellBody() {
     }
   }, [sidebarHidden]);
 
-  // The new shell's pins start from what you already use, once.
+  // Pins start from what you already use, once.
   useEffect(() => {
     invoke("seedPins");
   }, [invoke]);

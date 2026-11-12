@@ -12,9 +12,9 @@ final class ShellStoreTests: XCTestCase {
         }
     }
 
-    func testSettingsDefaultsKeepTheOldLookAndTheShake() throws {
-        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
-        XCTAssertFalse(decoded.newShell)
+    func testSettingsDefaultsKeepTheShakeAndHotkey() throws {
+        // Older saved settings carry "newShell"; it's ignored now that the shell is the only look.
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"newShell": false}"#.utf8))
         XCTAssertTrue(decoded.shakeToSummon)
         XCTAssertEqual(decoded.summonHotkey, "option+space")
     }

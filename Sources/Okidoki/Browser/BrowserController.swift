@@ -12,10 +12,6 @@ final class BrowserModel: ObservableObject {
     /// Recording a skill: what the person does here becomes its steps.
     @Published var recording = false
     @Published var recordedSteps = 0
-    /// Bumped by ⌘L and ⌘T to put the cursor in the address bar.
-    @Published var focusAddress = 0
-    /// The new shell draws the tabs and the toolbar itself; the browser is just the page.
-    @Published var chromeless = false
 
     var active: BrowserTab? { tabs.first { $0.id == activeID } ?? tabs.first }
 }
@@ -243,7 +239,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     static let maxTabs = 24
 
     let model = BrowserModel()
-    /// Fires when anything the new shell's sidebar or toolbar shows changes: tabs coming and going, the
+    /// Fires when anything the shell's sidebar or toolbar shows changes: tabs coming and going, the
     /// one in front, and each tab's title, address, loading, owner and buttons. Not load progress.
     let changes = PassthroughSubject<Void, Never>()
     private var modelWatch: AnyCancellable?
@@ -256,7 +252,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     private let processPool = WKProcessPool()
     private var escMonitor: Any?
     private var shortcutMonitor: Any?
-    /// The new shell's own shortcuts (⌘L, ⌘T, ⌘K, ⌘J, ⌘B, ⌘N), passed to the dashboard page when the
+    /// the shell's own shortcuts (⌘L, ⌘T, ⌘K, ⌘J, ⌘B, ⌘N), passed to the dashboard page when the
     /// keyboard is in the browser's page and the page would otherwise swallow them.
     var onShellKey: ((String) -> Void)?
     private var nextNumber = 1
@@ -382,7 +378,6 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         model.activeID = tab.id
         stack.bringToFront(tab.webView)
         refreshGlow()
-        if tab.isBlank { model.focusAddress += 1 }
     }
 
     func select(offset: Int) {
@@ -452,17 +447,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             if flags == .control, event.keyCode == 48 { self.select(offset: 1); return nil }               // ⌃⇥
             if flags == [.control, .shift], event.keyCode == 48 { self.select(offset: -1); return nil }    // ⌃⇧⇥
             guard flags == .command || flags == [.command, .shift] else { return event }
-            if self.model.chromeless, flags == .command, let key = event.charactersIgnoringModifiers,
+            if flags == .command, let key = event.charactersIgnoringModifiers,
                ["l", "t", "k", "j", "b", "n", "w", "1", "2", "3", "4", "5", "6", "7", "8", "9"].contains(key) {
-                // In the new shell these mean what the sidebar says: ⌘1–9 are the pins, ⌘W closes the tab shown.
+                // These mean what the shell's sidebar says: ⌘1–9 are the pins, ⌘W closes the tab shown.
                 self.onShellKey?(key)
                 return nil
             }
             let tab = self.activeTab
             switch event.charactersIgnoringModifiers {
-            case "l": self.model.focusAddress += 1
-            case "t": self.openTab(activate: true)
-            case "w": self.closeTab(tab)
             case "r": tab.webView.reload()
             case "[": tab.webView.goBack()
             case "]": tab.webView.goForward()
@@ -471,11 +463,6 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
             case "=", "+": tab.webView.pageZoom = min(3, tab.webView.pageZoom + 0.1)
             case "-": tab.webView.pageZoom = max(0.5, tab.webView.pageZoom - 0.1)
             case "0": tab.webView.pageZoom = 1
-            case let digit? where digit.count == 1 && ("1"..."9").contains(digit):
-                let n = Int(digit)!
-                guard !self.model.tabs.isEmpty else { return nil }
-                // ⌘9 is always the last tab, as in every browser.
-                self.select(n == 9 ? self.model.tabs[self.model.tabs.count - 1] : self.model.tabs[min(n, self.model.tabs.count) - 1])
             default: return event
             }
             return nil
@@ -498,10 +485,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// working there, in which case it gets a tab of its own.
     func show(url: URL? = nil) {
         env?.openDashboard(.browser)
-        guard let url else {
-            if activeTab.isBlank { model.focusAddress += 1 }
-            return
-        }
+        guard let url else { return }
         let front = activeTab
         if front.working || front.ownerRunID != nil { openTab(url: url, activate: true) } else { front.load(url) }
     }
@@ -513,10 +497,8 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     }
 
     /// The agent or a replay starts working in `tab`: put it in front so the person can watch. Not in
-    /// the new shell while its window is the one in use: the person stays where they are (usually the
+    /// the shell while its window is the one in use: the person stays where they are (usually the
     /// task's chat), and the tab shows up under Agent tabs with its live card in the chat.
-    /// Thumbnails and favicons are for the new shell only; the original look keeps nothing on disk.
-    private var shellLook: Bool { env?.store.settings.newShell == true }
 
     func presentForWork(_ tab: BrowserTab) {
         if env?.shellInFront == true { return }
@@ -613,14 +595,14 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
         tab.onEscape = onEscape
         objectChanged()
         refreshGlow()
-        if shellLook { RunThumbs.capture(tab, runID: runID) }
+        RunThumbs.capture(tab, runID: runID)
     }
 
     func updateWork(_ line: String, in tab: BrowserTab) {
         guard tab.status != nil else { return }
         tab.status = line
         if tab.id == model.activeID { refreshGlow(pulse: true) }
-        if shellLook, let runID = tab.ownerRunID { RunThumbs.capture(tab, runID: runID) }
+        if let runID = tab.ownerRunID { RunThumbs.capture(tab, runID: runID) }
     }
 
     /// The tab each conversation's last run ended in, where its follow-ups carry on.
@@ -634,7 +616,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// The run is done with every tab it had.
     func endWork(runID: String) {
         for tab in model.tabs where tab.ownerRunID == runID {
-            if shellLook { RunThumbs.capture(tab, runID: runID, final: true) }
+            RunThumbs.capture(tab, runID: runID, final: true)
             tab.status = nil
             tab.ownerRunID = nil
             tab.onEscape = nil
@@ -734,7 +716,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tab = tab(for: webView) else { return }
         tab.navigationEnded(navigation)
-        if shellLook { FaviconCache.learn(from: tab) }
+        FaviconCache.learn(from: tab)
         if model.recording, recordingTab === tab { Task { _ = await tab.call("return window.__okidoki?.record(true)") } }
     }
 
@@ -1151,229 +1133,11 @@ private struct BrowserView: View {
     weak var controller: BrowserController?
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !model.chromeless {
-                BrowserTabStrip(model: model, controller: controller)
-                if let tab = model.active {
-                    BrowserToolbar(tab: tab, model: model, controller: controller)
-                        .id(tab.id)
-                }
-            }
-            ZStack(alignment: .top) {
-                TabStackRepresentable(stack: stack)
-                if let tab = model.active { BrowserPageOverlay(tab: tab, controller: controller).id(tab.id) }
-            }
+        // The shell's toolbar and sidebar are the browser's chrome; this is only the page.
+        ZStack(alignment: .top) {
+            TabStackRepresentable(stack: stack)
+            if let tab = model.active { BrowserPageOverlay(tab: tab, controller: controller).id(tab.id) }
         }
-    }
-}
-
-private struct BrowserTabStrip: View {
-    @ObservedObject var model: BrowserModel
-    weak var controller: BrowserController?
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let theme = OKTheme(scheme)
-        HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(model.tabs) { tab in
-                        BrowserTabChip(tab: tab, active: tab.id == model.active?.id, closable: true,
-                                       select: { controller?.select(tab) }, close: { controller?.closeTab(tab) })
-                    }
-                }
-                .padding(.horizontal, 1)
-            }
-            OKIconButton(glyph: "plus", size: 24, help: "New tab (⌘T)") { controller?.openTab(activate: true) }
-        }
-        .padding(.horizontal, 12).padding(.top, 8)
-        .background(theme.card.opacity(0.0001))
-    }
-}
-
-private struct BrowserTabChip: View {
-    @ObservedObject var tab: BrowserTab
-    let active: Bool
-    let closable: Bool
-    let select: () -> Void
-    let close: () -> Void
-    @Environment(\.colorScheme) private var scheme
-    @State private var hovering = false
-
-    var body: some View {
-        let theme = OKTheme(scheme)
-        HStack(spacing: 6) {
-            if tab.working {
-                BreathingGlow(color: OKBrand.green, size: 7)
-            } else if tab.loading {
-                PixelGlyph(name: "spinner", size: 9, color: theme.secondary)
-            } else {
-                PixelGlyph(name: "globe", size: 9, color: theme.tertiary)
-            }
-            Text(tab.label)
-                .font(.okBody(12, active ? .medium : .regular))
-                .foregroundStyle(active ? theme.ink : theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            if closable {
-                Button(action: close) {
-                    PixelGlyph(name: "x", size: 8, color: theme.secondary)
-                        .frame(width: 16, height: 16)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .opacity(hovering || active ? 1 : 0)
-                .help(tab.ownerRunID != nil ? "Close tab and stop the agent working here" : "Close tab (⌘W)")
-            }
-        }
-        .padding(.leading, 9).padding(.trailing, 4)
-        .frame(width: 168, height: 28)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(active ? theme.card : (hovering ? Color.primary.opacity(0.05) : .clear))
-        )
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(active ? theme.line : .clear))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: select)
-        .onHover { hovering = $0 }
-        .help(tab.status ?? tab.address)
-    }
-}
-
-private struct BrowserToolbar: View {
-    @ObservedObject var tab: BrowserTab
-    @ObservedObject var model: BrowserModel
-    weak var controller: BrowserController?
-    @Environment(\.colorScheme) private var scheme
-    @FocusState private var addressFocused: Bool
-    @State private var typed = ""
-    /// Which suggestion Return takes, while typing; nil follows the default for what's typed.
-    @State private var picked: BrowserAddressChoice?
-
-    private var choices: [BrowserAddressChoice] {
-        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard addressFocused, !text.isEmpty, text != tab.address else { return [] }
-        if BrowserSteps.looksLikeAddress(text) { return [.open, .ask] }
-        return BrowserSteps.looksLikeTask(text) ? [.ask, .search] : [.search, .ask]
-    }
-
-    private var chosen: BrowserAddressChoice {
-        let options = choices
-        if let picked, options.contains(picked) { return picked }
-        return options.first ?? .open
-    }
-
-    var body: some View {
-        let theme = OKTheme(scheme)
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                OKIconButton(glyph: "chevron-left", help: "Back") { tab.webView.goBack() }
-                    .disabled(!tab.canGoBack).opacity(tab.canGoBack ? 1 : 0.4)
-                OKIconButton(glyph: "chevron", help: "Forward") { tab.webView.goForward() }
-                    .disabled(!tab.canGoForward).opacity(tab.canGoForward ? 1 : 0.4)
-                OKIconButton(glyph: tab.loading ? "x" : "refresh", help: tab.loading ? "Stop" : "Reload") {
-                    if tab.loading { tab.webView.stopLoading() } else { tab.webView.reload() }
-                }
-                HStack(spacing: 6) {
-                    if tab.hasLogin {
-                        Image(systemName: "key.fill").font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(OKBrand.greenInk)
-                            .help("A vault login is saved for this site")
-                    }
-                    TextField("Search, enter a website, or ask okidoki to do something", text: $typed)
-                        .textFieldStyle(.plain)
-                        .font(.okBody(13))
-                        .focused($addressFocused)
-                        .onSubmit { submit(chosen) }
-                        .onKeyPress(.downArrow) { move(1) }
-                        .onKeyPress(.upArrow) { move(-1) }
-                        .onKeyPress(.escape) {
-                            guard addressFocused else { return .ignored }
-                            typed = tab.address
-                            addressFocused = false
-                            return .handled
-                        }
-                }
-                .padding(.horizontal, 10).frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 9).fill(theme.card))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(addressFocused ? theme.lineStrong : theme.line))
-                if let status = tab.status {
-                    HStack(spacing: 6) {
-                        BreathingGlow(color: OKBrand.green, size: 8)
-                        Text(status).font(.okBody(12, .medium)).lineLimit(1)
-                        Text("esc").font(.okMono(10)).foregroundStyle(theme.tertiary)
-                    }
-                    .padding(.horizontal, 10).frame(height: 30)
-                    .frame(maxWidth: 320)
-                    .background(Capsule().fill(OKBrand.green.opacity(0.16)))
-                    .transition(.opacity)
-                }
-                Button {
-                    model.recording ? controller?.env_stopRecording() : controller?.env_startRecording()
-                } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(model.recording ? Color.red : theme.secondary).frame(width: 8, height: 8)
-                        Text(model.recording ? "Save · \(model.recordedSteps)" : "Record").font(.okBody(12, .medium))
-                    }
-                }
-                .buttonStyle(OKButtonStyle(kind: model.recording ? .primary : .secondary, compact: true))
-                .help(model.recording ? "Stop and save these steps as a skill" : "Record what you do here as a skill")
-            }
-            .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
-            if !choices.isEmpty {
-                VStack(spacing: 2) {
-                    ForEach(choices, id: \.self) { choice in
-                        suggestion(choice, selected: choice == chosen, theme: theme)
-                    }
-                }
-                .padding(.horizontal, 12).padding(.bottom, 8)
-                .transition(.opacity)
-            }
-        }
-        .onAppear { typed = tab.address; if tab.isBlank { addressFocused = true } }
-        .onChange(of: tab.address) { _, value in if !addressFocused { typed = value } }
-        .onChange(of: typed) { _, _ in picked = nil }
-        .onChange(of: model.focusAddress) { _, _ in addressFocused = true }
-        .animation(OKMotion.quick, value: tab.status)
-        .animation(OKMotion.quick, value: choices)
-    }
-
-    private func move(_ by: Int) -> KeyPress.Result {
-        let options = choices
-        guard options.count > 1, let index = options.firstIndex(of: chosen) else { return .ignored }
-        picked = options[(index + by + options.count) % options.count]
-        return .handled
-    }
-
-    private func submit(_ choice: BrowserAddressChoice) {
-        let text = typed
-        controller?.go(typed: text, in: tab, choice: choice)
-        addressFocused = false
-        if choice == .ask { typed = tab.address }
-    }
-
-    private func suggestion(_ choice: BrowserAddressChoice, selected: Bool, theme: OKTheme) -> some View {
-        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        let (glyph, verb, hint): (String, String, String) = switch choice {
-        case .ask: ("bolt", "Ask okidoki to do it", "the agent works in this tab")
-        case .search: ("search", "Search Google", "")
-        case .open: ("globe", "Open", BrowserSteps.addressURL(text).map { BrowserSteps.displayURL($0.absoluteString) } ?? "")
-        }
-        return Button { submit(choice) } label: {
-            HStack(spacing: 8) {
-                PixelGlyph(name: glyph, size: 11, color: choice == .ask ? OKBrand.greenInk : theme.secondary)
-                Text(verb).font(.okBody(12.5, .medium)).foregroundStyle(theme.ink)
-                Text(choice == .open ? hint : "“\(text)”").font(.okBody(12.5)).foregroundStyle(theme.secondary).lineLimit(1)
-                Spacer(minLength: 8)
-                if choice == .ask, !hint.isEmpty { Text(hint).font(.okBody(11)).foregroundStyle(theme.tertiary) }
-                if selected { Text("↩").font(.okMono(11)).foregroundStyle(theme.tertiary) }
-            }
-            .padding(.horizontal, 10).frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Color.primary.opacity(0.06) : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

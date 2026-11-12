@@ -1,5 +1,4 @@
 /* ---------- grouped inset lists (shared by settings, keys, memory) ---------- */
-
 .pref-group {
   background: var(--tile);
   border: 1px solid var(--tile-line);
@@ -20,8 +19,7 @@
   padding: 10px 16px;
   text-align: left;
 }
-.pref-row + .pref-row::before,
-.pref-list > .pref-row + .pref-row::before {
+.pref-row + .pref-row::before {
   content: "";
   position: absolute;
   top: 0;
@@ -137,60 +135,6 @@
 }
 
 /* row as a button (account switcher, actions) */
-.pref-row-button {
-  transition: background 0.15s;
-}
-.pref-row-button:hover {
-  background: var(--well);
-}
-.pref-row-button:focus-visible {
-  outline-offset: -2px;
-}
-.pref-row-button.is-current {
-  cursor: default;
-}
-.pref-row-button.is-current:hover {
-  background: transparent;
-}
-.pref-row-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.pref-row-button:disabled:hover {
-  background: transparent;
-}
-.pref-row-button .pref-copy em {
-  text-transform: capitalize;
-}
-.pref-switch-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--faint);
-  transition: color 0.15s;
-}
-.pref-row-button:hover .pref-switch-hint {
-  color: var(--ink);
-}
-.pref-action {
-  min-height: 44px;
-  gap: 10px;
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--ink-2);
-}
-.pref-action .icon {
-  color: var(--ok-muted);
-}
-.pref-action.is-danger,
-.pref-action.is-danger .icon {
-  color: var(--red);
-}
-.pref-action.is-danger:hover {
-  background: var(--red-soft);
-}
 
 /* slider */
 .pref-slider {
@@ -262,7 +206,6 @@
 }
 
 /* ---------- settings page ---------- */
-
 .settings-page {
   max-width: 980px;
   margin: 0 auto;
@@ -571,7 +514,6 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-
 .settings-foot {
   display: flex;
   align-items: center;
@@ -581,7 +523,6 @@
   color: var(--faint);
   margin-top: -8px;
 }
-
 @media (max-width: 1000px) {
   .settings-layout {
     grid-template-columns: 148px minmax(0, 1fr);

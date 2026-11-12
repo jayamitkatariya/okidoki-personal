@@ -243,7 +243,6 @@ export const demoState: NativeState = {
     tourComplete: true,
     showedWelcome: true,
     claudeModel: "claude-haiku-5-5",
-    newShell: true,
     shakeToSummon: true,
     summonHotkey: "option+space",
     drivePace: "fast",

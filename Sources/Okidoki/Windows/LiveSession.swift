@@ -75,7 +75,7 @@ final class LiveFrameSchemeHandler: NSObject, WKURLSchemeHandler {
         let key = ObjectIdentifier(task)
         let kind = url?.host ?? "frame"
         Task { @MainActor in
-            // Frames are in memory; thumbnails, favicons and the browser still come from the new shell's caches.
+            // Frames are in memory; thumbnails, favicons and the browser still come from the shell's caches.
             let found: Data? = kind == "frame" ? LiveFrames.shared.data(for: id) : await ShellImages.serve(kind: kind, id: id)
             guard !self.stopped.contains(key) else { self.stopped.remove(key); return }
             guard let url, let data = found else {

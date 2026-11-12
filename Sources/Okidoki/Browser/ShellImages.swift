@@ -3,7 +3,7 @@ import Foundation
 import OkidokiCore
 import WebKit
 
-/// Pictures the new shell shows that aren't the page itself: a thumbnail per run for the Recent tasks
+/// Pictures the shell shows that aren't the page itself: a thumbnail per run for the Recent tasks
 /// cards, a favicon per site for pins, bookmarks and tabs, and a still of the tab in front for when a
 /// web overlay has to cover the native page. All are served to the dashboard as
 /// `okidoki-live://thumb/<runID>`, `okidoki-live://favicon/<host>` and `okidoki-live://freeze/<n>`.

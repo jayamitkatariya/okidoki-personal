@@ -57,14 +57,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         dashboard.target = self
         menu.addItem(dashboard)
 
-        // The original look keeps its original menu while shake is the way in.
-        if env.store.settings.newShell || !env.store.settings.shakeToSummon {
-            let summon = NSMenuItem(title: "summon okidoki", action: #selector(summonNow), keyEquivalent: "")
-            summon.target = self
-            let key = SummonHotKey.label(AppEnvironment.activeHotkey(env.store.settings))
-            if !key.isEmpty { summon.toolTip = key }
-            menu.addItem(summon)
-        }
+        let summon = NSMenuItem(title: "summon okidoki", action: #selector(summonNow), keyEquivalent: "")
+        summon.target = self
+        let key = SummonHotKey.label(AppEnvironment.activeHotkey(env.store.settings))
+        if !key.isEmpty { summon.toolTip = key }
+        menu.addItem(summon)
 
         let ask = NSMenuItem(title: "ask okidoki", action: #selector(ask), keyEquivalent: "")
         ask.target = self

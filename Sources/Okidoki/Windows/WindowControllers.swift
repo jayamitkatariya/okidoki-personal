@@ -6,27 +6,20 @@ import Combine
 final class DashboardWindowController: NSObject, NSWindowDelegate {
     private weak var env: AppEnvironment?
     private(set) var window: NSWindow?
-    private var lookSub: AnyCancellable?
 
     init(environment: AppEnvironment) {
         self.env = environment
         super.init()
         build()
-        lookSub = environment.store.$settings
-            .map(\.newShell)
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] on in self?.applyLook(newShell: on) }
+        applyLook()
     }
 
-    /// The new shell lets the desktop through the sidebar (vibrancy behind a clear window); the original
-    /// dashboard is an opaque window. Flipping the setting changes the window in place.
-    private func applyLook(newShell: Bool) {
+    /// The shell lets the desktop through the sidebar: vibrancy behind a clear window.
+    private func applyLook() {
         guard let window else { return }
-        window.isOpaque = !newShell
-        window.backgroundColor = newShell ? .clear : .okDashboardBackground
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.invalidateShadow()
-        if newShell || env?.browserMade == true { env?.browser.model.chromeless = newShell }
     }
 
     private func build() {
@@ -47,8 +40,8 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         // the transparent title bar strip still drags it.
         window.isMovableByWindowBackground = false
         window.titlebarSeparatorStyle = .none
-        window.backgroundColor = .okDashboardBackground
-        window.isOpaque = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
         window.hasShadow = true
         window.minSize = NSSize(width: 900, height: 600)
         window.collectionBehavior = [.fullScreenPrimary]

@@ -2,15 +2,15 @@ import AppKit
 import Foundation
 import OkidokiCore
 
-/// What the new shell asks of the Mac: requests from its composer, and the browser driven from its
+/// What the shell asks of the Mac: requests from its composer, and the browser driven from its
 /// sidebar and toolbar instead of the native tab strip.
 extension AppEnvironment {
     /// The dashboard window is the one taking the keyboard.
     var dashboardWindowIsKey: Bool { dashboard?.window?.isKeyWindow == true }
 
-    /// The new shell is the window in use: it already shows runs, approvals and answers in place, so
+    /// The shell is the window in use: it already shows runs, approvals and answers in place, so
     /// nothing else (the notch, a card at the cursor, a jump to another tab) should repeat them.
-    var shellInFront: Bool { store.settings.newShell && dashboardWindowIsKey }
+    var shellInFront: Bool { dashboardWindowIsKey }
 
     /// A request from the composer. Returns the conversation it lands in, so the shell can open it.
     /// `mode` is the Where chip: auto, browser, act or chat. A conversation whose last task asked
@@ -92,7 +92,7 @@ extension AppEnvironment {
         shellBrowserGo(url, tabID: nil, choice: "open", newTab: newTab)
     }
 
-    /// The new shell's first open: pins come from what the person already uses.
+    /// the shell's first open: pins come from what the person already uses.
     func seedShellPins() {
         store.seedPinsIfNeeded(loginSites: vault.logins.map(\.site))
     }
