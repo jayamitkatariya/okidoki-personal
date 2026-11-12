@@ -30,7 +30,7 @@ export function strictSchema(schema: unknown): unknown {
 }
 
 /** One model call whose answer is JSON matching `tool.input_schema` (structured outputs). */
-async function forcedTool<T>(opts: {
+export async function forcedTool<T>(opts: {
   key: string | undefined; model: string; system: string; user: unknown[] | string;
   tool: { name: string; description: string; input_schema: Record<string, unknown> };
   maxTokens?: number; timeoutMs?: number; fetchImpl?: Fetch; effort?: "low" | "medium" | "high";

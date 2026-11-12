@@ -34,6 +34,7 @@ final class AppEnvironment: ObservableObject {
     private(set) lazy var browserReplayer = BrowserReplayer(environment: self)
     /// Smart replay in the browser (settings.hybridReplay). Off, `browserReplayer` runs as it always has.
     private(set) lazy var hybridBrowserReplayer = HybridBrowserReplayer(environment: self)
+    private(set) lazy var hybridMacReplayer = HybridMacReplayer(environment: self)
     /// The open "check before submitting" card's answer, for scripts (`gate carry|skip|stop`).
     var pendingGate: ((HybridBrowserReplayer.GateAnswer) -> Void)?
     /// The steps of a recording in the browser so far, while one is going.
@@ -110,6 +111,10 @@ final class AppEnvironment: ObservableObject {
     var lastHandoffSpoken = Date.distantPast
     /// Runs started with nobody at this Mac (routines): a hand-off there stops instead of waiting.
     var unattendedRuns: Set<String> = []
+    /// Developer switch (`macax on`, scripts/cu-replay-eval.py): smart Mac replay acts through
+    /// Accessibility alone — no pointer, no keys, no screenshots, nothing brought to the front — so it can
+    /// be tested on a Mac someone is using. Never on for the person.
+    var macAccessibilityOnly = false
     /// The words a smart replay was asked with, for finding values the request states in passing.
     var pendingReplayRequests: [String: String] = [:]
     /// Runs following a library template: which template, and the passes still to replay once it's learned.
@@ -318,6 +323,7 @@ final class AppEnvironment: ObservableObject {
                 if self.browserDriver.isActive { self.browserDriver.cancelAll(reason: "stopped by the test script") }
                 if self.browserReplayer.isActive { self.browserReplayer.cancel(reason: "stopped by the test script") }
                 if self.hybridBrowserReplayer.isActive { self.hybridBrowserReplayer.cancel(reason: "stopped by the test script") }
+                if self.hybridMacReplayer.isActive { self.hybridMacReplayer.cancel(reason: "stopped by the test script") }
             }
         }
         // The browser, for scripts/dev-browser.sh: run a goal there, open a page, record, save, replay.
@@ -396,6 +402,9 @@ final class AppEnvironment: ObservableObject {
         // The notch's okay on a run waiting for one, for scripts (`approve <run id>`).
         case "approve":
             if let run = store.run(arg), [.waiting, .previewing].contains(run.status) { approveRun(run.id) }
+        // `macax on|off`: smart Mac replay through Accessibility alone (scripts/cu-replay-eval.py).
+        case "macax":
+            macAccessibilityOnly = arg == "on"
         // `importskill <path to .okiskill>`: adds a skill file the way "import" does (scripts/cu-replay-eval.py).
         case "importskill":
             importSkill(at: URL(fileURLWithPath: arg))
@@ -418,11 +427,11 @@ final class AppEnvironment: ObservableObject {
             pendingTeach?()
             pendingTeach = nil
         case "takeback":
-            if let back = pendingHandoff { back() } else { hybridBrowserReplayer.takeBack() }
+            if let back = pendingHandoff { back() } else if hybridMacReplayer.isActive { hybridMacReplayer.takeBack() } else { hybridBrowserReplayer.takeBack() }
         case "pause":
             // The notch's button on whatever is running: `pause` for the smart replay, `pause <run id>` for any.
             if !arg.isEmpty { pauseRun(arg, from: "script") }
-            else if let id = hybridBrowserReplayer.runID { pauseRun(id, from: "script") }
+            else if let id = hybridBrowserReplayer.runID ?? hybridMacReplayer.runID { pauseRun(id, from: "script") }
         case "tabjs":
             let tab = browser.activeTab
             Task { @MainActor in _ = await tab.call(arg) }
@@ -522,7 +531,7 @@ final class AppEnvironment: ObservableObject {
         guard store.settings.okidokiEnabled else { return }
         // Pointer movement must never interrupt an active action, recording, or replay.
         // Use the session's explicit controls or Escape to stop it.
-        guard !driver.isActive, !watch.isRecording, !replayer.isActive,
+        guard !driver.isActive, !watch.isRecording, !replayer.isActive, !hybridMacReplayer.isActive,
               !ghost.model.visible else { return }
         if simOverlay.isVisible { simOverlay.dismiss(); return }
         if drawActive { draw.dismissAll(); dismissSummon(); return }
@@ -1373,6 +1382,10 @@ final class AppEnvironment: ObservableObject {
         if replayer.isActive, replayer.runID == id { replayer.pauseOrResume(); return }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.pauseOrResume(); return }
         // Smart replay pauses for real: the page is the person's until they take it back, then it carries on.
+        if hybridMacReplayer.isActive, hybridMacReplayer.runID == id {
+            if hybridMacReplayer.personsTurn { hybridMacReplayer.takeBack() } else { hybridMacReplayer.pauseForPerson(from: source) }
+            return
+        }
         if hybridBrowserReplayer.isActive, hybridBrowserReplayer.runID == id {
             if hybridBrowserReplayer.personsTurn { hybridBrowserReplayer.takeBack() } else { hybridBrowserReplayer.pauseForPerson(from: source) }
             return
@@ -1424,6 +1437,7 @@ final class AppEnvironment: ObservableObject {
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "you stopped me"); return }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "you stopped me"); return }
         if hybridBrowserReplayer.isActive, hybridBrowserReplayer.runID == id { hybridBrowserReplayer.cancel(reason: "you stopped me"); return }
+        if hybridMacReplayer.isActive, hybridMacReplayer.runID == id { hybridMacReplayer.cancel(reason: "you stopped me"); return }
         if browserDriver.isRunning(id) { browserDriver.cancel(runID: id, reason: "you stopped me"); return }
         if ghost.model.visible, store.run(id)?.kind == .borrow { ghost.cancel() }
         if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "you stopped me"); return }
@@ -1478,8 +1492,8 @@ final class AppEnvironment: ObservableObject {
                         browserReplayer.begin(skill: skill, runID: run.id, times: times, values: values)
                     }
                 } else if smart {
-                    replayer.beginSmart(skill: skill, runID: run.id, passes: values, times: times,
-                                        request: pendingReplayRequests.removeValue(forKey: run.id) ?? "")
+                    hybridMacReplayer.begin(skill: skill, runID: run.id, passes: values, times: times,
+                                            request: pendingReplayRequests.removeValue(forKey: run.id) ?? "")
                 } else {
                     replayer.begin(skill: skill, runID: run.id, times: times, values: values)
                 }
@@ -1670,6 +1684,7 @@ final class AppEnvironment: ObservableObject {
         if replayer.isActive, replayer.runID == id { replayer.cancel(reason: "cancelled") }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.cancel(reason: "cancelled") }
         if hybridBrowserReplayer.isActive, hybridBrowserReplayer.runID == id { hybridBrowserReplayer.cancel(reason: "cancelled") }
+        if hybridMacReplayer.isActive, hybridMacReplayer.runID == id { hybridMacReplayer.cancel(reason: "cancelled") }
         if browserDriver.isRunning(id) { browserDriver.cancel(runID: id, reason: "cancelled") }
         if driver.isActive, store.run(id)?.kind == .computerUse { driver.cancel(reason: "cancelled") }
         store.cancelRun(id)
@@ -1685,6 +1700,7 @@ final class AppEnvironment: ObservableObject {
     func startRecording(name: String) {
         guard !watch.isRecording else { return }
         if replayer.isActive { replayer.cancel(reason: "recording instead") }
+        if hybridMacReplayer.isActive { hybridMacReplayer.cancel(reason: "recording instead") }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         beginWatching(prompt: trimmed.isEmpty ? "record a skill" : "record: \(trimmed)", threadID: "", name: trimmed, speakLine: "")
     }
@@ -1835,7 +1851,7 @@ final class AppEnvironment: ObservableObject {
     private func chatContext() -> ChatCommands.Context {
         ChatCommands.Context(skills: store.activeSkills,
                              recording: watch.isRecording,
-                             replaying: replayer.isActive || browserReplayer.isActive || hybridBrowserReplayer.isActive,
+                             replaying: replayer.isActive || browserReplayer.isActive || hybridBrowserReplayer.isActive || hybridMacReplayer.isActive,
                              hasReplayed: lastReplayedSkillID.flatMap { store.skill($0) } != nil,
                              records: SkillRecords.load())
     }
@@ -1936,6 +1952,7 @@ final class AppEnvironment: ObservableObject {
             if replayer.isActive { replayer.cancel(reason: "you said stop") }
             if browserReplayer.isActive { browserReplayer.cancel(reason: "you said stop") }
             if hybridBrowserReplayer.isActive { hybridBrowserReplayer.cancel(reason: "you said stop") }
+            if hybridMacReplayer.isActive { hybridMacReplayer.cancel(reason: "you said stop") }
 
         case .deleteSkill(let id):
             guard let skill = store.skill(id) else { return }
@@ -2007,10 +2024,11 @@ final class AppEnvironment: ObservableObject {
             return false
         }
         // Another agent must never cut off the user's own replay; the user asking for a new one may.
-        if source == "control", replayer.isActive || browserReplayer.isActive || hybridBrowserReplayer.isActive { return false }
+        if source == "control", replayer.isActive || browserReplayer.isActive || hybridBrowserReplayer.isActive || hybridMacReplayer.isActive { return false }
         if replayer.isActive { replayer.cancel(reason: "replaying \(skill.name) instead") }
         if browserReplayer.isActive { browserReplayer.cancel(reason: "replaying \(skill.name) instead") }
         if hybridBrowserReplayer.isActive { hybridBrowserReplayer.cancel(reason: "replaying \(skill.name) instead") }
+        if hybridMacReplayer.isActive { hybridMacReplayer.cancel(reason: "replaying \(skill.name) instead") }
         let passes = max(1, min(times, 10_000))
         let run = makeReplayRun(skill, times: passes, threadID: threadID, values: values)
         if Self.isUnattended(source) { unattendedRuns.insert(run.id) }

@@ -161,13 +161,16 @@ final class MacObserver {
         return false
     }
 
-    /// Chooses `option` in a pop-up: by setting its value when the app allows it, else by opening its
-    /// menu and pressing the item (closing the menu again if the item isn't there).
-    func choose(_ option: String, in element: AXUIElement) async -> String? {
-        if await isSettable(element), await setValue(element, option) {
-            return option
+    /// Chooses `option` in a pop-up, written the way its choices are ("24(b)" → "24B"): by setting its
+    /// value when the app allows it, else (only when `mayOpenMenu`) by opening its menu and pressing the
+    /// item, closing the menu again if none fits. A menu opens on a display even for a window that's off
+    /// them all, so acting through Accessibility alone never opens one. The choice made, or nil.
+    func choose(_ option: String, in element: AXUIElement, options: [String]?, mayOpenMenu: Bool) async -> String? {
+        if await isSettable(element) {
+            let picked = options.map { SkillBinder.choice(option, in: $0) } ?? option
+            if await setValue(element, picked) { return picked }
         }
-        guard await press(element) else { return nil }
+        guard mayOpenMenu, await press(element) else { return nil }
         for _ in 0..<10 {
             try? await Task.sleep(nanoseconds: 80_000_000)
             let items: [(UncheckedAX, String)] = await Self.off {

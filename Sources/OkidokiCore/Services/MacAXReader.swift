@@ -125,6 +125,9 @@ public enum MacAXReader {
         return out
     }
 
+    /// Where an element is on screen now (Quartz points), or nil.
+    public static func frame(of element: AXUIElement) -> CGRect? { AXSearch.frame(of: element) }
+
     /// An attribute that holds another element (a window's default button).
     public static func attributeElement(_ key: String, of element: AXUIElement) -> AXUIElement? {
         self.element(key, of: element)

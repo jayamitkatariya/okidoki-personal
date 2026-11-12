@@ -95,6 +95,17 @@ final class Popup: NSPopUpButton {
         guard !blocked(self), let title = value as? String, let item = itemArray.first(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame }) else { return }
         select(item)
     }
+    /// Its choices, listed without opening the menu (a menu would open on the person's screen).
+    override func accessibilityChildren() -> [Any]? {
+        itemArray.map { item in
+            let element = NSAccessibilityElement()
+            element.setAccessibilityRole(.menuItem)
+            element.setAccessibilityTitle(item.title)
+            element.setAccessibilityParent(self)
+            element.setAccessibilityFrameInParentSpace(.zero)
+            return element
+        }
+    }
 }
 
 final class Button: NSButton {

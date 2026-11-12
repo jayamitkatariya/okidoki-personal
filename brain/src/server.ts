@@ -11,6 +11,7 @@ import { findDocument } from "./finder";
 import type { ComputerRequest, ConnectorRunRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
 import { browserStep, type BrowserRequest } from "./browser";
 import { compileSkill, resolveValues, routeRequest, type CompileRequest, type ResolveRequest, type RouteRequest } from "./skillcompile";
+import { macStep, type MacStepRequest } from "./macstep";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
@@ -111,6 +112,13 @@ async function route(request: Request): Promise<Response> {
       const payload = await body<RouteRequest>(request);
       const key = anthropicKey(request.headers.get("x-anthropic-key"));
       return json(await routeRequest(payload, key, fetchUntil(request.signal)));
+    }
+
+    // Smart Mac replay's help on evidence: one turn through the app's accessibility controls.
+    if (url.pathname === "/mac/step" && request.method === "POST") {
+      const payload = await body<MacStepRequest>(request);
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      return json(await macStep(payload, key, fetchUntil(request.signal)));
     }
 
     if (url.pathname === "/computer" && request.method === "POST") {
