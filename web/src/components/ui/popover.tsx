@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Popover as PopoverPrimitive } from '@base-ui/react/popover'
 
 import { cn } from '@/lib/utils'
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 function Popover({ ...props }: PopoverPrimitive.Root.Props) {
   return <PopoverPrimitive.Root data-slot="popover" {...props} />
@@ -39,6 +40,7 @@ function PopoverContent({
   }) {
   return (
     <PopoverPrimitive.Portal>
+      <OverlayCover />
       <PopoverPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

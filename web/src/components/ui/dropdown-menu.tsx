@@ -4,6 +4,7 @@ import { Menu as MenuPrimitive } from '@base-ui/react/menu'
 
 import { cn } from '@/lib/utils'
 import { IconChevronRight, IconCheck } from "@tabler/icons-react"
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 type DropdownMenuSize = 'sm' | 'default'
 
@@ -100,6 +101,7 @@ function DropdownMenuContent({
   return (
     <SizeContext.Provider value={resolved}>
       <MenuPrimitive.Portal>
+      <OverlayCover />
         <MenuPrimitive.Positioner
           className="isolate z-50 outline-none"
           align={align}

@@ -5,6 +5,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { IconX } from "@tabler/icons-react"
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -65,6 +66,7 @@ function DialogContent({
 } & VariantProps<typeof dialogContentVariants>) {
   return (
     <DialogPortal>
+      <OverlayCover />
       <DialogOverlay />
       <DialogPrimitive.Popup
         data-slot="dialog-content"

@@ -3,6 +3,7 @@ import { Select as SelectPrimitive } from '@base-ui/react/select'
 
 import { cn } from '@/lib/utils'
 import { IconChevronDown, IconCheck, IconChevronUp } from "@tabler/icons-react"
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 const Select = SelectPrimitive.Root
 
@@ -71,6 +72,7 @@ function SelectContent({
   Pick<SelectPrimitive.Portal.Props, 'container'>) {
   return (
     <SelectPrimitive.Portal container={container}>
+      <OverlayCover />
       <SelectPrimitive.Positioner
         side={side}
         sideOffset={sideOffset}

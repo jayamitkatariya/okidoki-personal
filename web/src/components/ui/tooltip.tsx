@@ -6,6 +6,7 @@ import { TextMorph } from 'torph/react'
 
 import { joinsLetters } from '@/lib/joined-script'
 import { cn } from '@/lib/utils'
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 const TRAVEL = 'duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]'
 
@@ -50,6 +51,7 @@ function TooltipContent({
   Pick<TooltipPrimitive.Portal.Props, 'container'>) {
   return (
     <TooltipPrimitive.Portal container={container}>
+      <OverlayCover />
       <TooltipPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

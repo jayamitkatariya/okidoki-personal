@@ -6,6 +6,7 @@ import { useDirection } from '@base-ui/react/direction-provider'
 import { cn } from '@/lib/utils'
 import { KbdGroup } from '@/components/ui/kbd'
 import { IconChevronRight, IconCheck } from "@tabler/icons-react"
+import { OverlayCover } from '@/components/ui/overlay-cover'
 
 function ContextMenu({ ...props }: ContextMenuPrimitive.Root.Props) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />
@@ -39,6 +40,7 @@ function ContextMenuContent({
 
   return (
     <ContextMenuPrimitive.Portal>
+      <OverlayCover />
       <ContextMenuPrimitive.Positioner
         className="isolate z-50 outline-none"
         align={align}
