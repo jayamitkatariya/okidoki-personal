@@ -267,10 +267,15 @@ public enum HybridReplay {
     /// Text a dialog can be known by again: its words without numbers ("time out in 2 minutes" changes),
     /// the first few that are long enough to mean something.
     public static func dialogKey(_ text: String) -> String? {
-        let words = text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 && !$0.contains(where: \.isNumber) }
+        let words = keyWords(text)
         guard words.count >= 2 else { return nil }
         return words.prefix(4).joined(separator: " ")
+    }
+
+    /// The words a dialog key is made of: three letters or more, no digits.
+    static func keyWords(_ text: String) -> [String] {
+        text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !$0.contains(where: \.isNumber) }
     }
 
     /// Buttons that move past a page nobody recorded (a "verify your email" step) without doing anything.
@@ -309,7 +314,11 @@ public enum HybridReplay {
             if let element = handler.whenElement, !element.isEmpty { return present(element) }
             if handler.source == "learned-page" { return false }
             if let text = handler.whenText, !text.isEmpty {
-                if handler.source == "learned" { return dialogText.map { contains($0, text) } ?? false }
+                // A learned key is the dialog's longer words ("what new acmedesk returns" for "What's new in
+                // AcmeDesk 3. Returns…"), so it's found among the dialog's words as well as in its text.
+                if handler.source == "learned" {
+                    return dialogText.map { contains($0, text) || (" " + keyWords($0).joined(separator: " ") + " ").contains(" " + text + " ") } ?? false
+                }
                 return contains(seen.text, text) || contains(seen.window, text)
             }
             return false

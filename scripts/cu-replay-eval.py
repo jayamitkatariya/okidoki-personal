@@ -33,8 +33,9 @@ STATE = SUPPORT / "state.json"
 DOMAIN = "dev.okidoki.personal"
 TERMINAL = {"done", "failed", "cancelled"}
 FIXTURE_APP = ROOT / "build/cu-fixture/AcmeDesk.app"
-# The fixture's own folder for this eval: config, submissions, its log. Deleted at the end.
-ACME = ROOT / "build/cu-replay/acmedesk-home"
+# The fixture's own folder for this eval: config, submissions, its log. Deleted at the end. Not under
+# ~/Desktop or ~/Documents: macOS would ask the person before letting a new app write there.
+ACME = Path.home() / "Library/Application Support/AcmeDesk/eval"
 KNOBS = ["drift", "randomIds", "slow", "popups", "expire", "busy", "random", "wipe", "moveWindow"]
 
 
@@ -179,8 +180,8 @@ def ensure_skills(spec, reimport):
             time.sleep(0.6)
         if not find_skill(name):
             hook(f"importskill {ROOT / 'scripts/cu-fixture' / file}")
-            for _ in range(20):
-                time.sleep(0.3)
+            for _ in range(60):
+                time.sleep(0.5)
                 if find_skill(name):
                     break
             else:

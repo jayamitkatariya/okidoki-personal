@@ -128,7 +128,7 @@ def smart():
         step("in AcmeDesk, click “Next”", "click", "Deductions", label="Next", role="AXButton", ident="deductions-next",
              expect={"labelPresent": "Review your return"}, **on("Deductions")),
         step("in AcmeDesk, click “Submit”", "click", "Deductions", label="Submit", role="AXButton", ident="submit", sheet=True,
-             irreversible=True, expect={"textContains": "Your return has been filed"},
+             irreversible=True, echoes=True, expect={"textContains": "Your return has been filed"},
              anchor=anchor("Deductions", "Review your return")),
         step("read the reference number", "read", "Filed", capture="reference", **on("Filed")),
         step("in AcmeDesk, click “Done”", "click", "Filed", label="Done", role="AXButton", ident="done",

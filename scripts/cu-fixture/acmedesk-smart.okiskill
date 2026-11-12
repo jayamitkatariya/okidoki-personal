@@ -474,6 +474,7 @@
         ]
       },
       "irreversible": true,
+      "echoes": true,
       "expect": {
         "textContains": "Your return has been filed"
       },
