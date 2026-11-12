@@ -67,7 +67,7 @@ export function Toolbar({
   return (
     <div className={cx("toolbar", working && "is-agent")}>
       {sidebarHidden ? <ToolButton icon="panel" label="Show sidebar (⌘B)" onClick={onShowSidebar} className="tool-sidebar" /> : null}
-      {tab ? (
+      {tab && !home ? (
       <div className="tool-nav">
         <ToolButton icon="chevron-left" label="Back (⌘[)" disabled={!tab?.canGoBack} onClick={() => invoke("browserNav", { action: "back", tabID: tab?.id })} />
         <ToolButton icon="chevron" label="Forward (⌘])" disabled={!tab?.canGoForward} onClick={() => invoke("browserNav", { action: "forward", tabID: tab?.id })} />
