@@ -46,7 +46,7 @@ export function Home({
     return [...live, ...done].slice(0, 6);
   }, [runs]);
   const skills = useMemo(() => [...(state.skills ?? [])].sort((a, b) => (b.runCount ?? 0) - (a.runCount ?? 0)).slice(0, 4), [state.skills]);
-  const templates = (state.library ?? []).filter((entry) => !entry.added).slice(0, 4 - Math.min(skills.length, 4) + 1);
+  const templates = (state.library ?? []).filter((entry) => !entry.added).slice(0, Math.max(0, 4 - skills.length));
   const empty = runs.length === 0;
   const fresh = useRef(firstOpen).current;
 
@@ -119,6 +119,11 @@ export function Home({
                 )}
               </div>
             ))}
+            {needs.length > 4 ? (
+              <button type="button" className="need-more" onClick={onShowAll}>
+                +{needs.length - 4} more waiting
+              </button>
+            ) : null}
           </div>
         </motion.section>
       ) : null}
@@ -160,7 +165,7 @@ export function Home({
                 </span>
                 <span className="replay-text">
                   <strong>{skill.name}</strong>
-                  <em>{skill.runCount ? `${skill.runCount} runs` : "Never run"}</em>
+                  <em>{skill.runCount ? `${skill.runCount} ${skill.runCount === 1 ? "run" : "runs"}` : "Never run"}</em>
                 </span>
               </button>
             ))}

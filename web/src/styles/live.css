@@ -108,7 +108,7 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #111;
+  background: var(--code-bg);
 }
 .live-frame-large {
   border-radius: 14px;

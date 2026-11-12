@@ -86,7 +86,11 @@ export function Palette({
       }
     }
     for (const item of [...(state.pins ?? []), ...(state.bookmarks ?? [])]) {
-      if (has(item.title, item.url)) list.push({ id: `site-${item.id}`, group: "Sites", label: siteLabel(item.title, item.url), detail: hostOf(item.url), icon: <Favicon url={item.url} size={16} />, run: close(() => onOpenURL(item.url)) });
+      if (has(item.title, item.url)) {
+        // Like the sidebar: back to that site's tab if one's open, else a new one.
+        const open = (state.browser?.tabs ?? []).find((tab) => !tab.ownerRunID && !tab.status && tab.host === hostOf(item.url));
+        list.push({ id: `site-${item.id}`, group: "Sites", label: siteLabel(item.title, item.url), detail: hostOf(item.url), icon: <Favicon url={item.url} size={16} />, run: close(() => (open ? onOpenTab(open.id) : onOpenURL(item.url))) });
+      }
     }
     for (const page of LIBRARY) {
       if (has(page.title, page.hint)) list.push({ id: `page-${page.page}`, group: "Go to", label: page.title, detail: page.hint, icon: <PixelIcon name={page.icon} size={16} />, run: close(() => onNavigate({ kind: "page", page: page.page })) });
@@ -99,9 +103,11 @@ export function Palette({
     return list.slice(0, 40);
   }, [query, state, invoke, onClose, onNavigate, onOpenTab, onOpenURL]);
 
+  // Results shrink as you type: keep the selection on something that exists.
+  const at = Math.min(index, Math.max(0, results.length - 1));
   useEffect(() => {
     selected.current?.scrollIntoView({ block: "nearest" });
-  }, [index]);
+  }, [at]);
 
   return createPortal(
     <AnimatePresence>
@@ -133,6 +139,10 @@ export function Palette({
                 value={query}
                 placeholder="Go to a tab, chat or page, or ask okidoki…"
                 aria-label="Search"
+                role="combobox"
+                aria-expanded={results.length > 0}
+                aria-controls="palette-results"
+                aria-activedescendant={results[at] ? `palette-${results[at].id}` : undefined}
                 onChange={(event) => {
                   setQuery(event.target.value);
                   setIndex(0);
@@ -147,7 +157,7 @@ export function Palette({
                     setIndex((value) => Math.max(0, value - 1));
                   } else if (event.key === "Enter") {
                     event.preventDefault();
-                    results[index]?.run();
+                    results[at]?.run();
                   } else if (event.key === "Escape") {
                     event.preventDefault();
                     onClose();
@@ -155,15 +165,19 @@ export function Palette({
                 }}
               />
             </div>
-            <div className="palette2-body">
-              {results.map((result, at) => (
-                <div key={result.id}>
-                  {at === 0 || results[at - 1].group !== result.group ? <div className="pop-group">{result.group}</div> : null}
+            <div className="palette2-body" id="palette-results" role="listbox" aria-label="Results">
+              {results.map((result, place) => (
+                <div key={result.id} role="presentation">
+                  {place === 0 || results[place - 1].group !== result.group ? <div className="pop-group" role="presentation">{result.group}</div> : null}
                   <button
-                    ref={at === index ? selected : undefined}
+                    ref={place === at ? selected : undefined}
+                    id={`palette-${result.id}`}
                     type="button"
-                    className={cx("pop-item", at === index && "is-active")}
-                    onMouseEnter={() => setIndex(at)}
+                    role="option"
+                    aria-selected={place === at}
+                    tabIndex={-1}
+                    className={cx("pop-item", place === at && "is-active")}
+                    onMouseEnter={() => setIndex(place)}
                     onClick={result.run}
                   >
                     {result.icon}
@@ -171,11 +185,11 @@ export function Palette({
                       <span>{result.label}</span>
                       {result.detail ? <em>{result.detail}</em> : null}
                     </span>
-                    {at === index ? <span className="pop-enter">↵</span> : null}
+                    {place === at ? <span className="pop-enter">↵</span> : null}
                   </button>
                 </div>
               ))}
-              {!results.length ? <p className="pop-empty">Nothing matches. Press ↵ to ask okidoki.</p> : null}
+              {!results.length ? <p className="pop-empty">Type to find a tab, chat or page, or to ask okidoki.</p> : null}
             </div>
             <footer className="palette2-foot">
               <span>

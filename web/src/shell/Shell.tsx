@@ -6,6 +6,7 @@ import { cx } from "../lib";
 import { Empty, KobraToastBridge } from "../components/ui";
 import { Toasts } from "@/components/ui/toast";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { PixelIcon } from "../components/ui";
 import { jumpToSettingsSection, type Page } from "../nav";
 import { RunsPage } from "../pages/RunsPage";
@@ -42,7 +43,9 @@ export function Shell() {
   }, []);
   return (
     <CoverProvider>
-      <ShellBody />
+      <TooltipProvider delay={350}>
+        <ShellBody />
+      </TooltipProvider>
     </CoverProvider>
   );
 }
@@ -195,7 +198,7 @@ function ShellBody() {
           else newTab();
           break;
         case "k":
-          setPaletteOpen(true);
+          setPaletteOpen((open) => !open);
           break;
         case "b":
           setSidebarHidden((value) => !value);
@@ -347,6 +350,9 @@ function ShellBody() {
           focusTick={addressTick}
           assistantOpen={assistantOpen}
           onToggleAssistant={toggleAssistant}
+          onAskedHere={() => {
+            if (tab && !tab.blank) setAssistantFor((current) => ({ ...current, [tab.id]: true }));
+          }}
         />
         <div className={cx("card-body", `is-${view.kind}`)}>
           {view.kind === "home" || (view.kind === "tab" && (!tab || tab.blank)) ? (

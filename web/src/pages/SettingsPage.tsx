@@ -129,6 +129,7 @@ export function SettingsPage() {
   const mcpConnector = state.connectors.find((connector) => connector.id === "mcp");
 
   const profileDirty = name !== account.name || email !== account.email;
+  const emailInvalid = email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const instructionsDirty = instructions !== settings.customInstructions;
 
   return (
@@ -152,7 +153,7 @@ export function SettingsPage() {
             <SettingsSection id="keys" title="Keys" description="Bring your own keys. Each goes in a private file on this Mac, readable only by you, and is sent only to the service it belongs to.">
               <div className="pref-group">
                 {(state.keyProviders ?? []).map((provider) => (
-                  <KeyRow key={provider.id} provider={provider} invoke={invoke} notify={notify} />
+                  <KeyRow key={provider.id} provider={provider} invoke={invoke} notify={notify} confirm={setConfirm} />
                 ))}
                 {!state.keyProviders?.length ? (
                   <PrefRow title="Keys" detail="Open this in the okidoki app on your Mac to add or remove keys.">
@@ -242,7 +243,7 @@ export function SettingsPage() {
                 />
               </PrefRow>
               <PrefRow title="Speaking speed">
-                <Slider min={0.7} max={1.4} step={0.05} value={settings.voiceSpeed} onChange={(value) => updateSettings({ voiceSpeed: value })} format={(value) => `${value.toFixed(2)}×`} />
+                <Slider name="Speaking speed" min={0.7} max={1.4} step={0.05} value={settings.voiceSpeed} onChange={(value) => updateSettings({ voiceSpeed: value })} format={(value) => `${value.toFixed(2)}×`} />
               </PrefRow>
               <PrefRow title="Captions" detail="Show what okidoki is saying">
                 <Switch label="Captions" checked={settings.captions} onChange={(value) => updateSettings({ captions: value })} />
@@ -258,7 +259,7 @@ export function SettingsPage() {
                   <strong>Voice</strong>
                   <em>Pick one to hear a preview.</em>
                 </span>
-                <div className="voice-grid">
+                <div className="voice-grid" role="radiogroup" aria-label="Voice">
                   {VOICES.map((voice) => {
                     // A retired voice (like "brielle") plays as Sarah on the Mac, so show Sarah as chosen.
                     const known = VOICES.some((item) => item.id === settings.voiceID);
@@ -308,7 +309,7 @@ export function SettingsPage() {
                 <Switch label="Smart replay" checked={settings.hybridReplay ?? false} onChange={(value) => updateSettings({ hybridReplay: value })} />
               </PrefRow>
               <PrefRow title="Spending limit" detail="Per task, for tools that cost money">
-                <Slider min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
+                <Slider name="Spending limit" min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
               </PrefRow>
             </div>
 
@@ -410,6 +411,7 @@ export function SettingsPage() {
               >
                 <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)} inert={!(settings.shakeToSummon ?? true)}>
                   <Slider
+                    name="Shake sensitivity"
                     min={0.2}
                     max={1}
                     step={0.05}
@@ -486,16 +488,23 @@ export function SettingsPage() {
           <SettingsSection id="account" title="Profile" description="What okidoki calls you. It stays on this Mac.">
             <div className="pref-group">
               <PrefRow title="Name">
-                <TextField value={name} onChange={setName} className="pref-field" />
+                <TextField value={name} onChange={setName} placeholder="Your name" className="pref-field" />
               </PrefRow>
               <PrefRow title="Email">
-                <TextField value={email} onChange={setEmail} type="email" className="pref-field" />
+                <span className="pref-field-wrap">
+                  <TextField value={email} onChange={setEmail} type="email" placeholder="you@example.com" className="pref-field" />
+                  {emailInvalid ? (
+                    <em className="field-error" role="alert">
+                      That doesn't look like an email address.
+                    </em>
+                  ) : null}
+                </span>
               </PrefRow>
               <div className="pref-row pref-row-end">
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={!profileDirty || !name.trim()}
+                  disabled={!profileDirty || !name.trim() || emailInvalid}
                   onClick={() => {
                     invoke("updateAccount", { name: name.trim(), email: email.trim(), kind: account.kind });
                     notify("Profile saved", name.trim());
@@ -623,7 +632,17 @@ function mcpDetail(services: ServicesState | null | undefined): string {
 }
 
 /** One saved key: set / shipped / missing, with a field to save or replace it. The value is never shown back. */
-function KeyRow({ provider, invoke, notify }: { provider: KeyProvider; invoke: (type: string, payload?: Record<string, unknown>) => void; notify: (title: string, detail: string, kind: Toast["kind"]) => void }) {
+function KeyRow({
+  provider,
+  invoke,
+  notify,
+  confirm,
+}: {
+  provider: KeyProvider;
+  invoke: (type: string, payload?: Record<string, unknown>) => void;
+  notify: (title: string, detail: string, kind: Toast["kind"]) => void;
+  confirm: (request: ConfirmRequest) => void;
+}) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const save = () => {
@@ -667,10 +686,17 @@ function KeyRow({ provider, invoke, notify }: { provider: KeyProvider; invoke: (
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                invoke("deleteKey", { provider: provider.id });
-                notify("Key removed", provider.name, "info");
-              }}
+              onClick={() =>
+                confirm({
+                  title: `Remove your ${provider.name} key?`,
+                  detail: "okidoki stops using it until you add one again.",
+                  action: "Remove key",
+                  onConfirm: () => {
+                    invoke("deleteKey", { provider: provider.id });
+                    notify("Key removed", provider.name, "info");
+                  },
+                })
+              }
             >
               Remove
             </Button>
@@ -1085,6 +1111,20 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
 
   const words = splitCommand(target.trim());
   const valid = name.trim() && (transport === "http" ? /^https?:\/\/\S+$/.test(target.trim()) : !target.trim().startsWith("{") && words !== null && Boolean(words[0]));
+  // Why Save is off, said next to it rather than left to guess.
+  const blocked = !name.trim()
+    ? "Give it a name."
+    : transport === "http"
+      ? /^https?:\/\/\S+$/.test(target.trim())
+        ? null
+        : "Add the server's http(s) address."
+      : target.trim().startsWith("{")
+        ? "That JSON couldn’t be read. Check it, or type the command instead."
+        : words === null
+          ? "The command has an unclosed quote."
+          : !words[0]
+            ? "Add the command that starts the server."
+            : null;
   const save = () => {
     if (!valid || (transport === "stdio" && !words)) return;
     const next: McpServer = {
@@ -1188,6 +1228,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
           </Button>
         ) : null}
         <span className="spacer" />
+        {blocked ? <em className="field-hint">{blocked}</em> : null}
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
@@ -1295,7 +1336,7 @@ function PrefRow({ title, detail, children }: { title: string; detail?: string; 
 }
 
 // Moves live while dragging; commits once on release so a drag isn't a save and a sync per tick.
-function Slider({ min, max, step, value, onChange, format }: { min: number; max: number; step: number; value: number; onChange: (value: number) => void; format: (value: number) => string }) {
+function Slider({ name, min, max, step, value, onChange, format }: { name: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void; format: (value: number) => string }) {
   const [draft, setDraft] = useState(value);
   const latest = useRef(value);
   const dragging = useRef(false);
@@ -1309,6 +1350,8 @@ function Slider({ min, max, step, value, onChange, format }: { min: number; max:
     dragging.current = false;
     if (latest.current !== value) onChange(latest.current);
   };
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
   const fill = ((draft - min) / (max - min)) * 100;
   const label = format(draft);
   return (
@@ -1319,9 +1362,20 @@ function Slider({ min, max, step, value, onChange, format }: { min: number; max:
         max={max}
         step={step}
         value={draft}
-        aria-label={label}
+        aria-label={name}
+        aria-valuetext={label}
         style={{ ["--fill" as string]: `${fill}%` }}
-        onPointerDown={() => (dragging.current = true)}
+        onPointerDown={() => {
+          dragging.current = true;
+          // A release outside the slider still ends the drag.
+          const end = () => {
+            window.removeEventListener("pointerup", end);
+            window.removeEventListener("pointercancel", end);
+            if (dragging.current) commitRef.current();
+          };
+          window.addEventListener("pointerup", end);
+          window.addEventListener("pointercancel", end);
+        }}
         onChange={(event) => {
           latest.current = Number(event.target.value);
           setDraft(latest.current);

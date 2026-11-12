@@ -6,6 +6,18 @@ import { isComposing, PixelIcon, Switch } from "../components/ui";
 import { hasNativeBridge } from "../bridge";
 import type { Settings } from "../types";
 import { MenuItem, Popover } from "./Popover";
+import { followAsk, nextAskRef } from "./ask";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover as KPopover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Favicon } from "./media";
 import { looksLikeAddress, looksLikeTask, siteLabel } from "./model";
 
@@ -39,7 +51,7 @@ interface Mention {
   icon: React.ReactNode;
 }
 
-let refSeq = 0;
+
 
 /**
  * The one place to ask okidoki anything. Home has the full composer (Search or Ask, and the chips),
@@ -88,21 +100,14 @@ export function Composer({
     const el = input.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 6 * 22 + 4)}px`;
+    const line = parseFloat(getComputedStyle(el).lineHeight) || 22;
+    el.style.height = `${Math.min(el.scrollHeight, 6 * line + 4)}px`;
   }, [text]);
 
-  // The Mac says which conversation the request landed in.
-  useEffect(() => {
-    const onAskedEvent = (event: Event) => {
-      const [ref, thread] = String((event as CustomEvent<string>).detail).split("|");
-      if (!pendingRef.current || ref !== pendingRef.current) return;
-      pendingRef.current = null;
-      setPending(false);
-      if (thread) onAsked?.(thread);
-    };
-    window.addEventListener("okidoki-asked", onAskedEvent);
-    return () => window.removeEventListener("okidoki-asked", onAskedEvent);
-  }, [onAsked]);
+  // Stop following a request's reply when this box goes away; a late reply then offers itself in a toast.
+  const stopFollowing = useRef<(() => void) | null>(null);
+  const onAskedRef = useRef(onAsked);
+  onAskedRef.current = onAsked;
 
   const tabs = state.browser?.tabs ?? [];
   const candidates = useMemo<Mention[]>(() => {
@@ -181,7 +186,7 @@ export function Composer({
       return;
     }
     const context = mentions.length ? `\n\n(context: ${mentions.map((item) => item.context).join("; ")})` : "";
-    const ref = `ask-${Date.now()}-${++refSeq}`;
+    const ref = nextAskRef();
     const where = variant === "panel" ? "tab" : settings.summonMode ?? "auto";
     invoke("shellAsk", { text: trimmed + context, mode: where, threadID, tabID, ref });
     setText("");
@@ -192,13 +197,17 @@ export function Composer({
     }
     pendingRef.current = ref;
     setPending(true);
-    // The answer has its own conversation to land in; don't leave the button turning if the Mac is slow to say which.
-    window.setTimeout(() => {
-      if (pendingRef.current === ref) {
-        pendingRef.current = null;
-        setPending(false);
-      }
-    }, 4000);
+    stopFollowing.current?.();
+    stopFollowing.current = followAsk(
+      ref,
+      (thread) => onAskedRef.current?.(thread),
+      () => {
+        if (pendingRef.current === ref) {
+          pendingRef.current = null;
+          setPending(false);
+        }
+      },
+    );
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -286,7 +295,7 @@ export function Composer({
             ref={input}
             rows={1}
             value={text}
-            aria-label={defaultPlaceholder}
+            aria-label={placeholder ?? defaultPlaceholder}
             placeholder={placeholder ?? defaultPlaceholder}
             onChange={(event) => updateText(event.target.value)}
             onKeyDown={onKeyDown}
@@ -294,13 +303,26 @@ export function Composer({
           />
           {hint && variant === "home" ? <span className="composer-hint">{hint} <kbd>↵</kbd></span> : null}
           {variant === "home" ? (
-            <div className="mode-switch" role="tablist" aria-label="Search or ask">
+            <div
+              className="mode-switch"
+              role="radiogroup"
+              aria-label="Search or ask"
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                const next = mode === "search" ? "ask" : "search";
+                setMode(next);
+                event.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
+              }}
+            >
               {(["search", "ask"] as const).map((value) => (
                 <button
                   key={value}
                   type="button"
-                  role="tab"
-                  aria-selected={mode === value}
+                  role="radio"
+                  data-mode={value}
+                  aria-checked={mode === value}
+                  tabIndex={mode === value ? 0 : -1}
                   className={cx(mode === value && "is-on")}
                   onClick={() => {
                     setMode(value);
@@ -312,13 +334,15 @@ export function Composer({
                 </button>
               ))}
             </div>
-          ) : (
+          ) : null}
+          {(
             <button
               type="button"
               className="send"
-              aria-label="Send"
+              aria-label={effective === "search" || opensSite ? "Go" : "Send"}
               aria-busy={pending}
               onClick={submit}
+              disabled={!trimmed && !pending}
               data-ready={trimmed ? "" : undefined}
             >
               <AnimatePresence mode="popLayout" initial={false}>
@@ -384,82 +408,105 @@ function MentionList({
 }
 
 function AttachButton({ candidates, onPick, compact }: { candidates: Mention[]; onPick: (item: Mention) => void; compact?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
   const tabs = candidates.filter((item) => item.kind === "tab").slice(0, 5);
   const files = candidates.filter((item) => item.kind === "file").slice(0, 4);
   const skills = candidates.filter((item) => item.kind === "skill").slice(0, 4);
-  const choose = (item: Mention) => {
-    onPick(item);
-    setOpen(false);
-  };
+  const group = (title: string, items: Mention[]) =>
+    items.length ? (
+      <DropdownMenuGroup>
+        <DropdownMenuLabel>{title}</DropdownMenuLabel>
+        {items.map((item) => (
+          <DropdownMenuItem key={item.id} onClick={() => onPick(item)}>
+            {typeof item.icon === "string" ? <PixelIcon name={item.icon} size={15} /> : item.icon}
+            <span className="menu-copy">{item.label}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuGroup>
+    ) : null;
   return (
-    <>
-      <button ref={anchor} type="button" className={cx("chip-btn", compact && "chip-icon")} aria-label="Add context" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<button type="button" className={cx("chip-btn", compact && "chip-icon")} aria-label="Add context" />}>
         <PixelIcon name="plus" size={compact ? 15 : 16} />
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={300} side={compact ? "top" : "bottom"}>
-        {tabs.length ? <div className="pop-group">Open tabs</div> : null}
-        {tabs.map((item) => (
-          <MenuItem key={item.id} icon={item.icon} label={item.label} onSelect={() => choose(item)} />
-        ))}
-        {files.length ? <div className="pop-group">From the vault</div> : null}
-        {files.map((item) => (
-          <MenuItem key={item.id} icon={item.icon} label={item.label} onSelect={() => choose(item)} />
-        ))}
-        {skills.length ? <div className="pop-group">Skills</div> : null}
-        {skills.map((item) => (
-          <MenuItem key={item.id} icon={item.icon} label={item.label} onSelect={() => choose(item)} />
-        ))}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent width="menu" side={compact ? "top" : "bottom"}>
+        {group("Open tabs", tabs)}
+        {group("From the vault", files)}
+        {group("Skills", skills)}
         {!tabs.length && !files.length && !skills.length ? <p className="pop-empty">Open a tab or add files to the vault, then attach them here. Type @ to search everything.</p> : null}
-      </Popover>
-    </>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** A chip that picks one of a few options, each with a line of detail. */
+function PickChip<T extends string>({
+  title,
+  icon,
+  label,
+  value,
+  options,
+  onChange,
+  align = "start",
+}: {
+  title: string;
+  icon?: string;
+  label: string;
+  value: T;
+  options: Array<{ value: T; label: string; detail?: string; icon?: string }>;
+  onChange: (value: T) => void;
+  align?: "start" | "end";
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<button type="button" className="chip-btn" />}>
+        {icon ? <PixelIcon name={icon} size={15} /> : null}
+        <span>{label}</span>
+        <PixelIcon name="chevron" size={11} className="chip-caret" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent width="menu" align={align}>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{title}</DropdownMenuLabel>
+          <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
+            {options.map((item) => (
+              <DropdownMenuRadioItem key={item.value} value={item.value}>
+                {item.icon ? <PixelIcon name={item.icon} size={15} /> : null}
+                <span className="menu-copy">
+                  <span>{item.label}</span>
+                  {item.detail ? <em>{item.detail}</em> : null}
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function WhereChip({ value, target, onChange }: { value: Where; target: Settings["computerTarget"]; onChange: (value: Where) => void }) {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
   const current = WHERE.find((item) => item.value === value) ?? WHERE[0];
-  const label = current.value === "act" && target === "vm" ? "Private Mac" : current.label;
+  const name = (item: (typeof WHERE)[number]) => (item.value === "act" && target === "vm" ? "Private Mac" : item.label);
   return (
-    <>
-      <button ref={anchor} type="button" className="chip-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <PixelIcon name={current.icon} size={15} />
-        <span>{label}</span>
-        <PixelIcon name="chevron" size={11} className="chip-caret" />
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={290}>
-        <div className="pop-group">Where okidoki works</div>
-        {WHERE.map((item) => (
-          <MenuItem
-            key={item.value}
-            icon={item.icon}
-            label={item.value === "act" && target === "vm" ? "Private Mac" : item.label}
-            detail={item.detail}
-            checked={item.value === value}
-            onSelect={() => {
-              onChange(item.value);
-              setOpen(false);
-            }}
-          />
-        ))}
-      </Popover>
-    </>
+    <PickChip
+      title="Where okidoki works"
+      icon={current.icon}
+      label={name(current)}
+      value={value}
+      options={WHERE.map((item) => ({ value: item.value, label: name(item), detail: item.detail, icon: item.icon }))}
+      onChange={onChange}
+    />
   );
 }
 
 function GuardChip({ settings, onChange }: { settings: Settings; onChange: (patch: Partial<Settings>) => void }) {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
   return (
-    <>
-      <button ref={anchor} type="button" className="chip-btn" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+    <KPopover>
+      <PopoverTrigger render={<button type="button" className="chip-btn" />}>
         <PixelIcon name="lock" size={15} />
         <span>Guard</span>
         <PixelIcon name="chevron" size={11} className="chip-caret" />
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={320} className="guard-pop" role="dialog">
+      </PopoverTrigger>
+      <PopoverContent align="start" className="guard-pop">
         <p className="pop-note">okidoki always asks before it sends, buys, deletes, installs or runs anything risky.</p>
         <label className="pop-toggle">
           <span>
@@ -482,54 +529,40 @@ function GuardChip({ settings, onChange }: { settings: Settings; onChange: (patc
           </span>
           <Switch label="See the screen" checked={settings.screenContext ?? true} onChange={(value) => onChange({ screenContext: value })} />
         </label>
-        <div className="pop-toggle pop-static">
-          <span>
-            <strong>Spending limit</strong>
-            <em>Per task, for tools that cost money</em>
-          </span>
-          <span className="pop-value">${settings.spendingLimit}</span>
-        </div>
-      </Popover>
-    </>
+        {/* Not a control here: it's set in Settings › Safety, so it reads as a fact, not a field. */}
+        <p className="pop-note">
+          Spending limit ${settings.spendingLimit} per task. Change it in Settings › Safety.
+        </p>
+      </PopoverContent>
+    </KPopover>
   );
 }
 
 function ModelChip({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
   const current = MODELS.find((item) => item.value === value);
   return (
-    <>
-      <button ref={anchor} type="button" className="chip-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <PixelIcon name="spark" size={15} />
-        <span>{current?.label ?? value.replace(/^claude-/, "")}</span>
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={240} align="end">
-        <div className="pop-group">Model for doing things</div>
-        {MODELS.map((item) => (
-          <MenuItem key={item.value} label={item.label} detail={item.detail} checked={item.value === value} onSelect={() => { onChange(item.value); setOpen(false); }} />
-        ))}
-      </Popover>
-    </>
+    <PickChip
+      title="Model for doing things"
+      icon="spark"
+      label={current?.label ?? value.replace(/^claude-/, "")}
+      value={value}
+      options={MODELS.map((item) => ({ value: item.value, label: item.label, detail: item.detail }))}
+      onChange={onChange}
+      align="end"
+    />
   );
 }
 
 function PaceChip({ value, onChange }: { value: "calm" | "fast"; onChange: (value: "calm" | "fast") => void }) {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
   const current = PACE.find((item) => item.value === value) ?? PACE[0];
   return (
-    <>
-      <button ref={anchor} type="button" className="chip-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span>{current.label}</span>
-        <PixelIcon name="chevron" size={11} className="chip-caret" />
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} width={260} align="end">
-        <div className="pop-group">Pace on your Mac</div>
-        {PACE.map((item) => (
-          <MenuItem key={item.value} label={item.label} detail={item.detail} checked={item.value === value} onSelect={() => { onChange(item.value); setOpen(false); }} />
-        ))}
-      </Popover>
-    </>
+    <PickChip
+      title="Pace on your Mac"
+      label={current.label}
+      value={value}
+      options={PACE.map((item) => ({ value: item.value, label: item.label, detail: item.detail }))}
+      onChange={onChange}
+      align="end"
+    />
   );
 }

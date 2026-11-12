@@ -122,7 +122,6 @@ export function SkillsPage() {
   const watching = state.watching ?? IDLE_WATCHING;
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
-
   // record
   const [recordOpen, setRecordOpen] = useState(false);
   const [recordName, setRecordName] = useState("");
@@ -472,7 +471,6 @@ export function SkillsPage() {
             </div>
             <Button
               variant="primary"
-             
               onClick={() => {
                 setRecordName("");
                 setRecordOpen(true);
@@ -492,7 +490,6 @@ export function SkillsPage() {
           invoke("installTemplate", { id: entry.id });
         }}
       />
-
 
       <section className="skills-section routines-section">
         <div className="section-head">

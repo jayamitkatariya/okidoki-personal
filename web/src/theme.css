@@ -23,6 +23,8 @@
    Depth comes from hairlines and one soft lift for floating surfaces. */
 
 :root {
+  /* Text and icons on a solid accent fill. */
+  --on-accent: #fff;
   --bg: #f0f2ed;
   --canvas: var(--bg);
   --panel: #fafbf8;
@@ -121,6 +123,7 @@
 }
 
 :root[data-theme="dark"] {
+  --on-accent: #03170f;
   --bg: #101612;
   --canvas: var(--bg);
   --panel: #161d18;
@@ -846,7 +849,7 @@ kbd {
 :root[data-theme="dark"] .thread-send,
 :root[data-theme="dark"] .run-approve-icon,
 :root[data-theme="dark"] .voice-radio.is-on {
-  color: #03170f;
+  color: var(--on-accent);
 }
 .btn-secondary {
   background: var(--tile);

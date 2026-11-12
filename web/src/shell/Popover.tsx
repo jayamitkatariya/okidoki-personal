@@ -108,7 +108,12 @@ export function MenuItem({
   active,
   danger,
   onHover,
+  id,
+  role,
 }: {
+  id?: string;
+  /** "option" inside a listbox (the address suggestions); a menu item otherwise. */
+  role?: "option";
   icon?: React.ReactNode;
   label: string;
   detail?: string;
@@ -122,8 +127,11 @@ export function MenuItem({
   return (
     <button
       type="button"
-      role={checked === undefined ? "menuitem" : "menuitemradio"}
-      aria-checked={checked}
+      id={id}
+      role={role ?? (checked === undefined ? "menuitem" : "menuitemradio")}
+      aria-checked={role ? undefined : checked}
+      aria-selected={role === "option" ? Boolean(active) : undefined}
+      tabIndex={role === "option" ? -1 : undefined}
       className={cx("pop-item", active && "is-active", danger && "is-danger")}
       onClick={onSelect}
       onMouseEnter={onHover}

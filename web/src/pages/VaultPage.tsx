@@ -5,6 +5,7 @@ import type { Page } from "../nav";
 import type { VaultFile, VaultImportState, VaultLogin, VaultState } from "../types";
 import { browserDetail, cookieSummary, importSummary } from "../vaultImport";
 import { decryptSecret, deriveVaultKey, encryptSecret, rememberPassphrase, rememberedPassphrase, VAULT_KEY_VERSION } from "../vaultCrypto";
+import { Spinner } from "@/components/ui/spinner";
 import { Button, Choice, ConfirmModal, Empty, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 type Tab = "documents" | "credentials";
@@ -247,6 +248,9 @@ function Credentials({ vault }: { vault: VaultState }) {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  // Deriving the key is slow on purpose; the button shows it's working and ignores a second press.
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,33 +258,52 @@ function Credentials({ vault }: { vault: VaultState }) {
       setKey(null);
       return;
     }
-    void deriveVaultKey(passphrase, salt).then((derived) => {
+    void (async () => {
+      const derived = await deriveVaultKey(passphrase, salt);
+      // A remembered passphrase is checked against a real login before the vault says it's open.
+      const first = vault.logins[0];
+      if (first && (await decryptSecret(derived, first.ciphertext, first.iv)) === null) {
+        if (cancelled) return;
+        setPassphrase("");
+        setKey(null);
+        rememberPassphrase(salt, null);
+        if (native) invoke("saveVaultPassphrase", { passphrase: "" });
+        setError("The saved passphrase no longer opens these logins. Type it again.");
+        return;
+      }
       if (!cancelled) setKey(derived);
-    });
+    })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passphrase, salt]);
 
   const unlock = async () => {
     const value = draftPass;
-    if (!value) return;
+    if (!value || busy) return;
     if (vault.logins.length === 0 && value !== confirmPass) {
-      notify("Passphrases don’t match", "Type the same passphrase in both fields.", "warning");
+      setError("The two passphrases don’t match. Type the same one in both fields.");
       return;
     }
-    // With logins already there, a wrong passphrase is caught here rather than on the first reveal.
-    const first = vault.logins[0];
-    if (first && (await decryptSecret(await deriveVaultKey(value, salt), first.ciphertext, first.iv)) === null) {
-      notify("Wrong passphrase", "That isn't the passphrase these logins were sealed with.", "warning");
-      return;
-    }
-    setPassphrase(value);
-    setDraftPass("");
-    setConfirmPass("");
-    if (remember) {
-      rememberPassphrase(salt, value);
-      if (native) invoke("saveVaultPassphrase", { passphrase: value });
+    setBusy(true);
+    setError(null);
+    try {
+      // With logins already there, a wrong passphrase is caught here rather than on the first reveal.
+      const first = vault.logins[0];
+      if (first && (await decryptSecret(await deriveVaultKey(value, salt), first.ciphertext, first.iv)) === null) {
+        setError("That isn’t the passphrase these logins were sealed with.");
+        return;
+      }
+      setPassphrase(value);
+      setDraftPass("");
+      setConfirmPass("");
+      if (remember) {
+        rememberPassphrase(salt, value);
+        if (native) invoke("saveVaultPassphrase", { passphrase: value });
+      }
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -339,16 +362,47 @@ function Credentials({ vault }: { vault: VaultState }) {
             </p>
           </header>
           <div className="form-stack">
-            <TextField value={draftPass} onChange={setDraftPass} type="password" icon="key" placeholder="Vault passphrase" onEnter={() => void unlock()} />
+            <TextField
+              value={draftPass}
+              onChange={(value) => {
+                setDraftPass(value);
+                setError(null);
+              }}
+              type="password"
+              icon="key"
+              placeholder="Vault passphrase"
+              onEnter={() => void unlock()}
+            />
             {vault.logins.length === 0 ? (
-              <TextField value={confirmPass} onChange={setConfirmPass} type="password" icon="key" placeholder="Same passphrase again" onEnter={() => void unlock()} />
+              <TextField
+                value={confirmPass}
+                onChange={(value) => {
+                  setConfirmPass(value);
+                  setError(null);
+                }}
+                type="password"
+                icon="key"
+                placeholder="Same passphrase again"
+                onEnter={() => void unlock()}
+              />
+            ) : null}
+            {error ? (
+              <em className="field-error" role="alert">
+                {error}
+              </em>
             ) : null}
             <div className="form-inline">
               <span className="form-label">Remember on this Mac</span>
-              <Switch checked={remember} onChange={setRemember} />
+              <Switch label="Remember on this Mac" checked={remember} onChange={setRemember} />
             </div>
-            <Button variant="primary" disabled={!draftPass || (vault.logins.length === 0 && !confirmPass)} onClick={() => void unlock()}>
+            <Button
+              variant="primary"
+              aria-busy={busy}
+              disabled={!draftPass || (vault.logins.length === 0 && !confirmPass)}
+              onClick={() => void unlock()}
+            >
               {vault.logins.length ? "Unlock" : "Set passphrase"}
+              {busy ? <Spinner className="vault-spinner" aria-hidden /> : null}
             </Button>
           </div>
         </div>

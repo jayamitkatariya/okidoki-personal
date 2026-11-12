@@ -380,6 +380,7 @@
   [data-slot]::after {
     box-sizing: border-box;
     border: 0 solid;
+    border-color: var(--border);
     margin: 0;
   }
   [data-slot]:is(button, input, textarea, select),

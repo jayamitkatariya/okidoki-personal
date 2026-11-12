@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, clockLabel, copyText, formatBytes, relativeTime } from "../lib";
 import type { Run, RunKind, RunStatus } from "../types";
-import { Button, Empty, IconButton, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
+import { Button, Empty, IconButton, isComposing, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
 
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
@@ -254,7 +254,7 @@ export function AskedReply({ run }: { run: Run }) {
           placeholder="Your answer…"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && text.trim()) send();
+            if (event.key === "Enter" && !isComposing(event) && text.trim()) send();
           }}
         />
         <Button variant="primary" size="sm" icon="arrow" onClick={send} disabled={!text.trim()}>

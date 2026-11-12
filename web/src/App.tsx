@@ -27,7 +27,9 @@ export default function App() {
 
 /** The new look is its own shell; off, the original dashboard renders exactly as before. */
 function Root() {
-  const { state, settings } = useDashboard();
+  const { state, settings, booting } = useDashboard();
+  // In the Mac app, wait for its state rather than flashing the demo's for a frame.
+  if (booting) return null;
   if (settings.newShell && !state.signedOut) return <Shell />;
   return <LegacyRoot />;
 }

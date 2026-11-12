@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { invoke, isNative } from "../bridge";
 import { useCovered } from "./media";
 
-/** Old-style overlays that pages inside the card still use (dialogs). */
-const LEGACY_OVERLAYS = ".modal, .palette, .account-pop";
-
 /**
  * Where the native page sits. Reports its rect to the Mac whenever the layout moves. While something
  * covers it, the Mac sends a still of the page first, the still goes in here, and only then does the
@@ -13,21 +10,12 @@ const LEGACY_OVERLAYS = ".modal, .palette, .account-pop";
 export function PageSlot({ children }: { children?: React.ReactNode }) {
   const slot = useRef<HTMLDivElement>(null);
   const covered = useCovered();
-  const [legacyCovered, setLegacyCovered] = useState(false);
   const [still, setStill] = useState<string | null>(null);
-  const hidden = covered || legacyCovered;
+  // Every overlay in the new shell registers a cover (Kobra ones through OverlayCover), so this is all.
+  const hidden = covered;
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
   const last = useRef("");
-
-  // Dialogs from pages that don't know about covers.
-  useEffect(() => {
-    const check = () => setLegacyCovered(Boolean(document.querySelector(LEGACY_OVERLAYS)));
-    const observer = new MutationObserver(check);
-    observer.observe(document.body, { childList: true, subtree: true });
-    check();
-    return () => observer.disconnect();
-  }, []);
 
   // Freeze, then hide; show, then thaw.
   useEffect(() => {
@@ -66,7 +54,9 @@ export function PageSlot({ children }: { children?: React.ReactNode }) {
     const element = slot.current;
     if (!element || !isNative() || hiddenRef.current) return;
     const r = element.getBoundingClientRect();
-    const rect = { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+    // With the assistant panel beside it, the page's bottom-right corner meets the panel: square it.
+    const squareRight = Boolean(element.closest(".tab-view")?.querySelector(".assistant"));
+    const rect = { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height), squareRight };
     const key = JSON.stringify(rect);
     if (key === last.current) return;
     last.current = key;
@@ -81,18 +71,22 @@ export function PageSlot({ children }: { children?: React.ReactNode }) {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(report);
     };
+    // The sidebar or the assistant panel sliding changes the slot's size (and so fires here) as it moves.
     const observer = new ResizeObserver(schedule);
     observer.observe(element);
     observer.observe(document.body);
+    const card = element.closest(".card");
+    if (card) observer.observe(card);
     window.addEventListener("resize", schedule);
-    // The sidebar or the assistant panel sliding moves the slot without resizing the body.
-    const timer = window.setInterval(schedule, 300);
+    // A slide that ends with the same width but a new position: one late check after layout settles.
+    const settle = () => window.setTimeout(schedule, 260);
+    document.addEventListener("transitionend", settle);
     schedule();
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener("resize", schedule);
-      window.clearInterval(timer);
+      document.removeEventListener("transitionend", settle);
       last.current = "";
       invoke("browserFrame", { hidden: true });
     };

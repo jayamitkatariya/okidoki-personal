@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { cx, relativeTime } from "../lib";
 import { PixelIcon } from "../components/ui";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { Run } from "../types";
 import { actionLines, ACTIVE, NEEDS_YOU, runUnread, workingFor } from "./model";
 import { thumbURL } from "./media";
@@ -16,21 +17,39 @@ function statusLine(run: Run, now: number): { text: string; tone: "live" | "wait
   return { text: relativeTime(run.endedAt ?? run.createdAt), tone: "done" };
 }
 
-/** A thumbnail that shows a placeholder until it has loaded (and only if loading takes a moment). */
+/**
+ * A thumbnail that keeps the last frame on screen while the next one loads, so a live card doesn't
+ * flash. A skeleton shows only for the very first frame, and only if it takes a moment.
+ */
 function Thumb({ src, title }: { src: string; title: string }) {
-  const [loaded, setLoaded] = useState(false);
+  const [shown, setShown] = useState<string | null>(null);
   const [slow, setSlow] = useState(false);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    setLoaded(false);
-    setFailed(false);
-    const timer = window.setTimeout(() => setSlow(true), 150);
-    return () => window.clearTimeout(timer);
+    let live = true;
+    setSlow(false);
+    const timer = window.setTimeout(() => live && setSlow(true), 150);
+    const image = new Image();
+    image.onload = () => {
+      if (!live) return;
+      setShown(src);
+      setFailed(false);
+    };
+    image.onerror = () => live && setFailed(true);
+    image.src = src;
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
   }, [src]);
-  if (failed) return null;
+  if (failed && !shown) return null;
   return (
-    <div className={cx("task-thumb", slow && !loaded && "is-loading")}>
-      <img src={src} alt={`What okidoki saw while working on “${title}”`} draggable={false} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
+    <div className="task-thumb">
+      {shown ? (
+        <img src={shown} alt={`What okidoki saw while working on “${title}”`} draggable={false} />
+      ) : slow ? (
+        <Skeleton className="task-thumb-skeleton" />
+      ) : null}
     </div>
   );
 }

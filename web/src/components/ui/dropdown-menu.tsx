@@ -90,10 +90,13 @@ function DropdownMenuContent({
   side = 'bottom',
   sideOffset = 6,
   size,
+  width = 'anchor',
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<MenuPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'> & {
     size?: DropdownMenuSize
+    /** okidoki: 'menu' gives a small chip's menu room for a label and a detail line. */
+    width?: 'anchor' | 'menu'
   }) {
   const inherited = React.useContext(SizeContext)
   const resolved = size ?? inherited
@@ -114,8 +117,9 @@ function DropdownMenuContent({
             data-size={resolved}
 
             className={cn(
-              'z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-[cubic-bezier(0.16,1,0.3,1)] outline-none data-closed:animate-out data-closed:overflow-hidden data-closed:fade-out-0 data-closed:zoom-out-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95',
+              'z-50 max-h-(--available-height) origin-(--transform-origin) overflow-x-hidden overflow-y-auto bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-[cubic-bezier(0.16,1,0.3,1)] outline-none data-closed:animate-out data-closed:overflow-hidden data-closed:fade-out-0 data-closed:zoom-out-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95',
               SIZES[resolved].panel,
+              width === 'menu' ? 'w-72' : 'w-(--anchor-width)',
               className,
             )}
             {...props}

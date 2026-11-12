@@ -57,11 +57,12 @@ private struct BrowserSlot: View {
 
     var body: some View {
         let frame = environment.browserFrame
-        // The new shell's content card is r=12 with the page flush to its bottom edge: concentric corners.
-        let radius: CGFloat = store.settings.newShell ? 12 : 19
+        // The new shell's content card is r=14 (--r-card) with the page flush to its bottom edge: concentric corners.
+        let radius: CGFloat = store.settings.newShell ? 14 : 19
+        let trailing: CGFloat = environment.browserSquareRight ? 0 : radius
         HostedView(view: environment.browser.view, hidden: frame == nil)
             .frame(width: max(frame?.width ?? 1000, 1), height: max(frame?.height ?? 700, 1))
-            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius))
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: trailing))
             .offset(x: frame?.minX ?? 0, y: frame?.minY ?? 0)
             .opacity(frame == nil ? 0 : 1)
             .allowsHitTesting(frame != nil)
@@ -1045,6 +1046,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             else if let x = payload["x"] as? Double, let y = payload["y"] as? Double,
                     let width = payload["width"] as? Double, let height = payload["height"] as? Double, width > 0, height > 0 {
                 env.browserFrame = CGRect(x: x, y: y, width: width, height: height)
+                env.browserSquareRight = payload["squareRight"] as? Bool ?? false
                 BrowserFreeze.release()
             }
         case "openBrowser":

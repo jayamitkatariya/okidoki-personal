@@ -7,15 +7,22 @@ import { Favicon, useCover } from "./media";
 import { MenuItem } from "./Popover";
 import { hostOf, looksLikeAddress, looksLikeTask } from "./model";
 import { askAndOpen } from "./ask";
+import { Tip } from "./Tip";
 import { AnimatePresence, motion } from "motion/react";
 
 type Choice = "open" | "search" | "ask";
 
-function ToolButton({ icon, label, onClick, disabled, active, className }: { icon: string; label: string; onClick: () => void; disabled?: boolean; active?: boolean; className?: string }) {
+/**
+ * The toolbar sits right above the native page; a tip hanging below would make the page step aside on
+ * every hover. Toolbar tips open beside their button instead: rightward on the left, leftward on the right.
+ */
+function ToolButton({ icon, label, onClick, disabled, active, className, tip = "right" }: { icon: string; label: string; onClick: () => void; disabled?: boolean; active?: boolean; className?: string; tip?: "left" | "right" }) {
   return (
-    <button type="button" className={cx("tool-btn", active && "is-on", className)} aria-label={label} data-tip={label} disabled={disabled} onClick={onClick}>
-      <PixelIcon name={icon} size={16} />
-    </button>
+    <Tip label={label} side={tip}>
+      <button type="button" className={cx("tool-btn", active && "is-on", className)} aria-label={label} disabled={disabled} onClick={onClick}>
+        <PixelIcon name={icon} size={16} />
+      </button>
+    </Tip>
   );
 }
 
@@ -34,7 +41,7 @@ export function Toolbar({
   focusTick,
   assistantOpen,
   onToggleAssistant,
-  trailing,
+  onAskedHere,
 }: {
   /** A task typed into the address bar with no page to do it on: its conversation opens. */
   onAsked: (threadID: string) => void;
@@ -47,7 +54,8 @@ export function Toolbar({
   focusTick: number;
   assistantOpen: boolean;
   onToggleAssistant: () => void;
-  trailing?: React.ReactNode;
+  /** A task asked about the page in this tab: the assistant panel opens so its reply is in view. */
+  onAskedHere?: () => void;
 }) {
   const { invoke, state } = useDashboard();
   const working = Boolean(tab?.status || tab?.ownerRunID);
@@ -56,15 +64,17 @@ export function Toolbar({
   return (
     <div className={cx("toolbar", working && "is-agent")}>
       {sidebarHidden ? <ToolButton icon="panel" label="Show sidebar (⌘B)" onClick={onShowSidebar} className="tool-sidebar" /> : null}
+      {tab ? (
       <div className="tool-nav">
         <ToolButton icon="chevron-left" label="Back (⌘[)" disabled={!tab?.canGoBack} onClick={() => invoke("browserNav", { action: "back", tabID: tab?.id })} />
         <ToolButton icon="chevron" label="Forward (⌘])" disabled={!tab?.canGoForward} onClick={() => invoke("browserNav", { action: "forward", tabID: tab?.id })} />
         {tab?.loading ? (
           <ToolButton icon="x" label="Stop loading" onClick={() => invoke("browserNav", { action: "stop", tabID: tab.id })} />
         ) : (
-          <ToolButton icon="refresh" label="Reload (⌘R)" disabled={!tab} onClick={() => invoke("browserNav", { action: "reload", tabID: tab?.id })} />
+          <ToolButton icon="refresh" label="Reload (⌘R)" disabled={tab.blank} onClick={() => invoke("browserNav", { action: "reload", tabID: tab.id })} />
         )}
       </div>
+      ) : null}
 
       {crumb ? (
         <div className="tool-crumb">
@@ -72,20 +82,25 @@ export function Toolbar({
           <span>{crumb.title}</span>
         </div>
       ) : (
-        <Address tab={tab} focusTick={focusTick} onSearched={onSearched} onAsked={onAsked} />
+        <Address tab={tab} focusTick={focusTick} onSearched={onSearched} onAsked={onAsked} onAskedHere={onAskedHere} />
       )}
 
       <div className="tool-trailing">
         {tab && working ? <AgentPill tab={tab} /> : null}
         {tab && !tab.blank && !working ? (
           <>
-            {tab.hasLogin ? <span className="tool-key" data-tip="A saved login from your vault fills in here"><PixelIcon name="key" size={15} /></span> : null}
-            <ToolButton icon="record" label={recording ? `Save recording (${state.browser?.recordedSteps ?? 0} steps)` : "Record a skill"} active={recording} className={cx(recording && "is-recording")} onClick={() => invoke("browserRecord")} />
-            <ToolButton icon="bookmark" label={tab.bookmarked ? "Remove bookmark" : "Bookmark"} active={tab.bookmarked} onClick={() => invoke("toggleBookmark", { tabID: tab.id })} />
+            {tab.hasLogin ? (
+              <Tip label="A saved login from your vault fills in here" side="left">
+                <span className="tool-key" tabIndex={0} aria-label="A saved login from your vault fills in here">
+                  <PixelIcon name="key" size={15} />
+                </span>
+              </Tip>
+            ) : null}
+            <ToolButton tip="left" icon="record" label={recording ? `Save recording (${state.browser?.recordedSteps ?? 0} steps)` : "Record a skill"} active={recording} className={cx(recording && "is-recording")} onClick={() => invoke("browserRecord")} />
+            <ToolButton tip="left" icon="bookmark" label={tab.bookmarked ? "Remove bookmark" : "Bookmark"} active={tab.bookmarked} onClick={() => invoke("toggleBookmark", { tabID: tab.id })} />
           </>
         ) : null}
-        {trailing}
-        {tab && !tab.blank ? <ToolButton icon="chat" label={assistantOpen ? "Hide okidoki (⌘J)" : "Ask okidoki about this page (⌘J)"} active={assistantOpen} onClick={onToggleAssistant} /> : null}
+        {tab && !tab.blank ? <ToolButton tip="left" icon="chat" label={assistantOpen ? "Hide okidoki (⌘J)" : "Ask okidoki about this page (⌘J)"} active={assistantOpen} onClick={onToggleAssistant} /> : null}
       </div>
       {tab?.loading ? <span className="tool-progress" aria-hidden="true" /> : null}
     </div>
@@ -98,9 +113,11 @@ function AgentPill({ tab }: { tab: BrowserTab }) {
     <div className="agent-pill" role="status">
       <span className="agent-glow" aria-hidden="true" />
       <span className="agent-line">{tab.status ?? "okidoki is working here"}</span>
-      <button type="button" onClick={() => invoke("browserNav", { action: "takeOver", tabID: tab.id })} data-tip="Hand the page back to you (esc)">
-        Take over <kbd>esc</kbd>
-      </button>
+      <Tip label="Hand the page back to you" side="left">
+        <button type="button" onClick={() => invoke("browserNav", { action: "takeOver", tabID: tab.id })}>
+          Take over <kbd>esc</kbd>
+        </button>
+      </Tip>
     </div>
   );
 }
@@ -110,11 +127,13 @@ function Address({
   focusTick,
   onSearched,
   onAsked,
+  onAskedHere,
 }: {
   tab: BrowserTab | null;
   focusTick: number;
   onSearched: () => void;
   onAsked: (threadID: string) => void;
+  onAskedHere?: () => void;
 }) {
   const { invoke } = useDashboard();
   const [focused, setFocused] = useState(false);
@@ -163,8 +182,12 @@ function Address({
       askAndOpen(invoke, { text: typed, mode: "auto" }, onAsked);
       return;
     }
-    if (choice === "ask") invoke("shellAsk", { text: typed, mode: "tab", tabID: inTab });
-    else invoke("browserGo", { text: typed, choice, tabID: inTab, newTab: !inTab });
+    if (choice === "ask") {
+      invoke("shellAsk", { text: typed, mode: "tab", tabID: inTab });
+      onAskedHere?.();
+      return;
+    }
+    invoke("browserGo", { text: typed, choice, tabID: inTab, newTab: !inTab });
     onSearched();
   };
 
@@ -176,6 +199,11 @@ function Address({
         value={focused ? text : address ? prettyAddress(address) : ""}
         placeholder="Search Google or type a URL"
         aria-label="Address"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={choices.length > 0}
+        aria-controls={choices.length ? "address-choices" : undefined}
+        aria-activedescendant={choices.length ? `address-choice-${index}` : undefined}
         spellCheck={false}
         onFocus={(event) => {
           setFocused(true);
@@ -210,13 +238,15 @@ function Address({
         {choices.length ? (
           <motion.div
             className="address-pop"
+            id="address-choices"
             role="listbox"
+            aria-label="Where to go"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0, transition: { duration: 0.16, ease: [0.23, 1, 0.32, 1] } }}
             exit={{ opacity: 0, transition: { duration: 0.1 } }}
           >
             {choices.map((item, at) => (
-              <MenuItem key={item.choice} icon={item.icon} label={item.label} active={at === index} onHover={() => setIndex(at)} onSelect={() => go(item.choice)} />
+              <MenuItem key={item.choice} id={`address-choice-${at}`} role="option" icon={item.icon} label={item.label} active={at === index} onHover={() => setIndex(at)} onSelect={() => go(item.choice)} />
             ))}
           </motion.div>
         ) : null}

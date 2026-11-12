@@ -513,7 +513,7 @@
   overflow-wrap: anywhere;
 }
 .command-box code em {
-  color: #5fd9a6;
+  color: var(--accent-bright);
   font-style: normal;
   user-select: none;
 }

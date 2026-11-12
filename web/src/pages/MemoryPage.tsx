@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
 import type { Memory, MemorySource, ServicesState } from "../types";
-import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, type ConfirmRequest } from "../components/ui";
+import { Button, Chip, ConfirmModal, IconButton, isComposing, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, type ConfirmRequest } from "../components/ui";
+import { isNative } from "../bridge";
 
 type Section = "aboutYou" | "rightNow";
 
@@ -41,11 +42,12 @@ export function MemoryPage() {
     notify("Preparing the import", source ? `Reading what ${source.name} remembers` : "Reading every assistant on this Mac", "info");
   };
 
+  const [tooShort, setTooShort] = useState(false);
   const add = () => {
     // mirror the native rules (OkidokiStore.addMemory) so the toast only claims what gets saved
     const cleaned = text.trim().replace(/^[.,;: ]+|[.,;: ]+$/g, "");
     if (cleaned.length <= 2) {
-      notify("Too short to remember", "Add a few more words", "warning");
+      setTooShort(true);
       return;
     }
     if (state.memories.some((memory) => memory.text.toLowerCase() === cleaned.toLowerCase())) {
@@ -84,7 +86,7 @@ export function MemoryPage() {
       <PageTitle
         title="Memory"
         subtitle="What okidoki knows about you, kept on this Mac."
-        trailing={state.services ? <MemoryIndexBadge services={state.services} onFix={() => (window.location.hash = "#/keys")} /> : null}
+        trailing={state.services ? <MemoryIndexBadge services={state.services} onFix={isNative() ? () => (window.location.hash = "#/keys") : undefined} /> : null}
       />
 
       <div className="memory-top">
@@ -102,7 +104,30 @@ export function MemoryPage() {
               onChange={(value) => setSection(value as Section)}
             />
           </header>
-          <TextArea value={text} onChange={setText} rows={3} placeholder={SECTIONS[section].placeholder} />
+          {/* ⌘↩ remembers it, as in the chat composer. */}
+          <div
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && event.metaKey && !isComposing(event)) {
+                event.preventDefault();
+                add();
+              }
+            }}
+          >
+            <TextArea
+              value={text}
+              onChange={(value) => {
+                setText(value);
+                setTooShort(false);
+              }}
+              rows={3}
+              placeholder={SECTIONS[section].placeholder}
+            />
+          </div>
+          {tooShort ? (
+            <em className="field-error" role="alert">
+              Too short to remember. Add a few more words.
+            </em>
+          ) : null}
           <div className="memory-compose-foot">
             <span>
               <PixelIcon name="lock" size={13} />
@@ -303,8 +328,17 @@ function MemoryList({
 }
 
 /** What the Moss index holds, so "searched with Moss" is a fact rather than a promise. */
-function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix: () => void }) {
+function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix?: () => void }) {
   const memory = services.memory;
+  // Keys live in the Mac app's Settings; on the web there's nowhere to send you.
+  if (!memory.configured && !onFix) {
+    return (
+      <span className="memory-index is-off">
+        <i />
+        Moss off · exact matches only
+      </span>
+    );
+  }
   if (!memory.configured) {
     return (
       <button className="memory-index is-off" onClick={onFix} title="Add a Moss key in Settings › Keys">

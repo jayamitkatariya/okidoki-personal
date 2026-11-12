@@ -150,3 +150,10 @@
   margin: 0;
 }
 
+
+/* Busy unlock: the label stays, a small spinner turns in beside it. */
+.vault-spinner {
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+}

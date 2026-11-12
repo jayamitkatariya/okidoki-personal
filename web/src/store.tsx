@@ -8,6 +8,8 @@ interface DashboardContextValue {
   settings: Settings;
   account: Account;
   native: boolean;
+  /** Inside the Mac app, before its first state arrives: nothing real to show yet. */
+  booting: boolean;
   connected: boolean;
   toasts: Toast[];
   updateSettings: (patch: Partial<Settings>) => void;
@@ -34,6 +36,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(state.settings);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const pendingUntil = useRef(0);
+  // Waiting on the Mac's first state, but never forever: after a moment, show what there is.
+  const [patient, setPatient] = useState(true);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPatient(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (Date.now() > pendingUntil.current) setSettings(state.settings);
@@ -99,6 +107,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     settings,
     account,
     native,
+    booting: bridged && !nativeState && patient,
     connected,
     toasts,
     updateSettings,

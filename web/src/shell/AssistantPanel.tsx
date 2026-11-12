@@ -37,10 +37,14 @@ export function AssistantPanel({ tab, onClose, onOpenTab }: { tab: BrowserTab; o
   }, [thread, runs]);
   const browserRuns = runs.filter((run) => run.kind !== "answer");
 
+  // Follow new output only while you're already at the bottom, so reading back isn't interrupted.
+  const stick = useRef(true);
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [items.length, runs.map((run) => run.output.length).join()]);
+
+  const suggest = (text: string) => invoke("shellAsk", { text, mode: "tab", tabID: tab.id, threadID: thread?.id });
 
   return (
     <motion.aside
@@ -56,23 +60,35 @@ export function AssistantPanel({ tab, onClose, onOpenTab }: { tab: BrowserTab; o
           <span className="assistant-title">{tab.title || tab.host || "This page"}</span>
           <IconButton icon="x" label="Close (⌘J)" onClick={onClose} />
         </header>
-        <div className="assistant-scroll" ref={scroller}>
+        <div
+          className="assistant-scroll"
+          ref={scroller}
+          role="log"
+          aria-live="polite"
+          onScroll={(event) => {
+            const el = event.currentTarget;
+            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+          }}
+        >
           {items.length === 0 ? (
             <div className="assistant-empty">
               <PixelIcon name="spark" size={20} />
               <p>Ask about this page, or tell okidoki what to do here. It works right in this tab, and you can take over any time with esc.</p>
-              <ul>
-                <li>Summarize this page</li>
-                <li>Fill this form with my details</li>
-                <li>Find the cancel or unsubscribe option</li>
-              </ul>
+              <div className="assistant-suggestions">
+                {["Summarize this page", "Fill this form with my details", "Find the cancel or unsubscribe option"].map((text) => (
+                  <button key={text} type="button" className="starter" onClick={() => suggest(text)}>
+                    <PixelIcon name="spark" size={14} />
+                    <span>{text}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             items.map((item) =>
               item.node === "m" ? (
                 <MessageBubble key={item.key} message={thread!.messages[item.index]} />
               ) : (
-                <RunCard key={item.key} run={browserRuns[item.index]} now={now} thumbVersion={undefined} tabID={undefined} onOpenTab={onOpenTab} />
+                <RunCard key={item.key} run={browserRuns[item.index]} now={now} thumbVersion={state.thumbs?.[browserRuns[item.index].id]} tabID={undefined} onOpenTab={onOpenTab} />
               ),
             )
           )}

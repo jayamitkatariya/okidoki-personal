@@ -73,6 +73,8 @@ final class AppEnvironment: ObservableObject {
     @Published var dashboardRunID: String?
     /// Where the dashboard's Browser page holds the browser, in the page's points; nil while another page shows.
     @Published var browserFrame: CGRect?
+    /// The assistant panel sits right of the page: that corner meets the panel, so it's square.
+    @Published var browserSquareRight = false
     @Published var askPulse = 0
     @Published var shakePulse = 0
     @Published var inCall = false

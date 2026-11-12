@@ -376,6 +376,7 @@ export function PlanCard({
 
   return (
     <div
+      data-slot="plan-card"
       className={cn(
         'w-full max-w-lg rounded-2xl border bg-card p-5 text-card-foreground',
         className,

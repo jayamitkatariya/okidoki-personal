@@ -5,7 +5,8 @@ import { cx } from "../lib";
 import { Avatar, PixelIcon } from "../components/ui";
 import type { BrowserTab, Pin } from "../types";
 import { Favicon } from "./media";
-import { MenuItem, Popover } from "./Popover";
+import { Tip } from "./Tip";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { hostOf, LIBRARY, siteLabel, splitTabs, threadInfo, type View } from "./model";
 
 const OPEN_KEY = "okidoki.shell.sections";
@@ -94,12 +95,16 @@ export function Sidebar({
     <aside className="side" aria-label="okidoki">
       <div className="side-top">
         <span className="side-lights" aria-hidden="true" />
-        <button type="button" className="side-icon" aria-label="Hide sidebar (⌘B)" data-tip="Hide sidebar ⌘B" onClick={onHide}>
-          <PixelIcon name="panel" size={16} />
-        </button>
-        <button type="button" className="side-icon" aria-label="New tab (⌘T)" data-tip="New tab ⌘T" onClick={onNewTab}>
-          <PixelIcon name="plus" size={16} />
-        </button>
+        <Tip label="Hide sidebar ⌘B">
+          <button type="button" className="side-icon" aria-label="Hide sidebar (⌘B)" onClick={onHide}>
+            <PixelIcon name="panel" size={16} />
+          </button>
+        </Tip>
+        <Tip label="New tab ⌘T">
+          <button type="button" className="side-icon" aria-label="New tab (⌘T)" onClick={onNewTab}>
+            <PixelIcon name="plus" size={16} />
+          </button>
+        </Tip>
       </div>
 
       <div className="side-scroll">
@@ -153,7 +158,7 @@ export function Sidebar({
               }
             />
           ))}
-          {chats.length > CHATS_SHOWN || chats.length > 0 ? (
+          {chats.length > CHATS_SHOWN ? (
             <Row label="Show all" muted onClick={() => onNavigate({ kind: "page", page: "history" })} active={view.kind === "page" && view.page === "history"} />
           ) : null}
         </Section>
@@ -198,18 +203,18 @@ export function Sidebar({
             const active = view.kind === "page" && view.page === item.page;
             const badge = item.page === "runs" ? state.runs.filter((run) => (run.kind === "computer_use" || run.kind === "borrow") && run.status === "running").length : 0;
             return (
-              <button
-                key={item.page}
-                type="button"
-                className={cx("lib-btn", active && "is-active")}
-                aria-label={item.title}
-                aria-current={active ? "page" : undefined}
-                data-tip={`${item.title} · ${item.hint}`}
-                onClick={() => onNavigate({ kind: "page", page: item.page })}
-              >
-                <PixelIcon name={item.icon} size={17} />
-                {badge ? <span className="lib-badge" aria-hidden="true" /> : null}
-              </button>
+              <Tip key={item.page} label={`${item.title} · ${item.hint}`} side="top">
+                <button
+                  type="button"
+                  className={cx("lib-btn", active && "is-active")}
+                  aria-label={badge ? `${item.title}, ${badge} running` : item.title}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => onNavigate({ kind: "page", page: item.page })}
+                >
+                  <PixelIcon name={item.icon} size={17} />
+                  {badge ? <span className="lib-badge" aria-hidden="true" /> : null}
+                </button>
+              </Tip>
             );
           })}
         </nav>
@@ -331,8 +336,10 @@ function PinGrid({
   const { invoke } = useDashboard();
   const [dragging, setDragging] = useState<string | null>(null);
   const [order, setOrder] = useState<string[] | null>(null);
+  // The pin a right-click landed on; the menu only opens for a pin.
   const [menu, setMenu] = useState<Pin | null>(null);
-  const menuAnchor = useRef<HTMLElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const target = useRef<Pin | null>(null);
   const shown = order ? order.map((id) => pins.find((pin) => pin.id === id)).filter((pin): pin is Pin => Boolean(pin)) : pins;
   const canPin = viewingTab && !viewingTab.blank && !viewingTab.ownerRunID && !viewingTab.status && !pins.some((pin) => hostOf(pin.url) === viewingTab.host) && pins.length < 12;
   const openHosts = new Set(tabs.map((tab) => tab.host));
@@ -340,22 +347,34 @@ function PinGrid({
   if (!pins.length && !canPin) return null;
 
   return (
-    <div className="pins" role="group" aria-label="Pinned sites">
+    <ContextMenu
+      open={menuOpen}
+      onOpenChange={(open) => {
+        if (open && !target.current) return;
+        if (open) setMenu(target.current);
+        setMenuOpen(open);
+      }}
+    >
+    <ContextMenuTrigger
+      className="pins"
+      role="group"
+      aria-label="Pinned sites"
+      onContextMenuCapture={() => {
+        target.current = null;
+      }}
+    >
       {shown.map((pin) => {
         const host = hostOf(pin.url);
         return (
+          <Tip key={pin.id} label={pin.title || host}>
           <button
-            key={pin.id}
             type="button"
             className={cx("pin", viewingHost === host && "is-active", openHosts.has(host) && "is-open", dragging === pin.id && "is-dragging")}
             aria-label={pin.title || host}
-            data-tip={pin.title || host}
             draggable
             onClick={() => onOpen(pin.url)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              menuAnchor.current = event.currentTarget;
-              setMenu(pin);
+            onContextMenu={() => {
+              target.current = pin;
             }}
             onDragStart={(event) => {
               setDragging(pin.id);
@@ -382,36 +401,31 @@ function PinGrid({
           >
             <Favicon url={pin.url} size={20} />
           </button>
+          </Tip>
         );
       })}
       {canPin ? (
-        <button type="button" className="pin pin-add" aria-label="Pin this site" data-tip={`Pin ${viewingTab!.host}`} onClick={() => invoke("pinTab", { tabID: viewingTab!.id })}>
-          <PixelIcon name="plus" size={16} />
-        </button>
+        <Tip label={`Pin ${viewingTab!.host}`}>
+          <button type="button" className="pin pin-add" aria-label="Pin this site" onClick={() => invoke("pinTab", { tabID: viewingTab!.id })}>
+            <PixelIcon name="plus" size={16} />
+          </button>
+        </Tip>
       ) : null}
-      <Popover open={Boolean(menu)} onClose={() => setMenu(null)} anchor={menuAnchor} width={200}>
+    </ContextMenuTrigger>
+      <ContextMenuContent>
         {menu ? (
           <>
-            <MenuItem
-              icon="external"
-              label="Open in a new tab"
-              onSelect={() => {
-                onOpenNew(menu.url);
-                setMenu(null);
-              }}
-            />
-            <MenuItem
-              icon="x"
-              label="Unpin"
-              danger
-              onSelect={() => {
-                invoke("unpin", { id: menu.id });
-                setMenu(null);
-              }}
-            />
+            <ContextMenuItem onClick={() => onOpenNew(menu.url)}>
+              <PixelIcon name="external" size={15} />
+              Open in a new tab
+            </ContextMenuItem>
+            <ContextMenuItem variant="destructive" onClick={() => invoke("unpin", { id: menu.id })}>
+              <PixelIcon name="x" size={15} />
+              Unpin
+            </ContextMenuItem>
           </>
         ) : null}
-      </Popover>
-    </div>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
