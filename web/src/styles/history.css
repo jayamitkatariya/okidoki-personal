@@ -506,3 +506,28 @@
   opacity: 0.35;
   cursor: default;
 }
+
+/* A thread card with its ⋯ menu over the top-right corner. */
+.thread-card-wrap {
+  position: relative;
+  display: grid;
+}
+.thread-card-wrap .thread-card {
+  padding-right: 44px;
+}
+.thread-card-menu {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--ok-muted);
+}
+.thread-card-menu:hover,
+.thread-card-menu[aria-expanded="true"] {
+  background: var(--well-strong);
+  color: var(--ink);
+}

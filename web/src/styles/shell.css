@@ -280,15 +280,42 @@ html.shell2-on:not(.is-native) body::before {
   cursor: default;
 }
 
+.shell2 .side-top {
+  position: relative;
+  z-index: 1;
+}
+/* Once the list has scrolled, a hairline marks where it passes under the header, so pins don't look
+   cut off by it. */
+.shell2 .side-top::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--s-hover);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.shell2 .side.is-scrolled .side-top::after {
+  opacity: 1;
+}
 .shell2 .side-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   margin: 0 -10px;
-  padding: 2px 10px 12px;
-  scrollbar-gutter: stable;
-  mask-image: linear-gradient(to bottom, transparent 0, #000 6px, #000 calc(100% - 14px), transparent 100%);
+  padding: 6px 10px 12px;
+  /* No track in the sidebar: it scrolls by trackpad, and a bar there crowds the card's edge. */
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+.shell2 .side-scroll::-webkit-scrollbar {
+  display: none;
+}
+.shell2 .side:not(.is-scrolled) .side-scroll {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent 100%);
 }
 
 /* pinned sites */
@@ -751,6 +778,9 @@ html.shell2-on:not(.is-native) body::before {
   position: relative;
   flex: 1;
   min-width: 0;
+  /* A centred field like Safari's, not a bar that runs into the page's own buttons. */
+  max-width: 720px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -957,18 +987,20 @@ html.shell2-on:not(.is-native) body::before {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 6px 6px 6px 18px;
+  /* 38px controls with 9px around them: one line of text sits on their centre line. */
+  padding: 9px 9px 9px 18px;
   min-height: 56px;
 }
 .shell2-on .composer-dock .composer-row,
 .shell2-on .composer-panel .composer-row {
-  padding-left: 6px;
+  padding: 5px;
   min-height: 48px;
 }
 .shell2-on .composer textarea {
   flex: 1;
   min-width: 0;
   align-self: center;
+  margin: 8px 0;
   resize: none;
   border: 0;
   outline: 0;
@@ -1006,10 +1038,10 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2-on .mode-switch button {
   position: relative;
-  height: 38px;
-  padding: 0 16px;
+  height: 32px;
+  padding: 0 13px;
   border-radius: 8px;
-  font-size: 15px;
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--s-muted);
   transition: color 150ms ease;
@@ -1034,9 +1066,9 @@ html.shell2-on:not(.is-native) body::before {
 .shell2-on .send {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
   background: var(--c-well);
   color: var(--s-faint);
   flex: none;
@@ -1049,6 +1081,10 @@ html.shell2-on:not(.is-native) body::before {
 .shell2-on .send[data-ready] {
   background: var(--s-ink);
   color: var(--c-bg);
+}
+.shell2-on .send:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 .shell2-on .send:active {
   transform: scale(0.94);
@@ -1878,8 +1914,9 @@ html.shell2-on:not(.is-native) body::before {
 }
 
 /* Settings: a quiet left rail on the card's edge with its own scroll, and a compact title. */
-.shell2 .settings-page .page-title {
-  font-size: 24px;
+/* One title size on every page: the toolbar already says where you are, so titles needn't shout. */
+.shell2 .page-host .page-title {
+  font-size: 30px;
 }
 .shell2 .settings-layout {
   grid-template-columns: 188px minmax(0, 1fr);
@@ -1995,6 +2032,7 @@ html.shell2-on:not(.is-native) body::before {
   outline: none;
 }
 .shell2-on .palette2-input {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2013,10 +2051,12 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2-on .palette2-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 6px;
 }
 .shell2-on .palette2-foot {
+  flex: none;
   display: flex;
   gap: 16px;
   padding: 8px 16px;
@@ -2063,4 +2103,48 @@ html.shell2-on:not(.is-native) body::before {
   .shell2 .replay-chip:active {
     transform: none;
   }
+}
+
+.shell2 .tool-spacer {
+  flex: 1;
+}
+
+/* The ⋯ menu on a chat row stays visible while its menu is open. */
+.shell2 .srow-close[aria-expanded="true"],
+.shell2 .srow-close[data-popup-open] {
+  opacity: 1;
+  background: var(--s-press);
+}
+.shell2 .srow.has-close:has(.srow-close[aria-expanded="true"]) .srow-trailing {
+  opacity: 0;
+}
+/* A chat's own ⋯ menu, top right of its header. */
+.shell2 .chat-head {
+  position: relative;
+}
+.shell2 .chat-menu {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-ctl);
+  color: var(--s-muted);
+}
+@media (hover: hover) and (pointer: fine) {
+  .shell2 .chat-menu:hover {
+    background: var(--s-hover);
+    color: var(--s-ink);
+  }
+}
+.shell2 .chat-menu[aria-expanded="true"] {
+  background: var(--s-press);
+  color: var(--s-ink);
+}
+
+/* Dark logos (GitHub, Notion, X…) vanish on dark ground: a faint light rim keeps them readable. */
+.shell2-on[data-theme="dark"] img.fav {
+  filter: drop-shadow(0 0 0.6px rgba(255, 255, 255, 0.75)) drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.25));
 }

@@ -6,6 +6,7 @@ import { Avatar, PixelIcon } from "../components/ui";
 import type { BrowserTab, Pin } from "../types";
 import { Favicon } from "./media";
 import { Tip } from "./Tip";
+import { ChatMenu } from "./ChatMenu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { hostOf, LIBRARY, siteLabel, splitTabs, threadInfo, type View } from "./model";
 
@@ -52,6 +53,7 @@ export function Sidebar({
 }) {
   const { state, settings, account, invoke } = useDashboard();
   const [open, setOpen] = useState<Record<string, boolean>>(loadOpen);
+  const [scrolled, setScrolled] = useState(false);
   const toggle = (key: string) => {
     const next = { ...open, [key]: !(open[key] ?? true) };
     setOpen(next);
@@ -92,7 +94,7 @@ export function Sidebar({
           : "Ready";
 
   return (
-    <aside className="side" aria-label="okidoki">
+    <aside className={cx("side", scrolled && "is-scrolled")} aria-label="okidoki">
       <div className="side-top">
         <span className="side-lights" aria-hidden="true" />
         <Tip label="Hide sidebar ⌘B">
@@ -107,7 +109,7 @@ export function Sidebar({
         </Tip>
       </div>
 
-      <div className="side-scroll">
+      <div className="side-scroll" onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 2)}>
         <PinGrid
           pins={pins}
           tabs={tabs}
@@ -145,6 +147,7 @@ export function Sidebar({
               label={info.thread.title || "New chat"}
               active={view.kind === "chat" && view.id === info.thread.id}
               onClick={() => onNavigate({ kind: "chat", id: info.thread.id })}
+              menu={<ChatMenu thread={info.thread} className="srow-close" onGone={() => view.kind === "chat" && view.id === info.thread.id && onNavigate({ kind: "home" })} />}
               trailing={
                 info.needsYou ? (
                   <span className="srow-badge" aria-label="Needs you">
@@ -263,7 +266,10 @@ function Row({
   trailing,
   onClose,
   closeLabel,
+  menu,
 }: {
+  /** A trailing control revealed on hover (a chat's ⋯ menu); takes the close button's place. */
+  menu?: React.ReactNode;
   icon?: React.ReactNode;
   label: string;
   title?: string;
@@ -275,7 +281,7 @@ function Row({
   closeLabel?: string;
 }) {
   return (
-    <div className={cx("srow", active && "is-active", muted && "is-muted", onClose && "has-close")} title={title}>
+    <div className={cx("srow", active && "is-active", muted && "is-muted", Boolean(onClose || menu) && "has-close")} title={title}>
       <button type="button" className="srow-main" onClick={onClick} aria-current={active ? "page" : undefined}>
         {icon ? <span className="srow-icon">{icon}</span> : null}
         <span className="srow-label">{label}</span>
@@ -294,6 +300,7 @@ function Row({
           <PixelIcon name="x" size={12} />
         </button>
       ) : null}
+      {menu}
     </div>
   );
 }

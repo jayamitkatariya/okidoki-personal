@@ -654,3 +654,7 @@
 @media (max-width: 640px) {
   .library-search { max-width: none; }
 }
+
+.skill-meta-part {
+  white-space: nowrap;
+}

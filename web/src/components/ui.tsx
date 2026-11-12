@@ -811,7 +811,9 @@ export function Choice<T extends string | number>({
   options,
   onChange,
   label,
+  size,
 }: {
+  size?: "default" | "lg";
   value: T;
   options: Array<{ value: T; label: string }>;
   onChange: (value: T) => void;
@@ -827,7 +829,7 @@ export function Choice<T extends string | number>({
           if (next !== null) onChange(next as T);
         }}
       >
-        <SelectTrigger aria-label={label}>
+        <SelectTrigger aria-label={label} size={size}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

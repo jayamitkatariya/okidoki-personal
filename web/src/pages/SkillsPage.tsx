@@ -345,10 +345,21 @@ export function SkillsPage() {
                   </span>
                   <div className="skill-title">
                     <h3>{skill.name}</h3>
-                    <span>
-                      {skill.template
-                        ? "from the library · learns on its first run"
-                        : `${skill.steps.length} ${skill.steps.length === 1 ? "step" : "steps"} · ${skill.runCount.toLocaleString("en-US")} ${skill.runCount === 1 ? "replay" : "replays"} · learned ${relativeTime(skill.createdAt)}`}
+                    {/* Each fact stays on one line, so a narrow card breaks between them, never inside one. */}
+                    <span className="skill-meta">
+                      {(skill.template
+                        ? ["from the library", "learns on its first run"]
+                        : [
+                            `${skill.steps.length} ${skill.steps.length === 1 ? "step" : "steps"}`,
+                            `${skill.runCount.toLocaleString("en-US")} ${skill.runCount === 1 ? "replay" : "replays"}`,
+                            `learned ${relativeTime(skill.createdAt)}`,
+                          ]
+                      ).map((part, index) => (
+                        <span key={part} className="skill-meta-part">
+                          {index ? " · " : ""}
+                          {part}
+                        </span>
+                      ))}
                     </span>
                   </div>
                   <div className="skill-tools">
@@ -738,7 +749,7 @@ export function SkillsPage() {
               {cadence === "weekly" ? (
                 <div className="routine-cell is-day">
                   <span className="form-label">Day</span>
-                  <Choice label="Day" value={weekday} onChange={setWeekday} options={DAYS.map((_, index) => ({ value: index + 1, label: DAY_LABELS[index] }))} />
+                  <Choice label="Day" size="lg" value={weekday} onChange={setWeekday} options={DAYS.map((_, index) => ({ value: index + 1, label: DAY_LABELS[index] }))} />
                 </div>
               ) : null}
               {cadence !== "hourly" ? (

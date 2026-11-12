@@ -82,7 +82,9 @@ export function SettingsPage() {
     const update = () => {
       frame = 0;
       if (jumping.current !== null) return;
-      const top = root.getBoundingClientRect().top + 96;
+      // The reading line sits a third of the way down: the section you're looking at, not the one
+      // whose last rows are still peeking in at the top.
+      const top = root.getBoundingClientRect().top + Math.max(96, root.clientHeight * 0.3);
       // Keys only exists in the Mac app, so start from the first section actually on the page
       let current: string = SECTIONS.find((section) => document.getElementById(`settings-${section.id}`))?.id ?? SECTIONS[0].id;
       for (const section of SECTIONS) {

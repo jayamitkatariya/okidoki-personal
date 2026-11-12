@@ -42,7 +42,10 @@ export function Toolbar({
   assistantOpen,
   onToggleAssistant,
   onAskedHere,
+  home = false,
 }: {
+  /** Home (a new tab): the toolbar stays quiet. */
+  home?: boolean;
   /** A task typed into the address bar with no page to do it on: its conversation opens. */
   onAsked: (threadID: string) => void;
   tab: BrowserTab | null;
@@ -76,7 +79,10 @@ export function Toolbar({
       </div>
       ) : null}
 
-      {crumb ? (
+      {home ? (
+        // Home's own box searches and asks; a second one up here would only compete with it.
+        <div className="tool-spacer" />
+      ) : crumb ? (
         <div className="tool-crumb">
           <PixelIcon name={crumb.icon} size={15} />
           <span>{crumb.title}</span>

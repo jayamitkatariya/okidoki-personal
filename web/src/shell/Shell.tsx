@@ -343,6 +343,7 @@ function ShellBody() {
         <Toolbar
           tab={view.kind === "tab" ? tab : null}
           crumb={crumb}
+          home={view.kind === "home" || (view.kind === "tab" && (!tab || tab.blank))}
           sidebarHidden={sidebarHidden}
           onShowSidebar={() => setSidebarHidden(false)}
           onSearched={() => setView({ kind: "tab", id: "@active" })}
@@ -385,7 +386,7 @@ function ShellBody() {
 
           {view.kind === "chat" ? (
             thread ? (
-              <ChatView key={thread.id} thread={thread} runs={threadRuns} onOpenTab={openTab} onAsked={(id) => setView({ kind: "chat", id })} onUnarchive={() => invoke("archiveThread", { id: thread.id })} />
+              <ChatView key={thread.id} thread={thread} runs={threadRuns} onOpenTab={openTab} onAsked={(id) => setView({ kind: "chat", id })} onUnarchive={() => invoke("archiveThread", { id: thread.id })} onGone={() => setView({ kind: "home" })} />
             ) : (
               <div className="card-scroll">
                 <Empty icon="chat" title="This chat is gone">

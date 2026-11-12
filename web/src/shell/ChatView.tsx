@@ -5,6 +5,7 @@ import { Button, Markdown, PixelIcon, RiskBadge } from "../components/ui";
 import { AskedReply } from "../pages/RunsPage";
 import type { Message, Run, Thread } from "../types";
 import { Composer } from "./Composer";
+import { ChatMenu } from "./ChatMenu";
 import { PlanCard } from "@/components/ui/plan-card";
 import { Button as KButton } from "@/components/ui/button";
 import { ACTIVE, actionLines, runUnread, threadUnread, workingFor } from "./model";
@@ -41,7 +42,10 @@ export function ChatView({
   onOpenTab,
   onAsked,
   onUnarchive,
+  onGone,
 }: {
+  /** The chat was archived or deleted from its own menu. */
+  onGone?: () => void;
   thread: Thread;
   runs: Run[];
   onOpenTab: (tabID: string) => void;
@@ -97,6 +101,7 @@ export function ChatView({
               <span>Started {relativeTime(thread.createdAt)}</span>
               {thread.app && thread.app !== "mac" && thread.app !== "okidoki" ? <span> · {thread.app}</span> : null}
             </p>
+            <ChatMenu thread={thread} className="chat-menu" onGone={onGone} />
             {thread.archived ? (
               <div className="chat-archived" role="status">
                 <span>This chat is archived. Unarchive it to keep going.</span>

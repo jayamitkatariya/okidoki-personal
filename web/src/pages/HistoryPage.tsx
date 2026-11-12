@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ChatMenu } from "../shell/ChatMenu";
 import { useDashboard } from "../store";
 import { cx, clockLabel, dayLabel, formatBytes, relativeTime } from "../lib";
 import type { Run, Thread } from "../types";
@@ -249,6 +250,7 @@ function ThreadCard({ thread, onOpen }: { thread: Thread; onOpen: () => void }) 
   const last = thread.messages[thread.messages.length - 1];
   const count = thread.messages.length;
   return (
+    <div className="thread-card-wrap">
     <button className={cx("tile thread-card", thread.archived && "is-archived")} onClick={onOpen}>
       <span className="thread-top">
         <span className="thread-app">
@@ -271,6 +273,9 @@ function ThreadCard({ thread, onOpen }: { thread: Thread; onOpen: () => void }) 
         </span>
       </span>
     </button>
+    {/* Beside the card, not inside it: a button can't hold another button. */}
+    <ChatMenu thread={thread} className="thread-card-menu" />
+    </div>
   );
 }
 
