@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { actionLines, hostOf, looksLikeAddress, looksLikeTask, parseView, runUnread, splitTabs, threadInfo, threadUnread, workingFor } from "../src/shell/model";
+import { actionLines, draggedTabOrder, hostOf, looksLikeAddress, looksLikeTask, parseView, runUnread, splitTabs, threadInfo, threadUnread, workingFor } from "../src/shell/model";
 import { demoState } from "../src/demo";
 import type { BrowserTab, Run, Thread } from "../src/types";
 
@@ -77,24 +77,30 @@ test("threads know when they're running, waiting on you, or unread", () => {
   expect(info[0].thread.id).toBe("thread-cancel");
 });
 
+const tab = (patch: Partial<BrowserTab>): BrowserTab => ({
+  id: "x",
+  number: 1,
+  title: "",
+  address: "",
+  host: "",
+  loading: false,
+  blank: false,
+  canGoBack: false,
+  canGoForward: false,
+  hasLogin: false,
+  ...patch,
+});
+
 test("agent tabs are listed apart, blank tabs are Home", () => {
-  const tab = (patch: Partial<BrowserTab>): BrowserTab => ({
-    id: "x",
-    number: 1,
-    title: "",
-    address: "",
-    host: "",
-    loading: false,
-    blank: false,
-    canGoBack: false,
-    canGoForward: false,
-    hasLogin: false,
-    bookmarked: false,
-    ...patch,
-  });
   const { mine, agent } = splitTabs([tab({ id: "a" }), tab({ id: "b", blank: true }), tab({ id: "c", ownerRunID: "r" }), tab({ id: "d", blank: true, status: "opening" })]);
   expect(mine.map((item) => item.id)).toEqual(["a"]);
   expect(agent.map((item) => item.id)).toEqual(["c", "d"]);
+});
+
+test("a dragged tab takes its new place; agent and blank tabs stay put", () => {
+  const all = [tab({ id: "a" }), tab({ id: "x", blank: true }), tab({ id: "b" }), tab({ id: "c", ownerRunID: "r" }), tab({ id: "d" })];
+  // The person's tabs a and b swap; the blank tab and the agent's tab don't move.
+  expect(draggedTabOrder(all, ["b", "a", "d"])).toEqual(["b", "x", "a", "c", "d"]);
 });
 
 test("working-for ticks in seconds, then minutes, then hours", () => {

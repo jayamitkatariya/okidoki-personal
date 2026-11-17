@@ -107,10 +107,7 @@ export function Toolbar({
             ) : null}
             <ToolButton tip="left" icon="record" label={recording ? `Save recording (${state.browser?.recordedSteps ?? 0} steps)` : "Record a skill"} active={recording} className={cx(recording && "is-recording")} onClick={() => invoke("browserRecord")} />
             {canSave(tab.address) ? (
-              <>
-                <ToolButton tip="left" icon="pin" label={pinned ? `Unpin ${tab.host} (⇧⌘D)` : `Pin ${tab.host} (⇧⌘D)`} active={pinned} className={cx(pinned && "is-filled")} onClick={() => actions.togglePin(siteOf(tab))} />
-                <ToolButton tip="left" icon="bookmark" label={tab.bookmarked ? "Remove bookmark (⌘D)" : "Bookmark this page (⌘D)"} active={tab.bookmarked} className={cx(tab.bookmarked && "is-filled")} onClick={() => actions.toggleBookmark(siteOf(tab))} />
-              </>
+              <ToolButton tip="left" icon="pin" label={pinned ? `Unpin ${tab.host} (⌘D)` : `Pin ${tab.host} (⌘D)`} active={pinned} className={cx(pinned && "is-filled")} onClick={() => actions.togglePin(siteOf(tab))} />
             ) : null}
           </>
         ) : null}

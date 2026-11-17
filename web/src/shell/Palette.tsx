@@ -9,7 +9,7 @@ import { Favicon, useCover } from "./media";
 import { hostOf, LIBRARY, looksLikeAddress, siteLabel, threadInfo, type View } from "./model";
 import { askAndOpen } from "./ask";
 import type { BrowserTab } from "../types";
-import { bookmarkFor, canSave, pinFor, siteOf, useSiteActions } from "./siteActions";
+import { canSave, pinFor, siteOf, useSiteActions } from "./siteActions";
 
 interface Result {
   id: string;
@@ -20,7 +20,7 @@ interface Result {
   run: () => void;
 }
 
-/** ⌘K: jump to any tab, chat, bookmark or page, or hand what you typed to okidoki. */
+/** ⌘K: jump to any tab, chat, pin or page, or hand what you typed to okidoki. */
 export function Palette({
   open,
   onClose,
@@ -29,7 +29,7 @@ export function Palette({
   onOpenURL,
   tab = null,
 }: {
-  /** The tab in front, for "Pin this tab", "Bookmark this tab" and the like. */
+  /** The tab in front, for "Pin this tab", "Copy link" and the like. */
   tab?: BrowserTab | null;
   open: boolean;
   onClose: () => void;
@@ -84,15 +84,13 @@ export function Palette({
     if (tab && canSave(tab.address)) {
       const site = siteOf(tab);
       const pinned = pinFor(state, tab.address);
-      const saved = bookmarkFor(state, tab.address);
       const commands: Array<[string, string, string, string, () => void]> = [
-        ["pin", pinned ? "Unpin this tab" : "Pin this tab", "⇧⌘D", "pin", () => actions.togglePin(site)],
-        ["bookmark", saved ? "Remove bookmark" : "Bookmark this tab", "⌘D", "bookmark", () => actions.toggleBookmark(site)],
+        ["pin", pinned ? "Unpin this tab" : "Pin this tab", "⌘D", "pin", () => actions.togglePin(site)],
         ["copy", "Copy link", tab.host, "link", () => actions.copyLink(tab.address)],
         ["duplicate", "Duplicate tab", tab.host, "copy", () => actions.duplicate(tab.address)],
       ];
       for (const [id, label, detail, icon, run] of commands) {
-        if (q && has(label, id === "pin" ? "pinned sites unpin" : id === "bookmark" ? "bookmarks save" : undefined)) list.push({ id: `cmd-${id}`, group: "This tab", label, detail, icon: <PixelIcon name={icon} size={16} />, run: close(run) });
+        if (q && has(label, id === "pin" ? "pinned sites unpin" : undefined)) list.push({ id: `cmd-${id}`, group: "This tab", label, detail, icon: <PixelIcon name={icon} size={16} />, run: close(run) });
       }
     }
     for (const tab of state.browser?.tabs ?? []) {
@@ -105,11 +103,11 @@ export function Palette({
         list.push({ id: `chat-${info.thread.id}`, group: "Chats", label: info.thread.title || "New chat", icon: <PixelIcon name="chat" size={16} />, run: close(() => onNavigate({ kind: "chat", id: info.thread.id })) });
       }
     }
-    for (const item of [...(state.pins ?? []), ...(state.bookmarks ?? [])]) {
+    for (const item of state.pins ?? []) {
       if (has(item.title, item.url)) {
         // Like the sidebar: back to that site's tab if one's open, else a new one.
         const open = (state.browser?.tabs ?? []).find((tab) => !tab.ownerRunID && !tab.status && tab.host === hostOf(item.url));
-        list.push({ id: `site-${item.id}`, group: "Sites", label: siteLabel(item.title, item.url), detail: hostOf(item.url), icon: <Favicon url={item.url} size={16} />, run: close(() => (open ? onOpenTab(open.id) : onOpenURL(item.url))) });
+        list.push({ id: `site-${item.id}`, group: "Pins", label: siteLabel(item.title, item.url), detail: hostOf(item.url), icon: <Favicon url={item.url} size={16} />, run: close(() => (open ? onOpenTab(open.id) : onOpenURL(item.url))) });
       }
     }
     for (const page of LIBRARY) {

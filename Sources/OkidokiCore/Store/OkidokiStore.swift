@@ -15,7 +15,6 @@ public final class OkidokiStore: ObservableObject {
     @Published public var connectors: [Connector]
     /// Sidebar pins, in order. Nil until the shell seeds them the first time it opens.
     @Published public var pins: [BrowserPin]?
-    @Published public var bookmarks: [Bookmark]
     @Published public private(set) var lastSavedAt: Date?
     @Published public private(set) var loadError: String?
     /// The saved file had items this build couldn't read. They're kept in a copy beside it.
@@ -129,7 +128,6 @@ public final class OkidokiStore: ObservableObject {
         self.routines = routines
         self.connectors = Self.mergeConnectors(state.connectors)
         self.pins = state.pins
-        self.bookmarks = state.bookmarks
         self.deletions = state.deletions
         self.forgottenMemories = state.forgotten ?? [:]
         self.syncCursors = state.syncCursors
@@ -827,7 +825,7 @@ public final class OkidokiStore: ObservableObject {
         }
     }
 
-    // MARK: - Pins, bookmarks, seen
+    // MARK: - Pins, seen
 
     public static let maxPins = 12
 
@@ -884,31 +882,6 @@ public final class OkidokiStore: ObservableObject {
         pins = list
     }
 
-    /// Bookmarks a page, or removes the bookmark when the page is already saved. Returns true when saved.
-    @discardableResult
-    public func toggleBookmark(url: String, title: String) -> Bool {
-        if let existing = bookmarks.firstIndex(where: { $0.url == url }) {
-            bookmarks.remove(at: existing)
-            return false
-        }
-        bookmarks.insert(Bookmark(url: url, title: title.isEmpty ? BrowserPin.host(of: url) : title), at: 0)
-        return true
-    }
-
-    /// Bookmarks a page unless it's already saved (never toggles off: a drag or "Bookmark" twice keeps one).
-    /// `index` places it in the list (an undo puts it back where it was). Returns false for a duplicate.
-    @discardableResult
-    public func addBookmark(url: String, title: String, at index: Int? = nil) -> Bool {
-        guard !url.isEmpty, !bookmarks.contains(where: { $0.url == url }) else { return false }
-        let bookmark = Bookmark(url: url, title: title.isEmpty ? BrowserPin.host(of: url) : title)
-        bookmarks.insert(bookmark, at: min(max(index ?? 0, 0), bookmarks.count))
-        return true
-    }
-
-    public func removeBookmark(_ id: String) {
-        bookmarks.removeAll { $0.id == id }
-    }
-
     /// The person looked at a thread or a run: its unread dot goes away.
     public func markSeen(threadID: String? = nil, runID: String? = nil) {
         let now = Date()
@@ -939,7 +912,7 @@ public final class OkidokiStore: ObservableObject {
                              settings: settings, threads: threads, memories: memories, runs: runs,
                              skills: skills, routines: routines, connectors: connectors,
                              deletions: deletions, syncCursors: syncCursors, unreadable: unreadable,
-                             pins: pins, bookmarks: bookmarks,
+                             pins: pins,
                              forgotten: forgottenMemories.isEmpty ? nil : forgottenMemories)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -470,7 +470,6 @@ export interface NativeState {
   browser?: BrowserState | null;
   /** Sites pinned in the sidebar, in order. */
   pins?: Pin[];
-  bookmarks?: Bookmark[];
   /** Runs with a thumbnail: id → when it was last taken, in seconds. */
   thumbs?: Record<string, number>;
 }
@@ -491,7 +490,6 @@ export interface BrowserTab {
   canGoForward: boolean;
   hasLogin: boolean;
   loadError?: string | null;
-  bookmarked: boolean;
 }
 
 export interface BrowserState {
@@ -502,13 +500,6 @@ export interface BrowserState {
 }
 
 export interface Pin {
-  id: string;
-  url: string;
-  title: string;
-  createdAt: string;
-}
-
-export interface Bookmark {
   id: string;
   url: string;
   title: string;

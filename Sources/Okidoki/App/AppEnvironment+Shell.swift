@@ -88,6 +88,11 @@ extension AppEnvironment {
         browser.closeTab(tab)
     }
 
+    /// The sidebar dragged its rows into this order: the browser's tabs line up behind it.
+    func shellReorderTabs(_ ids: [String]) {
+        browser.reorderTabs(ids.compactMap(UUID.init(uuidString:)))
+    }
+
     func shellOpenURL(_ url: String, newTab: Bool) {
         shellBrowserGo(url, tabID: nil, choice: "open", newTab: newTab)
     }
@@ -95,14 +100,6 @@ extension AppEnvironment {
     /// the shell's first open: pins come from what the person already uses.
     func seedShellPins() {
         store.seedPinsIfNeeded(loginSites: vault.logins.map(\.site))
-    }
-
-    /// Bookmarks the tab's page, or removes the bookmark. The shell says what happened (with Undo) in its
-    /// own toast, so nothing pops out of the notch over the window for it.
-    func shellToggleBookmark(tabID: String?) {
-        let tab = tabID.flatMap(UUID.init(uuidString:)).flatMap { browser.tab($0) } ?? browser.activeTab
-        guard !tab.isBlank else { return }
-        store.toggleBookmark(url: tab.address, title: tab.title)
     }
 
     /// Pins the tab's site, at `index` among the pins when given. A full grid is the shell's to explain.

@@ -47,4 +47,12 @@ describe("dashboard browser preview", () => {
     expect(messages).toEqual([{ type: "pauseRun", payload: { id: "native-run" } }]);
     expect(snapshots).toHaveLength(1);
   });
+
+  test("tabs dragged into a new order line up behind it, unknown ids kept at the end", () => {
+    const ids = ["tab-flights", "tab-gh", "tab-figma", "tab-netflix", "tab-lepuzz"];
+    invoke("browserReorder", { ids });
+    expect(snapshots[0].browser?.tabs.map((tab) => tab.id)).toEqual(ids);
+    invoke("browserReorder", { ids: ["tab-gh", "tab-lepuzz"] });
+    expect(snapshots[1].browser?.tabs.map((tab) => tab.id)).toEqual(["tab-gh", "tab-lepuzz", "tab-flights", "tab-figma", "tab-netflix"]);
+  });
 });

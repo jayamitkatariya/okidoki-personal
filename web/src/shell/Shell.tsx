@@ -222,10 +222,8 @@ function ShellBody() {
           if (tab) invoke("browserClose", { tabID: tab.id });
           break;
         case "d":
-          // ⌘D bookmarks the page in front (again removes it), ⌘⇧D pins its site; both toast with Undo.
-          if (view.kind === "tab" && tab && !tab.blank) siteActions.toggleBookmark(siteOf(tab));
-          break;
         case "D":
+          // ⌘D pins the page's site in front (⇧⌘D the same); again unpins it, with Undo.
           if (view.kind === "tab" && tab && !tab.blank) siteActions.togglePin(siteOf(tab));
           break;
         default:

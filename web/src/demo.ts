@@ -553,11 +553,11 @@ export const demoState: NativeState = {
     recording: false,
     recordedSteps: 0,
     tabs: [
-      { id: "tab-gh", number: 1, title: "okidoki-personal · GitHub", address: "https://github.com/jaykatariya/okidoki-personal", host: "github.com", loading: false, blank: false, status: null, ownerRunID: null, threadID: null, canGoBack: true, canGoForward: false, hasLogin: true, loadError: null, bookmarked: true },
-      { id: "tab-figma", number: 2, title: "Workro onboarding – Figma", address: "https://www.figma.com/design/workro", host: "figma.com", loading: false, blank: false, status: null, ownerRunID: null, threadID: null, canGoBack: false, canGoForward: false, hasLogin: false, loadError: null, bookmarked: false },
-      { id: "tab-netflix", number: 3, title: "Netflix – Account", address: "https://www.netflix.com/account", host: "netflix.com", loading: false, blank: false, status: "type the reason into the refund form", ownerRunID: "run-cancel-sub", threadID: "thread-cancel", canGoBack: true, canGoForward: false, hasLogin: true, loadError: null, bookmarked: false },
-      { id: "tab-lepuzz", number: 4, title: "LE PUZZ – Wonderfully Whimsical Puzzles", address: "https://lepuzz.com/about", host: "lepuzz.com", loading: true, blank: false, status: "open the about page", ownerRunID: "run-design-examples", threadID: "thread-design", canGoBack: true, canGoForward: false, hasLogin: false, loadError: null, bookmarked: false },
-      { id: "tab-flights", number: 5, title: "Google Flights – ORD", address: "https://www.google.com/travel/flights", host: "google.com", loading: false, blank: false, status: null, ownerRunID: null, threadID: "thread-flights", canGoBack: true, canGoForward: false, hasLogin: false, loadError: null, bookmarked: false },
+      { id: "tab-gh", number: 1, title: "okidoki-personal · GitHub", address: "https://github.com/jaykatariya/okidoki-personal", host: "github.com", loading: false, blank: false, status: null, ownerRunID: null, threadID: null, canGoBack: true, canGoForward: false, hasLogin: true, loadError: null },
+      { id: "tab-figma", number: 2, title: "Workro onboarding – Figma", address: "https://www.figma.com/design/workro", host: "figma.com", loading: false, blank: false, status: null, ownerRunID: null, threadID: null, canGoBack: false, canGoForward: false, hasLogin: false, loadError: null },
+      { id: "tab-netflix", number: 3, title: "Netflix – Account", address: "https://www.netflix.com/account", host: "netflix.com", loading: false, blank: false, status: "type the reason into the refund form", ownerRunID: "run-cancel-sub", threadID: "thread-cancel", canGoBack: true, canGoForward: false, hasLogin: true, loadError: null },
+      { id: "tab-lepuzz", number: 4, title: "LE PUZZ – Wonderfully Whimsical Puzzles", address: "https://lepuzz.com/about", host: "lepuzz.com", loading: true, blank: false, status: "open the about page", ownerRunID: "run-design-examples", threadID: "thread-design", canGoBack: true, canGoForward: false, hasLogin: false, loadError: null },
+      { id: "tab-flights", number: 5, title: "Google Flights – ORD", address: "https://www.google.com/travel/flights", host: "google.com", loading: false, blank: false, status: null, ownerRunID: null, threadID: "thread-flights", canGoBack: true, canGoForward: false, hasLogin: false, loadError: null },
     ],
   },
   pins: [
@@ -567,11 +567,6 @@ export const demoState: NativeState = {
     { id: "pin-figma", url: "https://www.figma.com", title: "Figma", createdAt: iso(-9000) },
     { id: "pin-gh", url: "https://github.com", title: "GitHub", createdAt: iso(-9000) },
     { id: "pin-discord", url: "https://discord.com/app", title: "Discord", createdAt: iso(-9000) },
-  ],
-  bookmarks: [
-    { id: "bm-notion", url: "https://www.notion.so/workro/roadmap", title: "Notion", createdAt: iso(-5000) },
-    { id: "bm-figma", url: "https://www.figma.com/design/workro", title: "Figma", createdAt: iso(-5000) },
-    { id: "bm-gh", url: "https://github.com/jaykatariya/okidoki-personal", title: "GitHub", createdAt: iso(-5000) },
   ],
   thumbs: { "run-cancel-sub": 1, "run-design-examples": 1, "run-flights": 1, "run-park": 1, "run-keynote": 1 },
 };

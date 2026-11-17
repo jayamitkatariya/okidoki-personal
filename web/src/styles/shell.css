@@ -228,12 +228,12 @@ html.shell2-on:not(.is-native) body::before {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 0 10px 10px;
+  padding: 0 12px 12px;
 }
 .shell2 .side-top {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   height: 46px;
   flex: none;
   padding-top: 2px;
@@ -299,28 +299,28 @@ html.shell2-on:not(.is-native) body::before {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 0 -10px;
-  padding: 6px 10px 12px;
+  margin: 0 -12px;
+  padding: 8px 12px 14px;
   /* No track in the sidebar: it scrolls by trackpad, and a bar there crowds the card's edge. */
   scrollbar-width: none;
-  mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
 }
 .shell2 .side-scroll::-webkit-scrollbar {
   display: none;
 }
 .shell2 .side:not(.is-scrolled) .side-scroll {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
 }
 
 /* pinned sites */
 .shell2 .pins {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 7px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 18px;
 }
 .shell2 .pin {
-  height: 52px;
+  height: 48px;
   display: grid;
   place-items: center;
   border-radius: var(--r-tile);
@@ -373,7 +373,7 @@ html.shell2-on:not(.is-native) body::before {
 
 /* sections */
 .shell2 .side-section + .side-section {
-  margin-top: 12px;
+  margin-top: 16px;
 }
 .shell2 .side-label {
   display: flex;
@@ -381,9 +381,11 @@ html.shell2-on:not(.is-native) body::before {
   gap: 4px;
   width: 100%;
   height: 28px;
-  padding: 0 8px;
-  font-size: 12.5px;
-  font-weight: 500;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--s-faint);
   border-radius: 7px;
 }
@@ -439,7 +441,7 @@ html.shell2-on:not(.is-native) body::before {
   flex: 1;
   min-width: 0;
   height: 100%;
-  padding: 0 8px;
+  padding: 0 10px;
   text-align: left;
   border-radius: inherit;
 }
@@ -461,7 +463,7 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .srow-label {
   flex: 1;
   min-width: 0;
-  font-size: 13.5px;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -545,6 +547,10 @@ html.shell2-on:not(.is-native) body::before {
   z-index: -1;
   animation: shell-spin 3.2s linear infinite;
 }
+.shell2 .agent-group {
+  /* The agent's tabs are their own crowd: a breath between them and the person's. */
+  margin-top: 6px;
+}
 .shell2 .agent-tabs {
   overflow: hidden;
   padding-left: 12px;
@@ -554,13 +560,13 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .side-foot {
   flex: none;
   display: grid;
-  gap: 6px;
-  padding-top: 8px;
+  gap: 8px;
+  padding-top: 10px;
 }
 .shell2 .library {
   display: flex;
   justify-content: space-between;
-  padding: 3px;
+  padding: 4px;
   border-radius: 12px;
   background: var(--s-tile);
 }
@@ -605,7 +611,7 @@ html.shell2-on:not(.is-native) body::before {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border-radius: 10px;
   text-align: left;
   transition: background-color 150ms ease;
@@ -660,7 +666,7 @@ html.shell2-on:not(.is-native) body::before {
 /* Toasts sit bottom-left. With the sidebar out, that corner is the library and your account, so
    they rise just above them instead of covering the controls for as long as they show. */
 .shell2 {
-  --toast-bottom: 106px;
+  --toast-bottom: 122px;
 }
 .shell2.is-sidebar-hidden {
   --toast-bottom: 1rem;
@@ -2337,7 +2343,7 @@ html.shell2-on:not(.is-native) body::before {
   }
 }
 
-/* Organizing tabs: right-click menus on rows, and drags between the pins, Bookmarks and Tabs. */
+/* Organizing tabs: right-click menus on rows, drags between the pins and Tabs, and tabs among themselves. */
 .shell2 .srow-ctx {
   display: contents;
 }
@@ -2350,11 +2356,11 @@ html.shell2-on:not(.is-native) body::before {
   display: grid;
   place-items: center;
   height: 32px;
-  margin: 2px 0 4px;
+  margin: 2px 0 6px;
   border-radius: 8px;
   border: 1px dashed var(--c-line-strong);
   color: var(--s-faint);
-  font-size: 12.5px;
+  font-size: 12px;
   pointer-events: none;
   animation: side-drop-in 150ms var(--ease-out);
   transition:
@@ -2376,8 +2382,8 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2 .side-empty {
   margin: 0;
-  padding: 4px 8px 6px;
-  font-size: 12.5px;
+  padding: 4px 10px 8px;
+  font-size: 12px;
   color: var(--s-faint);
 }
 .shell2 .side-empty kbd {
@@ -2387,7 +2393,7 @@ html.shell2-on:not(.is-native) body::before {
   border-radius: 4px;
   box-shadow: inset 0 0 0 1px var(--c-line-strong);
 }
-/* The pins while a tab or bookmark is dragged over them: a bar where it lands, a ring on the pin it replaces. */
+/* The pins while a tab is dragged over them: a bar where it lands, a ring on the pin it replaces. */
 .shell2 .pins.is-drop-ready {
   border-radius: calc(var(--r-tile) + 4px);
   outline: 1px dashed var(--c-line-strong);
@@ -2444,14 +2450,7 @@ html.shell2-on:not(.is-native) body::before {
   background: var(--green-soft);
   color: var(--green);
 }
-.shell2 .pins-note {
-  grid-column: 1 / -1;
-  margin: 0;
-  font-size: 11.5px;
-  text-align: center;
-  color: var(--s-faint);
-}
-/* Pinned and bookmarked: the toolbar's icon fills in. */
+/* Pinned: the toolbar's pin icon fills in. */
 .shell2 .tool-btn.is-filled .icon path {
   fill: currentColor;
   fill-opacity: 1;

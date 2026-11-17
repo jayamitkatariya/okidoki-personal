@@ -117,6 +117,16 @@ export function splitTabs(tabs: BrowserTab[]): { mine: BrowserTab[]; agent: Brow
   };
 }
 
+/**
+ * The full tab order after the person dragged their rows around: their tabs take their new places,
+ * agent and blank tabs stay exactly where they were.
+ */
+export function draggedTabOrder(tabs: BrowserTab[], mine: string[]): string[] {
+  const moved = new Set(mine);
+  const queue = [...mine];
+  return tabs.map((tab) => (moved.has(tab.id) ? (queue.shift() ?? tab.id) : tab.id));
+}
+
 /** "1m 1s" and "1h 4m": time spent working, ticking while it runs. */
 export function workingFor(start: string | null | undefined, now: number, end?: string | null): string {
   const from = time(start);
@@ -169,7 +179,7 @@ export function hostOf(url: string): string {
   }
 }
 
-/** Tab or bookmark label: the title, else the site. */
+/** A tab or pin's label: the title, else the site. */
 export function siteLabel(title: string, url: string): string {
   return title.trim() || hostOf(url) || "New tab";
 }

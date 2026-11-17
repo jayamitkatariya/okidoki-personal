@@ -3,14 +3,14 @@ import { AnimatePresence, motion } from "motion/react";
 import { useDashboard } from "../store";
 import { cx } from "../lib";
 import { Avatar, PixelIcon } from "../components/ui";
-import type { Bookmark, BrowserTab, Pin } from "../types";
+import type { BrowserTab, Pin } from "../types";
 import { Favicon } from "./media";
 import { Tip } from "./Tip";
 import { ChatMenu } from "./ChatMenu";
 import { Kbd } from "@/components/ui/kbd";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { bookmarkFor, canSave, MAX_PINS, pinFor, siteOf, useSiteActions, type Site } from "./siteActions";
-import { ACTIVE, hostOf, LIBRARY, showsPrivateMac, siteLabel, splitTabs, threadInfo, type View } from "./model";
+import { canSave, MAX_PINS, pinFor, siteOf, useSiteActions, type Site } from "./siteActions";
+import { ACTIVE, draggedTabOrder, hostOf, LIBRARY, showsPrivateMac, siteLabel, splitTabs, threadInfo, type View } from "./model";
 
 const OPEN_KEY = "okidoki.shell.sections";
 const CHATS_SHOWN = 6;
@@ -32,15 +32,14 @@ function saveOpen(value: Record<string, boolean>) {
 }
 
 /**
- * What's being dragged in the sidebar. Tabs, pins and bookmarks move between the pins grid, Bookmarks
- * and Tabs: a tab onto the pins pins it, onto Bookmarks bookmarks it; a pin onto Tabs unpins it.
+ * What's being dragged in the sidebar. Tabs and pins: a tab onto the pins pins it, a pin onto Tabs
+ * unpins it, and a tab dragged over other tabs moves among them.
  */
-type Drag = { kind: "tab"; tab: BrowserTab } | { kind: "pin"; pin: Pin } | { kind: "bookmark"; bookmark: Bookmark };
+type Drag = { kind: "tab"; tab: BrowserTab } | { kind: "pin"; pin: Pin };
 
 function dragSite(drag: Drag): Site {
   if (drag.kind === "tab") return siteOf(drag.tab);
-  const item = drag.kind === "pin" ? drag.pin : drag.bookmark;
-  return { url: item.url, title: item.title };
+  return { url: drag.pin.url, title: drag.pin.title };
 }
 
 /** Starts a sidebar drag: the page's link rides along, so it can also be dropped into other apps. */
@@ -91,23 +90,49 @@ export function Sidebar({
   const agentCount = agent.length + (vmShown ? 1 : 0);
   const chats = useMemo(() => threadInfo(state), [state]);
   const pins = state.pins ?? [];
-  const bookmarks = state.bookmarks ?? [];
   const viewingTab = view.kind === "tab" ? tabs.find((tab) => tab.id === (view.id === "@active" ? activeTabID : view.id)) : null;
   const actions = useSiteActions();
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragging = drag ? dragSite(drag) : null;
+  /** The person's tabs as the drag is arranging them; the browser's order until one starts. */
+  const [order, setOrder] = useState<string[] | null>(null);
+  const shownMine = useMemo(
+    () => (order ? order.map((id) => mine.find((tab) => tab.id === id)).filter((tab): tab is BrowserTab => Boolean(tab)) : mine),
+    [order, mine],
+  );
+  const handleDrag = (next: Drag | null) => {
+    setDrag(next);
+    if (!next) setOrder(null);
+  };
 
-  /** A pin goes back to its site's tab if one is open; a bookmark only to that exact page. */
-  const openSite = (url: string, exact = false) => {
+  /** A pin goes back to its site's tab if one is open. */
+  const openSite = (url: string) => {
     const host = hostOf(url);
-    const same = (address: string) => address.replace(/\/$/, "") === url.replace(/\/$/, "");
-    const existing = tabs.find((tab) => !tab.ownerRunID && !tab.status && (exact ? same(tab.address) : tab.host === host));
+    const existing = tabs.find((tab) => !tab.ownerRunID && !tab.status && tab.host === host);
     if (existing) {
       onOpenTab(existing.id);
       return;
     }
     invoke("browserOpen", { url, newTab: true });
     onNavigate({ kind: "tab", id: "@active" });
+  };
+
+  /** The dragged tab moves before or after the one it's over, the way the pins do. */
+  const moveDraggedTab = (dragged: string, over: string) => {
+    const current = order ?? mine.map((tab) => tab.id);
+    const from = current.indexOf(dragged);
+    const at = current.indexOf(over);
+    if (from < 0 || at < 0 || from === at) return;
+    const next = current.filter((id) => id !== dragged);
+    next.splice(next.indexOf(over) + (from < at ? 1 : 0), 0, dragged);
+    setOrder(next);
+  };
+
+  /** Sends the browser the full order: the person's tabs in the arrangement they dragged, everything else where it was. */
+  const commitTabOrder = () => {
+    if (!drag || drag.kind !== "tab" || !order) return;
+    invoke("browserReorder", { ids: draggedTabOrder(tabs, order) });
+    handleDrag(null);
   };
 
   const waiting = state.runs.filter((run) => run.status === "waiting" || run.status === "previewing" || run.status === "asked").length;
@@ -150,84 +175,8 @@ export function Sidebar({
             onNavigate({ kind: "tab", id: "@active" });
           }}
           drag={drag}
-          onDrag={setDrag}
+          onDrag={handleDrag}
         />
-
-        <Section
-          title="Bookmarks"
-          open={isOpen("bookmarks")}
-          onToggle={() => toggle("bookmarks")}
-          drop={
-            drag && drag.kind !== "bookmark" && dragging && canSave(dragging.url)
-              ? {
-                  hint: bookmarkFor(state, dragging.url) ? "Already bookmarked" : "Drop to bookmark",
-                  onDrop: () => actions.bookmark(dragging),
-                }
-              : null
-          }
-        >
-          {bookmarks.map((bookmark) => (
-            <SiteMenu
-              key={bookmark.id}
-              site={bookmark}
-              onOpen={() => openSite(bookmark.url, true)}
-              onOpenNew={() => {
-                invoke("browserOpen", { url: bookmark.url, newTab: true });
-                onNavigate({ kind: "tab", id: "@active" });
-              }}
-              onRemove={{ label: "Remove bookmark", run: () => actions.removeBookmark(bookmark) }}
-            >
-              <Row
-                icon={<Favicon url={bookmark.url} size={16} />}
-                label={siteLabel(bookmark.title, bookmark.url)}
-                title={bookmark.url}
-                active={Boolean(viewingTab && viewingTab.address === bookmark.url)}
-                onClick={() => openSite(bookmark.url, true)}
-                onClose={() => actions.removeBookmark(bookmark)}
-                closeLabel="Remove bookmark"
-                dragging={drag?.kind === "bookmark" && drag.bookmark.id === bookmark.id}
-                onDragStart={(event) => {
-                  startDrag(event, bookmark.url, bookmark.title);
-                  setDrag({ kind: "bookmark", bookmark });
-                }}
-                onDragEnd={() => setDrag(null)}
-              />
-            </SiteMenu>
-          ))}
-          {!bookmarks.length ? (
-            <p className="side-empty">
-              Drag a tab here, or press <kbd>⌘D</kbd>
-            </p>
-          ) : null}
-        </Section>
-
-        <Section title="Chats" open={isOpen("chats")} onToggle={() => toggle("chats")}>
-          <Row icon={<PixelIcon name="compose" size={16} />} label="New chat" title="New chat (⌘N)" muted onClick={onNewChat} />
-          {chats.slice(0, CHATS_SHOWN).map((info) => (
-            <Row
-              key={info.thread.id}
-              label={info.thread.title || "New chat"}
-              title={info.thread.title || undefined}
-              active={view.kind === "chat" && view.id === info.thread.id}
-              onClick={() => onNavigate({ kind: "chat", id: info.thread.id })}
-              menu={<ChatMenu thread={info.thread} className="srow-close" onGone={() => view.kind === "chat" && view.id === info.thread.id && onNavigate({ kind: "home" })} />}
-              trailing={
-                info.needsYou ? (
-                  <span className="srow-badge" aria-label="Needs you">
-                    !
-                  </span>
-                ) : info.active ? (
-                  <RowSpinner />
-                ) : info.unread ? (
-                  <span className="unread-dot" aria-label="Unread" role="img" />
-                ) : null
-              }
-            />
-          ))}
-          {chats.length > CHATS_SHOWN ? (
-            <Row label="Show all" muted onClick={() => onNavigate({ kind: "page", page: "history" })} active={view.kind === "page" && view.page === "history"} />
-          ) : null}
-        </Section>
 
         <Section
           title="Tabs"
@@ -236,21 +185,26 @@ export function Sidebar({
           drop={
             drag?.kind === "pin"
               ? { hint: "Drop to unpin", effect: "move", onDrop: () => actions.unpin(drag.pin) }
-              : drag?.kind === "bookmark"
-                ? {
-                    hint: "Drop to open in a new tab",
-                    onDrop: () => {
-                      invoke("browserOpen", { url: drag.bookmark.url, newTab: true });
-                      onNavigate({ kind: "tab", id: "@active" });
-                    },
-                  }
-                : null
+              : null
           }
         >
-          <Row icon={<PixelIcon name="plus" size={16} />} label="New tab" title="New tab (⌘T)" muted onClick={onNewTab} active={view.kind === "home"} />
-          {mine.map((tab) => (
-            <TabRow key={tab.id} tab={tab} active={view.kind === "tab" && viewingTab?.id === tab.id} onOpen={() => onOpenTab(tab.id)} drag={drag} onDrag={setDrag} />
+          {shownMine.map((tab) => (
+            <TabRow
+              key={tab.id}
+              tab={tab}
+              active={view.kind === "tab" && viewingTab?.id === tab.id}
+              onOpen={() => onOpenTab(tab.id)}
+              drag={drag}
+              onDrag={handleDrag}
+              onMoveDragged={moveDraggedTab}
+              onDropInto={commitTabOrder}
+            />
           ))}
+          {!mine.length && !agentCount ? (
+            <p className="side-empty">
+              No pages open · press <kbd>⌘T</kbd>
+            </p>
+          ) : null}
           {agentCount ? (
             <div className="agent-group">
               <button type="button" className="srow srow-group" aria-expanded={isOpen("agentTabs", true)} onClick={() => toggle("agentTabs")}>
@@ -285,12 +239,40 @@ export function Sidebar({
                       />
                     ) : null}
                     {agent.map((tab) => (
-                      <TabRow key={tab.id} tab={tab} agent active={view.kind === "tab" && viewingTab?.id === tab.id} onOpen={() => onOpenTab(tab.id)} drag={drag} onDrag={setDrag} />
+                      <TabRow key={tab.id} tab={tab} agent active={view.kind === "tab" && viewingTab?.id === tab.id} onOpen={() => onOpenTab(tab.id)} drag={drag} onDrag={handleDrag} />
                     ))}
                   </motion.div>
                 ) : null}
               </AnimatePresence>
             </div>
+          ) : null}
+        </Section>
+
+        <Section title="Chats" open={isOpen("chats")} onToggle={() => toggle("chats")}>
+          <Row icon={<PixelIcon name="compose" size={16} />} label="New chat" title="New chat (⌘N)" muted onClick={onNewChat} />
+          {chats.slice(0, CHATS_SHOWN).map((info) => (
+            <Row
+              key={info.thread.id}
+              label={info.thread.title || "New chat"}
+              title={info.thread.title || undefined}
+              active={view.kind === "chat" && view.id === info.thread.id}
+              onClick={() => onNavigate({ kind: "chat", id: info.thread.id })}
+              menu={<ChatMenu thread={info.thread} className="srow-close" onGone={() => view.kind === "chat" && view.id === info.thread.id && onNavigate({ kind: "home" })} />}
+              trailing={
+                info.needsYou ? (
+                  <span className="srow-badge" aria-label="Needs you">
+                    !
+                  </span>
+                ) : info.active ? (
+                  <RowSpinner />
+                ) : info.unread ? (
+                  <span className="unread-dot" aria-label="Unread" role="img" />
+                ) : null
+              }
+            />
+          ))}
+          {chats.length > CHATS_SHOWN ? (
+            <Row label="Show all" muted onClick={() => onNavigate({ kind: "page", page: "history" })} active={view.kind === "page" && view.page === "history"} />
           ) : null}
         </Section>
       </div>
@@ -421,6 +403,9 @@ function Row({
   dragging,
   onDragStart,
   onDragEnd,
+  onDragEnter,
+  onDragOver,
+  onDrop,
 }: {
   /** A trailing control revealed on hover (a chat's ⋯ menu); takes the close button's place. */
   menu?: React.ReactNode;
@@ -433,10 +418,14 @@ function Row({
   trailing?: React.ReactNode;
   onClose?: () => void;
   closeLabel?: string;
-  /** Draggable rows (tabs, bookmarks) dim while they're being dragged. */
+  /** Draggable rows (tabs) dim while they're being dragged. */
   dragging?: boolean;
   onDragStart?: (event: React.DragEvent) => void;
   onDragEnd?: () => void;
+  /** While the person's tabs are being rearranged: this row is somewhere to land one. */
+  onDragEnter?: () => void;
+  onDragOver?: (event: React.DragEvent) => void;
+  onDrop?: (event: React.DragEvent) => void;
 }) {
   return (
     <div
@@ -445,6 +434,9 @@ function Row({
       draggable={onDragStart ? true : undefined}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       <button type="button" className="srow-main" onClick={onClick} aria-current={active ? "page" : undefined}>
         {icon ? <span className="srow-icon">{icon}</span> : null}
@@ -477,54 +469,6 @@ function Shortcut({ keys }: { keys: string }) {
   );
 }
 
-/** Right-click on a bookmark: open it, pin its site, copy its link, or remove it. */
-function SiteMenu({
-  site,
-  onOpen,
-  onOpenNew,
-  onRemove,
-  children,
-}: {
-  site: Site;
-  onOpen: () => void;
-  onOpenNew: () => void;
-  onRemove: { label: string; run: () => void };
-  children: React.ReactNode;
-}) {
-  const { state } = useDashboard();
-  const actions = useSiteActions();
-  const pinned = pinFor(state, site.url);
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger className="srow-ctx">{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onClick={onOpen}>
-          <PixelIcon name="arrow" size={15} />
-          Open
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onOpenNew}>
-          <PixelIcon name="external" size={15} />
-          Open in a new tab
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => (pinned ? actions.unpin(pinned) : actions.pin(site))}>
-          <PixelIcon name="pin" size={15} />
-          {pinned ? `Unpin ${hostOf(site.url)}` : `Pin ${hostOf(site.url)}`}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => actions.copyLink(site.url)}>
-          <PixelIcon name="link" size={15} />
-          Copy link
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onClick={onRemove.run}>
-          <PixelIcon name="x" size={15} />
-          {onRemove.label}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
 function TabRow({
   tab,
   active,
@@ -532,6 +476,8 @@ function TabRow({
   onOpen,
   drag,
   onDrag,
+  onMoveDragged,
+  onDropInto,
 }: {
   tab: BrowserTab;
   active: boolean;
@@ -539,6 +485,9 @@ function TabRow({
   onOpen: () => void;
   drag: Drag | null;
   onDrag: (drag: Drag | null) => void;
+  /** Only the person's tabs trade places with the one being dragged. */
+  onMoveDragged?: (dragged: string, over: string) => void;
+  onDropInto?: () => void;
 }) {
   const { state, invoke } = useDashboard();
   const actions = useSiteActions();
@@ -546,8 +495,10 @@ function TabRow({
   // Blank tabs and error pages have nothing to keep; agent tabs do (what the agent found).
   const saveable = !tab.blank && canSave(tab.address);
   const pinned = saveable ? pinFor(state, tab.address) : undefined;
-  const bookmarked = saveable ? bookmarkFor(state, tab.address) : undefined;
   const label = tab.blank ? "Opening…" : siteLabel(tab.title, tab.address);
+  const tabDrag = drag?.kind === "tab" ? drag.tab : null;
+  // The person's tabs trade places with the one being dragged; agent tabs keep to their group.
+  const rearranging = Boolean(onMoveDragged && tabDrag && !agent && !tabDrag.ownerRunID && !tabDrag.status && onDropInto);
   return (
     <ContextMenu>
       <ContextMenuTrigger className="srow-ctx">
@@ -574,17 +525,28 @@ function TabRow({
               : undefined
           }
           onDragEnd={() => onDrag(null)}
+          {...(rearranging && tabDrag
+            ? {
+                onDragEnter: () => {
+                  if (tabDrag.id !== tab.id) onMoveDragged?.(tabDrag.id, tab.id);
+                },
+                onDragOver: (event: React.DragEvent) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                },
+                onDrop: (event: React.DragEvent) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onDropInto?.();
+                },
+              }
+            : {})}
         />
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem disabled={!saveable} onClick={() => (pinned ? actions.unpin(pinned) : actions.pin(site))}>
           <PixelIcon name="pin" size={15} />
           {pinned ? "Unpin site" : "Pin site"}
-          {active ? <Shortcut keys="⇧⌘D" /> : null}
-        </ContextMenuItem>
-        <ContextMenuItem disabled={!saveable} onClick={() => (bookmarked ? actions.removeBookmark(bookmarked) : actions.bookmark(site))}>
-          <PixelIcon name="bookmark" size={15} />
-          {bookmarked ? "Remove bookmark" : "Bookmark"}
           {active ? <Shortcut keys="⌘D" /> : null}
         </ContextMenuItem>
         <ContextMenuSeparator />
@@ -607,7 +569,7 @@ function TabRow({
   );
 }
 
-/** Where a tab or bookmark dragged over the pins would land: before pin `index`, or onto a pin to replace it. */
+/** Where a tab or a pin dragged over the pins would land: before pin `index`, or onto a pin to replace it. */
 type PinTarget = { index: number } | { replace: Pin };
 
 function PinGrid({
@@ -642,7 +604,7 @@ function PinGrid({
   const full = pins.length >= MAX_PINS;
   const canPin = Boolean(viewingTab && !viewingTab.blank && canSave(viewingTab.address) && !pins.some((pin) => hostOf(pin.url) === viewingTab.host) && !full);
   const openHosts = new Set(tabs.map((tab) => tab.host));
-  // A tab or bookmark on its way in.
+  // A tab on its way in.
   const incoming = drag && drag.kind !== "pin" ? dragSite(drag) : null;
   const accepting = Boolean(incoming && canSave(incoming.url));
   const incomingPinned = incoming ? pins.find((pin) => hostOf(pin.url) === hostOf(incoming.url)) : undefined;
@@ -748,8 +710,8 @@ function PinGrid({
                   if (dragging) event.preventDefault();
                 }}
                 onDragEnd={(event) => {
-                  // Escape, or dropped outside the pins: nothing moves. Dropped on Tabs or Bookmarks:
-                  // that section unpins or bookmarks it; the order here is unchanged.
+                  // Escape, or dropped outside the pins: nothing moves. Dropped on Tabs:
+                  // that section unpins it; the order here is unchanged.
                   if (order && event.dataTransfer.dropEffect !== "none") invoke("reorderPins", { ids: order });
                   setDragging(null);
                   onDrag(null);
@@ -771,16 +733,11 @@ function PinGrid({
             Drop to pin
           </div>
         ) : canPin && !accepting ? (
-          <Tip label={`Pin ${viewingTab!.host} (⇧⌘D) · or drag a tab here`}>
+          <Tip label={`Pin ${viewingTab!.host} (⌘D) · or drag a tab here`}>
             <button type="button" className="pin pin-add" aria-label="Pin this site" onClick={() => actions.pin(siteOf(viewingTab!))}>
               <PixelIcon name="plus" size={16} />
             </button>
           </Tip>
-        ) : null}
-        {accepting && (full || incomingPinned) ? (
-          <p className="pins-note" role="status">
-            {incomingPinned ? `${hostOf(incomingPinned.url)} is pinned · drop to move it` : `Pins are full · drop on one to replace it`}
-          </p>
         ) : null}
       </ContextMenuTrigger>
       <ContextMenuContent>
@@ -795,16 +752,6 @@ function PinGrid({
               Open in a new tab
             </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() => {
-                const saved = bookmarkFor(state, menu.url);
-                if (saved) actions.removeBookmark(saved);
-                else actions.bookmark(menu);
-              }}
-            >
-              <PixelIcon name="bookmark" size={15} />
-              {bookmarkFor(state, menu.url) ? "Remove bookmark" : "Bookmark"}
-            </ContextMenuItem>
             <ContextMenuItem onClick={() => actions.copyLink(menu.url)}>
               <PixelIcon name="link" size={15} />
               Copy link

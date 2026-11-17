@@ -1058,7 +1058,7 @@ public struct UnreadableItem: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: - Browser pins and bookmarks
+// MARK: - Browser pins
 
 /// A site pinned to the top of the sidebar, as a favicon tile.
 public struct BrowserPin: Identifiable, Codable, Equatable, Sendable {
@@ -1077,18 +1077,6 @@ public struct BrowserPin: Identifiable, Codable, Equatable, Sendable {
     public static func host(of url: String) -> String {
         let host = URL(string: url)?.host ?? URL(string: "https://\(url)")?.host ?? url
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-    }
-}
-
-/// A saved page in the sidebar's Bookmarks.
-public struct Bookmark: Identifiable, Codable, Equatable, Sendable {
-    public var id: String
-    public var url: String
-    public var title: String
-    public var createdAt: Date
-
-    public init(id: String = UUID().uuidString, url: String, title: String, createdAt: Date = Date()) {
-        self.id = id; self.url = url; self.title = title; self.createdAt = createdAt
     }
 }
 
@@ -1114,7 +1102,6 @@ public struct AppState: Codable, Sendable {
     public var unreadable: [UnreadableItem]
     /// Sites pinned in the sidebar, in order. Nil until the shell seeds them once.
     public var pins: [BrowserPin]?
-    public var bookmarks: [Bookmark]
     /// Memory text the person deleted or replaced (folded text → when), so earlier turns that repeat it
     /// aren't recalled. Kept as long as those turns are indexed, then dropped.
     public var forgotten: [String: Date]?
@@ -1126,17 +1113,17 @@ public struct AppState: Codable, Sendable {
                 memories: [MemoryItem] = [], runs: [AgentRun] = [], skills: [Skill] = [],
                 routines: [Routine] = [], connectors: [Connector] = [],
                 deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = [],
-                pins: [BrowserPin]? = nil, bookmarks: [Bookmark] = [], forgotten: [String: Date]? = nil) {
+                pins: [BrowserPin]? = nil, forgotten: [String: Date]? = nil) {
         self.version = version; self.accounts = accounts; self.currentAccountID = currentAccountID
         self.settings = settings; self.threads = threads; self.memories = memories; self.runs = runs
         self.skills = skills; self.routines = routines; self.connectors = connectors
         self.deletions = deletions; self.syncCursors = syncCursors; self.unreadable = unreadable
-        self.pins = pins; self.bookmarks = bookmarks; self.forgotten = forgotten
+        self.pins = pins; self.forgotten = forgotten
     }
 
     enum CodingKeys: String, CodingKey {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
-        case deletions, syncCursors, unreadable, pins, bookmarks, forgotten
+        case deletions, syncCursors, unreadable, pins, forgotten
     }
 
     /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
@@ -1173,7 +1160,6 @@ public struct AppState: Codable, Sendable {
         syncCursors = (try? c.decodeIfPresent([String: Int].self, forKey: .syncCursors)).flatMap { $0 } ?? [:]
         unreadable = Self.items(UnreadableItem.self, c, .unreadable, dropped: &dropped) ?? []
         pins = Self.items(BrowserPin.self, c, .pins, dropped: &dropped)
-        bookmarks = Self.items(Bookmark.self, c, .bookmarks, dropped: &dropped) ?? []
         forgotten = (try? c.decodeIfPresent([String: Date].self, forKey: .forgotten)).flatMap { $0 }
         droppedItems = dropped
     }

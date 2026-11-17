@@ -1,7 +1,7 @@
 import XCTest
 @testable import OkidokiCore
 
-/// The new shell's data: pins, bookmarks, seen marks and its settings, saved and loaded back.
+/// The new shell's data: pins, seen marks and its settings, saved and loaded back.
 final class ShellStoreTests: XCTestCase {
     private func withStore(_ body: @MainActor (OkidokiStore, URL) throws -> Void) async throws {
         try await MainActor.run {
@@ -67,18 +67,6 @@ final class ShellStoreTests: XCTestCase {
         }
     }
 
-    func testBookmarkTogglesAndSurvivesReload() async throws {
-        try await withStore { store, url in
-            XCTAssertTrue(store.toggleBookmark(url: "https://example.com/a", title: "A"))
-            XCTAssertTrue(store.toggleBookmark(url: "https://example.com/b", title: ""))
-            XCTAssertEqual(store.bookmarks.first?.title, "example.com")
-            XCTAssertFalse(store.toggleBookmark(url: "https://example.com/a", title: "A"))
-            XCTAssertEqual(store.bookmarks.count, 1)
-            store.saveNow()
-            XCTAssertEqual(OkidokiStore(stateURL: url).bookmarks.map(\.url), ["https://example.com/b"])
-        }
-    }
-
     func testPinAtIndexAndBlankURLs() async throws {
         try await withStore { store, url in
             store.pins = []
@@ -92,21 +80,6 @@ final class ShellStoreTests: XCTestCase {
             XCTAssertEqual(store.pins?.count, 4)
             store.saveNow()
             XCTAssertEqual(OkidokiStore(stateURL: url).pins?.map(\.host), ["a.com", "c.com", "b.com", "d.com"])
-        }
-    }
-
-    func testAddBookmarkNeverTogglesOffAndKeepsItsPlace() async throws {
-        try await withStore { store, url in
-            XCTAssertTrue(store.addBookmark(url: "https://example.com/a", title: "A"))
-            XCTAssertFalse(store.addBookmark(url: "https://example.com/a", title: "A again"))
-            XCTAssertTrue(store.addBookmark(url: "https://example.com/b", title: ""))
-            XCTAssertEqual(store.bookmarks.map(\.url), ["https://example.com/b", "https://example.com/a"])
-            XCTAssertTrue(store.addBookmark(url: "https://example.com/c", title: "C", at: 5))
-            XCTAssertEqual(store.bookmarks.last?.url, "https://example.com/c")
-            XCTAssertTrue(store.addBookmark(url: "https://example.com/d", title: "D", at: 1))
-            XCTAssertEqual(store.bookmarks[1].url, "https://example.com/d")
-            store.saveNow()
-            XCTAssertEqual(OkidokiStore(stateURL: url).bookmarks.count, 4)
         }
     }
 

@@ -2,29 +2,23 @@ import { useCallback, useMemo, useRef } from "react";
 import { useDashboard } from "../store";
 import { copyText } from "../lib";
 import { toast } from "@/components/ui/toast";
-import type { Bookmark, BrowserTab, NativeState, Pin } from "../types";
+import type { BrowserTab, NativeState, Pin } from "../types";
 import { hostOf, siteLabel } from "./model";
 
 /** Matches OkidokiStore.maxPins. */
 export const MAX_PINS = 12;
 
-/** What can be pinned or bookmarked: a real web page, never a blank tab or an error page's about:. */
+/** What can be pinned: a real web page, never a blank tab or an error page's about:. */
 export function canSave(url: string | null | undefined): url is string {
   return Boolean(url && /^https?:\/\//i.test(url));
 }
-
-const sameURL = (a: string, b: string) => a.replace(/\/$/, "") === b.replace(/\/$/, "");
 
 export function pinFor(state: NativeState, url: string): Pin | undefined {
   const host = hostOf(url);
   return (state.pins ?? []).find((pin) => hostOf(pin.url) === host);
 }
 
-export function bookmarkFor(state: NativeState, url: string): Bookmark | undefined {
-  return (state.bookmarks ?? []).find((bookmark) => sameURL(bookmark.url, url));
-}
-
-/** A site: a tab's page, a pin or a bookmark, reduced to what pinning and bookmarking need. */
+/** A site: a tab's page or a pin, reduced to what pinning needs. */
 export interface Site {
   url: string;
   title: string;
@@ -35,12 +29,12 @@ export function siteOf(tab: BrowserTab): Site {
 }
 
 /**
- * Pin, bookmark, copy, duplicate: one set of actions for the sidebar, its menus, the toolbar, ⌘D/⌘⇧D and
- * the palette, so each says the same thing and offers the same Undo wherever it's done.
+ * Pin, copy, duplicate: one set of actions for the sidebar, its menus, the toolbar, ⌘D and the
+ * palette, so each says the same thing and offers the same Undo wherever it's done.
  */
 export function useSiteActions() {
   const { state, invoke } = useDashboard();
-  // Undo runs later: it reads the pins and bookmarks as they are then, not as they were when it was made.
+  // Undo runs later: it reads the pins as they are then, not as they were when it was made.
   const latest = useRef(state);
   latest.current = state;
 
@@ -111,55 +105,6 @@ export function useSiteActions() {
     [invoke],
   );
 
-  const removeBookmarkByURL = useCallback(
-    (url: string) => {
-      const found = bookmarkFor(latest.current, url);
-      if (found) invoke("removeBookmark", { id: found.id });
-    },
-    [invoke],
-  );
-
-  const bookmark = useCallback(
-    (site: Site, options: { quiet?: boolean } = {}) => {
-      if (!canSave(site.url)) return;
-      if (bookmarkFor(latest.current, site.url)) {
-        if (!options.quiet) toast({ message: "Already in your bookmarks", description: siteLabel(site.title, site.url), state: "info" });
-        return;
-      }
-      invoke("addBookmark", { url: site.url, title: site.title || hostOf(site.url) });
-      toast({
-        message: "Bookmarked",
-        description: siteLabel(site.title, site.url),
-        state: "success",
-        action: { label: "Undo", run: () => removeBookmarkByURL(site.url) },
-      });
-    },
-    [invoke, removeBookmarkByURL],
-  );
-
-  const removeBookmark = useCallback(
-    (item: Bookmark) => {
-      const index = (latest.current.bookmarks ?? []).findIndex((b) => b.id === item.id);
-      invoke("removeBookmark", { id: item.id });
-      toast({
-        message: "Bookmark removed",
-        description: siteLabel(item.title, item.url),
-        state: "info",
-        action: { label: "Undo", run: () => invoke("addBookmark", { url: item.url, title: item.title, index }) },
-      });
-    },
-    [invoke],
-  );
-
-  const toggleBookmark = useCallback(
-    (site: Site) => {
-      const found = bookmarkFor(latest.current, site.url);
-      if (found) removeBookmark(found);
-      else bookmark(site);
-    },
-    [bookmark, removeBookmark],
-  );
-
   const togglePin = useCallback(
     (site: Site) => {
       const found = pinFor(latest.current, site.url);
@@ -177,8 +122,5 @@ export function useSiteActions() {
 
   const duplicate = useCallback((url: string) => invoke("browserOpen", { url, newTab: true }), [invoke]);
 
-  return useMemo(
-    () => ({ pin, unpin, togglePin, bookmark, removeBookmark, toggleBookmark, copyLink, duplicate }),
-    [pin, unpin, togglePin, bookmark, removeBookmark, toggleBookmark, copyLink, duplicate],
-  );
+  return useMemo(() => ({ pin, unpin, togglePin, copyLink, duplicate }), [pin, unpin, togglePin, copyLink, duplicate]);
 }

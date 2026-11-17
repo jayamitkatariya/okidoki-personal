@@ -193,7 +193,7 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.skills = state.skills.filter((skill) => skill.id !== payload.id);
       break;
     }
-    // Pins and bookmarks, as OkidokiStore keeps them, so the sidebar's drags and menus work in the preview.
+    // Pins, as OkidokiStore keeps them, so the sidebar's drags and menus work in the preview.
     case "pinSite":
     case "pinTab": {
       const tab = state.browser?.tabs.find((item) => item.id === payload.tabID);
@@ -218,25 +218,16 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.pins = [...ids.map((id) => pins.find((pin) => pin.id === id)).filter((pin) => pin !== undefined), ...pins.filter((pin) => !ids.includes(pin.id))];
       break;
     }
-    case "addBookmark":
-    case "toggleBookmark": {
-      const tab = state.browser?.tabs.find((item) => item.id === payload.tabID);
-      const url = (payload.url as string | undefined) ?? tab?.address;
-      if (!url) return false;
-      const bookmarks = state.bookmarks ?? [];
-      const existing = bookmarks.find((item) => item.url === url);
-      if (existing) {
-        if (type === "addBookmark") return false;
-        state.bookmarks = bookmarks.filter((item) => item !== existing);
-      } else {
-        const bookmark = { id: `bm-${Math.random().toString(16).slice(2, 8)}`, url, title: (payload.title as string) || tab?.title || previewHost(url), createdAt: new Date().toISOString() };
-        const index = Math.min(Math.max(typeof payload.index === "number" ? payload.index : 0, 0), bookmarks.length);
-        state.bookmarks = [...bookmarks.slice(0, index), bookmark, ...bookmarks.slice(index)];
-      }
-      break;
-    }
-    case "removeBookmark": {
-      state.bookmarks = (state.bookmarks ?? []).filter((item) => item.id !== payload.id);
+    case "browserReorder": {
+      // The shell dragged its rows: tabs line up behind the ids given, any not listed keep their place at the end.
+      if (!state.browser) return false;
+      const ids = [...new Set(payload.ids as string[])];
+      const tabs = state.browser.tabs;
+      const byID = new Map(tabs.map((tab) => [tab.id, tab]));
+      state.browser = {
+        ...state.browser,
+        tabs: [...ids.map((id) => byID.get(id)).filter((tab) => tab !== undefined), ...tabs.filter((tab) => !ids.includes(tab.id))],
+      };
       break;
     }
     case "browserOpen": {
@@ -253,10 +244,6 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
     }
     default:
       return false;
-  }
-  if (state.browser) {
-    const saved = new Set((state.bookmarks ?? []).map((item) => item.url));
-    state.browser = { ...state.browser, tabs: state.browser.tabs.map((tab) => ({ ...tab, bookmarked: saved.has(tab.address) })) };
   }
   previewState = state;
   window.dispatchEvent(new CustomEvent<NativeState>("okidoki-native", { detail: state }));

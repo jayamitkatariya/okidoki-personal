@@ -165,7 +165,6 @@ struct DashboardPayload: Encodable {
     /// okidoki's browser as the shell's sidebar and toolbar show it.
     var browser: DashboardBrowserPayload
     var pins: [BrowserPin]
-    var bookmarks: [Bookmark]
     /// Runs with a thumbnail, id → when it was last taken (seconds), so the page can ask for the new one.
     var thumbs: [String: Double]
 }
@@ -186,7 +185,6 @@ struct DashboardBrowserTabPayload: Encodable {
     var canGoForward: Bool
     var hasLogin: Bool
     var loadError: String?
-    var bookmarked: Bool
 }
 
 struct DashboardBrowserPayload: Encodable {
@@ -610,7 +608,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
 
     private func browserPayload(_ env: AppEnvironment) -> DashboardBrowserPayload {
         let browser = env.browser
-        let saved = Set(env.store.bookmarks.map(\.url))
         return DashboardBrowserPayload(
             activeID: browser.model.active?.id.uuidString,
             recording: browser.model.recording,
@@ -620,7 +617,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                                            host: BrowserPin.host(of: tab.address), loading: tab.loading, blank: tab.isBlank,
                                            status: tab.status, ownerRunID: tab.ownerRunID, threadID: tab.threadID,
                                            canGoBack: tab.canGoBack, canGoForward: tab.canGoForward, hasLogin: tab.hasLogin,
-                                           loadError: tab.loadError, bookmarked: saved.contains(tab.address))
+                                           loadError: tab.loadError)
             })
     }
 
@@ -710,7 +707,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             library: libraryEntries(env),
             browser: browserPayload(env),
             pins: env.store.pins ?? [],
-            bookmarks: env.store.bookmarks,
             thumbs: thumbs(env)
         )
         let encoder = JSONEncoder()
@@ -1060,20 +1056,14 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             if let id = payload["tabID"] as? String { env.shellSelectTab(id) }
         case "browserClose":
             if let id = payload["tabID"] as? String { env.shellCloseTab(id) }
+        case "browserReorder":
+            if let ids = payload["ids"] as? [String] { env.shellReorderTabs(ids) }
         case "browserOpen":
             if let url = payload["url"] as? String { env.shellOpenURL(url, newTab: payload["newTab"] as? Bool ?? true) }
         case "browserRecord":
             if env.browser.model.recording { env.stopBrowserRecording() } else { env.startBrowserRecording() }
         case "browserFreeze":
             env.shellFreeze { [weak self] url in self?.replyToPage("okidoki-freeze", url ?? "") }
-        case "toggleBookmark":
-            env.shellToggleBookmark(tabID: payload["tabID"] as? String)
-        case "addBookmark":
-            if let url = payload["url"] as? String {
-                env.store.addBookmark(url: url, title: payload["title"] as? String ?? "", at: payload["index"] as? Int)
-            }
-        case "removeBookmark":
-            if let id = payload["id"] as? String { env.store.removeBookmark(id) }
         case "pinTab":
             env.shellPinTab(tabID: payload["tabID"] as? String, at: payload["index"] as? Int)
         case "pinSite":

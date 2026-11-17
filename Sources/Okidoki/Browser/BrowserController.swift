@@ -427,6 +427,21 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
     /// The tabs a run has: the ones it works in.
     func tabs(ownedBy runID: String) -> [BrowserTab] { model.tabs.filter { $0.ownerRunID == runID } }
 
+    /// The sidebar dragged its rows into this order. Tabs listed take their new places, in the order
+    /// given; any not listed (a blank tab, say) keep their place at the end. Ids that no longer exist
+    /// are ignored, and a repeated id must never duplicate a tab.
+    func reorderTabs(_ ids: [UUID]) {
+        var seen = Set<UUID>()
+        var ordered: [BrowserTab] = []
+        for id in ids {
+            guard let tab = tab(id), seen.insert(id).inserted else { continue }
+            ordered.append(tab)
+        }
+        for tab in model.tabs where !seen.contains(tab.id) { ordered.append(tab) }
+        guard ordered.count == model.tabs.count, ordered.map(\.id) != model.tabs.map(\.id) else { return }
+        model.tabs = ordered
+    }
+
     /// "Version/27.0 Safari/605.1.15" on macOS 27: Safari's version follows the OS from 26 on.
     private static var safariName: String {
         let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
@@ -453,7 +468,7 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
                 self.onShellKey?(key)
                 return nil
             }
-            // ⌘D bookmarks the page, ⌘⇧D pins its site (the shell toasts with Undo).
+            // ⌘D pins the page's site, again unpins it (⇧⌘D the same; the shell toasts with Undo).
             if let key = event.charactersIgnoringModifiers?.lowercased(), key == "d" {
                 self.onShellKey?(flags == .command ? "d" : "D")
                 return nil
