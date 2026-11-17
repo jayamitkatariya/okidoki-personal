@@ -143,4 +143,65 @@ final class CollabTests: XCTestCase {
         XCTAssertNotNil(object["vm"])
         XCTAssertNotNil(object["chat"])
     }
+
+    // MARK: Take-the-wheel input
+
+    private let w = 1440.0, h = 900.0
+
+    func testInputCoordinatesAreNormalizedAndClamped() {
+        let move = CollabInput.action(from: ["kind": "move", "x": 0.5, "y": 0.25], width: w, height: h)
+        XCTAssertEqual(move?.type, "move")
+        XCTAssertEqual(move?.x, 720)
+        XCTAssertEqual(move?.y, 225)
+        let outside = CollabInput.action(from: ["kind": "move", "x": 5.0, "y": -3.0], width: w, height: h)
+        XCTAssertEqual(outside?.x, w)
+        XCTAssertEqual(outside?.y, 0)
+        XCTAssertNil(CollabInput.action(from: ["kind": "move", "x": "nope"], width: w, height: h))
+        XCTAssertNil(CollabInput.action(from: ["kind": "move"], width: w, height: h))
+    }
+
+    func testInputClicksCarryButtonCountAndModifiers() {
+        let plain = CollabInput.action(from: ["kind": "click", "x": 0.1, "y": 0.1], width: w, height: h)
+        XCTAssertEqual(plain?.type, "click")
+        let double = CollabInput.action(from: ["kind": "click", "x": 0.1, "y": 0.1, "count": 2], width: w, height: h)
+        XCTAssertEqual(double?.type, "double_click")
+        let right = CollabInput.action(from: ["kind": "click", "x": 0.1, "y": 0.1, "button": "right"], width: w, height: h)
+        XCTAssertEqual(right?.type, "right_click")
+        let held = CollabInput.action(from: ["kind": "click", "x": 0.1, "y": 0.1, "modifiers": "cmd+shift"], width: w, height: h)
+        XCTAssertEqual(held?.modifiers, "cmd+shift")
+    }
+
+    func testInputDragScrollKeyAndType() {
+        let drag = CollabInput.action(from: ["kind": "drag", "fromX": 0.0, "fromY": 0.0, "toX": 1.0, "toY": 1.0], width: w, height: h)
+        XCTAssertEqual(drag?.type, "drag")
+        XCTAssertEqual(drag?.fromX, 0)
+        XCTAssertEqual(drag?.toX, w)
+        XCTAssertEqual(drag?.toY, h)
+
+        let scroll = CollabInput.action(from: ["kind": "scroll", "x": 0.5, "y": 0.5, "dy": 99999], width: w, height: h)
+        XCTAssertEqual(scroll?.type, "scroll")
+        XCTAssertEqual(scroll?.dy, CollabInput.maxScroll)
+        XCTAssertNil(CollabInput.action(from: ["kind": "scroll", "dx": 0, "dy": 0], width: w, height: h))
+
+        let key = CollabInput.action(from: ["kind": "key", "key": "cmd+l", "times": 500], width: w, height: h)
+        XCTAssertEqual(key?.type, "key")
+        XCTAssertEqual(key?.key, "cmd+l")
+        XCTAssertEqual(key?.times, CollabInput.maxKeyTimes)
+        XCTAssertNil(CollabInput.action(from: ["kind": "key", "key": String(repeating: "x", count: 80)], width: w, height: h))
+
+        let type = CollabInput.action(from: ["kind": "type", "text": String(repeating: "a", count: 900)], width: w, height: h)
+        XCTAssertEqual(type?.type, "type")
+        XCTAssertEqual(type?.text?.count, CollabInput.maxTypeLength)
+        XCTAssertNil(CollabInput.action(from: ["kind": "type", "text": ""], width: w, height: h))
+        XCTAssertNil(CollabInput.action(from: ["kind": "shell"], width: w, height: h))
+    }
+
+    func testOnlyPointerKindsBroadcast() {
+        XCTAssertTrue(CollabInput.movesPointer("move"))
+        XCTAssertTrue(CollabInput.movesPointer("click"))
+        XCTAssertTrue(CollabInput.movesPointer("drag"))
+        XCTAssertFalse(CollabInput.movesPointer("key"))
+        XCTAssertFalse(CollabInput.movesPointer("type"))
+        XCTAssertFalse(CollabInput.movesPointer("scroll"))
+    }
 }

@@ -122,12 +122,24 @@ export class MockHost implements Host {
     const trimmed = text.trim();
     if (!trimmed) return;
     this.say(you.id, trimmed, ask ? "ask" : "chat");
-    if (ask) this.startRun(trimmed.replace(/^\s*okidoki[,:]?\s*/i, ""), you.id);
+    if (ask) {
+      if (this.wheelHolder) {
+        const holder = this.participants.find((p) => p.id === this.wheelHolder);
+        this.say("okidoki", `${holder?.name ?? "someone"} has the wheel right now — ask them to release it, then try again.`, "okidoki");
+        return;
+      }
+      this.startRun(trimmed.replace(/^\s*okidoki[,:]?\s*/i, ""), you.id);
+    }
   }
 
   async runSkill(token: string, id: string, values?: Record<string, string>) {
     const you = this.tokens.get(token);
     if (!you) throw new Error("not in the session");
+    if (this.wheelHolder) {
+      const holder = this.participants.find((p) => p.id === this.wheelHolder);
+      this.say("okidoki", `${holder?.name ?? "someone"} has the wheel right now — ask them to release it, then try again.`, "okidoki");
+      return {};
+    }
     const skill = SKILLS.find((s) => s.id === id);
     const detail = values ? Object.entries(values).map(([k, v]) => `${k}=${v}`).join(" ") : "";
     const runID = this.startRun(`${skill?.name ?? id}${detail ? ` (${detail})` : ""}`, you.id);
@@ -136,6 +148,11 @@ export class MockHost implements Host {
 
   private startRun(goal: string, requestedBy: string): string {
     const id = `run-${uid()}`;
+    // The agent always wins the wheel back once it starts driving.
+    if (this.wheelHolder) {
+      this.wheelHolder = null;
+      this.emit({ type: "wheel", holder: null, holderName: null });
+    }
     const steps = [
       { say: "looking at the screen", kind: "look", detail: "", result: "" },
       { say: "open Safari", kind: "app", detail: "Safari", result: "opened Safari" },
@@ -174,15 +191,33 @@ export class MockHost implements Host {
 
   async wheel(token: string, action: "request" | "release") {
     const you = this.tokens.get(token);
-    if (action === "request") this.wheelHolder = you?.id ?? null;
-    else if (this.wheelHolder === you?.id) this.wheelHolder = null;
+    if (action === "request") {
+      if (this.run) throw new Error("okidoki is working — stop the run to take the wheel");
+      if (this.wheelHolder && this.wheelHolder !== you?.id) throw new Error("someone already has the wheel");
+      this.wheelHolder = you?.id ?? null;
+    } else if (this.wheelHolder === you?.id) {
+      this.wheelHolder = null;
+    }
     const holderName = this.participants.find((p) => p.id === this.wheelHolder)?.name ?? null;
     this.emit({ type: "wheel", holder: this.wheelHolder, holderName });
     return { holder: this.wheelHolder };
   }
 
-  async input(_token: string, _payload: Record<string, unknown>) {
-    // The mock screen doesn't move; the real host forwards these to the VM.
+  async input(token: string, payload: Record<string, unknown>) {
+    const you = this.tokens.get(token);
+    if (!you || this.wheelHolder !== you.id) return;
+    // The mock screen doesn't move, but the pointer overlay everyone else sees is real.
+    const kind = String(payload.kind ?? "");
+    if (kind === "move" || kind === "click" || kind === "drag") {
+      this.emit({
+        type: "pointer",
+        x: Number(payload.x ?? 0),
+        y: Number(payload.y ?? 0),
+        by: you.id,
+        color: you.colorHex,
+        click: kind === "click" || kind === "drag",
+      });
+    }
   }
 
   dispose() {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { useSession } from "./useSession";
 import type { ChatMessage, Participant, SkillCard } from "./protocol";
 import { asksOkidoki } from "./protocol";
+import { isDrag, keyInput, normPoint, scrollInput } from "./input";
 import { Button, Logo, Modal, PixelIcon, TextField } from "../components/ui";
 import { cx } from "../lib";
 
@@ -42,7 +43,7 @@ export function SessionPage({ session }: { session: Session }) {
         </span>
         <span className="collab-people">
           {snap.participants.slice(0, 6).map((p) => (
-            <Dot key={p.id} person={p} you={p.id === you.id} />
+            <Dot key={p.id} person={p} you={p.id === you.id} driving={snap.wheelHolder === p.id} />
           ))}
           <em>{snap.participants.length} here</em>
         </span>
@@ -53,22 +54,8 @@ export function SessionPage({ session }: { session: Session }) {
 
       <div className="collab-body">
         <section className="collab-stage">
-          <div className={cx("collab-screen", snap.vm.running && "is-on")}>
-            {frame ? (
-              <img src={frame} alt="The shared Mac's screen" draggable={false} />
-            ) : (
-              <span className="collab-screen-idle">
-                <PixelIcon name="screen" size={28} />
-                {snap.vm.running ? "Connecting to the screen…" : "The shared Mac is off. The host can start it."}
-              </span>
-            )}
-            {snap.vm.running ? (
-              <span className="collab-live">
-                <i /> LIVE
-              </span>
-            ) : null}
-            {snap.run ? <RunStrip session={session} /> : null}
-          </div>
+          <Screen session={session} frame={frame} />
+          <WheelBar session={session} />
           <SkillRow session={session} />
         </section>
 
@@ -79,12 +66,187 @@ export function SessionPage({ session }: { session: Session }) {
   );
 }
 
-function Dot({ person, you }: { person: Participant; you: boolean }) {
+function Dot({ person, you, driving }: { person: Participant; you: boolean; driving?: boolean }) {
   const initials = person.name.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   return (
-    <span className={cx("collab-dot", you && "is-you")} style={{ background: `#${person.colorHex}` }} title={person.name + (you ? " (you)" : "")}>
+    <span
+      className={cx("collab-dot", you && "is-you", driving && "is-driving")}
+      style={{ background: `#${person.colorHex}` }}
+      title={person.name + (you ? " (you)" : "") + (driving ? " · driving" : "")}
+    >
       {initials}
     </span>
+  );
+}
+
+/**
+ * The shared Mac's screen. While you hold the wheel it becomes the controls: pointer moves, clicks,
+ * drags, scrolls and keystrokes go to the guest; everyone else sees your pointer live. Esc releases.
+ */
+function Screen({ session, frame }: { session: Session; frame: string | null }) {
+  const { state, pointer } = session;
+  const snap = state.session!;
+  const you = state.you!;
+  const driving = snap.wheelHolder === you.id;
+  const stageRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const pressRef = useRef<{ x: number; y: number; button: number } | null>(null);
+  const lastMoveRef = useRef(0);
+  const lastScrollRef = useRef(0);
+
+  const point = (event: { clientX: number; clientY: number }) => {
+    const rect = imgRef.current?.getBoundingClientRect();
+    return rect ? normPoint(event.clientX, event.clientY, rect) : { x: 0, y: 0 };
+  };
+
+  // Focus the stage when the wheel is taken, so keystrokes flow without another click.
+  useEffect(() => {
+    if (driving) stageRef.current?.focus();
+  }, [driving]);
+
+  // React's onWheel is passive; a native listener is the only way to stop the page scrolling.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || !driving) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastScrollRef.current < 50) return;
+      lastScrollRef.current = now;
+      const p = point(event);
+      const packet = scrollInput(p.x, p.y, event.deltaX, event.deltaY);
+      if (packet) void session.sendInput(packet);
+    };
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driving, session.sendInput]);
+
+  const onMouseMove = (event: React.MouseEvent) => {
+    if (!driving) return;
+    if (pressRef.current) return; // a press in progress becomes a click or a drag on release
+    const now = Date.now();
+    if (now - lastMoveRef.current < 33) return;
+    lastMoveRef.current = now;
+    const p = point(event);
+    void session.sendInput({ kind: "move", x: p.x, y: p.y });
+  };
+
+  const onMouseDown = (event: React.MouseEvent) => {
+    if (!driving) return;
+    event.preventDefault();
+    stageRef.current?.focus();
+    const p = point(event);
+    pressRef.current = { ...p, button: event.button };
+  };
+
+  const onMouseUp = (event: React.MouseEvent) => {
+    const press = pressRef.current;
+    pressRef.current = null;
+    if (!driving || !press) return;
+    const p = point(event);
+    if (isDrag(press, p)) {
+      void session.sendInput({ kind: "drag", fromX: press.x, fromY: press.y, toX: p.x, toY: p.y });
+    } else {
+      void session.sendInput({ kind: "click", x: p.x, y: p.y, button: press.button === 2 ? "right" : "left" });
+    }
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (!driving) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void session.setWheel("release");
+      return;
+    }
+    const packet = keyInput(event);
+    if (packet) {
+      event.preventDefault();
+      void session.sendInput(packet);
+    }
+  };
+
+  const remotePointer = snap.wheelHolder && snap.wheelHolder !== you.id && pointer && pointer.by === snap.wheelHolder ? pointer : null;
+
+  return (
+    <div
+      ref={stageRef}
+      className={cx("collab-screen", snap.vm.running && "is-on", driving && "is-driving")}
+      tabIndex={driving ? 0 : -1}
+      role={driving ? "application" : undefined}
+      aria-label={driving ? "The shared Mac's screen — you are driving. Escape releases the wheel." : "The shared Mac's screen"}
+      onMouseMove={onMouseMove}
+      onMouseDown={onMouseDown}
+      onMouseUp={onMouseUp}
+      onMouseLeave={() => { pressRef.current = null; }}
+      onContextMenu={(event) => { if (driving) event.preventDefault(); }}
+      onKeyDown={onKeyDown}
+    >
+      {frame ? (
+        <img ref={imgRef} src={frame} alt="The shared Mac's screen" draggable={false} />
+      ) : (
+        <span className="collab-screen-idle">
+          <PixelIcon name="screen" size={28} />
+          {snap.vm.running ? "Connecting to the screen…" : "The shared Mac is off. The host can start it."}
+        </span>
+      )}
+      {snap.vm.running ? (
+        <span className="collab-live">
+          <i /> LIVE
+        </span>
+      ) : null}
+      {remotePointer ? (
+        <span
+          key={remotePointer.seq}
+          className={cx("collab-remote-pointer", remotePointer.click && "is-click")}
+          style={{ left: `${remotePointer.x * 100}%`, top: `${remotePointer.y * 100}%`, background: `#${remotePointer.color}` }}
+          aria-hidden="true"
+        />
+      ) : null}
+      {driving ? <span className="collab-driving-hint">You're driving · Esc releases</span> : null}
+      {snap.run ? <RunStrip session={session} /> : null}
+    </div>
+  );
+}
+
+function WheelBar({ session }: { session: Session }) {
+  const { state } = session;
+  const snap = state.session!;
+  const you = state.you!;
+  const driving = snap.wheelHolder === you.id;
+  const runActive = Boolean(snap.run);
+
+  return (
+    <div className="collab-wheel">
+      {driving ? (
+        <>
+          <span className="collab-wheel-state is-you">
+            <PixelIcon name="cursor" size={14} /> You're driving
+          </span>
+          <em>click the screen, then type · drag to move things · Esc releases</em>
+          <Button variant="secondary" size="sm" onClick={() => void session.setWheel("release")}>
+            Release the wheel
+          </Button>
+        </>
+      ) : snap.wheelHolder ? (
+        <span className="collab-wheel-state">
+          <PixelIcon name="cursor" size={14} /> {snap.wheelHolderName ?? "Someone"} is driving
+        </span>
+      ) : (
+        <>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="cursor"
+            disabled={runActive || !snap.vm.running}
+            onClick={() => void session.setWheel("request")}
+          >
+            Take the wheel
+          </Button>
+          <em>{runActive ? "okidoki is working — stop the run to drive" : snap.vm.running ? "drive the shared Mac yourself, live for everyone" : "the shared Mac is off"}</em>
+        </>
+      )}
+    </div>
   );
 }
 

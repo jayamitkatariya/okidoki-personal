@@ -14,9 +14,9 @@ That loop runs on three stages:
   once, and replay it any time.
 - **Private Mac** — give okidoki its own macOS, in a window. Runs happen there while you keep your
   screen, cursor and keyboard. Watch it live in the shell. *(Apple silicon.)*
-- **Shared session** *(next)* — one Mac hosts its private Mac; everyone on the same WiFi joins in a
-  browser. A live screen, a group chat, and your skills replayed on request. okidoki acts, the host
-  approves. **Collab shares okidoki's Mac, never yours.**
+- **Shared session** — one Mac hosts its private Mac; everyone on the same WiFi joins in a browser.
+  A live screen, a group chat, and your skills replayed on request. okidoki acts, the host approves,
+  and anyone can take the wheel and drive. **Collab shares okidoki's Mac, never yours.**
 
 Everything lives on your Mac. Bring your own Anthropic key; nothing ships with the app. See
 [docs/purpose.md](docs/purpose.md) for the one idea every feature answers to.
@@ -57,6 +57,15 @@ In **Settings › Private Mac**, give okidoki its own macOS. It downloads the la
 (about 15 GB), installs it once, and boots into Setup Assistant for you to click through. After that,
 runs that drive apps happen there by default while you keep working here, and you can watch the screen
 live in the shell. Closing its window hides it; the VM keeps running.
+
+## Share it with the room
+
+In **Settings › Shared session**, start a session. okidoki shows a join code and a link; everyone on
+your WiFi opens it in a browser — no install — enters a name and the code, and lands in the live
+session: the private Mac's screen, a group chat, and your saved skills one tap away. Anyone can ask
+okidoki to do something (it drives the shared Mac), or **take the wheel** and drive it themselves while
+everyone watches their cursor. Anything risky still waits for your okay in the notch. Ending the
+session stops sharing and disconnects everyone. See [docs/collab.md](docs/collab.md).
 
 ## Use it from Claude Code, Cursor and other agents
 

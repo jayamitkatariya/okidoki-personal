@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Host } from "./api";
-import type { CollabEvent, Participant, SessionSnapshot } from "./protocol";
+import type { CollabEvent, InputPayload, Participant, SessionSnapshot } from "./protocol";
 import { CHAT_MAX } from "./protocol";
 
 export type Phase = "join" | "joining" | "in" | "ended";
@@ -13,13 +13,25 @@ export interface SessionState {
   error: string | null;
 }
 
+/** The wheel holder's live pointer, for everyone else's overlay. Transient — never in the snapshot. */
+export interface PointerMark {
+  x: number;
+  y: number;
+  color: string;
+  by: string;
+  click: boolean;
+  seq: number;
+}
+
 const EMPTY: SessionState = { phase: "join", you: null, session: null, connected: false, error: null };
 
 /** Joining, the live event stream reduced into one snapshot, and the actions a participant can take. */
 export function useSession(host: Host) {
   const [state, setState] = useState<SessionState>(EMPTY);
+  const [pointer, setPointer] = useState<PointerMark | null>(null);
   const tokenRef = useRef<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
+  const pointerSeq = useRef(0);
 
   const reduce = useCallback((event: CollabEvent) => {
     setState((prev) => {
@@ -50,6 +62,16 @@ export function useSession(host: Host) {
     });
   }, []);
 
+  const onEvent = useCallback((event: CollabEvent) => {
+    if (event.type === "pointer") {
+      pointerSeq.current += 1;
+      setPointer({ x: event.x, y: event.y, color: event.color, by: event.by, click: Boolean(event.click), seq: pointerSeq.current });
+      return;
+    }
+    if ((event.type === "wheel" && !event.holder) || event.type === "ended") setPointer(null);
+    reduce(event);
+  }, [reduce]);
+
   const join = useCallback(async (name: string, code: string) => {
     setState((prev) => ({ ...prev, phase: "joining", error: null }));
     try {
@@ -57,11 +79,11 @@ export function useSession(host: Host) {
       tokenRef.current = res.token;
       setState({ phase: "in", you: res.you, session: res.session, connected: true, error: null });
       unsubRef.current?.();
-      unsubRef.current = host.subscribe(res.token, reduce, (connected) => setState((prev) => ({ ...prev, connected })));
+      unsubRef.current = host.subscribe(res.token, onEvent, (connected) => setState((prev) => ({ ...prev, connected })));
     } catch (err) {
       setState((prev) => ({ ...prev, phase: "join", error: err instanceof Error ? err.message : "couldn't join" }));
     }
-  }, [host, reduce]);
+  }, [host, onEvent]);
 
   const sendChat = useCallback(async (text: string, ask: boolean) => {
     const token = tokenRef.current;
@@ -104,7 +126,7 @@ export function useSession(host: Host) {
     }
   }, [host]);
 
-  const sendInput = useCallback(async (payload: Record<string, unknown>) => {
+  const sendInput = useCallback(async (payload: InputPayload) => {
     const token = tokenRef.current;
     if (!token) return;
     try {
@@ -116,5 +138,5 @@ export function useSession(host: Host) {
 
   useEffect(() => () => { unsubRef.current?.(); }, []);
 
-  return { state, join, sendChat, runSkill, stopRun, setWheel, sendInput, host, token: tokenRef.current };
+  return { state, pointer, join, sendChat, runSkill, stopRun, setWheel, sendInput, host, token: tokenRef.current };
 }

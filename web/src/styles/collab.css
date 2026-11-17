@@ -130,6 +130,77 @@
   object-fit: contain;
   display: block;
 }
+.collab-screen.is-driving {
+  cursor: crosshair;
+  outline: 2px solid color-mix(in srgb, var(--green) 60%, transparent);
+  outline-offset: -2px;
+}
+.collab-screen.is-driving:focus {
+  outline: 2px solid var(--green);
+}
+.collab-driving-hint {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: color-mix(in srgb, var(--green) 70%, #000);
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
+  pointer-events: none;
+}
+.collab-remote-pointer {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  transition: left 0.08s linear, top 0.08s linear;
+  z-index: 3;
+}
+.collab-remote-pointer.is-click {
+  animation: collab-click 0.4s ease-out;
+}
+@keyframes collab-click {
+  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7); }
+  100% { box-shadow: 0 0 0 16px rgba(255, 255, 255, 0); }
+}
+
+/* Wheel bar */
+.collab-wheel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--glass);
+}
+.collab-wheel em {
+  flex: 1;
+  min-width: 0;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--faint);
+}
+.collab-wheel-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ok-muted);
+}
+.collab-wheel-state.is-you {
+  color: var(--green);
+}
+.collab-dot.is-driving {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--green);
+}
 .collab-screen-idle {
   display: flex;
   flex-direction: column;

@@ -90,6 +90,10 @@ extension AppEnvironment {
             server.postOkidoki("i'm already working on something — one at a time, please.")
             return
         }
+        if let holder = session.wheelHolder, let person = session.participant(id: holder) {
+            server.postOkidoki("\(person.name) has the wheel right now — ask them to release it, then try again.")
+            return
+        }
         let threadID = ensureCollabThread()
         let since = Date().addingTimeInterval(-1)
         await handleRequest(text: text, appName: "mac", bundleID: "", threadID: threadID,
@@ -147,9 +151,28 @@ extension AppEnvironment {
         return assistants[(index + 1)...].map(\.text)
     }
 
-    /// Take-the-wheel input forwarding (PR B). For now the wheel is arbitrated but input is a no-op.
-    func performSessionInput(_ payload: [String: Any]) {
-        // Implemented with the remote-control surface; see the take-the-wheel change.
+    /// Take-the-wheel input: the wheel holder's events, delivered to the guest through the same
+    /// ComputerActions okidoki drives it with. Coordinates arrive normalized; the guest display is
+    /// the fixed size the model learned, so the mapping is exact. Returns false for a malformed
+    /// packet or a guest that isn't up.
+    @discardableResult
+    func performSessionInput(_ payload: [String: Any]) -> Bool {
+        guard privateMac.isRunning else { return false }
+        let width = PrivateMacSpec.displayPointWidth
+        let height = PrivateMacSpec.displayPointHeight
+        guard let action = CollabInput.action(from: payload, width: width, height: height) else { return false }
+        let computer = PrivateMacComputer(service: privateMac)
+        let box = ScreenBox(x: 0, y: 0, width: width, height: height)
+        Task { @MainActor in
+            _ = try? await computer.perform(action, screen: box, imageWidth: width, imageHeight: height)
+        }
+        return true
+    }
+
+    /// Whether okidoki is mid-run in the session: the wheel and the agent never drive at once.
+    func collabRunIsActive() -> Bool {
+        guard let id = collab?.session?.activeRunID, let run = store.run(id) else { return false }
+        return run.status.isActive
     }
 }
 

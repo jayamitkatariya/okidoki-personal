@@ -50,14 +50,23 @@ for the SSE and frame routes, which a browser cannot send headers for). The code
 | `POST /api/chat` | `{text, ask?}` | `{ok}` — `ask` (or an "okidoki, …" prefix) starts a VM task |
 | `POST /api/skills/run` | `{id, values?}` | `{ok, runID}` — a VM task from a skill card |
 | `POST /api/runs/stop` | `{id}` | `{ok}` — host or the person who asked |
-| `POST /api/wheel` | `{action: request\|release}` | `{ok, holder}` *(take-the-wheel)* |
-| `POST /api/input` | `{kind, …}` | `{ok}` — wheel holder only *(take-the-wheel)* |
+| `POST /api/wheel` | `{action: request\|release}` | `{ok, holder}` · 409 mid-run or already held |
+| `POST /api/input` | `{kind, …}` | `{ok}` — wheel holder only, 409 mid-run or VM off |
+
+**Take-the-wheel.** One participant drives at a time; the host can always reclaim. Input packets use
+normalized coordinates (0–1 across the guest display), so any screen size aims true:
+`move {x,y}` · `click {x,y,button?,count?,modifiers?}` · `drag {fromX,fromY,toX,toY}` ·
+`scroll {x,y,dx,dy}` · `key {key,times?}` (okidoki combos like `cmd+l`) · `type {text}`.
+The host parses them into the same `ComputerAction`s okidoki drives the VM with, clamped
+(`CollabInput`). The wheel and okidoki never drive at once: a wheel request is refused mid-run, an ask
+is refused while the wheel is held, and a run that starts reclaims the wheel. Every pointer event is
+broadcast as a `pointer` event so all other joiners see the driver's cursor live; Esc releases.
 
 SSE events, each `data: {type, …}\n\n`:
 
 - `hello` `{you, session}` · `chat` `{message}` · `presence` `{participants}`
 - `run` `{run}` (null when idle) · `vm` `{phase, running}` · `skills` `{skills}`
-- `wheel` `{holder, holderName}` · `ended` `{}`
+- `wheel` `{holder, holderName}` · `pointer` `{x, y, by, color, click?}` (normalized, the driver's cursor) · `ended` `{}`
 
 `session` snapshot: `{hostName, startedAt, participants, wheelHolder, wheelHolderName, vm, run, skills, chat}`.
 `message`: `{id, authorID, authorName, colorHex, text, kind: chat|ask|okidoki|system, at}`.

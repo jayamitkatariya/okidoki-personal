@@ -92,7 +92,17 @@ export type CollabEvent =
   | { type: "vm"; phase: string; running: boolean }
   | { type: "skills"; skills: SkillCard[] }
   | { type: "wheel"; holder: string | null; holderName: string | null }
+  | { type: "pointer"; x: number; y: number; by: string; color: string; click?: boolean }
   | { type: "ended" };
+
+/** One take-the-wheel input packet. Coordinates are normalized 0–1 across the guest display. */
+export type InputPayload =
+  | { kind: "move"; x: number; y: number }
+  | { kind: "click"; x: number; y: number; button?: "left" | "right"; count?: number; modifiers?: string }
+  | { kind: "drag"; fromX: number; fromY: number; toX: number; toY: number }
+  | { kind: "scroll"; x: number; y: number; dx: number; dy: number }
+  | { kind: "key"; key: string; times?: number }
+  | { kind: "type"; text: string };
 
 /** The host dashboard's view of its own session (NativeState.collab). */
 export interface CollabHostState {

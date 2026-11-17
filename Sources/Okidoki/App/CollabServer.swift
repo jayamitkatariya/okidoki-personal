@@ -245,6 +245,10 @@ final class CollabServer {
         case "wheel":
             let action = request.body["action"] as? String ?? ""
             if action == "request" {
+                guard !env.collabRunIsActive() else {
+                    reply(connection, status: 409, body: ["error": "okidoki is working — stop the run to take the wheel"])
+                    return
+                }
                 let ok = session.requestWheel(you.id)
                 broadcastWheel()
                 if ok {
@@ -259,7 +263,10 @@ final class CollabServer {
             }
         case "input":
             guard session.wheelHolder == you.id else { reply(connection, status: 403, body: ["error": "take the wheel first"]); return }
-            env.performSessionInput(request.body)
+            guard !env.collabRunIsActive() else { reply(connection, status: 409, body: ["error": "okidoki is working — stop the run first"]); return }
+            guard env.privateMac.isRunning else { reply(connection, status: 409, body: ["error": "the shared Mac is off"]); return }
+            guard env.performSessionInput(request.body) else { reply(connection, status: 400, body: ["error": "not an input okidoki understands"]); return }
+            broadcastPointer(request.body, by: you)
             reply(connection, status: 200, body: ["ok": true])
         default:
             reply(connection, status: 404, body: ["error": "no such route"])
@@ -345,13 +352,28 @@ final class CollabServer {
         broadcast(["type": "chat", "message": Self.encode(message)])
     }
 
-    /// The run the session is now watching, set when a joiner's ask becomes a run.
+    /// The run the session is now watching, set when a joiner's ask becomes a run. The agent always
+    /// wins the wheel back once it starts driving.
     func watchRun(_ id: String) {
         session?.activeRunID = id
+        if session?.wheelHolder != nil {
+            session?.reclaimWheel()
+            broadcastWheel()
+        }
         scheduleBroadcast()
     }
 
     func broadcastWheelPublic() { broadcastWheel() }
+
+    /// The wheel holder's pointer, normalized, so every other joiner can draw it live on the screen.
+    private func broadcastPointer(_ payload: [String: Any], by you: CollabParticipant) {
+        let kind = (payload["kind"] as? String ?? "").lowercased()
+        guard CollabInput.movesPointer(kind) else { return }
+        let x = min(max(CollabInput.number(payload["x"]) ?? 0, 0), 1)
+        let y = min(max(CollabInput.number(payload["y"]) ?? 0, 0), 1)
+        broadcast(["type": "pointer", "x": x, "y": y, "by": you.id, "color": you.colorHex,
+                   "click": kind == "click" || kind == "drag"])
+    }
 
     // MARK: Snapshot helpers
 

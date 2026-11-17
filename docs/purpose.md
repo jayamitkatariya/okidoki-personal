@@ -12,7 +12,7 @@ The loop runs on three stages. The skill is the unit of value; the stage is just
 |---|---|---|
 | **Your Mac** | Shake the pointer, ask or teach, approve in the notch, Esc takes over. | shipped |
 | **Private Mac** | okidoki's own macOS VM. Runs drive it while you keep your screen, cursor and keyboard. Watch it live in the shell. | shipped (Apple silicon) |
-| **Shared session** | One Mac hosts its private Mac; everyone on the same WiFi joins in a browser — live screen, a group chat, and the host's skills replayed on request. okidoki acts; the host approves. | next |
+| **Shared session** | One Mac hosts its private Mac; everyone on the same WiFi joins in a browser — live screen, a group chat, and the host's skills replayed on request. okidoki acts; the host approves; anyone can take the wheel. | shipped (Apple silicon) |
 
 The shared session is the flagship, and it is the *same loop*, not a new product: a team's learned
 skills, replayed live on a shared Mac, with the agent improvising only when no skill fits. Its privacy
