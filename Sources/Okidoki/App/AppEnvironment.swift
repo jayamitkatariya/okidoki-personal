@@ -155,7 +155,7 @@ final class AppEnvironment: ObservableObject {
     /// Lets local tools (the MCP server, scripts) list and replay skills. 127.0.0.1 only, token required.
     private var control: ControlServer?
     /// The shared session's LAN endpoint, alive only while a session is active. See AppEnvironment+Collab.
-    private(set) var collab: CollabServer?
+    var collab: CollabServer?
     /// The last okidoki reply posted to the session's group chat, so a reply is broadcast once.
     var collabMessageCursor: String?
     private var nudgeTimer: Timer?

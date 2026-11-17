@@ -98,6 +98,14 @@ public struct CollabSnapshot: Codable, Sendable {
     public var run: CollabRun?
     public var skills: [CollabSkillCard]
     public var chat: [CollabMessage]
+
+    public init(hostName: String, startedAt: Date, participants: [CollabParticipant], wheelHolder: String? = nil,
+                wheelHolderName: String? = nil, vm: CollabVM, run: CollabRun? = nil,
+                skills: [CollabSkillCard] = [], chat: [CollabMessage] = []) {
+        self.hostName = hostName; self.startedAt = startedAt; self.participants = participants
+        self.wheelHolder = wheelHolder; self.wheelHolderName = wheelHolderName
+        self.vm = vm; self.run = run; self.skills = skills; self.chat = chat
+    }
 }
 
 public struct CollabJoin: Sendable {

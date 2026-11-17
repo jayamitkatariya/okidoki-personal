@@ -248,14 +248,14 @@ final class CollabServer {
                 let ok = session.requestWheel(you.id)
                 broadcastWheel()
                 if ok {
-                    reply(connection, status: 200, body: ["ok": true, "holder": session.wheelHolder ?? NSNull()])
+                    reply(connection, status: 200, body: ["ok": true, "holder": (session.wheelHolder as Any?) ?? NSNull()])
                 } else {
                     reply(connection, status: 409, body: ["error": "someone already has the wheel"])
                 }
             } else {
                 session.releaseWheel(you.id)
                 broadcastWheel()
-                reply(connection, status: 200, body: ["ok": true, "holder": session.wheelHolder ?? NSNull()])
+                reply(connection, status: 200, body: ["ok": true, "holder": (session.wheelHolder as Any?) ?? NSNull()])
             }
         case "input":
             guard session.wheelHolder == you.id else { reply(connection, status: 403, body: ["error": "take the wheel first"]); return }
@@ -310,8 +310,8 @@ final class CollabServer {
 
     private func broadcastWheel() {
         guard let session else { return }
-        broadcast(["type": "wheel", "holder": session.wheelHolder ?? NSNull(),
-                   "holderName": session.wheelHolder.flatMap { session.participant(id: $0)?.name } ?? NSNull()])
+        broadcast(["type": "wheel", "holder": (session.wheelHolder as Any?) ?? NSNull(),
+                   "holderName": (session.wheelHolder.flatMap { session.participant(id: $0)?.name } as Any?) ?? NSNull()])
     }
 
     private func scheduleBroadcast() {
