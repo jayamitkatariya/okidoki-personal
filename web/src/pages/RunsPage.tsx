@@ -275,11 +275,11 @@ export function AskedReply({ run }: { run: Run }) {
           variant="ghost"
           size="sm"
           onClick={() => {
-            invoke("stopRun", { id: run.id });
-            notify("Dismissed", run.title);
+            invoke("declineQuestion", { id: run.id });
+            notify("Declined", run.title);
           }}
         >
-          Dismiss
+          Decline
         </Button>
       </div>
     </section>

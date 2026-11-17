@@ -22,7 +22,7 @@ const SIZES = {
     shortcut: 'text-xs',
   },
   default: {
-    panel: 'min-w-48 rounded-xl p-1.5',
+    panel: 'min-w-44 rounded-xl p-1.5',
     row: 'gap-2 rounded-lg px-2.5 py-1.5 text-sm',
     check: 'gap-2 rounded-lg py-1.5 ps-2.5 pe-9 text-sm',
     mark: 'end-2.5',
@@ -90,13 +90,13 @@ function DropdownMenuContent({
   side = 'bottom',
   sideOffset = 6,
   size,
-  width = 'anchor',
+  width = 'auto',
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<MenuPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'> & {
     size?: DropdownMenuSize
     /** okidoki: 'menu' gives a small chip's menu room for a label and a detail line. */
-    width?: 'anchor' | 'menu'
+    width?: 'auto' | 'menu'
   }) {
   const inherited = React.useContext(SizeContext)
   const resolved = size ?? inherited
@@ -119,7 +119,7 @@ function DropdownMenuContent({
             className={cn(
               'z-50 max-h-(--available-height) origin-(--transform-origin) overflow-x-hidden overflow-y-auto bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-[cubic-bezier(0.16,1,0.3,1)] outline-none data-closed:animate-out data-closed:overflow-hidden data-closed:fade-out-0 data-closed:zoom-out-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95',
               SIZES[resolved].panel,
-              width === 'menu' ? 'w-72' : 'w-(--anchor-width)',
+              width === 'menu' ? 'w-60' : 'w-auto',
               className,
             )}
             {...props}

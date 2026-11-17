@@ -809,6 +809,9 @@ final class AppEnvironment: ObservableObject {
     func presentDriveQuestion(runID: String, question: String) {
         guard let run = store.run(runID) else { return }
         let card = AnswerCardModel(title: "one thing first", text: question,
+                                   actions: [CardAction(title: "decline", kind: .secondary) { [weak self] in
+                                       self?.declineQuestion(runID)
+                                   }],
                                    threadTitle: run.threadID.flatMap { store.thread($0)?.title },
                                    runID: runID, threadID: run.threadID)
         card.footnote = "paused · \(run.title)"
@@ -817,6 +820,17 @@ final class AppEnvironment: ObservableObject {
         }
         present(card, source: "followup")
         speak(question)
+    }
+
+    /// The person declined the question a run paused on: the task is dropped, and the question stays
+    /// in its history marked as such. Nothing carries on, and nothing is sent to an agent.
+    func declineQuestion(runID: String) {
+        guard store.run(runID)?.status == .asked else { return }
+        if answerController.isShowing(runID: runID) { answerController.close(restoreApp: false) }
+        store.markSuperseded(runID, sameTask: false)
+        store.saveNow()
+        toast(title: "declined", detail: "the question was dropped", kind: .info,
+              undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: runID)
     }
 
     func answerDriveQuestion(runID: String, text: String) {

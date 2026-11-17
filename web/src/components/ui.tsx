@@ -462,7 +462,8 @@ export function Modal({
   const size = width <= 400 ? "default" : width <= 540 ? "sm" : width <= 700 ? "md" : "lg";
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent size={size}>
+      {/* The dialog is as wide as the form asks for, not snapped up to the next size class. */}
+      <DialogContent size={size} style={{ maxWidth: `min(${width}px, calc(100vw - 2rem))` }}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {subtitle ? <DialogDescription>{subtitle}</DialogDescription> : null}

@@ -52,7 +52,7 @@ function ContextMenuContent({
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
           className={cn(
-            'z-50 max-h-(--available-height) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-120 ease-exit outline-none data-closed:animate-out data-closed:fade-out-0 motion-reduce:duration-0',
+            'z-50 max-h-(--available-height) min-w-44 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-120 ease-exit outline-none data-closed:animate-out data-closed:fade-out-0 motion-reduce:duration-0',
             className,
           )}
           {...props}

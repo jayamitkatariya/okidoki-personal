@@ -21,7 +21,7 @@ export function ChatMenu({ thread, className, onGone }: { thread: Thread; classN
         >
           <PixelIcon name="dots" size={14} />
         </DropdownMenuTrigger>
-        <DropdownMenuContent width="menu" align="end">
+        <DropdownMenuContent align="end">
           <DropdownMenuItem
             onClick={() => {
               invoke("archiveThread", { id: thread.id });

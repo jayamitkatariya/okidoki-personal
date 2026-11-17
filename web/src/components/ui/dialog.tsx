@@ -42,11 +42,11 @@ const dialogContentVariants = cva(
   {
     variants: {
       size: {
-        default: 'sm:max-w-sm',
-        sm: 'sm:max-w-lg',
-        md: 'sm:max-w-2xl',
-        lg: 'sm:max-w-3xl',
-        xl: 'sm:max-w-4xl',
+        default: 'sm:max-w-[22.5rem]',
+        sm: 'sm:max-w-[28.75rem]',
+        md: 'sm:max-w-[35rem]',
+        lg: 'sm:max-w-[40rem]',
+        xl: 'sm:max-w-[48rem]',
       },
     },
     defaultVariants: {

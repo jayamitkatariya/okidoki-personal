@@ -109,9 +109,21 @@ export function Home({
                   <span>{run.status === "asked" ? run.summary || "okidoki has a question" : run.preview?.summary || run.prompt}</span>
                 </button>
                 {run.status === "asked" ? (
-                  <Button size="sm" variant="secondary" onClick={() => onOpenRun(run)}>
-                    Answer
-                  </Button>
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        invoke("declineQuestion", { id: run.id });
+                        notify("Declined", run.title);
+                      }}
+                    >
+                      Decline
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => onOpenRun(run)}>
+                      Answer
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Button
@@ -119,10 +131,10 @@ export function Home({
                       variant="ghost"
                       onClick={() => {
                         invoke("denyRun", { id: run.id });
-                        notify("Skipped", run.title);
+                        notify("Declined", run.title);
                       }}
                     >
-                      Not now
+                      Decline
                     </Button>
                     <Button size="sm" variant="primary" onClick={() => invoke("approveRun", { id: run.id })}>
                       Do it

@@ -397,7 +397,7 @@ function MentionList({
 }) {
   const groups: Record<Mention["kind"], string> = { tab: "Tabs", skill: "Skills", file: "Vault", memory: "Memory" };
   return (
-    <Popover open={open} onClose={onClose} anchor={anchor} width={360} side={side} className="mention-pop">
+    <Popover open={open} onClose={onClose} anchor={anchor} width={300} side={side} className="mention-pop">
       {items.map((item, at) => (
         <div key={item.id}>
           {at === 0 || items[at - 1].kind !== item.kind ? <div className="pop-group">{groups[item.kind]}</div> : null}
@@ -473,7 +473,7 @@ function PickChip<T extends string>({
                 {item.icon ? <PixelIcon name={item.icon} size={15} /> : null}
                 <span className="menu-copy">
                   <span>{item.label}</span>
-                  {item.detail ? <em>{item.detail}</em> : null}
+                  {item.detail ? <em title={item.detail}>{item.detail}</em> : null}
                 </span>
               </DropdownMenuRadioItem>
             ))}

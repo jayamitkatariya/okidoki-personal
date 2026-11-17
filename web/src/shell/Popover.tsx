@@ -40,7 +40,7 @@ export function Popover({
     if (!open || !anchor.current) return;
     const measure = () => {
       const r = anchor.current!.getBoundingClientRect();
-      const w = width ?? 260;
+      const w = width ?? 240;
       const left = Math.max(8, Math.min(window.innerWidth - w - 8, align === "end" ? r.right - w : r.left));
       const top = side === "bottom" ? r.bottom + 6 : r.top - 6;
       setPlace({ left, top, origin: `${align === "end" ? "right" : "left"} ${side === "bottom" ? "top" : "bottom"}` });

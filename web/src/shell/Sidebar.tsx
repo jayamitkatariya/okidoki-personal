@@ -228,7 +228,6 @@ export function Sidebar({
                         icon={
                           <span className={cx("tab-icon", "vm-icon", vmWorking && "is-agent")}>
                             <PixelIcon name="screen" size={15} />
-                            {vmWorking ? <span className="tab-glow" aria-hidden="true" /> : null}
                             {vmPhase === "running" && !vmWorking ? <span className="vm-dot" aria-hidden="true" /> : null}
                           </span>
                         }
@@ -236,6 +235,7 @@ export function Sidebar({
                         title={state.privateMac?.status}
                         active={view.kind === "vm"}
                         onClick={() => onNavigate({ kind: "vm" })}
+                        trailing={vmWorking ? <span className="agent-glow" role="img" aria-label="okidoki is working here" /> : undefined}
                       />
                     ) : null}
                     {agent.map((tab) => (
@@ -506,13 +506,13 @@ function TabRow({
           icon={
             <span className={cx("tab-icon", agent && "is-agent", tab.loading && "is-loading")}>
               <Favicon host={tab.host} size={16} />
-              {agent ? <span className="tab-glow" aria-hidden="true" /> : null}
             </span>
           }
           label={label}
           title={agent && tab.status ? `${label} · ${tab.status}` : tab.address}
           active={active}
           onClick={onOpen}
+          trailing={tab.status ? <span className="agent-glow" role="img" aria-label="okidoki is working here" /> : undefined}
           onClose={() => invoke("browserClose", { tabID: tab.id })}
           closeLabel={agent ? "Stop and close this tab" : "Close tab"}
           dragging={drag?.kind === "tab" && drag.tab.id === tab.id}

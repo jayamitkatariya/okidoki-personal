@@ -228,6 +228,9 @@ final class AnswerCardController {
 
     // MARK: - Close
 
+    /// The card in front belongs to this run, so a decline from elsewhere can close it too.
+    func isShowing(runID: String) -> Bool { current?.runID == runID }
+
     func close(restoreApp: Bool = true) {
         if holdingForFollowUp, let card = current, !card.isThinking {
             // A follow-up was just sent from this card: keep the window and show a
