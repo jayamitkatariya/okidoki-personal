@@ -15,13 +15,6 @@ export default defineConfig({
     emptyOutDir: true,
     assetsInlineLimit: 100_000_000,
     cssCodeSplit: false,
-    rollupOptions: {
-      // Two pages: the dashboard (index) and the standalone session joiner (collab), each inlined.
-      input: {
-        index: fileURLToPath(new URL("./index.html", import.meta.url)),
-        collab: fileURLToPath(new URL("./collab.html", import.meta.url)),
-      },
-    },
   },
   server: {
     port: 5174,

@@ -12,7 +12,7 @@ import OkidokiCore
 /// serves the bundled joiner page, and answers a latest-frame endpoint the screen polls.
 @MainActor
 final class CollabServer {
-    static let defaultPort: UInt16 = 4331
+    nonisolated static let defaultPort: UInt16 = 4331
 
     private weak var env: AppEnvironment?
     private var listener: NWListener?
