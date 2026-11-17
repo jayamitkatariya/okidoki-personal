@@ -167,6 +167,8 @@ struct DashboardPayload: Encodable {
     var pins: [BrowserPin]
     /// Runs with a thumbnail, id → when it was last taken (seconds), so the page can ask for the new one.
     var thumbs: [String: Double]
+    /// The shared session: whether one is live, its join code and URL, and who's in it.
+    var collab: CollabHostStatePayload
 }
 
 struct DashboardBrowserTabPayload: Encodable {
@@ -707,7 +709,8 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             library: libraryEntries(env),
             browser: browserPayload(env),
             pins: env.store.pins ?? [],
-            thumbs: thumbs(env)
+            thumbs: thumbs(env),
+            collab: env.collabHostState()
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -1025,6 +1028,15 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 }
             default: break
             }
+        case "collab":
+            switch payload["action"] as? String {
+            case "start": env.startCollab()
+            case "stop": env.stopCollab()
+            case "kick": if let id = payload["id"] as? String { env.collabKick(id) }
+            case "reclaimWheel": env.collabReclaimWheel()
+            default: break
+            }
+            sendState()
         case "createAccount":
             let name = payload["name"] as? String ?? "you"
             let email = payload["email"] as? String ?? ""

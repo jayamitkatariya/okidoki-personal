@@ -1,0 +1,549 @@
+/* The shared-session joiner page: a dark, glassy window onto the host's private Mac. */
+
+.collab {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, color-mix(in srgb, var(--green) 10%, transparent), transparent 60%),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+}
+
+/* Top bar */
+.collab-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--glass);
+  backdrop-filter: blur(var(--blur, 18px));
+}
+.collab-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.collab-brand strong {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.collab-brand em {
+  font-style: normal;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+}
+.collab-host {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ok-muted);
+}
+.collab-conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.collab-conn i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.collab-conn.is-on {
+  color: var(--green);
+}
+.collab-conn.is-on i {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 22%, transparent);
+}
+.collab-people {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.collab-people em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--faint);
+  margin-left: 4px;
+}
+.collab-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #141311;
+  border: 2px solid transparent;
+}
+.collab-dot.is-you {
+  border-color: var(--ink);
+}
+
+/* Body: screen + chat */
+.collab-body {
+  display: flex;
+  gap: 18px;
+  padding: 18px;
+  flex: 1;
+  min-height: 0;
+}
+.collab-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+.collab-screen {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: #0c0d10;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.collab-screen img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.collab-screen-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--faint);
+  font-size: 14px;
+  text-align: center;
+  padding: 24px;
+}
+.collab-live {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
+}
+.collab-live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff453a;
+  animation: collab-pulse 1.6s ease-in-out infinite;
+}
+@keyframes collab-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Run strip over the screen */
+.collab-run {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  background: var(--glass-strong);
+  backdrop-filter: blur(var(--blur, 18px));
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+}
+.collab-run-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.collab-run-head strong {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collab-run-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green);
+}
+.collab-run-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.collab-run-status.is-waiting,
+.collab-run-status.is-asked,
+.collab-run-status.is-paused {
+  color: var(--amber);
+}
+.collab-run-needs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+  font-size: 12.5px;
+  color: var(--amber);
+}
+.collab-run-steps {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.collab-run-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ok-muted);
+}
+.collab-run-steps li:last-child {
+  color: var(--ink);
+}
+
+/* Skill cards */
+.collab-skills {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.collab-skills-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+}
+.collab-skills-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.collab-skill {
+  flex: none;
+  width: 200px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--ok-card);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.collab-skill:hover {
+  border-color: var(--green);
+  transform: translateY(-1px);
+}
+.collab-skill strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.collab-skill em {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--ok-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collab-skill-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.collab-skill-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.collab-skill-none {
+  font-size: 13px;
+  color: var(--ok-muted);
+}
+
+/* Chat panel */
+.collab-chat {
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  flex: none;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--glass);
+  overflow: hidden;
+}
+.collab-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+}
+.collab-chat-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--faint);
+}
+.collab-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.collab-msg-system {
+  align-self: center;
+  font-size: 11.5px;
+  color: var(--faint);
+  text-align: center;
+}
+.collab-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 92%;
+}
+.collab-msg.is-you {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.collab-msg-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ok-muted);
+}
+.collab-msg-author i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.collab-msg-author em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 10.5px;
+  color: var(--green);
+}
+.collab-msg p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  padding: 8px 11px;
+  border-radius: var(--r-md);
+  background: var(--ok-card);
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.collab-msg.is-you p {
+  background: color-mix(in srgb, var(--green) 16%, var(--ok-card));
+}
+.collab-msg.is-okidoki p {
+  border-color: color-mix(in srgb, var(--green) 40%, var(--line));
+}
+.collab-msg.is-ask p {
+  border-style: dashed;
+}
+
+/* Composer */
+.collab-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+.collab-ask-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ok-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.collab-ask-chip.is-on {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  border-color: var(--green);
+  color: var(--green);
+}
+.collab-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 120px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--ok-card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 8px 11px;
+}
+.collab-input:focus {
+  outline: none;
+  border-color: var(--green);
+}
+
+.collab-error {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--red-soft, #3a1d1d);
+  color: var(--red, #ff6b6b);
+  border: 1px solid var(--red, #ff6b6b);
+  padding: 9px 14px;
+  border-radius: var(--r-md);
+  font-size: 13px;
+}
+
+/* Join / ended gate */
+.collab-gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(900px 500px at 50% -10%, color-mix(in srgb, var(--green) 12%, transparent), transparent 60%),
+    var(--bg);
+  font-family: var(--sans);
+  color: var(--ink);
+}
+.collab-gate-card {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 36px 32px;
+  border-radius: var(--r-xl, 22px);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+}
+.collab-gate-card h1 {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 6px 0 0;
+}
+.collab-gate-card p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ok-muted);
+  margin: 0;
+}
+.collab-gate-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  text-align: left;
+}
+.collab-gate-form .btn {
+  margin-top: 8px;
+  width: 100%;
+  justify-content: center;
+}
+.collab-code-field input {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-family: var(--mono);
+}
+.collab-gate-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--red, #ff6b6b);
+  font-size: 12.5px;
+}
+.collab-gate-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+/* Narrow screens: stack the chat under the screen. */
+@media (max-width: 900px) {
+  .collab-body {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .collab-chat {
+    width: 100%;
+    height: 420px;
+    flex: none;
+  }
+  .collab-host {
+    display: none;
+  }
+}

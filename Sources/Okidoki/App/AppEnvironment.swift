@@ -154,6 +154,10 @@ final class AppEnvironment: ObservableObject {
     private var callTimer: Timer?
     /// Lets local tools (the MCP server, scripts) list and replay skills. 127.0.0.1 only, token required.
     private var control: ControlServer?
+    /// The shared session's LAN endpoint, alive only while a session is active. See AppEnvironment+Collab.
+    private(set) var collab: CollabServer?
+    /// The last okidoki reply posted to the session's group chat, so a reply is broadcast once.
+    var collabMessageCursor: String?
     private var nudgeTimer: Timer?
     private var serviceStatusTimer: Timer?
     private var nudgedEvents: Set<String> = []
@@ -920,13 +924,14 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    private func handleRequest(text: String, appName: String, bundleID: String, threadID: String?,
+    func handleRequest(text: String, appName: String, bundleID: String, threadID: String?,
                                screenshot: Data?, selection: CGRect?, attachmentName: String,
                                documentText: String, source: String,
                                screenContext: ScreenContext? = nil, mode: String = "auto") async {
         // Skills and recordings are driven straight from the chat: "replay invoice flow", "stop",
-        // "save as …", "my skills". No brain round trip, no key needed, no variance.
-        if screenshot == nil, documentText.isEmpty, source != "repair",
+        // "save as …", "my skills". No brain round trip, no key needed, no variance. A shared-session
+        // ask never reaches these: joiners can't trigger the host's replays, vault or recordings.
+        if screenshot == nil, documentText.isEmpty, source != "repair", source != "collab",
            let command = ChatCommands.parse(text, context: chatContext()) {
             // "File the returns for Jay and Neha, their documents are in the vault" reads like "file this into
             // the vault". With smart replay on, a skill that does the job gets the first look.
@@ -959,7 +964,7 @@ final class AppEnvironment: ObservableObject {
         // A circled region is the thing to summarise; only ask for a file when there's nothing attached,
         // and never for a routine: a file picker would sit open on an unattended Mac.
         // Nor for another agent's request (MCP): a modal picker it never asked for would block the Mac.
-        if document.isEmpty, screenshot == nil, !Self.isUnattended(source), source != "control",
+        if document.isEmpty, screenshot == nil, !Self.isUnattended(source), source != "control", source != "collab",
            (lower.contains("summar") || lower.hasPrefix("read this pdf")) {
             if let url = await pickFile(kind: "pdf", prompt: "choose a PDF to read") {
                 document = DocumentReader.read(url: url) ?? ""
@@ -1079,7 +1084,8 @@ final class AppEnvironment: ObservableObject {
         // Memory: what they asked to keep is saved now (gated, deduped, a correction replaces the old one) and
         // confirmed in the chat; anything else they said is mined in the background after the reply.
         let userMessageID = store.thread(threadID)?.messages.last(where: { $0.role == .user })?.id
-        let facts = decision.memory.filter { BrainService.isDurableFact($0) }
+        // A joiner's words are not the host's lasting facts: nothing said in a session is mined into memory.
+        let facts = source == "collab" ? [] : decision.memory.filter { BrainService.isDurableFact($0) }
         var memorySaves: [OkidokiStore.MemorySave] = []
         let memorySource = source == "summon" ? "said" : source
         // The confirmation lists what was actually kept, never what the model meant to keep.
@@ -1101,11 +1107,15 @@ final class AppEnvironment: ObservableObject {
                 self.announceLearned(saves, title: "saved to memory")
             }
         } else {
-            learnFromTurn(words: request.text, reply: decision.answer, threadID: threadID, messageID: userMessageID, source: source)
+            if source != "collab" {
+                learnFromTurn(words: request.text, reply: decision.answer, threadID: threadID, messageID: userMessageID, source: source)
+            }
         }
         // Replay first: with smart replay on, a saved skill that does exactly this job runs in seconds
         // instead of the agent working it out again. The agent still takes anything no skill covers.
+        // A session ask never replays on the host: it drives the shared private Mac instead.
         if store.settings.hybridReplay, [.browser, .computerUse].contains(decision.kind), request.mode != "chat",
+           source != "collab",
            !ReplayDispatcher.wantsAgent(request.text),
            await dispatchToSkill(request.text, threadID: threadID, source: source) {
             return
@@ -1701,7 +1711,7 @@ final class AppEnvironment: ObservableObject {
             browserDriver.begin(run: run)
             return
         }
-        guard store.settings.computerTarget == "vm" else {
+        guard store.settings.computerTarget == "vm" || isSessionThread(run.threadID) else {
             driver.begin(run: run)
             return
         }

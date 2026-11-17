@@ -44,6 +44,7 @@ const SECTIONS = [
   { id: "advanced", label: "Advanced", icon: "link" },
   { id: "agents", label: "Use from agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
+  { id: "session", label: "Shared session", icon: "people" },
   { id: "summon", label: "Summon", icon: "spark" },
   { id: "general", label: "General", icon: "gear" },
 ];
@@ -444,6 +445,10 @@ export function SettingsPage() {
             />
           </SettingsSection>
 
+          <SettingsSection id="session" title="Shared session" description="Let everyone on your WiFi watch okidoki work in the private Mac, chat, and ask it to do things. They join in a browser — no install. You approve anything risky here, in the notch. Collab shares okidoki's Mac, never yours.">
+            <SharedSession />
+          </SettingsSection>
+
           <SettingsSection id="summon" title="Summon" description="How you call okidoki from anywhere on your Mac. The notch’s Ask button and the menu bar always work too.">
             <div className="pref-group">
               <PrefRow title="Shake to summon" detail="Shake the pointer and okidoki opens beside it. Off stops watching the mouse entirely.">
@@ -803,6 +808,109 @@ function PrivateMacSettings({
         </div>
       ) : null}
     </>
+  );
+}
+
+function SharedSession() {
+  const { state, invoke, notify, native } = useDashboard();
+  const collab = state.collab ?? null;
+  const supported = Boolean(state.privateMac?.supported);
+  const active = Boolean(collab?.active);
+  const act = (action: string, extra: Record<string, unknown> = {}) => invoke("collab", { action, ...extra });
+
+  if (!native) {
+    return (
+      <div className="pref-group">
+        <PrefRow title="Shared session" detail="Open this in the okidoki app on your Mac to start a session.">
+          <span className="pref-hint">Mac only</span>
+        </PrefRow>
+      </div>
+    );
+  }
+
+  if (!active) {
+    return (
+      <div className="pref-group">
+        <PrefRow
+          title="Share the private Mac"
+          detail={supported ? "Start a session and give everyone the code. The private Mac starts when a run needs it." : "A shared session needs the private Mac, which needs Apple silicon."}
+        >
+          <Button
+            variant="primary"
+            size="sm"
+            icon="people"
+            disabled={!supported}
+            onClick={() => {
+              act("start");
+              notify("Session live", "Give everyone the code below", "success");
+            }}
+          >
+            Start a session
+          </Button>
+        </PrefRow>
+      </div>
+    );
+  }
+
+  const people = collab?.participants ?? [];
+  return (
+    <div className="pref-group">
+      <div className="pref-row is-stack">
+        <span className="pref-copy">
+          <strong>Join code</strong>
+          <em>Everyone on your WiFi opens the link and enters this code.</em>
+        </span>
+        <div className="session-code">{collab?.code}</div>
+        {collab?.url ? (
+          <div className="pref-row-foot">
+            <code className="mcp-cmd">{collab.url}</code>
+            <IconButton icon="copy" label="Copy link" onClick={() => void copyText(collab.url!).then(() => notify("Copied", "Paste it to everyone", "info"))} />
+          </div>
+        ) : null}
+      </div>
+      <div className="pref-row is-stack">
+        <span className="pref-copy">
+          <strong>Participants</strong>
+          <em>{people.length} here · they see okidoki's Mac, never yours</em>
+        </span>
+        <div className="session-people">
+          {people.map((person) => (
+            <div key={person.id} className="session-person">
+              <span className="session-dot" style={{ background: `#${person.colorHex}` }}>
+                {person.name.split(" ").slice(0, 2).map((word) => word[0]).join("").toUpperCase()}
+              </span>
+              <span className="session-name">{person.name}{person.isHost ? " (host)" : ""}</span>
+              {collab?.wheelHolder === person.id ? <em className="session-driving">driving</em> : null}
+              {!person.isHost ? <IconButton icon="x" label={`Remove ${person.name}`} onClick={() => act("kick", { id: person.id })} /> : null}
+            </div>
+          ))}
+          {!people.length ? <span className="pref-hint">No one has joined yet.</span> : null}
+        </div>
+      </div>
+      <div className="pref-row">
+        <span className="pref-copy">
+          <strong>End the session</strong>
+          <em>Stops sharing and disconnects everyone.</em>
+        </span>
+        <span className="pref-control">
+          {collab?.wheelHolder ? (
+            <Button size="sm" onClick={() => act("reclaimWheel")}>
+              Reclaim wheel
+            </Button>
+          ) : null}
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => {
+              act("stop");
+              notify("Session ended", "No longer sharing", "info");
+            }}
+          >
+            End session
+          </Button>
+        </span>
+      </div>
+    </div>
   );
 }
 

@@ -505,6 +505,10 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     /// conversation resumes that session instead of starting cold.
     public var agentID: String?
     public var agentSession: String?
+    /// The shared session this run belongs to, if any. Session runs always drive the private Mac.
+    public var sessionID: String?
+    /// The session participant who asked for this run, so they (and the host) can stop it.
+    public var requestedBy: String?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,

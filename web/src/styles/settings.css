@@ -703,3 +703,56 @@
   line-height: 1.5;
   color: var(--ok-muted);
 }
+
+/* Shared session: the join code and who's in it. */
+.session-code {
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  padding: 10px 16px;
+  border-radius: var(--r-md, 12px);
+  background: var(--well);
+  border: 1px solid var(--tile-line);
+  align-self: flex-start;
+}
+.session-people {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.session-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--r-md, 12px);
+  background: var(--well);
+}
+.session-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #141311;
+  flex: none;
+}
+.session-name {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+}
+.session-driving {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--accent-ink);
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--well-strong);
+}

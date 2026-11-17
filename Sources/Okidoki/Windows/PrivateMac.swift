@@ -446,22 +446,49 @@ final class PrivateMacService: NSObject, ObservableObject {
 
     private var mirrorTask: Task<Void, Never>?
     private var mirrorTarget: (window: CGWindowID, content: SCWindow)?
+    /// Everyone watching the guest display: the dashboard's live view and the shared session, each
+    /// with its own "is anyone looking" gate and frame handler. One capture loop feeds them all.
+    private var mirrorSinks: [String: (wanted: @MainActor () -> Bool, frame: @MainActor (CGImage) -> Void)] = [:]
+
+    /// Registers a viewer of the guest display. The capture loop runs while any sink wants frames.
+    func setMirrorSink(_ id: String, wanted: @escaping @MainActor () -> Bool, frame: @escaping @MainActor (CGImage) -> Void) {
+        mirrorSinks[id] = (wanted, frame)
+        startMirrorLoop()
+    }
+
+    func removeMirrorSink(_ id: String) {
+        mirrorSinks[id] = nil
+        if mirrorSinks.isEmpty {
+            mirrorTask?.cancel()
+            mirrorTask = nil
+        }
+    }
+
+    private func startMirrorLoop() {
+        guard mirrorTask == nil else { return }
+        mirrorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.isRunning {
+                    let active = self.mirrorSinks.filter { $0.value.wanted() }
+                    if !active.isEmpty, let image = await self.displaySnapshot(maxWidth: 1440) {
+                        for sink in active.values { sink.frame(image) }
+                    }
+                }
+                try? await Task.sleep(nanoseconds: self.isRunning ? 250_000_000 : 1_000_000_000)
+            }
+        }
+    }
 
     /// Streams small stills of the guest display to `frame` while `on`, so the shell can show the
     /// private Mac live in its own view. `wanted` is asked each tick (the dashboard window has to be
     /// on screen), so nothing is captured while nobody can see it.
     func mirror(_ on: Bool, wanted: @escaping @MainActor () -> Bool = { true }, frame: @escaping @MainActor (String) -> Void = { _ in }) {
-        mirrorTask?.cancel()
-        mirrorTask = nil
-        guard on else { return }
-        mirrorTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                if self.isRunning, wanted(), let image = await self.displaySnapshot(maxWidth: 1440) {
-                    let url = await Task.detached(priority: .utility) { Self.jpegDataURL(image) }.value
-                    if let url, !Task.isCancelled { frame(url) }
-                }
-                try? await Task.sleep(nanoseconds: self.isRunning ? 250_000_000 : 1_000_000_000)
+        guard on else { removeMirrorSink("dashboard"); return }
+        setMirrorSink("dashboard", wanted: wanted) { image in
+            Task { @MainActor in
+                let url = await Task.detached(priority: .utility) { Self.jpegDataURL(image) }.value
+                if let url { frame(url) }
             }
         }
     }
@@ -503,6 +530,12 @@ final class PrivateMacService: NSObject, ObservableObject {
         let rep = NSBitmapImageRep(cgImage: image)
         guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.72]) else { return nil }
         return "data:image/jpeg;base64," + data.base64EncodedString()
+    }
+
+    /// The guest display as JPEG bytes, for the shared session's frame endpoint.
+    nonisolated static func jpegData(_ image: CGImage) -> Data? {
+        let rep = NSBitmapImageRep(cgImage: image)
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6])
     }
 
     private static func describe(_ error: Error) -> String {
