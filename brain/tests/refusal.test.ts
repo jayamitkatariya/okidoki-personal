@@ -79,3 +79,18 @@ test("a rejected key is still a rejected key", async () => {
   const result = await think({ text: "say hi" }, "fixture-key", api);
   expect(result.decision.title).toBe("key rejected");
 });
+
+test("a plain answer in prose (no tool call) is shown instead of failing", async () => {
+  const api = (async () => prose("Your passport number is in the vault, in passport.pdf.")) as typeof fetch;
+  const result = await think({ text: "where did I put my passport number?" }, "fixture-key", api);
+  expect(result.usedModel).toBe(true);
+  expect(result.decision.kind).toBe("answer");
+  expect(result.decision.answer).toContain("passport.pdf");
+});
+
+test("prose that promises an action still stops instead of reading as an answer", async () => {
+  const api = (async () => prose("Sure, I'll book the aisle seat for you now.")) as typeof fetch;
+  const result = await think({ text: "book my seat" }, "fixture-key", api);
+  expect(result.usedModel).toBe(false);
+  expect(result.error).toContain("structured decision");
+});

@@ -151,6 +151,21 @@
       "why": "renamed buttons, new ids, reordered fields, a cookie banner and a survey popup"
     },
     {
+      "id": "redesign",
+      "items": [
+        "Bharat",
+        "Chandra"
+      ],
+      "site": {
+        "redesign": true
+      },
+      "modes": [
+        "classic",
+        "hybrid"
+      ],
+      "why": "a new front end: no labels (aria-label only, reworded) and the form split into two steps on one page behind a Next button that only changes #hash — smart replay heals once (rescue), promotes the fix, and the second item needs no model"
+    },
+    {
       "id": "documents",
       "items": [
         "Bharat",

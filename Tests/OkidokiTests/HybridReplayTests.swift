@@ -307,6 +307,19 @@ final class HybridReplayTests: XCTestCase {
         XCTAssertEqual(SkillBinder.csvRows("name,amount\n\"Rao, Asha\",\"1,000\"\n").first, ["name": "Rao, Asha", "amount": "1,000"])
     }
 
+    /// "file for Ezra … deductions 80C 150000 and 80D 50000": the router hands the list over in words. It must
+    /// not bind as a list with no entries (that filed Ezra's return without deductions); it's left for the resolver.
+    func testAListGivenInWordsIsLeftForTheResolverNotBoundAsEmpty() {
+        let inputs = [SkillInput(name: "deductions", kind: "list", fields: ["section", "amount"], required: false), SkillInput(name: "pan")]
+        let words = SkillBinder.match(["deductions": "80C 150000 and 80D 50000", "pan": "EZTPT2468M"], to: inputs)
+        XCTAssertNil(words.matched["deductions"])
+        XCTAssertEqual(words.leftover["deductions"], "80C 150000 and 80D 50000")
+        XCTAssertEqual(words.matched["pan"], "EZTPT2468M")
+        let json = SkillBinder.match(["deductions": #"[{"section":"80C","amount":"150000"}]"#], to: inputs)
+        XCTAssertEqual(json.matched["deductions"], #"[{"section":"80C","amount":"150000"}]"#)
+        XCTAssertEqual(SkillBinder.match(["deductions": "none"], to: inputs).matched["deductions"], "[]")
+    }
+
     func testChoicesMatchValuesWrittenAnotherWay() {
         let sections = ["Choose…", "80C", "80D", "80G", "24B"]
         XCTAssertEqual(SkillBinder.choice("24(b)", in: sections), "24B")

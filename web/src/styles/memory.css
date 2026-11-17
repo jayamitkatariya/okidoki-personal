@@ -277,3 +277,38 @@
 .memory-index.is-off:hover {
   color: var(--ink);
 }
+
+/* search */
+.memory-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.memory-search .field {
+  flex: 1;
+  max-width: 420px;
+}
+.memory-search-count {
+  font-size: 12px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.memory-flag {
+  color: var(--accent-ink);
+  font-weight: 550;
+}
+.memory-actions.is-pinned {
+  opacity: 1;
+}
+.memory-actions.is-pinned .icon-btn:not(.is-on) {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.memory-item:hover .memory-actions .icon-btn,
+.memory-item:focus-within .memory-actions .icon-btn {
+  opacity: 1;
+}
+.memory-actions .icon-btn.is-on {
+  color: var(--accent-ink);
+}

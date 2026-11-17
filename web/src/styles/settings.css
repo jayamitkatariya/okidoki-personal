@@ -593,3 +593,47 @@
   font-style: normal;
   color: var(--faint);
 }
+
+/* Agents: coding agents okidoki hands work to, listed like MCP servers but as the group's own rows. */
+.mcp-list.coding-agents {
+  margin: 0;
+  padding: 2px 16px 12px;
+}
+.mcp-list.coding-agents > .mcp-row:first-child {
+  border-top: 0;
+}
+.mcp-row.is-missing .mcp-copy strong {
+  color: var(--ok-muted);
+}
+.agent-default {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  vertical-align: 1px;
+  color: var(--accent-ink, var(--text));
+  background: color-mix(in oklab, var(--accent-bright) 22%, transparent);
+}
+.mcp-hint.agent-warn {
+  color: var(--amber);
+}
+.settings-subhead {
+  margin: 18px 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ok-muted);
+}
+.mcp-list.coding-agents + .pref-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+.mcp-row.is-missing .mcp-dot {
+  opacity: 0.4;
+}

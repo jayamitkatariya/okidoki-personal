@@ -83,7 +83,7 @@ function LibrarySection({ entries, onAdd }: { entries: LibraryEntry[]; onAdd: (e
                 <div className="skill-title">
                   <h3>{entry.name}</h3>
                   <span>
-                    {entry.surface === "mac" ? "on your Mac" : "in okidoki's browser"}
+                    {entry.surface === "mac" ? "on your Mac" : "in okidoki’s browser"}
                     {entry.confirms ? " · always checks with you first" : ""}
                   </span>
                 </div>
@@ -344,7 +344,7 @@ export function SkillsPage() {
                     <PixelIcon name={skill.source === "watch me" ? "record" : "wand"} size={16} />
                   </span>
                   <div className="skill-title">
-                    <h3>{skill.name}</h3>
+                    <h3 title={skill.name}>{skill.name}</h3>
                     {/* Each fact stays on one line, so a narrow card breaks between them, never inside one. */}
                     <span className="skill-meta">
                       {(skill.template
@@ -542,7 +542,7 @@ export function SkillsPage() {
                     onClick={() =>
                       setConfirm({
                         title: "Delete this schedule?",
-                        detail: `“${routine.name}” won't run again.`,
+                        detail: `“${routine.name}” won’t run again.`,
                         action: "Delete schedule",
                         onConfirm: () => {
                           invoke("deleteRoutine", { id: routine.id });
@@ -578,7 +578,7 @@ export function SkillsPage() {
         )}
       </section>
 
-      <Modal open={recordOpen} onClose={() => setRecordOpen(false)} title="Record a skill" subtitle="You'll do the task once. okidoki learns it move by move." width={480}>
+      <Modal open={recordOpen} onClose={() => setRecordOpen(false)} title="Record a skill" subtitle="You’ll do the task once. okidoki learns it move by move." width={480}>
         <div className="routine-form">
           <div className="routine-field">
             <span className="form-label">Name (optional)</span>
@@ -591,7 +591,7 @@ export function SkillsPage() {
             </li>
             <li>
               <PixelIcon name="keyboard" size={13} />
-              <span>Typing and shortcuts like ⌘S are captured too, as plain text — don't type secrets while recording.</span>
+              <span>Typing and shortcuts like ⌘S are captured too, as plain text — don’t type secrets while recording.</span>
             </li>
             <li>
               <PixelIcon name="stop" size={13} />

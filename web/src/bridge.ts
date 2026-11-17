@@ -58,6 +58,17 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.connectors = state.connectors.map((connector) => (connector.id === payload.id ? { ...connector, enabled: Boolean(payload.enabled) } : connector));
       break;
     }
+    case "installAgentSkill": {
+      state.agentSkill = { installed: true, cli: true, paths: ["~/.claude/skills/okidoki/SKILL.md", "~/.agents/skills/okidoki/SKILL.md"] };
+      break;
+    }
+    case "rescanCodingAgents":
+    case "pickCodingAgentFolder":
+      break;
+    case "uninstallAgentSkill": {
+      state.agentSkill = { installed: false, cli: state.agentSkill?.cli ?? false, paths: [] };
+      break;
+    }
     case "saveKey":
     case "deleteKey": {
       const provider = payload.provider as string;
@@ -182,8 +193,70 @@ function previewInvoke(type: string, payload: Record<string, unknown>): boolean 
       state.skills = state.skills.filter((skill) => skill.id !== payload.id);
       break;
     }
+    // Pins and bookmarks, as OkidokiStore keeps them, so the sidebar's drags and menus work in the preview.
+    case "pinSite":
+    case "pinTab": {
+      const tab = state.browser?.tabs.find((item) => item.id === payload.tabID);
+      const url = (payload.url as string | undefined) ?? tab?.address;
+      if (!url) return false;
+      const host = previewHost(url);
+      const pins = state.pins ?? [];
+      if (pins.some((pin) => previewHost(pin.url) === host)) return false;
+      if (pins.length >= 12) return false;
+      const pin = { id: `pin-${Math.random().toString(16).slice(2, 8)}`, url, title: (payload.title as string) || tab?.title || host, createdAt: new Date().toISOString() };
+      const index = typeof payload.index === "number" && payload.index >= 0 && payload.index < pins.length ? payload.index : pins.length;
+      state.pins = [...pins.slice(0, index), pin, ...pins.slice(index)];
+      break;
+    }
+    case "unpin": {
+      state.pins = (state.pins ?? []).filter((pin) => pin.id !== payload.id);
+      break;
+    }
+    case "reorderPins": {
+      const ids = [...new Set(payload.ids as string[])];
+      const pins = state.pins ?? [];
+      state.pins = [...ids.map((id) => pins.find((pin) => pin.id === id)).filter((pin) => pin !== undefined), ...pins.filter((pin) => !ids.includes(pin.id))];
+      break;
+    }
+    case "addBookmark":
+    case "toggleBookmark": {
+      const tab = state.browser?.tabs.find((item) => item.id === payload.tabID);
+      const url = (payload.url as string | undefined) ?? tab?.address;
+      if (!url) return false;
+      const bookmarks = state.bookmarks ?? [];
+      const existing = bookmarks.find((item) => item.url === url);
+      if (existing) {
+        if (type === "addBookmark") return false;
+        state.bookmarks = bookmarks.filter((item) => item !== existing);
+      } else {
+        const bookmark = { id: `bm-${Math.random().toString(16).slice(2, 8)}`, url, title: (payload.title as string) || tab?.title || previewHost(url), createdAt: new Date().toISOString() };
+        const index = Math.min(Math.max(typeof payload.index === "number" ? payload.index : 0, 0), bookmarks.length);
+        state.bookmarks = [...bookmarks.slice(0, index), bookmark, ...bookmarks.slice(index)];
+      }
+      break;
+    }
+    case "removeBookmark": {
+      state.bookmarks = (state.bookmarks ?? []).filter((item) => item.id !== payload.id);
+      break;
+    }
+    case "browserOpen": {
+      if (!state.browser || typeof payload.url !== "string") return false;
+      const url = payload.url;
+      const tab = { ...state.browser.tabs[0], id: `tab-${Math.random().toString(16).slice(2, 8)}`, number: state.browser.tabs.length + 1, title: previewHost(url), address: url, host: previewHost(url), loading: false, blank: false, status: null, ownerRunID: null, threadID: null, canGoBack: false, canGoForward: false, hasLogin: false, loadError: null };
+      state.browser = { ...state.browser, tabs: [...state.browser.tabs, tab], activeID: tab.id };
+      break;
+    }
+    case "browserClose": {
+      if (!state.browser) return false;
+      state.browser = { ...state.browser, tabs: state.browser.tabs.filter((tab) => tab.id !== payload.tabID) };
+      break;
+    }
     default:
       return false;
+  }
+  if (state.browser) {
+    const saved = new Set((state.bookmarks ?? []).map((item) => item.url));
+    state.browser = { ...state.browser, tabs: state.browser.tabs.map((tab) => ({ ...tab, bookmarked: saved.has(tab.address) })) };
   }
   previewState = state;
   window.dispatchEvent(new CustomEvent<NativeState>("okidoki-native", { detail: state }));
@@ -242,4 +315,12 @@ export function useNativeState(): { state: NativeState | null; connected: boolea
   }, []);
 
   return { state, connected, native };
+}
+
+function previewHost(url: string): string {
+  try {
+    return new URL(url.includes("://") ? url : `https://${url}`).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }

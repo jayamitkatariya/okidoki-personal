@@ -1,5 +1,5 @@
 /**
- * The okidoki app's control endpoint (127.0.0.1, token in control.json), for the CLI and the MCP server.
+ * The okidoki app's control endpoint (127.0.0.1, token in control.json), for the `okidoki` CLI (and the okidoki skill that teaches agents to use it).
  * No dependencies. Everything risky the app does for another agent still waits for the person's okay.
  */
 import { readFileSync } from "node:fs";
@@ -37,7 +37,7 @@ export async function call(method: "GET" | "POST", path: string, body?: Json, ti
 const q = (value: unknown) => encodeURIComponent(String(value ?? ""));
 const tabQuery = (tab: unknown) => (tab === undefined || tab === null || tab === "" ? "" : `?tab=${q(tab)}`);
 
-/** Every thing another agent can ask of okidoki, shared by the CLI and the MCP server. */
+/** Every thing another agent can ask of okidoki, used by the CLI. */
 export const api = {
   status: () => call("GET", "/status"),
   task: (text: string, mode = "auto", wait = 0, thread?: string) =>

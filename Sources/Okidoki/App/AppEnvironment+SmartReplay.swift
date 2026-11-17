@@ -9,6 +9,8 @@ struct LearnedBrowserRun {
     var steps: [SkillStep]
     /// URL → some of the page's text.
     var pages: [String: String]
+    /// Values typed from the request that a skill keeps outside its file (a `{{password}}`), by input name.
+    var secrets: [String: String] = [:]
 }
 
 extension BrainClient {
@@ -229,7 +231,7 @@ extension AppEnvironment {
                 let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
                 let name = fold(label).split(separator: " ").first.map(String.init) ?? ""
                 let remembered: [String] = pass["ref"] == nil && pass["name"] == nil
-                    ? store.memoryLines(limit: 40)
+                    ? store.memoryLines(limit: 40, query: "\(skill.name) \(request) \(label)")
                     : (name.count >= 3 ? store.memories.filter { fold($0.text).contains(name) }.prefix(20).map(\.text) : [])
                 group.addTask { @MainActor in
                     var (values, leftover) = SkillBinder.match(pass, to: inputs)

@@ -28,7 +28,7 @@ extension AppEnvironment {
         }
         store.markSeen(threadID: thread.id)
         noteSpokenInput(false)
-        let known = ["auto", "browser", "act", "chat"]
+        let known = ["auto", "browser", "act", "chat", "agent"]
         Task {
             await handleRequestFromShell(text: trimmed, threadID: thread.id, mode: known.contains(mode) ? mode : "auto")
         }
@@ -97,22 +97,19 @@ extension AppEnvironment {
         store.seedPinsIfNeeded(loginSites: vault.logins.map(\.site))
     }
 
-    /// Bookmarks the tab's page, or removes the bookmark.
+    /// Bookmarks the tab's page, or removes the bookmark. The shell says what happened (with Undo) in its
+    /// own toast, so nothing pops out of the notch over the window for it.
     func shellToggleBookmark(tabID: String?) {
         let tab = tabID.flatMap(UUID.init(uuidString:)).flatMap { browser.tab($0) } ?? browser.activeTab
         guard !tab.isBlank else { return }
-        let saved = store.toggleBookmark(url: tab.address, title: tab.title)
-        toast(title: saved ? "bookmarked" : "bookmark removed", detail: tab.label, kind: .info,
-              undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+        store.toggleBookmark(url: tab.address, title: tab.title)
     }
 
-    func shellPinTab(tabID: String?) {
+    /// Pins the tab's site, at `index` among the pins when given. A full grid is the shell's to explain.
+    func shellPinTab(tabID: String?, at index: Int? = nil) {
         let tab = tabID.flatMap(UUID.init(uuidString:)).flatMap { browser.tab($0) } ?? browser.activeTab
         guard !tab.isBlank else { return }
-        if !store.pin(url: tab.address, title: tab.title) {
-            toast(title: "the pins are full", detail: "unpin one to make room", kind: .info,
-                  undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
-        }
+        store.pin(url: tab.address, title: tab.title, at: index)
     }
 
     /// A still of the tab in front, for the page to show while an overlay covers the native view.

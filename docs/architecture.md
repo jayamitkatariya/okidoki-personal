@@ -13,7 +13,7 @@ okidoki is three local processes and one optional one:
  └───────────────┬─────────────────────────────────┬────────────────┘
                  │ HTTP 127.0.0.1:4329 (token)      │ HTTP 127.0.0.1:4330 (token in control.json)
                  ▼                                  ▼
-        brain (Bun, TypeScript)              mcp/okidoki-mcp.ts (stdio) ◀── Claude Code, Cursor…
+        brain (Bun, TypeScript)              `okidoki` CLI (mcp/okidoki.ts) ◀── Claude Code, Codex… (okidoki skill)
         router · Claude · computer use v2
         browser agent · MCP client · Moss index
 ```

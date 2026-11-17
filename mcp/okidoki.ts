@@ -8,7 +8,6 @@
  *   okidoki computer "make a new note in Notes titled Groceries"
  *   okidoki replay "file a return" --item name=Asha pan=ABCDE1234F --item name=Ravi pan=…
  *   okidoki open https://example.com && okidoki page && okidoki click 4
- *   okidoki mcp                                                            # serve MCP over stdio
  *
  * Exit codes, for scripts: 0 done · 1 failed or stopped · 2 needs the person · 3 still running · 4 error.
  * Every command takes --json for the raw answer.
@@ -57,8 +56,6 @@ memory and vault
   okidoki memory                what okidoki remembers about the person
   okidoki remember <fact…>
   okidoki vault <query…>
-
-  okidoki mcp                   MCP server over stdio (claude mcp add okidoki -- okidoki mcp)
 
 Anything risky waits for the person's okay in the notch, and captchas are theirs: a run that needs them
 says so (exit code 2). Add --json to any command for the raw answer.`;
@@ -133,11 +130,6 @@ async function main(argv: string[]): Promise<number> {
     case "help":
       console.log(HELP);
       return 0;
-    case "mcp": {
-      const { serve } = await import("./okidoki-mcp");
-      serve();
-      return -1; // keeps running
-    }
     case "do":
     case "browse":
     case "computer":

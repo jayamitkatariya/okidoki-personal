@@ -127,12 +127,11 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         // would drag the whole window instead of drawing.
         window.isMovableByWindowBackground = false
         window.titlebarSeparatorStyle = .none
-        window.backgroundColor = NSColor(srgbRed: 0xEE / 255, green: 0xF2 / 255, blue: 0xEF / 255, alpha: 1)
-        window.isOpaque = true
+        // Frosted like the shell: the view lays the desk gradient over behind-window vibrancy.
+        window.backgroundColor = .clear
+        window.isOpaque = false
         window.hasShadow = true
-        // Onboarding is a light-only design (white fields, ink text); pin it so dark mode
-        // doesn't render white text inside the white fields.
-        window.appearance = NSAppearance(named: .aqua)
+        // Appearance follows NSApp.appearance (driven by settings), same as the dashboard.
         window.minSize = NSSize(width: 760, height: 720)
         window.center()
         window.delegate = self

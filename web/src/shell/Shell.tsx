@@ -24,7 +24,9 @@ import { ChatView } from "./ChatView";
 import { AssistantPanel } from "./AssistantPanel";
 import { PageSlot } from "./PageSlot";
 import { Palette } from "./Palette";
+import { siteOf, useSiteActions } from "./siteActions";
 import { CoverProvider } from "./media";
+import { PrivateMacView } from "./PrivateMacView";
 import { hostOf, LIBRARY, parseView, viewKey, type LibraryPage, type View } from "./model";
 // Inlined: a CSS mask is a CORS load, which a page opened from the app's files can't make.
 import brandMark from "../../public/brand.png?inline";
@@ -60,6 +62,15 @@ function initialView(): View {
 function ShellBody() {
   const { state, toasts, invoke } = useDashboard();
   const [view, setViewState] = useState<View>(initialView);
+  // "just now", "5m ago" and dates are worked out while rendering; redraw once a minute so they keep
+  // moving on a quiet screen. Paused while the window is hidden.
+  const [, setMinute] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") setMinute((value) => value + 1);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_KEY) === "hidden";
@@ -72,6 +83,7 @@ function ShellBody() {
   const [focusTick, setFocusTick] = useState(0);
   const [addressTick, setAddressTick] = useState(0);
   const firstHome = useRef(true);
+  const pageScroll = useRef<Record<string, number>>({});
   // A chat opened on purpose from History may be archived; it stays open (read-only) instead of bouncing Home.
   const [archivedOK, setArchivedOK] = useState<string | null>(null);
 
@@ -184,6 +196,7 @@ function ShellBody() {
     setAssistantFor((current) => ({ ...current, [tab.id]: !current[tab.id] }));
   }, [tab]);
 
+  const siteActions = useSiteActions();
   const key = useCallback(
     (k: string) => {
       switch (k) {
@@ -208,6 +221,13 @@ function ShellBody() {
         case "w":
           if (tab) invoke("browserClose", { tabID: tab.id });
           break;
+        case "d":
+          // ⌘D bookmarks the page in front (again removes it), ⌘⇧D pins its site; both toast with Undo.
+          if (view.kind === "tab" && tab && !tab.blank) siteActions.toggleBookmark(siteOf(tab));
+          break;
+        case "D":
+          if (view.kind === "tab" && tab && !tab.blank) siteActions.togglePin(siteOf(tab));
+          break;
         default:
           if (/^[1-9]$/.test(k)) {
             const pins = state.pins ?? [];
@@ -220,7 +240,7 @@ function ShellBody() {
           }
       }
     },
-    [newTab, view.kind, toggleAssistant, tab, invoke, state.pins, openURL, openTab, tabs],
+    [newTab, view.kind, toggleAssistant, tab, invoke, state.pins, openURL, openTab, tabs, siteActions],
   );
 
   // Shortcuts while the page here has the keyboard, and from the Mac while the browser's page has it.
@@ -231,8 +251,17 @@ function ShellBody() {
     const key = (k: string) => keyRef.current(k);
     const onKey = (event: KeyboardEvent) => {
       // ⌘ only: ⌃K, ⌃B, ⌃N, ⌃T and ⌃L are text editing keys on the Mac.
-      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (!event.metaKey || event.ctrlKey || event.altKey) return;
+      // A dialog (a delete confirm, a form) owns the keyboard: ⌘K would stack the palette over it and
+      // ⌘T/⌘W would change what's behind it.
+      if (document.querySelector('[data-slot="dialog-content"][data-open]')) return;
       const k = event.key.toLowerCase();
+      if (k === "d") {
+        event.preventDefault();
+        key(event.shiftKey ? "D" : "d");
+        return;
+      }
+      if (event.shiftKey) return;
       if (["t", "n", "l", "k", "b", "j", "w"].includes(k)) {
         event.preventDefault();
         key(k);
@@ -292,7 +321,12 @@ function ShellBody() {
     // Back and forward in the page's own history, and hand-typed links.
     const onHash = () => {
       const parsed = parseView(window.location.hash);
-      if (parsed && parsed !== "browser" && !("settingsSection" in parsed)) setView(parsed);
+      if (!parsed || parsed === "browser") return;
+      // "#/keys" (Memory's "Add a Moss key") lands on that section of Settings.
+      if ("settingsSection" in parsed) {
+        setView({ kind: "page", page: "settings" });
+        jumpToSettingsSection(parsed.settingsSection);
+      } else setView(parsed);
     };
     window.addEventListener("hashchange", onHash);
     return () => {
@@ -311,7 +345,9 @@ function ShellBody() {
   const crumb =
     view.kind === "chat"
       ? { icon: "chat", title: thread?.title || "Chat" }
-      : page
+      : view.kind === "vm"
+        ? { icon: "screen", title: "Private Mac" }
+        : page
         ? { icon: page.icon, title: page.title }
         : null;
 
@@ -395,8 +431,22 @@ function ShellBody() {
             )
           ) : null}
 
+          {view.kind === "vm" ? <PrivateMacView onOpenSettings={() => setView({ kind: "page", page: "settings" })} /> : null}
+
           {view.kind === "page" ? (
-            <div className="card-scroll page-host" key={view.page}>
+            <div
+              className="card-scroll page-host"
+              key={view.page}
+              // Coming back to a page puts you where you were on it, not at the top.
+              ref={(el) => {
+                if (!el || el.dataset.restored) return;
+                el.dataset.restored = "1";
+                if (pageScroll.current[view.page]) el.scrollTop = pageScroll.current[view.page];
+              }}
+              onScroll={(event) => {
+                pageScroll.current[view.page] = event.currentTarget.scrollTop;
+              }}
+            >
               <div className="page-inner">
                 {view.page === "runs" ? (
                   <ComputerPage />
@@ -423,7 +473,7 @@ function ShellBody() {
         </div>
       </main>
 
-      <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={setView} onOpenTab={openTab} onOpenURL={openURL} />
+      <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={setView} onOpenTab={openTab} onOpenURL={openURL} tab={view.kind === "tab" && tab && !tab.blank ? tab : null} />
       <KobraToastBridge toasts={toasts} />
       <Toasts position="bottom-start" />
     </div>

@@ -132,8 +132,16 @@ export function HistoryPage({ go, onOpenThread }: { go: (page: Page) => void; on
             Nothing you’ve asked mentions “{query}”.
           </Empty>
         ) : (
-          <Empty icon="clock" title="Nothing here yet">
-            Shake your mouse and ask for something. Every request lands here with its plan and what happened.
+          <Empty
+            icon="clock"
+            title="Nothing here yet"
+            action={
+              <Button size="sm" variant="secondary" icon="spark" onClick={() => go("home")}>
+                Ask something
+              </Button>
+            }
+          >
+            Every request lands here with its plan and what happened.
           </Empty>
         )
       ) : threads.length ? (
@@ -147,7 +155,15 @@ export function HistoryPage({ go, onOpenThread }: { go: (page: Page) => void; on
           No thread mentions “{query}”.
         </Empty>
       ) : (
-        <Empty icon="memory" title="No threads yet">
+        <Empty
+          icon="memory"
+          title="No threads yet"
+          action={
+            <Button size="sm" variant="secondary" icon="compose" onClick={() => go("home")}>
+              Start a chat
+            </Button>
+          }
+        >
           Every conversation becomes a thread. Come back later and okidoki picks it up instead of starting over.
         </Empty>
       )}
@@ -354,6 +370,7 @@ function kindGlyph(kind: Run["kind"]): string {
       browser: "globe",
       routine: "clock",
       connector: "link",
+      coding_agent: "code",
     } as const
   )[kind] ?? "spark";
 }

@@ -79,6 +79,37 @@ final class ShellStoreTests: XCTestCase {
         }
     }
 
+    func testPinAtIndexAndBlankURLs() async throws {
+        try await withStore { store, url in
+            store.pins = []
+            XCTAssertTrue(store.pin(url: "https://a.com", title: "A"))
+            XCTAssertTrue(store.pin(url: "https://b.com", title: "B"))
+            XCTAssertTrue(store.pin(url: "https://c.com", title: "C", at: 1))
+            XCTAssertEqual(store.pins?.map(\.host), ["a.com", "c.com", "b.com"])
+            XCTAssertTrue(store.pin(url: "https://d.com", title: "D", at: 99))
+            XCTAssertEqual(store.pins?.last?.host, "d.com")
+            XCTAssertFalse(store.pin(url: "", title: ""))
+            XCTAssertEqual(store.pins?.count, 4)
+            store.saveNow()
+            XCTAssertEqual(OkidokiStore(stateURL: url).pins?.map(\.host), ["a.com", "c.com", "b.com", "d.com"])
+        }
+    }
+
+    func testAddBookmarkNeverTogglesOffAndKeepsItsPlace() async throws {
+        try await withStore { store, url in
+            XCTAssertTrue(store.addBookmark(url: "https://example.com/a", title: "A"))
+            XCTAssertFalse(store.addBookmark(url: "https://example.com/a", title: "A again"))
+            XCTAssertTrue(store.addBookmark(url: "https://example.com/b", title: ""))
+            XCTAssertEqual(store.bookmarks.map(\.url), ["https://example.com/b", "https://example.com/a"])
+            XCTAssertTrue(store.addBookmark(url: "https://example.com/c", title: "C", at: 5))
+            XCTAssertEqual(store.bookmarks.last?.url, "https://example.com/c")
+            XCTAssertTrue(store.addBookmark(url: "https://example.com/d", title: "D", at: 1))
+            XCTAssertEqual(store.bookmarks[1].url, "https://example.com/d")
+            store.saveNow()
+            XCTAssertEqual(OkidokiStore(stateURL: url).bookmarks.count, 4)
+        }
+    }
+
     func testMarkSeenStampsThreadAndRun() async throws {
         try await withStore { store, _ in
             let thread = store.createThread(title: "t", app: "okidoki", topic: "")

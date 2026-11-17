@@ -245,6 +245,12 @@ export const demoState: NativeState = {
     claudeModel: "claude-haiku-5-5",
     shakeToSummon: true,
     summonHotkey: "option+space",
+    codingAgents: {
+      agents: [{ id: "claude", name: "Claude Code", enabled: true, command: "", access: "workspace" }],
+      defaultID: "claude",
+      workingFolder: "",
+      autoRoute: true,
+    },
     drivePace: "fast",
     computerTarget: "mac",
     mcpServers: [
@@ -502,6 +508,20 @@ export const demoState: NativeState = {
   dashboardOpen: true,
   sidecar: "ready",
   version: "0.9.1",
+  agentSkill: { installed: false, cli: false, paths: [] },
+  codingAgents: {
+    folder: "/Users/demo/Desktop/Okidoki Vault",
+    access: { claude: "edits files in ~/Desktop/Okidoki Vault and runs safe commands there; deleting, installing and sending come back to you" },
+    detected: [
+      { id: "claude", name: "Claude Code", path: "/Users/demo/.local/bin/claude", verified: "help", unguarded: false, site: "https://claude.com/claude-code" },
+      { id: "codex", name: "Codex", path: "/Users/demo/.local/bin/codex", verified: "help", unguarded: false, site: "https://developers.openai.com/codex/cli" },
+      { id: "amp", name: "Amp", path: null, verified: "docs", unguarded: false, site: "https://ampcode.com" },
+      { id: "pi", name: "Pi", path: "/Users/demo/.local/bin/pi", verified: "help", unguarded: true, site: "https://pi.dev" },
+      { id: "opencode", name: "OpenCode", path: "/Users/demo/.opencode/bin/opencode", verified: "help", unguarded: false, site: "https://opencode.ai" },
+      { id: "gemini", name: "Gemini CLI", path: null, verified: "docs", unguarded: false, site: "https://github.com/google-gemini/gemini-cli" },
+      { id: "cursor", name: "Cursor Agent", path: "/Users/demo/.local/bin/cursor-agent", verified: "help", unguarded: false, site: "https://cursor.com/cli" },
+    ],
+  },
   vault: {
     folder: "~/Desktop/Okidoki Vault",
     available: true,

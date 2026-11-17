@@ -38,7 +38,7 @@ Skills are files you can share: the share icon on a skill saves a `.okiskill`
 
 ## Use it from Claude Code, Cursor and other agents
 
-Other agents can hand okidoki work through the `okidoki` command (installed by `make install`) or as MCP tools:
+Other agents (Claude Code, Codex, anything that reads skills) hand okidoki work through the **okidoki skill** and the `okidoki` command it teaches them. `make install` puts both in place, or open the app → Settings › Agents:
 - web tasks in its browser, with your logins
 - tasks in your Mac's apps
 - replays of your skills, for many items at once
@@ -48,7 +48,6 @@ They can also wait for the result, pause or take back a run, answer its question
 ```bash
 okidoki do "find the cheapest direct flight SFO→JFK next Friday" --wait 300
 okidoki replay "file a return" --item name=Asha pan=ABCDE1234F --item name=Ravi pan=PQRSX6789K
-claude mcp add okidoki -- okidoki mcp
 ```
 
 Anything risky still waits for your okay in the notch, and captchas are always yours. See [docs/agents.md](docs/agents.md).
@@ -69,7 +68,7 @@ Anything risky still waits for your okay in the notch, and captchas are always y
 | Mac app | `Sources/` (Swift, SwiftUI, AppKit) | notch, overlays, recorder and replayer, computer use, browser, local store |
 | Brain | `brain/` (TypeScript, Bun, local HTTP on 127.0.0.1) | routing, Claude calls, computer use and browser loops, MCP client, memory index |
 | Control panel | `web/` (React, Vite) | the dashboard, bundled into the app |
-| CLI + MCP server | `mcp/okidoki.ts`, `mcp/okidoki-mcp.ts` | okidoki for other agents, through the app's local control endpoint |
+| CLI + agent skill | `mcp/okidoki.ts`, `mcp/skill/SKILL.md` | okidoki for other agents, through the app's local control endpoint |
 
 Data: `~/Library/Application Support/Okidoki Personal/` (state, keys, skill pictures, telemetry).
 The vault: `~/Desktop/Okidoki Vault` unless you move it in the Vault page. More in

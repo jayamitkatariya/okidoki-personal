@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { copyText, cx, relativeTime } from "../lib";
 import { joinCommand, parseServerJSON, serversFromConfig, splitCommand } from "../mcp";
-import type { Connector, KeyProvider, McpServer, PrivateMacPhase, PrivateMacState, ServicesState, Toast } from "../types";
+import type { Connector, KeyProvider, McpServer, PrivateMacPhase, PrivateMacState, Toast } from "../types";
 import { SETTINGS_JUMP_EVENT } from "../nav";
+import { CodingAgents } from "./CodingAgents";
 import { Button, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
 const VOICES = [
@@ -16,11 +17,11 @@ const VOICES = [
   { id: "ella", name: "Ella", blurb: "Bright and light · Australian" },
   { id: "brenda", name: "Brenda", blurb: "Cheerful and upbeat · African American" },
   { id: "wyatt", name: "Wyatt", blurb: "Clear, with a gentle drawl · Southern US" },
-  { id: "system", name: "System voice", blurb: "Your Mac's own voice" },
+  { id: "system", name: "System voice", blurb: "Your Mac’s own voice" },
 ];
 
 const PERMISSIONS = [
-  { id: "screen", title: "Screen recording", icon: "screen", blurb: "See what you're looking at when you ask" },
+  { id: "screen", title: "Screen recording", icon: "screen", blurb: "See what you’re looking at when you ask" },
   { id: "microphone", title: "Microphone", icon: "mic", blurb: "Talk instead of type" },
   { id: "accessibility", title: "Accessibility", icon: "cursor", blurb: "Click and type when you lend the screen" },
   { id: "automation", title: "Automation", icon: "bolt", blurb: "Calendar and other apps without opening them" },
@@ -34,24 +35,17 @@ const CONNECTOR_ICON: Record<string, string> = {
 
 const HIDDEN_CONNECTORS = new Set(["notes", "reminders"]);
 
-// Brand-green family first; the setting key stays cursorGlowHex / drawingColorHex.
-const COLORS = ["44E45E", "1FB57A", "3DDC97", "9BE8C6", "0B8A5E", "B8F26B", "8FB7FF", "F7F2E9"];
-
 const SECTIONS = [
   { id: "keys", label: "Keys", icon: "key" },
   { id: "permissions", label: "Permissions", icon: "lock" },
-  { id: "instructions", label: "Instructions", icon: "pencil" },
-  { id: "voice", label: "Voice & input", icon: "mic" },
+  { id: "you", label: "You", icon: "user" },
+  { id: "voice", label: "Voice", icon: "mic" },
   { id: "safety", label: "Safety", icon: "hand" },
   { id: "connectors", label: "Connectors", icon: "link" },
-  { id: "mcp", label: "MCP servers", icon: "grid" },
-  { id: "other-agents", label: "Use from other agents", icon: "code" },
+  { id: "other-agents", label: "Agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
   { id: "summon", label: "Summon", icon: "spark" },
-  { id: "notch", label: "Notch", icon: "bell" },
-  { id: "appearance", label: "Appearance", icon: "sun" },
-  { id: "account", label: "Profile", icon: "user" },
-  { id: "advanced", label: "Advanced", icon: "gear" },
+  { id: "general", label: "General", icon: "gear" },
 ];
 
 export function SettingsPage() {
@@ -60,7 +54,6 @@ export function SettingsPage() {
   const [name, setName] = useState(account.name);
   const [email, setEmail] = useState(account.email);
   const [appDraft, setAppDraft] = useState("");
-  const [askDraft, setAskDraft] = useState("");
   const [active, setActive] = useState(SECTIONS[0].id);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
@@ -110,7 +103,8 @@ export function SettingsPage() {
     setActive(id);
     if (jumping.current !== null) window.clearTimeout(jumping.current);
     jumping.current = window.setTimeout(() => (jumping.current = null), 700);
-    document.getElementById(`settings-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.getElementById(`settings-${id}`)?.scrollIntoView({ behavior: still ? "auto" : "smooth", block: "start" });
   };
 
   // "#/keys", the notch's "add a key" button and the Mac's own links land on a section, not just the page.
@@ -126,8 +120,13 @@ export function SettingsPage() {
     updateSettings({ [list]: [...settings[list], value.trim()] } as never);
   };
 
-  // MCP gets its own section; Apple Notes and Reminders aren't offered any more.
-  const connectors = state.connectors.filter((connector) => connector.id !== "mcp" && !HIDDEN_CONNECTORS.has(connector.id));
+  // MCP is listed with its servers below; Apple Notes and Reminders aren't offered any more, and a
+  // connector that can't work without a key (Apify) only shows once there is one.
+  const connectors = state.connectors.filter(
+    (connector) => connector.id !== "mcp" && !HIDDEN_CONNECTORS.has(connector.id) && !(connector.id === "apify" && !state.keys.apify),
+  );
+  // Picking a voice only means something with a Cartesia key; without one okidoki speaks with the Mac's voice.
+  const cartesia = Boolean(state.keyProviders?.find((provider) => provider.id === "cartesia")?.set ?? state.keys.cartesia);
   const mcpConnector = state.connectors.find((connector) => connector.id === "mcp");
 
   const profileDirty = name !== account.name || email !== account.email;
@@ -210,281 +209,7 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="instructions" title="Instructions" description="Added to the top of every request. Keep it short and concrete.">
-            <div className="pref-group">
-              <div className="pref-row is-stack">
-                <TextArea value={instructions} onChange={setInstructions} rows={4} placeholder="Keep answers short. I'm a student. Prefer free tools." />
-                <div className="pref-row-foot">
-                  <span className="pref-hint">{instructions.length} characters</span>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={!instructionsDirty}
-                    onClick={() => {
-                      updateSettings({ customInstructions: instructions });
-                      notify("Instructions saved", "Applies to the next request");
-                    }}
-                  >
-                    Save
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="voice" title="Voice & input" description="Your default for every summon. You can switch for a single request.">
-            <div className="pref-group">
-              <PrefRow title="Default input" detail={settings.defaultInput === "voice" ? "Starts listening right away" : "A small box opens at your cursor"}>
-                <Segmented
-                  options={[
-                    { value: "voice", label: "Voice" },
-                    { value: "typing", label: "Typing" },
-                  ]}
-                  value={settings.defaultInput}
-                  onChange={(value) => updateSettings({ defaultInput: value as "voice" | "typing" })}
-                />
-              </PrefRow>
-              <PrefRow title="Speaking speed">
-                <Slider name="Speaking speed" min={0.7} max={1.4} step={0.05} value={settings.voiceSpeed} onChange={(value) => updateSettings({ voiceSpeed: value })} format={(value) => `${value.toFixed(2)}×`} />
-              </PrefRow>
-              <PrefRow title="Captions" detail="Show what okidoki is saying">
-                <Switch label="Captions" checked={settings.captions} onChange={(value) => updateSettings({ captions: value })} />
-              </PrefRow>
-              <PrefRow title="Say “okidoki!”" detail="A quick confirmation when it takes a task">
-                <Switch label="Confirmation" checked={settings.confirmOK} onChange={(value) => updateSettings({ confirmOK: value })} />
-              </PrefRow>
-            </div>
-
-            <div className="pref-group">
-              <div className="pref-row is-stack">
-                <span className="pref-copy">
-                  <strong>Voice</strong>
-                  <em>Pick one to hear a preview.</em>
-                </span>
-                <div className="voice-grid" role="radiogroup" aria-label="Voice">
-                  {VOICES.map((voice) => {
-                    // A retired voice (like "brielle") plays as Sarah on the Mac, so show Sarah as chosen.
-                    const known = VOICES.some((item) => item.id === settings.voiceID);
-                    const selected = known ? settings.voiceID === voice.id : voice.id === VOICES[0].id;
-                    return (
-                      <button
-                        key={voice.id}
-                        role="radio"
-                        aria-checked={selected}
-                        className={cx("voice-card", selected && "is-selected")}
-                        onClick={() => {
-                          updateSettings({ voiceID: voice.id });
-                          invoke("previewVoice", { voice: voice.id });
-                          notify("Voice changed", voice.name);
-                        }}
-                      >
-                        <span className="voice-wave" aria-hidden="true">
-                          {[0, 1, 2, 3, 4].map((bar) => (
-                            <i key={bar} style={{ height: 5 + ((bar * 5) % 11) }} />
-                          ))}
-                        </span>
-                        <span className="voice-copy">
-                          <strong>{voice.name}</strong>
-                          <em>{voice.blurb}</em>
-                        </span>
-                        <span className={cx("voice-radio", selected && "is-on")}>{selected ? <PixelIcon name="check" size={11} /> : null}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="safety" title="Safety" description="okidoki always asks before sending, buying, deleting, installing or running risky commands.">
-            <div className="pref-group">
-              <PrefRow title="Background mode" detail="Long jobs run without touching your cursor">
-                <Switch label="Background mode" checked={settings.backgroundMode} onChange={(value) => updateSettings({ backgroundMode: value })} />
-              </PrefRow>
-              <PrefRow title="Screen borrowing" detail="A ghost cursor, ten seconds at a time">
-                <Switch label="Screen borrowing" checked={settings.screenBorrowing} onChange={(value) => updateSettings({ screenBorrowing: value })} />
-              </PrefRow>
-              <PrefRow title="See the screen" detail="Send the front window, browser tab and a small screenshot with each request, so okidoki knows what it's about. Never stored.">
-                <Switch label="See the screen" checked={settings.screenContext ?? true} onChange={(value) => updateSettings({ screenContext: value })} />
-              </PrefRow>
-              <PrefRow title="Smart replay" detail="Skills fill in what changes from your documents, check each step, run themselves when a request matches, and hand off to the agent if the screen changed. Off replays exactly as recorded.">
-                <Switch label="Smart replay" checked={settings.hybridReplay ?? false} onChange={(value) => updateSettings({ hybridReplay: value })} />
-              </PrefRow>
-              <PrefRow title="Spending limit" detail="Per task, for tools that cost money">
-                <Slider name="Spending limit" min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
-              </PrefRow>
-            </div>
-
-            <div className="pref-group">
-              <ListEditor
-                title="Blocked apps and tools"
-                detail="okidoki never opens or runs these."
-                placeholder="Add an app or tool"
-                draft={appDraft}
-                setDraft={setAppDraft}
-                items={settings.blockedApps}
-                empty="Nothing blocked."
-                onAdd={() => {
-                  addToList("blockedApps", appDraft);
-                  setAppDraft("");
-                }}
-                onRemove={(item) => updateSettings({ blockedApps: settings.blockedApps.filter((value) => value !== item) })}
-              />
-              <ListEditor
-                title="Always ask"
-                detail="Extra commands or tools that need your yes."
-                placeholder="Command or tool"
-                draft={askDraft}
-                setDraft={setAskDraft}
-                items={settings.alwaysAsk}
-                empty="Risky commands already ask."
-                onAdd={() => {
-                  addToList("alwaysAsk", askDraft);
-                  setAskDraft("");
-                }}
-                onRemove={(item) => updateSettings({ alwaysAsk: settings.alwaysAsk.filter((value) => value !== item) })}
-              />
-              {settings.alwaysAllow.length ? (
-                <div className="pref-row is-stack">
-                  <span className="pref-copy">
-                    <strong>Always allowed</strong>
-                    <em>Things you said yes to for good. Remove one to be asked again.</em>
-                  </span>
-                  <div className="chip-row">
-                    {settings.alwaysAllow.map((item) => (
-                      <RemovableChip key={item} label={item} onRemove={() => updateSettings({ alwaysAllow: settings.alwaysAllow.filter((value) => value !== item) })} />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="connectors" title="Connectors" description="Services okidoki can reach for you. Each one asks before it changes anything.">
-            <div className="pref-group">
-              {connectors.map((connector) => (
-                <ConnectorRow key={connector.id} connector={connector} />
-              ))}
-              {!connectors.length ? (
-                <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
-                  <span className="pref-hint">Mac only</span>
-                </PrefRow>
-              ) : null}
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="mcp" title="MCP servers" description="Bring your own tools. okidoki lists what each server offers and asks before calling any of them.">
-            <div className="pref-group">
-              {mcpConnector ? (
-                <ConnectorRow connector={mcpConnector} />
-              ) : (
-                <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
-                  <span className="pref-hint">Mac only</span>
-                </PrefRow>
-              )}
-              {mcpConnector?.enabled ? <McpServers /> : null}
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="other-agents" title="Use from other agents" description="okidoki runs its own MCP server, so other agents can reach it on this Mac.">
-            <UseFromAgents />
-          </SettingsSection>
-
-          <SettingsSection id="private-mac" title="Private Mac" description="Give okidoki its own macOS, in a window. Runs that drive apps happen there while you keep working here.">
-            <PrivateMacSettings
-              privateMac={state.privateMac ?? null}
-              target={settings.computerTarget}
-              native={native}
-              onTarget={(value) => updateSettings({ computerTarget: value })}
-              invoke={invoke}
-              notify={notify}
-              confirm={setConfirm}
-            />
-          </SettingsSection>
-
-          <SettingsSection id="summon" title="Summon" description="How you call okidoki from anywhere on your Mac. The notch's Ask button and the menu bar always work too.">
-            <div className="pref-group">
-              <PrefRow title="Shake to summon" detail="Shake the pointer and okidoki opens beside it. Off stops watching the mouse entirely.">
-                <Switch label="Shake to summon" checked={settings.shakeToSummon ?? true} onChange={(value) => updateSettings({ shakeToSummon: value })} />
-              </PrefRow>
-              <PrefRow
-                title="Shake sensitivity"
-                detail={(settings.shakeToSummon ?? true) ? "Lower is easier to trigger" : "Turn on Shake to summon to tune this"}
-              >
-                <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)} inert={!(settings.shakeToSummon ?? true)}>
-                  <Slider
-                    name="Shake sensitivity"
-                    min={0.2}
-                    max={1}
-                    step={0.05}
-                    value={settings.shakeSensitivity}
-                    onChange={(value) => updateSettings({ shakeSensitivity: value })}
-                    format={(value) => `${Math.round(value * 100)}%`}
-                  />
-                </span>
-              </PrefRow>
-              <PrefRow title="Summon shortcut" detail="Works in any app. Click, then press the keys you want.">
-                <HotkeyField value={settings.summonHotkey ?? "option+space"} onChange={(value) => updateSettings({ summonHotkey: value })} />
-              </PrefRow>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="notch" title="Notch" description="Your status center. On Macs without a notch it floats at the top.">
-            <div className="pref-group">
-              <PrefRow title="Show in the notch" detail="Toasts, progress and approvals">
-                <Switch label="Show in the notch" checked={settings.notchEnabled} onChange={(value) => updateSettings({ notchEnabled: value })} />
-              </PrefRow>
-              <PrefRow title="Quiet mode" detail="Silent during calls and screen shares">
-                <Switch label="Quiet mode" checked={settings.quietMode} onChange={(value) => updateSettings({ quietMode: value })} />
-              </PrefRow>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="appearance" title="Appearance" description="How the panel and the pointer behave.">
-            <div className="pref-group">
-              <PrefRow title="Theme">
-                <Segmented
-                  options={[
-                    { value: "system", label: "System" },
-                    { value: "light", label: "Light" },
-                    { value: "dark", label: "Dark" },
-                  ]}
-                  value={settings.appearance}
-                  onChange={(value) => updateSettings({ appearance: value as typeof settings.appearance })}
-                />
-              </PrefRow>
-              <PrefRow title="Driving pace" detail="How the pointer moves when okidoki drives an app for you">
-                <Segmented
-                  options={[
-                    { value: "calm", label: "Calm" },
-                    { value: "fast", label: "Fast" },
-                  ]}
-                  value={settings.drivePace ?? "fast"}
-                  onChange={(value) => updateSettings({ drivePace: value as typeof settings.drivePace })}
-                  compact
-                />
-              </PrefRow>
-            </div>
-            <div className="pref-group">
-              <PrefRow title="Drawing pen">
-                <Segmented
-                  options={[
-                    { value: "ink", label: "Ink" },
-                    { value: "marker", label: "Marker" },
-                    { value: "pencil", label: "Pencil" },
-                  ]}
-                  value={settings.drawingStyle}
-                  onChange={(value) => updateSettings({ drawingStyle: value as typeof settings.drawingStyle })}
-                  compact
-                />
-              </PrefRow>
-              <PrefRow title="Drawing color">
-                <Swatches value={settings.drawingColorHex} onPick={(color) => updateSettings({ drawingColorHex: color })} small />
-              </PrefRow>
-            </div>
-          </SettingsSection>
-
-          <SettingsSection id="account" title="Profile" description="What okidoki calls you. It stays on this Mac.">
+          <SettingsSection id="you" title="You" description="What okidoki calls you, and what it should always keep in mind. Stays on this Mac.">
             <div className="pref-group">
               <PrefRow title="Name">
                 <TextField value={name} onChange={setName} placeholder="Your name" className="pref-field" />
@@ -513,63 +238,244 @@ export function SettingsPage() {
                 </Button>
               </div>
             </div>
+            <div className="pref-group">
+              <div className="pref-row is-stack">
+                <span className="pref-copy">
+                  <strong>Instructions</strong>
+                  <em>Added to the top of every request. Keep it short and concrete.</em>
+                </span>
+                <TextArea value={instructions} onChange={setInstructions} rows={4} placeholder="Keep answers short. I’m a student. Prefer free tools." />
+                <div className="pref-row-foot">
+                  <span className="pref-hint">{instructions.length} characters</span>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={!instructionsDirty}
+                    onClick={() => {
+                      updateSettings({ customInstructions: instructions });
+                      notify("Instructions saved", "Applies to the next request");
+                    }}
+                  >
+                    Save
+                  </Button>
+                </div>
+              </div>
+            </div>
           </SettingsSection>
 
-          <SettingsSection id="advanced" title="Advanced" description="The boring but necessary bits.">
+          <SettingsSection id="voice" title="Voice" description="How you talk to okidoki, and how it talks back.">
             <div className="pref-group">
+              <PrefRow title="Default input" detail={settings.defaultInput === "voice" ? "Starts listening right away" : "A small box opens at your cursor"}>
+                <Segmented
+                  options={[
+                    { value: "voice", label: "Voice" },
+                    { value: "typing", label: "Typing" },
+                  ]}
+                  value={settings.defaultInput}
+                  onChange={(value) => updateSettings({ defaultInput: value as "voice" | "typing" })}
+                />
+              </PrefRow>
+              <PrefRow title="Speaking speed">
+                <Slider name="Speaking speed" min={0.7} max={1.4} step={0.05} value={settings.voiceSpeed} onChange={(value) => updateSettings({ voiceSpeed: value })} format={(value) => `${value.toFixed(2)}×`} />
+              </PrefRow>
+              <PrefRow title="Captions" detail="Show what okidoki is saying">
+                <Switch label="Captions" checked={settings.captions} onChange={(value) => updateSettings({ captions: value })} />
+              </PrefRow>
+            </div>
+
+            {cartesia ? (
+              <div className="pref-group">
+                <div className="pref-row is-stack">
+                  <span className="pref-copy">
+                    <strong>Voice</strong>
+                    <em>Pick one to hear a preview.</em>
+                  </span>
+                  <div className="voice-grid" role="radiogroup" aria-label="Voice">
+                    {VOICES.map((voice) => {
+                      // A retired voice (like "brielle") plays as Sarah on the Mac, so show Sarah as chosen.
+                      const known = VOICES.some((item) => item.id === settings.voiceID);
+                      const selected = known ? settings.voiceID === voice.id : voice.id === VOICES[0].id;
+                      return (
+                        <button
+                          key={voice.id}
+                          role="radio"
+                          aria-checked={selected}
+                          className={cx("voice-card", selected && "is-selected")}
+                          onClick={() => {
+                            updateSettings({ voiceID: voice.id });
+                            invoke("previewVoice", { voice: voice.id });
+                            notify("Voice changed", voice.name);
+                          }}
+                        >
+                          <span className="voice-wave" aria-hidden="true">
+                            {[0, 1, 2, 3, 4].map((bar) => (
+                              <i key={bar} style={{ height: 5 + ((bar * 5) % 11) }} />
+                            ))}
+                          </span>
+                          <span className="voice-copy">
+                            <strong>{voice.name}</strong>
+                            <em>{voice.blurb}</em>
+                          </span>
+                          <span className={cx("voice-radio", selected && "is-on")}>{selected ? <PixelIcon name="check" size={11} /> : null}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="pref-group">
+                <PrefRow title="Voices" detail="okidoki speaks with your Mac’s voice. Add a Cartesia key for natural voices to pick from.">
+                  {native ? (
+                    <Button variant="secondary" size="sm" icon="key" onClick={() => jump("keys")}>
+                      Add key
+                    </Button>
+                  ) : (
+                    <span className="pref-hint">Mac voice</span>
+                  )}
+                </PrefRow>
+              </div>
+            )}
+          </SettingsSection>
+
+          <SettingsSection id="safety" title="Safety" description="okidoki always asks before sending, buying, deleting, installing or running risky commands. Background mode and screen borrowing are on the composer’s Guard chip.">
+            <div className="pref-group">
+              <PrefRow title="Smart replay" detail="Skills fill in what changes from your documents, check each step, run themselves when a request matches, and hand off to the agent if the screen changed. Off replays exactly as recorded.">
+                <Switch label="Smart replay" checked={settings.hybridReplay ?? false} onChange={(value) => updateSettings({ hybridReplay: value })} />
+              </PrefRow>
+              {/* Only Apify spends money today, so the limit shows once it can. */}
+              {state.keys.apify ? (
+                <PrefRow title="Spending limit" detail="Per task, for tools that cost money">
+                  <Slider name="Spending limit" min={0} max={200} step={5} value={settings.spendingLimit} onChange={(value) => updateSettings({ spendingLimit: value })} format={(value) => `$${value}`} />
+                </PrefRow>
+              ) : null}
+            </div>
+
+            <div className="pref-group">
+              <ListEditor
+                title="Blocked apps and tools"
+                detail="okidoki never opens or runs these."
+                placeholder="Add an app or tool"
+                draft={appDraft}
+                setDraft={setAppDraft}
+                items={settings.blockedApps}
+                empty="Nothing blocked."
+                onAdd={() => {
+                  addToList("blockedApps", appDraft);
+                  setAppDraft("");
+                }}
+                onRemove={(item) => updateSettings({ blockedApps: settings.blockedApps.filter((value) => value !== item) })}
+              />
+              {settings.alwaysAllow.length ? (
+                <div className="pref-row is-stack">
+                  <span className="pref-copy">
+                    <strong>Always allowed</strong>
+                    <em>Things you said yes to for good. Remove one to be asked again.</em>
+                  </span>
+                  <div className="chip-row">
+                    {settings.alwaysAllow.map((item) => (
+                      <RemovableChip key={item} label={item} onRemove={() => updateSettings({ alwaysAllow: settings.alwaysAllow.filter((value) => value !== item) })} />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </SettingsSection>
+
+          <SettingsSection id="connectors" title="Connectors" description="Services and tools okidoki can reach for you. Each one asks before it changes anything.">
+            <div className="pref-group">
+              {connectors.map((connector) => (
+                <ConnectorRow key={connector.id} connector={connector} />
+              ))}
+              {!connectors.length ? (
+                <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
+                  <span className="pref-hint">Mac only</span>
+                </PrefRow>
+              ) : null}
+            </div>
+            <div className="pref-group">
+              {mcpConnector ? (
+                <ConnectorRow connector={mcpConnector} />
+              ) : (
+                <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
+                  <span className="pref-hint">Mac only</span>
+                </PrefRow>
+              )}
+              {mcpConnector?.enabled ? <McpServers /> : null}
+            </div>
+          </SettingsSection>
+
+          <SettingsSection id="other-agents" title="Agents" description="Work both ways with Claude Code, Codex and other coding agents: okidoki hands them files, the terminal and code, and they hand okidoki the web, your logins and your Mac’s apps.">
+            <CodingAgents />
+            <h3 className="settings-subhead">Let agents use okidoki</h3>
+            <UseFromAgents />
+          </SettingsSection>
+
+          <SettingsSection id="private-mac" title="Private Mac" description="Give okidoki its own macOS, in a window. Runs that drive apps happen there while you keep working here.">
+            <PrivateMacSettings
+              privateMac={state.privateMac ?? null}
+              target={settings.computerTarget}
+              native={native}
+              onTarget={(value) => updateSettings({ computerTarget: value })}
+              memoryGB={settings.privateMacMemoryGB}
+              onMemory={(gb) => updateSettings({ privateMacMemoryGB: gb })}
+              invoke={invoke}
+              notify={notify}
+              confirm={setConfirm}
+            />
+          </SettingsSection>
+
+          <SettingsSection id="summon" title="Summon" description="How you call okidoki from anywhere on your Mac. The notch’s Ask button and the menu bar always work too.">
+            <div className="pref-group">
+              <PrefRow title="Shake to summon" detail="Shake the pointer and okidoki opens beside it. Off stops watching the mouse entirely.">
+                <Switch label="Shake to summon" checked={settings.shakeToSummon ?? true} onChange={(value) => updateSettings({ shakeToSummon: value })} />
+              </PrefRow>
+              <PrefRow
+                title="Shake sensitivity"
+                detail={(settings.shakeToSummon ?? true) ? "Lower is easier to trigger" : "Turn on Shake to summon to tune this"}
+              >
+                <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)} inert={!(settings.shakeToSummon ?? true)}>
+                  <Slider
+                    name="Shake sensitivity"
+                    min={0.2}
+                    max={1}
+                    step={0.05}
+                    value={settings.shakeSensitivity}
+                    onChange={(value) => updateSettings({ shakeSensitivity: value })}
+                    format={(value) => `${Math.round(value * 100)}%`}
+                  />
+                </span>
+              </PrefRow>
+              <PrefRow title="Summon shortcut" detail="Works in any app. Click, then press the keys you want.">
+                <HotkeyField value={settings.summonHotkey ?? "option+space"} onChange={(value) => updateSettings({ summonHotkey: value })} />
+              </PrefRow>
+              <PrefRow title="Notch" detail="Progress, approvals and answers at the top of the screen. On Macs without a notch it floats there.">
+                <Switch label="Show in the notch" checked={settings.notchEnabled} onChange={(value) => updateSettings({ notchEnabled: value })} />
+              </PrefRow>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection id="general" title="General" description="Look, setup and where your data lives.">
+            <div className="pref-group">
+              <PrefRow title="Theme">
+                <Segmented
+                  options={[
+                    { value: "system", label: "System" },
+                    { value: "light", label: "Light" },
+                    { value: "dark", label: "Dark" },
+                  ]}
+                  value={settings.appearance}
+                  onChange={(value) => updateSettings({ appearance: value as typeof settings.appearance })}
+                />
+              </PrefRow>
               <PrefRow title="Onboarding" detail="Walk through setup again">
                 <Button variant="secondary" size="sm" icon="wand" onClick={() => invoke("openOnboarding")}>
                   Replay
                 </Button>
               </PrefRow>
-              <PrefRow title="Data folder" detail="Threads, memory and logs on disk">
+              <PrefRow title="Data folder" detail={`Threads, memory and logs on disk · okidoki ${state.version}`}>
                 <Button variant="secondary" size="sm" icon="folder" onClick={() => invoke("openDataFolder")}>
                   Open
-                </Button>
-              </PrefRow>
-            </div>
-
-            <div className="pref-group">
-              <PrefRow title="Brain" detail={state.services ? `Bun sidecar on 127.0.0.1:${state.services.brain.port}${state.services.brain.version ? ` · v${state.services.brain.version}` : ""}` : undefined}>
-                <span className={cx("pref-value", (state.services?.brain.ready ?? state.sidecar === "ready") && "is-on")}>
-                  <i />
-                  {state.services?.brain.status ?? state.sidecar}
-                </span>
-              </PrefRow>
-              <PrefRow title="Memory index" detail={memoryDetail(state.services)}>
-                <span className={cx("pref-value", state.services?.memory.ready && !state.services.memory.error && "is-on")}>
-                  <i />
-                  {memoryLabel(state.services)}
-                </span>
-              </PrefRow>
-              <PrefRow title="MCP servers" detail={mcpDetail(state.services)}>
-                <span className={cx("pref-value", (state.services?.mcp.connected ?? 0) > 0 && state.services?.mcp.connected === state.services?.mcp.servers && "is-on")}>
-                  <i />
-                  {mcpLabel(state.services)}
-                </span>
-                {state.services?.mcp.enabled && state.services.mcp.servers ? (
-                  <Button variant="secondary" size="sm" icon="grid" onClick={() => jump("mcp")}>
-                    Servers
-                  </Button>
-                ) : null}
-              </PrefRow>
-            </div>
-
-            <div className="pref-group">
-              <PrefRow title="Quit okidoki" detail="Stops listening until you open it again">
-                <Button
-                  variant="danger"
-                  size="sm"
-                  onClick={() =>
-                    setConfirm({
-                      title: "Quit okidoki?",
-                      detail: "It stops listening until you open it again.",
-                      action: "Quit",
-                      onConfirm: () => invoke("quit"),
-                    })
-                  }
-                >
-                  Quit
                 </Button>
               </PrefRow>
             </div>
@@ -596,38 +502,6 @@ function SettingsSection({ id, title, description, children }: { id: string; tit
       {children}
     </section>
   );
-}
-
-function memoryLabel(services: ServicesState | null | undefined): string {
-  if (!services) return "unknown";
-  if (!services.memory.configured) return "off";
-  if (services.memory.error) return "error";
-  if (!services.memory.ready) return "starting";
-  return `${services.memory.notes + services.memory.messages} items`;
-}
-
-function memoryDetail(services: ServicesState | null | undefined): string {
-  if (!services) return "Moss, searched by meaning for every request.";
-  const memory = services.memory;
-  if (!memory.configured) return "Add a Moss key to search threads and memories by meaning. Right now only exact text matches.";
-  if (memory.error) return memory.error;
-  if (!memory.ready) return "Moss is loading the index on this Mac.";
-  const parts = [`${memory.notes} ${memory.notes === 1 ? "memory" : "memories"}`, `${memory.messages} recent turn${memory.messages === 1 ? "" : "s"}`];
-  return `${parts.join(" · ")}${memory.lastSyncAt ? ` · synced ${relativeTime(memory.lastSyncAt)}` : ""}`;
-}
-
-function mcpLabel(services: ServicesState | null | undefined): string {
-  if (!services) return "unknown";
-  if (!services.mcp.enabled) return "off";
-  if (!services.mcp.servers) return "none";
-  return `${services.mcp.connected} of ${services.mcp.servers}`;
-}
-
-function mcpDetail(services: ServicesState | null | undefined): string {
-  if (!services?.mcp.enabled) return "Turn on MCP above to bring your own tools in.";
-  if (!services.mcp.servers) return "No servers added yet. Add one under MCP servers.";
-  const checked = services.mcp.checkedAt ? `Checked ${relativeTime(services.mcp.checkedAt)}; rechecked every minute while this is open.` : "Not checked yet.";
-  return services.mcp.connected < services.mcp.servers ? `Some servers aren't answering. ${checked}` : checked;
 }
 
 /** One saved key: set / shipped / missing, with a field to save or replace it. The value is never shown back. */
@@ -717,6 +591,8 @@ function PrivateMacSettings({
   target,
   native,
   onTarget,
+  memoryGB,
+  onMemory,
   invoke,
   notify,
   confirm,
@@ -725,6 +601,8 @@ function PrivateMacSettings({
   target: "mac" | "vm";
   native: boolean;
   onTarget: (value: "mac" | "vm") => void;
+  memoryGB?: number;
+  onMemory: (gb: number) => void;
   invoke: (type: string, payload?: Record<string, unknown>) => void;
   notify: (title: string, detail?: string, kind?: Toast["kind"]) => void;
   confirm: (request: ConfirmRequest) => void;
@@ -844,7 +722,7 @@ function PrivateMacSettings({
           </div>
 
           {ready && vm.needsFirstBoot ? (
-            <PrefRow title="Finish macOS setup" detail="The first boot shows Setup Assistant. Click through it in the private Mac's window, then tell okidoki it's done.">
+            <PrefRow title="Finish macOS setup" detail="The first boot shows Setup Assistant. Click through it in the private Mac’s window, then tell okidoki it’s done.">
               {phase === "running" ? (
                 <Button size="sm" onClick={() => act("show")}>
                   Open window
@@ -853,6 +731,24 @@ function PrivateMacSettings({
               <Button variant="primary" size="sm" onClick={() => act("firstBootDone")}>
                 It's done
               </Button>
+            </PrefRow>
+          ) : null}
+
+          {ready || phase === "notSetUp" ? (
+            <PrefRow
+              title="Memory"
+              detail={
+                phase === "running" || phase === "starting"
+                  ? "Takes effect the next time the private Mac starts."
+                  : "Less leaves more for your own apps; more keeps big apps smooth in there."
+              }
+            >
+              <Segmented<string>
+                compact
+                options={[{ value: "0", label: "Auto" }, ...(vm.memoryChoicesGB ?? [4, 8]).map((gb) => ({ value: String(gb), label: `${gb} GB` }))]}
+                value={String(memoryGB ?? 0)}
+                onChange={(value) => onMemory(Number(value))}
+              />
             </PrefRow>
           ) : null}
 
@@ -873,7 +769,7 @@ function PrivateMacSettings({
                   onClick={() =>
                     confirm({
                       title: "Delete your private Mac?",
-                      detail: `Removes ${formatBytes(vm.bytesOnDisk)}: macOS, every app installed there and every file saved there. Runs go back to this Mac. This can't be undone.`,
+                      detail: `Removes ${formatBytes(vm.bytesOnDisk)}: macOS, every app installed there and every file saved there. Runs go back to this Mac. This can’t be undone.`,
                       action: "Delete private Mac",
                       onConfirm: () => act("delete"),
                     })
@@ -897,7 +793,7 @@ function ConnectorRow({ connector }: { connector: Connector }) {
   const needsKey = connector.id === "apify" && !state.keys.apify;
   const toggle = (value: boolean) => {
     if (value && needsKey) {
-      notify("Apify isn't configured", "It stays off until a key is set", "warning");
+      notify("Apify isn’t configured", "It stays off until a key is set", "warning");
       return;
     }
     if (connector.kind === "apple") {
@@ -920,7 +816,7 @@ function ConnectorRow({ connector }: { connector: Connector }) {
             {connector.blurb}
             {connector.kind === "apple" ? " Uses Apple Events." : ""}
             {connector.id === "apify" && !needsKey ? " Every run shows a preview first and uses your Apify credits." : ""}
-            {needsKey ? " Apify isn't configured." : null}
+            {needsKey ? " Apify isn’t configured." : null}
           </em>
         </span>
         <Switch label={connector.name} checked={connector.enabled && !needsKey} onChange={toggle} />
@@ -955,7 +851,7 @@ function McpServers() {
                     ? "Connecting…"
                     : status.ok
                       ? `${status.tools.length} tool${status.tools.length === 1 ? "" : "s"}${status.tools.length ? ` · ${status.tools.slice(0, 3).map((tool) => tool.name).join(", ")}${status.tools.length > 3 ? "…" : ""}` : ""}`
-                      : status.error || "Couldn't connect"}
+                      : status.error || "Couldn’t connect"}
               </em>
             </span>
             <Switch
@@ -1013,7 +909,7 @@ function McpImportModal({ open, onClose }: { open: boolean; onClose: () => void 
       found = serversFromConfig(text);
       if (!found.length) problem = "No servers in that. Paste the part with \"mcpServers\".";
     } catch {
-      problem = "That isn't valid JSON yet.";
+      problem = "That isn’t valid JSON yet.";
     }
   }
   const add = () => {
@@ -1023,7 +919,7 @@ function McpImportModal({ open, onClose }: { open: boolean; onClose: () => void 
     onClose();
   };
   return (
-    <Modal open={open} onClose={onClose} title="Paste an MCP config" subtitle="From Claude Desktop, Claude Code or Cursor. Secrets go to this Mac's key file." width={560}>
+    <Modal open={open} onClose={onClose} title="Paste an MCP config" subtitle="From Claude Desktop, Claude Code or Cursor. Secrets go to this Mac’s key file." width={560}>
       <TextArea value={text} onChange={setText} rows={10} placeholder={'{\n  "mcpServers": {\n    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }\n  }\n}'} />
       <p className="form-hint">{problem || (found.length ? `Found ${found.map((item) => item.server.name).join(", ")}.` : " ")}</p>
       <footer className="modal-actions">
@@ -1038,22 +934,53 @@ function McpImportModal({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
-/** How to reach okidoki from another agent: its own MCP server, over this Mac's control endpoint. */
+/** How other agents reach okidoki: the okidoki skill (instructions they load) plus the `okidoki` command it uses. */
 function UseFromAgents() {
-  const { notify } = useDashboard();
-  const command = "claude mcp add okidoki -- bun ~/Desktop/okidoki-personal/mcp/okidoki-mcp.ts";
+  const { state, invoke, notify, native } = useDashboard();
+  const skill = state.agentSkill ?? null;
+  const installed = Boolean(skill?.installed);
+  const example = 'okidoki do "find the cheapest direct flight SFO→JFK next Friday" --wait 300';
   return (
     <div className="pref-group">
-      <div className="pref-row is-stack">
-        <span className="pref-copy">
-          <strong>Add okidoki to an agent</strong>
-          <em>Claude Code, Cursor and any MCP client can list and replay your skills and search the vault. Replays still ask for your okay here.</em>
-        </span>
-        <div className="pref-row-foot">
-          <code className="mcp-cmd agent-command">{command}</code>
-          <IconButton icon="copy" label="Copy" onClick={() => void copyText(command).then(() => notify("Copied", "Paste it in a shell", "info"))} />
+      <PrefRow
+        title="okidoki skill"
+        detail={
+          installed
+            ? `Installed for ${skill!.paths.length === 1 ? "1 agent" : `${skill!.paths.length} agents`}${skill!.cli ? " with the okidoki command" : ""}. Agents look for a saved skill first, replay it, and hand the rest to okidoki. Risky steps still wait for your okay.`
+            : "Puts the okidoki command on this Mac and teaches Claude Code, Codex and other agents to use it: replay your skills, run browser and Mac tasks, read memory and the vault."
+        }
+      >
+        {native ? (
+          installed ? (
+            <>
+              <span className="pref-status is-on">
+                <PixelIcon name="check" size={13} /> Installed
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => invoke("uninstallAgentSkill")}>
+                Remove
+              </Button>
+            </>
+          ) : (
+            <Button variant="primary" size="sm" icon="download" onClick={() => invoke("installAgentSkill")}>
+              Install
+            </Button>
+          )
+        ) : (
+          <span className="pref-hint">Mac only</span>
+        )}
+      </PrefRow>
+      {installed && skill!.paths.length ? (
+        <div className="pref-row is-stack">
+          <span className="pref-copy">
+            <strong>Try it from any agent or terminal</strong>
+            <em>{skill!.paths.map((path) => path.replace(/^\/Users\/[^/]+/, "~")).join(" · ")}</em>
+          </span>
+          <div className="pref-row-foot">
+            <code className="mcp-cmd agent-command">{example}</code>
+            <IconButton icon="copy" label="Copy" onClick={() => void copyText(example).then(() => notify("Copied", "Paste it in a terminal", "info"))} />
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -1116,7 +1043,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
     : transport === "http"
       ? /^https?:\/\/\S+$/.test(target.trim())
         ? null
-        : "Add the server's http(s) address."
+        : "Add the server’s http(s) address."
       : target.trim().startsWith("{")
         ? "That JSON couldn’t be read. Check it, or type the command instead."
         : words === null
@@ -1181,7 +1108,7 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
             placeholder={transport === "http" ? "https://example.com/mcp" : "npx -y @modelcontextprotocol/server-github"}
             icon={transport === "http" ? "link" : "terminal"}
           />
-          <span className="mcp-hint">{transport === "http" ? "A streamable HTTP endpoint." : "Or paste the JSON from the server's README."}</span>
+          <span className="mcp-hint">{transport === "http" ? "A streamable HTTP endpoint." : "Or paste the JSON from the server’s README."}</span>
         </div>
         <div className="mcp-field">
           <span className="form-label">{transport === "http" ? "Headers" : "Environment variables"}</span>
@@ -1281,7 +1208,7 @@ function HotkeyField({ value, onChange }: { value: string; onChange: (value: str
     if (["Meta", "Alt", "Control", "Shift"].includes(event.key)) return;
     const mods = [event.metaKey && "command", event.altKey && "option", event.ctrlKey && "control", event.shiftKey && "shift"].filter(Boolean) as string[];
     if (!mods.length || (mods.length === 1 && mods[0] === "shift")) {
-      setError("Add ⌘, ⌥ or ⌃ so it doesn't fire while you type");
+      setError("Add ⌘, ⌥ or ⌃ so it doesn’t fire while you type");
       return;
     }
     const code = event.code;
@@ -1384,23 +1311,6 @@ function Slider({ name, min, max, step, value, onChange, format }: { name: strin
         onBlur={commit}
       />
       <em>{label}</em>
-    </span>
-  );
-}
-
-function Swatches({ value, onPick, small }: { value: string; onPick: (color: string) => void; small?: boolean }) {
-  return (
-    <span className={cx("swatch-row", small && "small")}>
-      {COLORS.map((color) => (
-        <button
-          key={color}
-          className={cx("swatch", small && "small", value.toUpperCase() === color && "is-selected")}
-          style={{ background: `#${color}` }}
-          onClick={() => onPick(color)}
-          aria-label={`#${color}`}
-          title={`#${color}`}
-        />
-      ))}
     </span>
   );
 }

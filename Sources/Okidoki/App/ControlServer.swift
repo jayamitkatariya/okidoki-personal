@@ -159,7 +159,7 @@ final class ControlServer {
         "POST /browser/act {tab, action, ref?|selector?, text?, value?, key?}",
         "GET  /browser/screenshot?tab=     a PNG, base64",
         "POST /browser/close {tab}",
-        "GET  /memory · POST /memory {text}",
+        "GET  /memory?q=&limit=&items=1 · POST /memory {text} · PATCH /memory/<id> {text?, pinned?} · DELETE /memory/<id>",
         "GET  /vault/search?q=",
     ]
 
@@ -204,14 +204,55 @@ final class ControlServer {
             return await runSkill(request, name: request.body["skill"] as? String ?? "", env: env)
         case (_, "browser"):
             return await browserRoute(request, parts: parts, env: env)
-        case ("GET", "memory"):
-            return (200, ["memory": env.store.memoryLines(limit: 200)])
+        case ("GET", "memory") where parts.count == 1:
+            // `?q=` ranks the notes the way a request with that text would get them (pinned and matching first).
+            let limit = max(1, min(Int(request.query["limit"] ?? "") ?? 200, 1_000))
+            // Picked once; `memory` is the lines a request would get, `items` the same notes with ids.
+            let notes = MemoryRecall.select(env.store.activeMemories, query: request.query["q"] ?? "", limit: limit,
+                                            isCurrent: { env.store.isCurrent($0) })
+            let lines = notes.map { "\($0.section.label): \($0.text)" }
+            guard request.query["items"] != nil else { return (200, ["memory": lines]) }
+            return (200, ["memory": lines, "items": notes.map { ["id": $0.id, "section": $0.section.rawValue, "text": $0.text,
+                                                                 "pinned": $0.pinned == true] as [String: Any] }])
+        case ("PATCH", "memory") where parts.count == 2:
+            // The person's own edit (text) or pin, as on the Memory page.
+            guard env.store.activeMemories.contains(where: { $0.id == parts[1] }) else { return (404, ["error": "no such memory"]) }
+            if let text = request.body["text"] as? String {
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (400, ["error": "empty text"]) }
+                // Same gates as POST: an edit is a way in too (no secrets, nothing that reads as an instruction).
+                if let why = MemoryPolicy.refusal(text) {
+                    return (400, ["error": why.hasPrefix("secret:") ? MemoryPolicy.vaultNote(String(why.dropFirst(7))) : "only lasting facts about the person are kept"])
+                }
+                env.store.updateMemory(parts[1], text: text)
+            }
+            if let pinned = request.body["pinned"] as? Bool { env.store.setMemoryPinned(parts[1], pinned) }
+            env.store.saveNow()
+            return (200, ["ok": true])
+        case ("DELETE", "memory") where parts.count == 2:
+            guard env.store.activeMemories.contains(where: { $0.id == parts[1] }) else { return (404, ["error": "no such memory"]) }
+            env.store.deleteMemory(parts[1])
+            env.store.saveNow()
+            return (200, ["ok": true])
         case ("POST", "memory"):
             let text = (request.body["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard BrainService.isDurableFact(text) else { return (400, ["error": "only lasting facts about the person are kept"]) }
-            let kept = env.store.addMemory(text, section: .aboutYou, source: "agent")
+            if let secret = MemoryPolicy.secretKind(text) {
+                return (400, ["error": MemoryPolicy.vaultNote(secret)])
+            }
+            let results = await env.rememberExplicit([text], words: text, source: "agent", threadID: nil, messageID: nil)
             env.store.saveNow()
-            return (200, ["ok": true, "kept": kept != nil, "note": kept == nil ? "already known" : "remembered"])
+            let kept = results.compactMap { save -> [String: Any]? in
+                switch save {
+                case .added(let item): return ["id": item.id, "text": item.text, "op": "added"]
+                case .updated(let item): return ["id": item.id, "text": item.text, "op": "updated", "was": item.previousText ?? ""]
+                case .known(let item): return ["id": item.id, "text": item.text, "op": "known"]
+                case .refused: return nil
+                }
+            }
+            let added = kept.contains { ($0["op"] as? String) != "known" }
+            let note = kept.isEmpty ? "not kept" : kept.contains { ($0["op"] as? String) == "updated" } ? "updated"
+                : added ? "remembered" : "already known"
+            return (200, ["ok": !kept.isEmpty, "kept": added, "note": note, "memories": kept])
         case ("GET", "vault") where parts.count == 2 && parts[1] == "search":
             let hits = env.vault.search(request.query["q"] ?? "", limit: 10)
             return (200, ["folder": env.vault.folderURL.path, "files": hits.map { file in
@@ -236,6 +277,8 @@ final class ControlServer {
         guard !text.isEmpty else { return (400, ["error": "nothing to do: send {\"text\": \"…\"}"]) }
         guard env.hasKey("anthropic") else { return (409, ["error": "okidoki has no Anthropic key yet; add one in its Settings"]) }
         let mode = (request.body["mode"] as? String ?? "auto").lowercased()
+        // Callers here are other agents, so they never pick the person's coding agent directly: a coding agent
+        // okidoki started could otherwise bounce its own work back to itself. Delegating stays okidoki's call.
         guard ["auto", "browser", "computer", "act", "chat"].contains(mode) else {
             return (400, ["error": "mode is auto, browser, computer or chat"])
         }

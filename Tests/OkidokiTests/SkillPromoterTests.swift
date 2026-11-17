@@ -64,6 +64,28 @@ final class SkillPromoterTests: XCTestCase {
         XCTAssertEqual(out.map(\.text), ["a", "b1", "b2", "c"])
         XCTAssertEqual(SkillPromoter.replacing([a, c], at: 1, with: [SkillStep(text: "x")]).map(\.text), ["a", "c"])
     }
+
+    /// A redesigned form shows the income field only after "Next": the rescue's click becomes a plain step
+    /// before the recorded one, which keeps its condition and input and gains the selectors that found it.
+    func testAFieldBehindANextButtonIsLearnedAsARevealThenTheStep() throws {
+        var income = SkillStep.browser("type", text: "type “{{income}}” in “Annual income (₹)”", url: "http://x/form.html",
+                                       selectors: ["#annual-income"], label: "Annual income (₹)", input: "{{income}}")
+        income.when = "{{income}}"
+        let actions = [SkillPromoter.Action(action: "click", selectors: ["#next"], label: "Next", url: "http://x/form.html"),
+                       SkillPromoter.Action(action: "type", selectors: ["#income"], label: "Total yearly income", input: "980000", url: "http://x/form.html#step-2")]
+        let inputs = [SkillInput(name: "income", description: "income", kind: "money")]
+        let plain = try XCTUnwrap(SkillPromoter.promote(income, actions: actions, values: ["income": "980000"], inputs: inputs))
+        let before = SkillStep(text: "before"), after = SkillStep(text: "after")
+        let out = SkillPromoter.replacing([before, income, after], at: 1, with: plain)
+        XCTAssertEqual(out.count, 4)
+        XCTAssertEqual(out[1].action, "click")
+        XCTAssertEqual(out[1].selectors, ["#next"])
+        XCTAssertEqual(out[1].when, "{{income}}")
+        XCTAssertEqual(out[2].input, "{{income}}")
+        XCTAssertEqual(out[2].text, income.text)
+        XCTAssertEqual(out[2].selectors, ["#income", "#annual-income"])
+        XCTAssertEqual(out[3].text, "after")
+    }
 }
 
 final class SkillPromoterFromPersonTests: XCTestCase {

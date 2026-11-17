@@ -74,7 +74,7 @@ test("the first request: toolset and own tools, cached instructions, text before
   expect(body.system[0].text).toContain("The task: send hi to You on whatsapp");
   expect(body.context_management.edits[0].type).toBe("clear_tool_uses_20250919");
   expect(body.tools[0]).toEqual({ type: TOOLSET_TYPE });
-  expect(body.tools.map((t: any) => t.name).filter(Boolean)).toEqual(["run_script", "open_app", "open_url", "click_element", "finish", "ask"]);
+  expect(body.tools.map((t: any) => t.name).filter(Boolean)).toEqual(["run_script", "open_app", "open_url", "click_element", "finish", "remember", "ask"]);
   const content = body.messages[0].content;
   expect(content.map((c: any) => c.type)).toEqual(["text", "image"]);
   expect(content[0].text).toContain("Frontmost app: WhatsApp");
@@ -171,6 +171,7 @@ test("toolset calls map onto the Mac's actions", () => {
   expect(m("click_element", { id: 7, clicks: 2 }, null)).toMatchObject({ type: "click_element", element: 7, times: 2, member: false });
   expect(m("run_script", { script: "beep" }, null)).toMatchObject({ type: "script", lang: "applescript", script: "beep" });
   expect(m("finish", { success: false, summary: "login needed" }, null)).toMatchObject({ type: "fail", reason: "login needed" });
+  expect(m("remember", { fact: "Uses Things for todos" }, null)).toMatchObject({ type: "remember", text: "Uses Things for todos" });
   expect(m("ask", { question: "Two chats are called Jay —  which one?" }, null)).toMatchObject({ type: "ask", text: "Two chats are called Jay — which one?" });
 });
 
@@ -407,7 +408,7 @@ test("the private Mac gets the toolset without scripts or numbered controls", as
   const api = fakeAPI([reply([{ type: "tool_use", id: "a", name: "finish", input: { success: true, summary: "ok" } }])]);
   await driveStep(request({ remote: true }), "sk", api.impl);
   const body = api.sent[0].body;
-  expect(body.tools.map((t: any) => t.name ?? t.type)).toEqual([TOOLSET_TYPE, "open_app", "open_url", "finish", "ask"]);
+  expect(body.tools.map((t: any) => t.name ?? t.type)).toEqual([TOOLSET_TYPE, "open_app", "open_url", "finish", "remember", "ask"]);
   expect(body.system[0].text).toContain("PRIVATE MAC");
   expect(body.messages[0].content[0].text).not.toContain("Frontmost app");
 });

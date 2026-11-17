@@ -233,18 +233,24 @@
 .run-prompt::first-letter {
   text-transform: uppercase;
 }
+/* Every fact leads with its "·"; the row starts one separator to the left and clips that strip, so a
+   fact that wraps to a new line never starts with a stray dot. */
 .run-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 4px 0;
   margin-top: 12px;
+  margin-left: -20px;
+  clip-path: inset(-8px -8px -8px 20px);
   font-size: 12.5px;
   color: var(--faint);
 }
-.run-meta > * + *::before {
+.run-meta > *::before {
   content: "·";
-  margin: 0 8px;
+  display: inline-block;
+  width: 20px;
+  text-align: center;
   color: var(--faint);
 }
 .run-meta > span {
@@ -265,6 +271,7 @@
 }
 .run-thread::before {
   font-weight: 400;
+  margin-right: -5px;
 }
 .run-thread span {
   overflow: hidden;

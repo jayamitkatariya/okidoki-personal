@@ -368,6 +368,8 @@ final class ComputerUseDriver {
         let jpeg = (UserDefaults.standard.string(forKey: "drivingImageFormat") ?? "jpeg") != "png"
         let effort = UserDefaults.standard.string(forKey: "drivingEffort") ?? "low"
         let previous = previousRun(for: run)
+        // What okidoki knows about the person, picked for this task once so the run's instructions stay cached.
+        let memory = env.store.memoryLines(limit: 24, query: run.prompt)
         var history: [[String: Any]] = []
         var results: [[String: Any]] = []
         var notes: [String] = []
@@ -445,6 +447,8 @@ final class ComputerUseDriver {
                 "settings": ["claudeModel": env.store.settings.claudeModel],
             ]
             if let previous { body["previous"] = previous }
+            if !memory.isEmpty { body["memory"] = memory }
+            body["accountId"] = env.store.currentAccountID
             if let plan = run.preview?.summary.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty,
                plan.lowercased() != run.prompt.lowercased() {
                 body["plan"] = plan
@@ -492,6 +496,18 @@ final class ComputerUseDriver {
                 guard env.store.run(run.id)?.status == .running else { ended = true; return false }
                 handled += 1
                 let id = act.toolUseID ?? ""
+                if act.type == "remember" {
+                    // Held until the run ends: only a finished task confirms it, and the brain checks it
+                    // against the person's request first (a page or an email can try to plant one).
+                    let fact = (act.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let why = MemoryPolicy.refusal(fact, untrusted: true) {
+                        results.append(["id": id, "result": why.hasPrefix("secret:") ? "Not kept: secrets belong in the vault, never in memory." : "Not kept: only lasting facts the user stated.", "isError": true])
+                    } else {
+                        env.proposeRunFact(fact, runID: run.id)
+                        results.append(["id": id, "result": "Noted; kept if the task finishes."])
+                    }
+                    return true
+                }
                 if act.type == "done" || act.type == "fail" || act.type == "ask" {
                     if halted || batchFailed {
                         results.append(["id": id, "result": "Not finished: an earlier action in this turn failed — check the new screenshot first.", "isError": true])
@@ -888,6 +904,7 @@ final class ComputerUseDriver {
         cleanupPanels()
         if success {
             env.store.finishRun(runID, status: .done, summary: summary)
+            env.learnFromRun(runID)
             if let run = env.store.run(runID), let threadID = run.threadID {
                 env.store.appendMessage(threadID: threadID, role: .assistant,
                                         text: "i did it — \(summary)", runID: runID)
@@ -899,6 +916,8 @@ final class ComputerUseDriver {
             env.speak(summary)
         } else {
             env.store.finishRun(runID, status: .failed, summary: summary)
+            // A failed run confirms nothing: what its agent proposed to remember is dropped.
+            env.pendingRunFacts[runID] = nil
             if let run = env.store.run(runID), let threadID = run.threadID {
                 env.store.appendMessage(threadID: threadID, role: .assistant,
                                         text: "i couldn't finish — \(summary)", runID: runID)

@@ -12,7 +12,7 @@ function statusLine(run: Run, now: number): { text: string; tone: "live" | "wait
   if (run.status === "paused") return { text: run.waitingFor ? `Paused for ${run.waitingFor}` : "Paused", tone: "wait" };
   if (run.status === "asked") return { text: "Needs your answer", tone: "wait" };
   if (NEEDS_YOU.has(run.status)) return { text: "Waiting for your OK", tone: "wait" };
-  if (run.status === "failed") return { text: `Didn't finish · ${relativeTime(run.endedAt ?? run.createdAt)}`, tone: "fail" };
+  if (run.status === "failed") return { text: `Didn’t finish · ${relativeTime(run.endedAt ?? run.createdAt)}`, tone: "fail" };
   if (run.status === "cancelled") return { text: `Stopped · ${relativeTime(run.endedAt ?? run.createdAt)}`, tone: "fail" };
   return { text: relativeTime(run.endedAt ?? run.createdAt), tone: "done" };
 }
@@ -66,7 +66,7 @@ export function TaskCard({ run, now, thumbVersion, onOpen }: { run: Run; now: nu
     // A card, not a button wrapping headings and lists: one stretched button opens it, and the
     // steps stay readable on their own.
     <div className={cx("task-card", active && "is-active")}>
-      <button type="button" className="task-card-hit" onClick={onOpen} aria-label={`Open ${run.title || run.prompt}. ${status.text}${unread ? ". Unread" : ""}`} />
+      <button type="button" className="task-card-hit" title={run.title || run.prompt} onClick={onOpen} aria-label={`Open ${run.title || run.prompt}. ${status.text}${unread ? ". Unread" : ""}`} />
       <div className="task-head">
         <span className={cx("task-status", `tone-${status.tone}`)}>
           {status.tone === "live" ? <span className="pulse-dot" aria-hidden="true" /> : null}

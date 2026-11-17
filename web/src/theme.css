@@ -181,26 +181,18 @@
   --code-ink: #d6dfdb;
 }
 
-/* circular theme reveal from the toggle, as the portfolio does */
+/* Theme switch: one crossfade of the whole page (store.tsx starts a view transition). The new theme
+   rises over the old with a soft ease, long enough to read as a change of light, not a cut. Per-element
+   color transitions are paused meanwhile so nothing lags behind the snapshot. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
-::view-transition-new(root) {
-  clip-path: circle(0% at var(--toggle-x, 50%) var(--toggle-y, 0%));
-  animation: ok-expand 0.55s var(--ease) forwards;
-}
-::view-transition-old(root) {
-  z-index: 1;
-}
-::view-transition-new(root) {
-  z-index: 9999;
-}
-@keyframes ok-expand {
-  to {
-    clip-path: circle(150% at var(--toggle-x, 50%) var(--toggle-y, 0%));
-  }
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
 }
 
 /* ---------- base ---------- */

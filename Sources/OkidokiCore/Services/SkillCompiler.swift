@@ -213,7 +213,10 @@ public enum SkillCompiler {
         var inputs = compiled.inputs
         if let capture, !capture.name.isEmpty {
             let last = out.last
-            var read = SkillStep(text: "read the \(capture.description ?? capture.name.replacingOccurrences(of: "_", with: " "))",
+            // "read the reference number", never "read the The reference number shown…".
+            let what = capture.description ?? capture.name.replacingOccurrences(of: "_", with: " ")
+            let readText = what.lowercased().hasPrefix("the ") ? "read " + what.prefix(1).lowercased() + what.dropFirst() : "read the " + what
+            var read = SkillStep(text: readText,
                                  app: last?.app ?? "", action: "read")
             read.surface = last?.surface
             read.url = last?.observedAfter?.url ?? last?.url

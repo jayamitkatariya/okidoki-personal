@@ -129,9 +129,70 @@ struct OKTheme {
     var lineStrong: Color { dark ? Color.white.opacity(0.14) : Color.black.opacity(0.16) }
 }
 
+// MARK: - Shell look
+
+/// The web shell's tokens (web/src/styles/shell.css + theme.css), for native windows that
+/// should read as the same product: onboarding today. Other native surfaces (the notch,
+/// overlays) keep `OKBrand` / `OKTheme`.
+struct OKShell {
+    let dark: Bool
+
+    init(_ scheme: ColorScheme) { self.dark = scheme == .dark }
+
+    // ground: --desk, a 170deg gradient (top a touch right → bottom a touch left)
+    var desk: LinearGradient {
+        let stops: [Gradient.Stop] = dark
+            ? [.init(color: Color(hex: 0x0F1A1D), location: 0), .init(color: Color(hex: 0x0E1612), location: 0.6), .init(color: Color(hex: 0x0C100E), location: 1)]
+            : [.init(color: Color(hex: 0xD9EBF3), location: 0), .init(color: Color(hex: 0xE4EFE9), location: 0.55), .init(color: Color(hex: 0xEEF2EE), location: 1)]
+        return LinearGradient(stops: stops, startPoint: UnitPoint(x: 0.59, y: 0), endPoint: UnitPoint(x: 0.41, y: 1))
+    }
+
+    // text: --s-ink, --s-ink-2, --s-muted, --s-faint
+    var ink: Color { dark ? Color(hex: 0xEEF2EF) : Color(hex: 0x111613) }
+    var ink2: Color { dark ? Color(hex: 0xD4DAD6) : Color(hex: 0x2A312D) }
+    var muted: Color { dark ? Color(hex: 0x9BA49F) : Color(hex: 0x5F6964) }
+    var faint: Color { dark ? Color(hex: 0x8D968F) : Color(hex: 0x6F7873) }
+
+    // states: --s-hover, --s-press
+    var hover: Color { dark ? Color.white.opacity(0.06) : Color(hex: 0x111613, opacity: 0.05) }
+    var press: Color { dark ? Color.white.opacity(0.09) : Color(hex: 0x111613, opacity: 0.08) }
+
+    // surfaces: --c-bg, --c-soft, --c-well, --c-line, --c-line-strong
+    var card: Color { dark ? Color(hex: 0x151817) : .white }
+    var soft: Color { dark ? Color(hex: 0x1B1F1D) : Color(hex: 0xF6F7F6) }
+    var well: Color { dark ? Color(hex: 0x202523) : Color(hex: 0xF1F3F1) }
+    var line: Color { dark ? Color.white.opacity(0.07) : Color(hex: 0x111613, opacity: 0.07) }
+    var lineStrong: Color { dark ? Color.white.opacity(0.12) : Color(hex: 0x111613, opacity: 0.12) }
+
+    // the one accent: --green (text/icons), --green-bright, --green-soft, --ok-accent (fills)
+    var green: Color { dark ? Color(hex: 0x4CD774) : Color(hex: 0x0B7A45) }
+    var greenBright: Color { dark ? Color(hex: 0x44E45E) : Color(hex: 0x36D158) }
+    var greenSoft: Color { dark ? Color(hex: 0x44E45E, opacity: 0.12) : Color(hex: 0x0B7A45, opacity: 0.09) }
+    var accent: Color { dark ? Color(hex: 0x44E45E) : Color(hex: 0x0B7A45) }
+    var accentHover: Color { dark ? Color(hex: 0x5BEA72) : Color(hex: 0x096A3C) }
+    var onAccent: Color { dark ? Color(hex: 0x03170F) : .white }
+    /// --focus: a 3px bright-green halo.
+    var focus: Color { Color(hex: 0x36D158, opacity: 0.35) }
+
+    // --ring-shadow / --lift: the 1px ring. On dark ground lift is invisible, so the ring does the work.
+    var ring: Color { dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06) }
+
+    static let radiusCard: CGFloat = 14
+    static let radiusTile: CGFloat = 12
+    static let radiusControl: CGFloat = 9
+
+    // --ease-out (arriving) and --ease-exit (leaving)
+    static func easeOut(_ duration: Double) -> Animation { .timingCurve(0.23, 1, 0.32, 1, duration: duration) }
+    static func easeExit(_ duration: Double) -> Animation { .timingCurve(0.4, 0, 0.6, 1, duration: duration) }
+}
+
 // MARK: - Fonts
 
 extension Font {
+    /// The shell's --ui: the system face (SF Pro Text / Display by size).
+    static func shellUI(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight)
+    }
     static func okBody(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         let name: String
         switch weight {

@@ -10,7 +10,8 @@ export type DecisionKind =
   | "computer_use"
   | "browser"
   | "overlay"
-  | "connector";
+  | "connector"
+  | "coding_agent";
 
 export interface QuickAction {
   type: "event" | "move_event" | "click";
@@ -50,6 +51,9 @@ export interface Decision {
   connectorCall?: ConnectorCall;
   // The same call as a JSON string: the Mac app keeps it opaque and hands it back to /connector/run.
   connectorCallJSON?: string;
+  /** For coding_agent: the self-contained job, and which connected agent should do it. */
+  agentTask?: string;
+  agentId?: string;
 }
 
 export type ConnectorCall =
@@ -135,10 +139,12 @@ export interface ThinkRequest {
   clipboardText?: string;
   nativeContext?: NativeContext;
   connectors?: ConnectorsContext;
+  /** Coding agents the person turned on (Claude Code, Codex…), for jobs on files, code and the terminal. */
+  codingAgents?: import("./codingagents").CodingAgentsContext;
   /** The current okidoki account, so recall stays within it (plus shared memories). */
   accountId?: string;
   /** What the person picked on the cursor card: act or chat. Missing means decide. */
-  mode?: "act" | "browser" | "chat";
+  mode?: "act" | "browser" | "chat" | "agent";
 }
 
 /** What the Mac sends to keep the memory index current: the parts of its items the index uses.
@@ -156,6 +162,8 @@ export interface MemorySyncRequest {
 }
 
 export interface RecalledItem {
+  /** The item's own id on the Mac (a memory's id for notes), without the index's type prefix. */
+  id?: string;
   /** memory · message · run · skill */
   type: string;
   text: string;
@@ -265,6 +273,10 @@ export interface DriveRequest {
   previous?: { goal: string; summary?: string; steps?: string[]; asked?: boolean };
   /** The plan the user approved before the run started, when it says more than the goal. */
   plan?: string;
+  /** What okidoki knows about the person, picked for this task, one note per line. */
+  memory?: string[];
+  /** The current okidoki account, so recall stays within it (plus shared memories). */
+  accountId?: string;
   remote?: boolean;
   /** Use the stronger model for this one turn. */
   escalate?: boolean;

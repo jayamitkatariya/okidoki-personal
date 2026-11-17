@@ -6,6 +6,7 @@ export type View =
   | { kind: "home" }
   | { kind: "chat"; id: string }
   | { kind: "tab"; id: string }
+  | { kind: "vm" }
   | { kind: "page"; page: LibraryPage };
 
 /** Pages that open inside the content card. Home and Browser are views of their own now. */
@@ -28,6 +29,8 @@ export function viewKey(view: View): string {
       return `chat/${view.id}`;
     case "tab":
       return `tab/${view.id}`;
+    case "vm":
+      return "private-mac";
     case "page":
       return view.page;
   }
@@ -39,6 +42,7 @@ export function parseView(raw: string): View | "browser" | { settingsSection: st
   if (!route || route === "home") return { kind: "home" };
   if (route === "browser") return "browser";
   if (route === "keys") return { settingsSection: "keys" };
+  if (route === "private-mac") return { kind: "vm" };
   // Live is a tab of the Computer page.
   if (route === "live") return { kind: "page", page: "runs" };
   const [head, ...rest] = route.split("/");
@@ -96,6 +100,12 @@ export function threadInfo(state: NativeState): ThreadInfo[] {
       return { thread, runs, active, needsYou, unread };
     })
     .sort((a, b) => time(b.thread.updatedAt) - time(a.thread.updatedAt));
+}
+
+/** The private Mac gets a place among the agent tabs once it's where runs go and it exists. */
+export function showsPrivateMac(state: NativeState): boolean {
+  const phase = state.privateMac?.phase;
+  return state.settings.computerTarget === "vm" && Boolean(state.privateMac?.supported) && phase !== "unsupported";
 }
 
 /** Tabs the sidebar lists: the person's pages, and the ones an agent or replay works in. Blank tabs are Home. */

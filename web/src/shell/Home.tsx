@@ -48,6 +48,9 @@ export function Home({
   const skills = useMemo(() => [...(state.skills ?? [])].sort((a, b) => (b.runCount ?? 0) - (a.runCount ?? 0)).slice(0, 4), [state.skills]);
   const templates = (state.library ?? []).filter((entry) => !entry.added).slice(0, Math.max(0, 4 - skills.length));
   const empty = runs.length === 0;
+  // Said up front, not after the first request bounces: nothing answers until a key is saved.
+  const anthropic = state.keyProviders?.find((provider) => provider.id === "anthropic");
+  const needsKey = anthropic ? !anthropic.set && !anthropic.builtin : state.keys?.anthropic === false;
   const fresh = useRef(firstOpen).current;
 
   const rise = (order: number) =>
@@ -66,6 +69,15 @@ export function Home({
         <motion.div className="nt-composer" {...rise(1)}>
           <Composer variant="home" autoFocus focusTick={focusTick} onAsked={onAsked} onSearched={onSearched} />
         </motion.div>
+        {needsKey ? (
+          <p className="nt-needs-key" role="status">
+            <PixelIcon name="key" size={14} />
+            <span>okidoki needs an Anthropic key before it can answer or do anything.</span>
+            <button type="button" className="link-btn" onClick={() => (window.location.hash = "#/keys")}>
+              Add a key
+            </button>
+          </p>
+        ) : null}
         {empty ? (
           <motion.div className="nt-starters" {...rise(2)}>
             <p>Ask okidoki to do something. It works in a tab or on your Mac, and anything it learns you can replay forever.</p>
@@ -92,7 +104,7 @@ export function Home({
                 <span className="need-icon">
                   <PixelIcon name={run.status === "asked" ? "chat" : "hand"} size={16} />
                 </span>
-                <button type="button" className="need-copy" onClick={() => onOpenRun(run)}>
+                <button type="button" className="need-copy" title={run.title} onClick={() => onOpenRun(run)}>
                   <strong>{run.title}</strong>
                   <span>{run.status === "asked" ? run.summary || "okidoki has a question" : run.preview?.summary || run.prompt}</span>
                 </button>

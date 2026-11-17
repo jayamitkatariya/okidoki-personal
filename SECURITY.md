@@ -11,7 +11,7 @@ else do that. Open a private security advisory on GitHub, not a public issue.
 - **Keys** live in `keys.json` in the support folder (mode 0600). They're sent only to their own
   service, and never bundled into the app.
 - **The brain** listens on 127.0.0.1 and needs a per-launch token.
-- **The control endpoint** (`ControlServer`, used by the MCP server) listens on 127.0.0.1, needs the
+- **The control endpoint** (`ControlServer`, used by the `okidoki` CLI) listens on 127.0.0.1, needs the
   token in `control.json` (0600), and refuses any request with a browser `Origin`.
 - **Vault logins** are sealed in the panel with your passphrase (PBKDF2, 200k rounds, then AES-GCM)
   before they reach the Mac. Only ciphertext is stored.

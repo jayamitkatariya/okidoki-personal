@@ -14,9 +14,9 @@ verify:
 
 # Memory end to end: the brain's index and recall with an in-memory engine. OKIDOKI_LIVE_MOSS=1 adds the real Moss engine.
 verify-memory:
-	cd brain && bun run typecheck && bun test tests/memory.test.ts tests/memory-sync.test.ts
-	cd web && bunx tsc --noEmit -p .
-	swift test --filter 'ContextTests'
+	cd brain && bun run typecheck && bun test tests/memory.test.ts tests/memory-sync.test.ts tests/memory-recall.test.ts
+	cd web && bunx tsc --noEmit -p . && bun test tests/memorySearch.test.ts
+	swift test --filter 'ContextTests|MemoryRecallTests'
 	@if [ "$$OKIDOKI_LIVE_MOSS" = "1" ]; then cd brain && OKIDOKI_LIVE_MOSS=1 bun test tests/memory-live.test.ts; fi
 
 app:

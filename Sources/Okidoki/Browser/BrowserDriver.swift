@@ -105,6 +105,8 @@ final class BrowserAgentRun {
     /// Some text from each page the run went through, for smart replay's compiler: what the run
     /// didn't use (an optional section, an empty table) is only visible here.
     private var pageTexts: [String: String] = [:]
+    /// A password the task itself gave, typed as `{{password}}` in the learned steps.
+    private var secrets: [String: String] = [:]
     static let maxTurns = 80
     /// Times in a row the brain didn't answer before the run gives up.
     static let maxMisses = 3
@@ -240,7 +242,7 @@ final class BrowserAgentRun {
         var misses = 0
         let logins = env.vault.logins.map { BrowserSteps.host(of: $0.site).isEmpty ? $0.site : BrowserSteps.host(of: $0.site) }
         let context = conversation()
-        let memory = env.store.memoryLines(limit: 40)
+        let memory = env.store.memoryLines(limit: 40, query: run.prompt)
         var step = 0
         while step < Self.maxTurns {
             if Task.isCancelled { return }
@@ -293,6 +295,7 @@ final class BrowserAgentRun {
             ]
             if !context.isEmpty { body["context"] = context }
             if !memory.isEmpty { body["memory"] = memory }
+            body["accountId"] = env.store.currentAccountID
             // What the run did, in case the brain lost its side of the conversation.
             if step > 0, let output = env.store.run(run.id)?.output {
                 let done = output.split(separator: "\n").filter { $0.hasPrefix("→") || $0.hasPrefix("✗") }.suffix(30).map(String.init)
@@ -327,10 +330,14 @@ final class BrowserAgentRun {
                     turnResults.append(["ok": true])
                 case "remember":
                     let fact = action["fact"] as? String ?? ""
-                    if BrainService.isDurableFact(fact) {
-                        // Nil here means it was already known: that's fine too.
-                        if env.store.addMemory(fact, section: .aboutYou, source: "browser") != nil { self.log("→ remembered: \(fact)") }
+                    if BrainService.isDurableFact(fact), MemoryPolicy.refusal(fact, untrusted: true) == nil {
+                        // Held until the run ends: only a finished run is a confirmed outcome, and the brain
+                        // checks the fact against the person's own request first (a page can plant one).
+                        env.proposeRunFact(fact, runID: self.run.id)
+                        self.log("→ will remember if the task finishes: \(fact)")
                         turnResults.append(["ok": true])
+                    } else if MemoryPolicy.secretKind(fact) != nil {
+                        turnResults.append(["ok": false, "detail": "not kept: secrets belong in the vault, never in memory"])
                     } else {
                         turnResults.append(["ok": false, "detail": "not kept: only lasting facts about the user"])
                     }
@@ -511,6 +518,8 @@ final class BrowserAgentRun {
                 let typed = payload["text"] as? String ?? ""
                 input = typed.count >= 4 && run.prompt.contains(typed) ? "{{password}}"
                     : BrowserSteps.vaultPlaceholder(site: BrowserSteps.host(of: url), field: "password")
+                // Remembered (keys.json, not the skill) so the saved skill doesn't need it in every request.
+                if input == "{{password}}" { secrets["password"] = typed }
             }
             learned.append(.browser(type, text: BrowserSteps.line(type, label: result.label, input: input), url: url,
                                     selectors: result.selectors, label: result.label, role: result.role, input: input, delay: gap))
@@ -546,8 +555,10 @@ final class BrowserAgentRun {
         // The tab it ended in is where a follow-up in this conversation carries on.
         if let threadID = run.threadID { env.browser.noteThreadTab(threadID, tab) }
         env.store.finishRun(run.id, status: success ? .done : .failed, summary: summary)
+        env.learnFromRun(run.id)
         if let threadID = run.threadID { env.store.appendMessage(threadID: threadID, role: .assistant, text: summary, runID: run.id) }
         env.learnedPages[run.id] = pageTexts
+        env.learnedSecrets[run.id] = secrets
         env.browserRunFinished(run, success: success, summary: summary, learned: success ? learned : [])
         env.store.saveNow()
         ended(run.id)
@@ -595,6 +606,15 @@ final class BrowserReplayer {
     func begin(skill: Skill, runID: String, times: Int, values: [[String: String]]) {
         guard let env, task == nil else {
             env?.failReplay(runID: runID, reason: "another replay is running in the browser — let it finish or stop it first")
+            return
+        }
+        // Values this recording has no place for: replaying it would do what was recorded (someone else's
+        // details) and call it done. Say so instead.
+        let ignored = ReplayValues.ignoredByRecording(skill.steps, passes: values)
+        if !ignored.isEmpty {
+            env.failReplay(runID: runID, reason: "“\(skill.name)” replays exactly as it was recorded — it has nowhere to put "
+                + ignored.prefix(4).joined(separator: ", ") + ", so it would repeat the recorded details. Nothing was done. "
+                + "Turn on Smart replay and save the run again to give it inputs, or ask okidoki to do it with the agent.")
             return
         }
         let builtins = ParameterFill.builtins()

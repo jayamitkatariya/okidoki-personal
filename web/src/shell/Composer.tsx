@@ -187,7 +187,8 @@ export function Composer({
     }
     const context = mentions.length ? `\n\n(context: ${mentions.map((item) => item.context).join("; ")})` : "";
     const ref = nextAskRef();
-    const where = variant === "panel" ? "tab" : settings.summonMode ?? "auto";
+    const picked = settings.summonMode === "agent" && !defaultCodingAgent(settings) ? "auto" : settings.summonMode ?? "auto";
+    const where = variant === "panel" ? "tab" : picked;
     invoke("shellAsk", { text: trimmed + context, mode: where, threadID, tabID, ref });
     setText("");
     setMentions([]);
@@ -339,7 +340,7 @@ export function Composer({
             <button
               type="button"
               className="send"
-              aria-label={effective === "search" || opensSite ? "Go" : "Send"}
+              aria-label={pending ? "Sending…" : effective === "search" || opensSite ? "Go" : "Send"}
               aria-busy={pending}
               onClick={submit}
               disabled={!trimmed && !pending}
@@ -364,7 +365,7 @@ export function Composer({
       {variant === "home" ? (
         <div className="composer-chips">
           <AttachButton onPick={(item) => setMentions((current) => [...current, item])} candidates={candidates} />
-          <WhereChip value={settings.summonMode ?? "auto"} target={settings.computerTarget} onChange={(value) => updateSettings({ summonMode: value })} />
+          <WhereChip value={settings.summonMode ?? "auto"} target={settings.computerTarget} agent={defaultCodingAgent(settings)} onChange={(value) => updateSettings({ summonMode: value })} />
           <GuardChip settings={settings} onChange={updateSettings} />
           <span className="chips-gap" />
           <ModelChip value={settings.claudeModel} onChange={(value) => updateSettings({ claudeModel: value })} />
@@ -483,22 +484,33 @@ function PickChip<T extends string>({
   );
 }
 
-function WhereChip({ value, target, onChange }: { value: Where; target: Settings["computerTarget"]; onChange: (value: Where) => void }) {
-  const current = WHERE.find((item) => item.value === value) ?? WHERE[0];
-  const name = (item: (typeof WHERE)[number]) => (item.value === "act" && target === "vm" ? "Private Mac" : item.label);
+/** The coding agent the Where chip offers: the default one that's on, else the first one on. */
+export function defaultCodingAgent(settings: Settings): { id: string; name: string } | null {
+  const on = (settings.codingAgents?.agents ?? []).filter((agent) => agent.enabled);
+  return on.find((agent) => agent.id === settings.codingAgents?.defaultID) ?? on[0] ?? null;
+}
+
+function WhereChip({ value, target, agent, onChange }: { value: Where; target: Settings["computerTarget"]; agent: { name: string } | null; onChange: (value: Where) => void }) {
+  // "Agent" is offered only while a coding agent is on; picked with none on, it reads as Auto.
+  const items = agent
+    ? [...WHERE, { value: "agent" as Where, label: `Agent: ${agent.name}`, icon: "code", detail: `Hands files, terminal and code jobs to ${agent.name}` }]
+    : WHERE;
+  const current = items.find((item) => item.value === value) ?? items[0];
+  const name = (item: (typeof items)[number]) => (item.value === "act" && target === "vm" ? "Private Mac" : item.label);
   return (
     <PickChip
       title="Where okidoki works"
       icon={current.icon}
       label={name(current)}
-      value={value}
-      options={WHERE.map((item) => ({ value: item.value, label: name(item), detail: item.detail, icon: item.icon }))}
+      value={current.value}
+      options={items.map((item) => ({ value: item.value, label: name(item), detail: item.detail, icon: item.icon }))}
       onChange={onChange}
     />
   );
 }
 
 function GuardChip({ settings, onChange }: { settings: Settings; onChange: (patch: Partial<Settings>) => void }) {
+  const apify = Boolean(useDashboard().state.keys.apify);
   return (
     <KPopover>
       <PopoverTrigger render={<button type="button" className="chip-btn" />}>
@@ -530,9 +542,11 @@ function GuardChip({ settings, onChange }: { settings: Settings; onChange: (patc
           <Switch label="See the screen" checked={settings.screenContext ?? true} onChange={(value) => onChange({ screenContext: value })} />
         </label>
         {/* Not a control here: it's set in Settings › Safety, so it reads as a fact, not a field. */}
-        <p className="pop-note">
-          Spending limit ${settings.spendingLimit} per task. Change it in Settings › Safety.
-        </p>
+        {settings.spendingLimit && apify ? (
+          <p className="pop-note">
+            Spending limit ${settings.spendingLimit} per task. Change it in Settings › Safety.
+          </p>
+        ) : null}
       </PopoverContent>
     </KPopover>
   );

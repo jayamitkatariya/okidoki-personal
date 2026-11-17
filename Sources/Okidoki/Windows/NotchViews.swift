@@ -968,7 +968,7 @@ private struct NotchRecentRow: View {
 
     private var when: String {
         if item.status == .asked { return "Needs your answer" }
-        if item.status == .failed { return "Didn't finish" }
+        if item.status == .failed { return "Didn’t finish" }
         if item.status == .cancelled { return "Stopped" }
         return Self.ago(item.at)
     }
@@ -1001,6 +1001,9 @@ private struct NotchRecentRow: View {
         .buttonStyle(NotchPressStyle())
         .onHover { hovering = $0 }
         .animation(NotchMotion.hover, value: hovering)
+        // The title is cut to one line; the full one shows on hover and is what VoiceOver reads.
+        .help(item.title)
+        .accessibilityLabel("\(item.title), \(when)")
     }
 
     /// "1m 7s", "12m", "2h 5m": steady width with monospaced digits.

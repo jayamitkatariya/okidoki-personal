@@ -45,6 +45,15 @@ final class ReplayDispatcherTests: XCTestCase {
         XCTAssertEqual(ReplayDispatcher.decide(route, skills: [plain, other]), .agent)
     }
 
+    /// The router sees each list input's fields, so it can hand "80C 150000 and 80D 50000" over as entries.
+    func testTheCatalogueNamesListInputsWithTheirFields() {
+        var skill = Skill(id: "s", accountID: "a", name: "acme filing smart", summary: "")
+        skill.inputs = [SkillInput(name: "pan"), SkillInput(name: "deductions", kind: "list", fields: ["section", "amount"], required: false)]
+        let row = ReplayDispatcher.catalogue([skill])[0]
+        XCTAssertEqual(row["inputs"] as? [String], ["pan", "deductions"])
+        XCTAssertEqual(row["lists"] as? [String: [String]], ["deductions": ["section", "amount"]])
+    }
+
     func testAskingForTheAgentSkipsReplay() {
         XCTAssertTrue(ReplayDispatcher.wantsAgent("file it for Neha, but use the agent"))
         XCTAssertFalse(ReplayDispatcher.wantsAgent("file it for Neha"))

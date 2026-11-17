@@ -37,6 +37,10 @@ final class AppEnvironment: ObservableObject {
     private(set) lazy var hybridMacReplayer = HybridMacReplayer(environment: self)
     /// The open "check before submitting" card's answer, for scripts (`gate carry|skip|stop`).
     var pendingGate: ((HybridBrowserReplayer.GateAnswer) -> Void)?
+    /// Messages already sent for memory extraction, so a turn is never mined twice (AppEnvironment+Memory).
+    var learnedTurns: Set<String> = []
+    /// Facts a run's agent asked to remember, held until the run ends and its outcome is known.
+    var pendingRunFacts: [String: [String]] = [:]
     /// The steps of a recording in the browser so far, while one is going.
     var browserRecording: (() -> [SkillStep])?
     /// What a browser run learned before it stopped to ask something, by thread, for the run that continues it.
@@ -47,6 +51,9 @@ final class AppEnvironment: ObservableObject {
     var savableRuns: [String: LearnedBrowserRun] = [:]
     /// Page texts a finished browser run saw, by run id, until its card is gone (smart replay's compiler reads them).
     var learnedPages: [String: [String: String]] = [:]
+    /// Secrets a finished browser run typed from the request itself (a password given in the task), by run id,
+    /// so a skill kept from it can replay without being told the password again. Kept in keys.json, never the skill.
+    var learnedSecrets: [String: [String: String]] = [:]
     /// The tab a browser run was asked from (typed in that tab's address bar), until the run starts there.
     var browserRunTabs: [String: UUID] = [:]
     /// The macOS VM computer-use runs drive when settings say so; this Mac otherwise.
@@ -81,6 +88,9 @@ final class AppEnvironment: ObservableObject {
     @Published var mcpCheckedAt: Date?
     /// The brain's Moss index as last reported: after each sync, and on request for the dashboard.
     @Published var memoryIndex = MemoryIndexStatus()
+    /// The Memory page's last search by meaning: what was asked and the matching memory ids, best first.
+    /// `ids` is nil while it's being looked up or when there's no index to ask.
+    @Published var memorySearch: (query: String, ids: [String]?) = ("", nil)
     @Published var isBusy = false
     /// Requests in flight; a routine finishing must not mark a summon request idle.
     private var busyCount = 0 { didSet { isBusy = busyCount > 0 } }
@@ -196,6 +206,7 @@ final class AppEnvironment: ObservableObject {
                 let hint = Self.summonHint(settings)
                 if self.notch.model.summonHint != hint { self.notch.model.summonHint = hint }
                 self.applyAppearance(settings.appearance)
+                self.privateMac.preferredMemoryGB = settings.privateMacMemoryGB
             }
             .store(in: &cancellables)
 
@@ -297,7 +308,9 @@ final class AppEnvironment: ObservableObject {
         detectCall()
 
         if ProcessInfo.processInfo.environment["OKIDOKI_OPEN_DASHBOARD"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.openDashboard(.home) }
+            // OKIDOKI_OPEN_PAGE (memory, keys, …) lands a test build on one page.
+            let page = DashboardSection(rawValue: ProcessInfo.processInfo.environment["OKIDOKI_OPEN_PAGE"] ?? "") ?? .home
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.openDashboard(page) }
         } else if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.previewOverlays() }
         } else if ProcessInfo.processInfo.environment["OKIDOKI_OPEN_ONBOARDING"] == "1" {
@@ -316,25 +329,27 @@ final class AppEnvironment: ObservableObject {
     /// Off unless the app is launched with OKIDOKI_DEV_HOOKS=1, since any local process could post them.
     private func installDevHooks() {
         let center = DistributedNotificationCenter.default()
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.drive"), object: nil, queue: .main) { [weak self] note in
+        // Namespaced by bundle id, so a test build (its own bundle id) never answers another build's scripts.
+        let domain = Bundle.main.bundleIdentifier ?? "dev.okidoki.personal"
+        center.addObserver(forName: Notification.Name(domain + ".dev.drive"), object: nil, queue: .main) { [weak self] note in
             guard let goal = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { return }
             Task { @MainActor in await self?.devDrive(goal: goal) }
         }
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.ask"), object: nil, queue: .main) { [weak self] note in
+        center.addObserver(forName: Notification.Name(domain + ".dev.ask"), object: nil, queue: .main) { [weak self] note in
             guard let text = note.object as? String else { return }
             Task { @MainActor in self?.askFromDashboard(text) }
         }
         // "x,y" in global Quartz points: a click as the person would make it.
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.click"), object: nil, queue: .main) { note in
+        center.addObserver(forName: Notification.Name(domain + ".dev.click"), object: nil, queue: .main) { note in
             let parts = ((note.object as? String) ?? "").split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
             guard parts.count == 2 else { return }
             Task { await EventActuator.click(at: CGPoint(x: parts[0], y: parts[1])) }
         }
         // Opens the cursor card as a shake would, so a script can check what's on it.
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.summon"), object: nil, queue: .main) { [weak self] _ in
+        center.addObserver(forName: Notification.Name(domain + ".dev.summon"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.startSummon() }
         }
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.stop"), object: nil, queue: .main) { [weak self] _ in
+        center.addObserver(forName: Notification.Name(domain + ".dev.stop"), object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 if self.driver.isActive { self.driver.cancel(reason: "stopped by the test script") }
@@ -345,11 +360,11 @@ final class AppEnvironment: ObservableObject {
             }
         }
         // The browser, for scripts/dev-browser.sh: run a goal there, open a page, record, save, replay.
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.browse"), object: nil, queue: .main) { [weak self] note in
+        center.addObserver(forName: Notification.Name(domain + ".dev.browse"), object: nil, queue: .main) { [weak self] note in
             guard let goal = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { return }
             Task { @MainActor in self?.devBrowse(goal: goal) }
         }
-        center.addObserver(forName: Notification.Name("dev.okidoki.personal.dev.browser"), object: nil, queue: .main) { [weak self] note in
+        center.addObserver(forName: Notification.Name(domain + ".dev.browser"), object: nil, queue: .main) { [weak self] note in
             let command = (note.object as? String) ?? ""
             Task { @MainActor in self?.devBrowser(command) }
         }
@@ -536,6 +551,20 @@ final class AppEnvironment: ObservableObject {
     }
 
     private func applyAppearance(_ appearance: AppAppearance) {
+        let wanted: NSAppearance? = appearance == .light ? NSAppearance(named: .aqua)
+            : appearance == .dark ? NSAppearance(named: .darkAqua) : nil
+        guard NSApp.appearance?.name != wanted?.name else { return }
+        // The window's frosted backdrop and native chrome flip with NSApp.appearance; fade them so the
+        // change matches the page's own crossfade instead of snapping underneath it.
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+           let frame = dashboard?.window?.contentView?.superview, dashboard?.window?.isVisible == true {
+            frame.wantsLayer = true
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.42
+            fade.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+            frame.layer?.add(fade, forKey: "okidoki.appearance")
+        }
         switch appearance {
         case .system: NSApp.appearance = nil
         case .light: NSApp.appearance = NSAppearance(named: .aqua)
@@ -845,7 +874,7 @@ final class AppEnvironment: ObservableObject {
             answerDriveQuestion(runID: last.id, text: text)
             return thread.id
         }
-        let modes = ["browser": "browser", "computer": "act", "act": "act", "chat": "chat"]
+        let modes = ["browser": "browser", "computer": "act", "act": "act", "chat": "chat", "agent": "agent"]
         noteSpokenInput(false)
         Task {
             await handleRequest(text: text, appName: "mac", bundleID: "", threadID: thread.id,
@@ -897,6 +926,11 @@ final class AppEnvironment: ObservableObject {
         // "Import my memory from Claude Code": read on the Mac itself, no model needed.
         if screenshot == nil, documentText.isEmpty, let plan = MemoryImport.plan(text) {
             await offerMemoryImport(plan, prompt: text, threadID: threadID, source: source)
+            return
+        }
+        // Picked their coding agent: it gets the job straight away, no model call (and no key) needed.
+        if mode == "agent", screenshot == nil,
+           await delegateToCodingAgent(text: text, appName: appName, threadID: threadID, source: source) {
             return
         }
         guard hasKey("anthropic") else {
@@ -957,14 +991,16 @@ final class AppEnvironment: ObservableObject {
         }
         let history = (store.thread(thread.id)?.messages ?? []).map { BrainMessage(role: $0.role.rawValue, text: $0.text) }
         // The account's current notes; anything else it remembers is found by meaning in the memory index.
-        let memory = store.memoryLines()
+        let memory = store.memoryLines(query: text)
         var decision: BrainDecision?
         if sidecar.status.isReady {
             switch await BrainClient.shared.think(text: text, request: request, history: history,
                                                   memory: memory, events: events,
                                                   settings: store.settings, account: store.activeAccount,
                                                   frontWindow: screenContext?.windowTitle ?? "",
-                                                  connectors: connectorsPayload()) {
+                                                  connectors: connectorsPayload(),
+                                                  // Another agent asking okidoki (the CLI) never gets bounced to a coding agent.
+                                                  codingAgents: source == "control" ? nil : codingAgentsPayload(threadID: thread.id)) {
             case .answered(let envelope):
                 decision = envelope.decision
             case .failed(let why):
@@ -1026,18 +1062,32 @@ final class AppEnvironment: ObservableObject {
             decision.kind = .browser
             decision.previewSummary = decision.previewSummary.isEmpty ? request.text : decision.previewSummary
         }
-        var saved: [String] = []
-        for fact in decision.memory where BrainService.isDurableFact(fact) {
-            if let item = store.addMemory(fact, section: fact.lowercased().hasPrefix("right now") ? .rightNow : .aboutYou,
-                                          source: source == "summon" ? "said" : source) { saved.append(item.text) }
-        }
+        // Memory: what they asked to keep is saved now (gated, deduped, a correction replaces the old one) and
+        // confirmed in the chat; anything else they said is mined in the background after the reply.
+        let userMessageID = store.thread(threadID)?.messages.last(where: { $0.role == .user })?.id
+        let facts = decision.memory.filter { BrainService.isDurableFact($0) }
+        var memorySaves: [OkidokiStore.MemorySave] = []
+        let memorySource = source == "summon" ? "said" : source
         // The confirmation lists what was actually kept, never what the model meant to keep.
         if decision.kind == .memory {
-            let known = decision.memory.filter { fact in store.memories.contains { $0.text.lowercased() == fact.lowercased() } }
-            decision.answer = saved.isEmpty && known.isEmpty
-                ? "I couldn't find a lasting fact to keep there. Try \"remember that …\" with the detail itself."
-                : "Noted. I'll remember:\n" + (saved.isEmpty ? known : saved).map { "· \($0)" }.joined(separator: "\n")
-            decision.previewSummary = (saved.isEmpty ? known : saved).joined(separator: " · ")
+            if !facts.isEmpty {
+                memorySaves = await rememberExplicit(facts, words: request.text, source: memorySource,
+                                                     threadID: threadID, messageID: userMessageID)
+            }
+            decision.answer = Self.memoryConfirmation(memorySaves, words: request.text)
+            decision.previewSummary = memorySaves.compactMap(\.item?.text).joined(separator: " · ")
+        } else if !facts.isEmpty {
+            // Saved alongside an answer or a task, without holding it up (reconciling can take a model call):
+            // the chat shows it under the reply; the notch says so too.
+            let words = request.text
+            Task { [weak self] in
+                guard let self else { return }
+                let saves = await self.rememberExplicit(facts, words: words, source: memorySource,
+                                                        threadID: threadID, messageID: userMessageID)
+                self.announceLearned(saves, title: "saved to memory")
+            }
+        } else {
+            learnFromTurn(words: request.text, reply: decision.answer, threadID: threadID, messageID: userMessageID, source: source)
         }
         // Replay first: with smart replay on, a saved skill that does exactly this job runs in seconds
         // instead of the agent working it out again. The agent still takes anything no skill covers.
@@ -1060,11 +1110,21 @@ final class AppEnvironment: ObservableObject {
                                       threadID: threadID, status: .done)
             store.appendMessage(threadID: threadID, role: .assistant, text: decision.answer, runID: run.id)
             present(makeAnswerCard(decision: decision, request: request, threadID: threadID, run: run), source: source)
-            toast(title: "noted", detail: decision.previewSummary.isEmpty ? decision.answer : decision.previewSummary,
-                  kind: .success, undoLabel: nil, onUndo: nil, editLabel: "memory", onEdit: { [weak self] in
+            let savedIDs = memorySaves.compactMap { save -> String? in
+                switch save { case .added(let item), .updated(let item): return item.id; default: return nil }
+            }
+            toast(title: savedIDs.isEmpty ? "nothing saved" : "saved to memory",
+                  detail: decision.previewSummary.isEmpty ? decision.answer : decision.previewSummary,
+                  kind: savedIDs.isEmpty ? .info : .success,
+                  undoLabel: savedIDs.isEmpty ? nil : "undo",
+                  onUndo: savedIDs.isEmpty ? nil : { [weak self] in
+                      for id in savedIDs { self?.store.undoMemorySave(id) }
+                      self?.store.saveNow()
+                  },
+                  editLabel: "memory", onEdit: { [weak self] in
                       self?.openDashboard(.memory)
                   }, runID: nil)
-            speak("Noted.")
+            speak(savedIDs.isEmpty ? "Nothing saved." : "Noted.")
 
         case .quickAction:
             await performQuickAction(decision: decision, request: request, threadID: threadID, source: source)
@@ -1126,6 +1186,10 @@ final class AppEnvironment: ObservableObject {
 
         case .connector:
             await prepareConnector(decision: decision, request: request, threadID: threadID, source: source)
+
+        case .codingAgent:
+            prepareCodingAgent(task: decision.agentTask ?? request.text, agentID: decision.agentID, title: decision.title,
+                               answer: decision.answer, prompt: request.text, threadID: threadID, source: source)
         }
     }
 
@@ -1464,7 +1528,7 @@ final class AppEnvironment: ObservableObject {
     func pauseRun(_ id: String, from source: String = "button") {
         guard let run = store.run(id) else { return }
         // A recording can't pause: the recorder either watches or it doesn't.
-        if run.kind == .watch || run.kind == .connector { return }
+        if run.kind == .watch || run.kind == .connector || run.kind == .codingAgent { return }
         // A Mac replay pauses between steps: the ghost steps aside, and play carries on from the next step.
         if replayer.isActive, replayer.runID == id { replayer.pauseOrResume(); return }
         if browserReplayer.isActive, browserReplayer.runID == id { browserReplayer.pauseOrResume(); return }
@@ -1563,11 +1627,26 @@ final class AppEnvironment: ObservableObject {
         case .borrow:
             if run.builtin == "skill" {
                 let times = pendingReplays.removeValue(forKey: run.id) ?? 1
-                guard let id = run.pickedPath, let skill = store.skill(id) else {
+                guard let id = run.pickedPath, var skill = store.skill(id) else {
                     failReplay(runID: run.id, reason: "that skill was deleted before the replay started")
                     return
                 }
-                let values = pendingReplayValues.removeValue(forKey: run.id) ?? []
+                // A plain recording asked to do it for someone else: its smart version (same site, with inputs)
+                // does that; replaying the recording would repeat the recorded details.
+                if skill.runsInBrowser, (skill.inputs ?? []).isEmpty,
+                   !ReplayValues.ignoredByRecording(skill.steps, passes: pendingReplayValues[run.id] ?? []).isEmpty {
+                    if let smart = ReplayDispatcher.smartSibling(of: skill, in: store.activeSkills) {
+                        replayLog(run.id, "“\(skill.name)” was recorded with fixed details — using “\(smart.name)”, which takes them")
+                        skill = smart
+                    } else if store.settings.hybridReplay {
+                        pendingReplayValues[run.id] = nil
+                        failReplay(runID: run.id, reason: "“\(skill.name)” replays exactly as it was recorded, with no inputs for the details you gave, "
+                            + "so it would repeat the recorded ones. Nothing was done. Save a run of it again with Smart replay on to give it inputs, "
+                            + "or ask okidoki to do it with the agent.")
+                        return
+                    }
+                }
+                let values = SkillSecrets.fill(pendingReplayValues.removeValue(forKey: run.id) ?? [], skill: skill, times: times)
                 // A skill smart replay made (inputs, conditions, loops, think steps) only makes sense to
                 // the smart replayer, whatever the switch says; the switch decides for plain recordings.
                 let smart = store.settings.hybridReplay || skill.usesSmartReplay
@@ -1592,6 +1671,8 @@ final class AppEnvironment: ObservableObject {
             beginDriving(run)
         case .connector:
             Task { await executeConnector(run) }
+        case .codingAgent:
+            Task { await executeCodingAgent(run) }
         case .watch:
             break
         default:
@@ -1721,6 +1802,10 @@ final class AppEnvironment: ObservableObject {
         var added = 0
         for item in found {
             let name = (MemoryImport.source(forFile: item.file) ?? asked)?.name ?? "another assistant"
+            // Near-duplicates of what's already known ("Prefers aisle seats." vs "prefers aisle seats") are
+            // skipped too, and secrets are dropped (addMemory refuses them). Imports never overwrite: an export
+            // is older than what the person told okidoki since.
+            if case .duplicate = MemoryPolicy.match(item.text, in: store.activeMemories) { continue }
             if store.addMemory(item.text, section: item.section, source: "from \(name)") != nil { added += 1 }
         }
         let skipped = found.count - added
@@ -2326,6 +2411,10 @@ final class AppEnvironment: ObservableObject {
                 // New credentials: build the memory index now rather than on the next change.
                 lastMemoryHash = nil
                 scheduleMemoryIndex(after: 1)
+                if let problem = mossKeyProblem {
+                    toast(title: "moss key didn't fit", detail: problem, kind: .warning,
+                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+                }
             }
             if provider == "apify", sidecar.status.isReady {
                 // Catch a mistyped key now rather than on the first scrape.
@@ -2344,6 +2433,8 @@ final class AppEnvironment: ObservableObject {
     func deleteKey(provider: String) {
         KeyStore.delete(provider)
         keysVersion += 1
+        // No key, no index: the brain stops recalling from it now, not at its next restart.
+        if provider == "moss" { scheduleMemoryIndex(after: 0) }
         toast(title: "key removed", detail: provider, kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
     }
 
@@ -2580,9 +2671,42 @@ final class AppEnvironment: ObservableObject {
         return (parts[0], parts[1].trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// Why a saved Moss key can't be used, so the Memory page doesn't wait on an index that never comes.
+    var mossKeyProblem: String? {
+        guard hasKey("moss"), mossCredentials() == nil else { return nil }
+        return "the Moss key should look like project-id:project-key"
+    }
+
+    /// The Memory page's search by meaning. Results land in `memorySearch`; nil ids mean words only.
+    func searchMemory(_ query: String) {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, mossCredentials() != nil, sidecar.status.isReady, memoryIndex.ready else {
+            // Nothing to ask: answer with no matches by meaning, so the page doesn't keep saying it's looking.
+            memorySearch = (text, text.isEmpty ? nil : [])
+            return
+        }
+        memorySearch = (text, nil)
+        let account = store.currentAccountID
+        Task { [weak self] in
+            let ids = await BrainClient.shared.memorySearch(text, accountID: account)
+            guard let self, self.memorySearch.query == text else { return }
+            // A failed lookup answers with nothing, so the page stops saying it's looking.
+            self.memorySearch = (text, ids ?? [])
+        }
+    }
+
     /// Keeps the brain's memory index current, a few seconds after the store settles.
     private func scheduleMemoryIndex(after delay: Double = 5) {
-        guard mossCredentials() != nil else { return }
+        guard mossCredentials() != nil else {
+            // The key was removed (or never worked): the brain must stop recalling from an index nobody keeps
+            // current any more, or a memory deleted now would still be recalled until the brain restarts.
+            if memoryIndex.ready || memoryIndex.documents > 0 {
+                memoryIndex = MemoryIndexStatus()
+                lastMemoryHash = nil
+                Task { await BrainClient.shared.memoryClose() }
+            }
+            return
+        }
         memoryWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             Task { await self?.pushMemoryIndex() }

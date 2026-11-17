@@ -30,7 +30,7 @@ function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
-    reader.onerror = () => reject(reader.error ?? new Error("couldn't read the file"));
+    reader.onerror = () => reject(reader.error ?? new Error("couldn’t read the file"));
     reader.readAsDataURL(file);
   });
 }
@@ -86,7 +86,7 @@ function Documents({ vault, invoke }: { vault: VaultState; invoke: (type: string
     const picked = Array.from(list);
     if (!picked.length) return;
     if (!native) {
-      notify("Do this on your Mac", "The browser preview can't write to the vault folder.", "info");
+      notify("Do this on your Mac", "The browser preview can’t write to the vault folder.", "info");
       return;
     }
     const tooBig = picked.filter((file) => file.size > MAX_UPLOAD);
@@ -98,7 +98,7 @@ function Documents({ vault, invoke }: { vault: VaultState; invoke: (type: string
       const encoded = await Promise.all(fits.map(async (file) => ({ name: file.name, data: await readAsBase64(file) })));
       invoke("vaultAddFiles", { folder: uploadTo, files: encoded });
     } catch (error) {
-      notify("Couldn't read that", error instanceof Error ? error.message : String(error), "warning");
+      notify("Couldn’t read that", error instanceof Error ? error.message : String(error), "warning");
     } finally {
       setUploading((current) => current.filter((name) => !fits.some((file) => file.name === name)));
     }
@@ -358,7 +358,7 @@ function Credentials({ vault }: { vault: VaultState }) {
             <p>
               {vault.logins.length
                 ? "Logins are sealed with your vault passphrase. Nothing can read them without it, okidoki included."
-                : "Pick one you'll remember. Passwords are sealed with it right here, before they're saved; only the sealed box is kept on this Mac."}
+                : "Pick one you’ll remember. Passwords are sealed with it right here, before they’re saved; only the sealed box is kept on this Mac."}
             </p>
           </header>
           <div className="form-stack">
@@ -461,7 +461,7 @@ function Credentials({ vault }: { vault: VaultState }) {
                   onClick={() =>
                     setConfirm({
                       title: `Delete the ${login.site} login?`,
-                      detail: "It's removed from this Mac.",
+                      detail: "It’s removed from this Mac.",
                       action: "Delete",
                       onConfirm: () => {
                         invoke("vaultDeleteLogin", { id: login.id });
@@ -502,7 +502,7 @@ function ImportModal({ open, passphrase, onClose }: { open: boolean; passphrase:
   const csvReport = status.last && /\.csv$/i.test(status.last.source) ? status.last : null;
 
   return (
-    <Modal open={open} onClose={onClose} title="Import from your browsers" subtitle="Passwords are sealed with your vault passphrase as they come in. Sign-ins keep you logged in to your sites in okidoki's browser." width={520}>
+    <Modal open={open} onClose={onClose} title="Import from your browsers" subtitle="Passwords are sealed with your vault passphrase as they come in. Sign-ins keep you logged in to your sites in okidoki’s browser." width={520}>
       <div className="pref-group">
         {status.sources.map((browser) => {
           const report = status.last?.source === browser.name ? status.last : null;
@@ -525,7 +525,7 @@ function ImportModal({ open, passphrase, onClose }: { open: boolean; passphrase:
                   variant="ghost"
                   icon={cookieBusy ? "spinner" : "user"}
                   disabled={Boolean(status.cookiesBusy) || Boolean(browser.error)}
-                  title="Bring this browser's sign-ins into okidoki's browser, so sites (and the agent) are already signed in"
+                  title="Bring this browser’s sign-ins into okidoki’s browser, so sites (and the agent) are already signed in"
                   onClick={() => invoke("vaultImportCookies", { browser: browser.id })}
                 >
                   {cookieBusy ? "Signing in…" : signins && signins.cookies > 0 ? "Sign-ins again" : "Sign-ins"}
@@ -628,14 +628,14 @@ function LoginModal({ editing, vaultKey, onClose }: { editing: VaultLogin | null
       notify(existing ? "Login updated" : "Login added", site.trim());
       onClose();
     } catch (error) {
-      notify("That didn't work", error instanceof Error ? error.message : String(error), "warning");
+      notify("That didn’t work", error instanceof Error ? error.message : String(error), "warning");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Modal open={Boolean(editing)} onClose={onClose} title={existing ? "Edit login" : "Add a login"} subtitle="The password is sealed on this Mac before it's saved." width={460}>
+    <Modal open={Boolean(editing)} onClose={onClose} title={existing ? "Edit login" : "Add a login"} subtitle="The password is sealed on this Mac before it’s saved." width={460}>
       <div className="form-stack">
         <label className="form-label">Site or tool</label>
         <TextField value={site} onChange={setSite} placeholder="stripe.com, the bank, the utility portal…" autoFocus />

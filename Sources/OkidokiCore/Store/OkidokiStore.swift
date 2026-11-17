@@ -25,6 +25,8 @@ public final class OkidokiStore: ObservableObject {
     public let deviceID: String
     /// Items deleted here, id → when, kept for a while.
     public private(set) var deletions: [String: Date]
+    /// Memory text deleted or replaced here (folded → when). Earlier turns that repeat it stay out of recall.
+    public private(set) var forgottenMemories: [String: Date] = [:]
     /// Left from older builds that synced. Saved back as it was.
     public var syncCursors: [String: Int]
     /// Items this build can't read, from the saved file. Saved back as they are, never deleted.
@@ -129,6 +131,7 @@ public final class OkidokiStore: ObservableObject {
         self.pins = state.pins
         self.bookmarks = state.bookmarks
         self.deletions = state.deletions
+        self.forgottenMemories = state.forgotten ?? [:]
         self.syncCursors = state.syncCursors
         var unreadable = state.unreadable
         for item in unreadableAtLoad where !unreadable.contains(where: { $0.table == item.table && $0.id == item.id }) {
@@ -196,10 +199,12 @@ public final class OkidokiStore: ObservableObject {
 
     /// What the model is told it remembers about the account in front: current right-now notes first,
     /// then the newest about-you notes. The rest is found by meaning through the memory index.
-    public func memoryLines(limit: Int = 24, now: Date = Date()) -> [String] {
-        let current = memories(.rightNow).filter { isCurrent($0, now: now) }
-        let about = memories(.aboutYou)
-        return (current + about).prefix(limit).map { "\($0.section.label): \($0.text)" }
+    /// With a `query`, notes that share words with it come before the newest ones (see `MemoryRecall`), so
+    /// the right note reaches the model even among thousands, and even without a Moss key. Pinned notes
+    /// always come first.
+    public func memoryLines(limit: Int = 24, query: String = "", now: Date = Date()) -> [String] {
+        MemoryRecall.select(activeMemories, query: query, limit: limit, isCurrent: { isCurrent($0, now: now) })
+            .map { "\($0.section.label): \($0.text)" }
     }
 
     public func isFromThisMac(_ run: AgentRun) -> Bool { run.origin == deviceID }
@@ -337,6 +342,8 @@ public final class OkidokiStore: ObservableObject {
         guard cleaned.count > 2 else { return nil }
         // What the model saves on its own has to be a lasting fact about the person, checked here, once.
         if Self.modelSources.contains(source), !BrainService.isDurableFact(cleaned) { return nil }
+        // Secrets never become memories, whoever sends them (an import included); they belong in the Vault.
+        if MemoryPolicy.secretKind(cleaned) != nil { return nil }
         let account = accountID ?? currentAccountID
         let lower = cleaned.lowercased()
         if memories.contains(where: { $0.accountID == account && $0.text.lowercased() == lower }) { return nil }
@@ -346,12 +353,109 @@ public final class OkidokiStore: ObservableObject {
     }
 
     public func updateMemory(_ id: String, text: String) {
-        guard let index = memories.firstIndex(where: { $0.id == id }) else { return }
-        memories[index].text = text
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, let index = memories.firstIndex(where: { $0.id == id }),
+              memories[index].text != cleaned else { return }
+        forget(memories[index].text)
+        memories[index].text = cleaned
         memories[index].updatedAt = Date()
     }
 
+    /// Earlier turns are indexed for two weeks; what was forgotten is remembered as forgotten that long.
+    public static let forgetLifetime: TimeInterval = 60 * 60 * 24 * 15
+
+    /// Notes that the person deleted or replaced; their old wording is kept out of recall.
+    private func forget(_ text: String) {
+        let key = MemoryRecall.forgetKey(text)
+        guard !key.isEmpty else { return }
+        forgottenMemories[key] = Date()
+    }
+
+    /// What one save did, for the chat chip and the toast.
+    public enum MemorySave: Equatable {
+        case added(MemoryItem)
+        /// A correction replaced what it said; `previousText` on the item holds the old text.
+        case updated(MemoryItem)
+        /// Already known; nothing changed.
+        case known(MemoryItem)
+        /// Not saved: "secret:<kind>", "instruction", "not-a-fact" or "empty".
+        case refused(String)
+
+        public var item: MemoryItem? {
+            switch self {
+            case .added(let item), .updated(let item), .known(let item): return item
+            case .refused: return nil
+            }
+        }
+    }
+
+    /// The one way a remembered fact is saved: gated (no secrets, no instructions), reconciled with what the
+    /// account already knows (a duplicate is skipped, a correction replaces the old memory instead of adding
+    /// a second one), and marked with where it came from. `op`/`targetID` come from the brain when it decided;
+    /// without them the Mac decides by itself.
+    @discardableResult
+    public func saveMemory(_ text: String, section: MemorySection = .aboutYou, source: String,
+                           learned: Bool = false, threadID: String? = nil, runID: String? = nil,
+                           messageID: String? = nil, op: String? = nil, targetID: String? = nil,
+                           untrusted: Bool = false) -> MemorySave {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,;: "))
+        guard cleaned.count > 2 else { return .refused("empty") }
+        if let why = MemoryPolicy.refusal(cleaned, untrusted: untrusted || learned) { return .refused(why) }
+        let known = activeMemories
+        var decided: MemoryPolicy.Match = MemoryPolicy.match(cleaned, in: known)
+        if let op, let targetID, known.contains(where: { $0.id == targetID }) {
+            if op == "skip" { decided = .duplicate(id: targetID) }
+            if op == "update" { decided = .correction(id: targetID) }
+        }
+        switch decided {
+        case .duplicate(let id):
+            guard let item = known.first(where: { $0.id == id }) else { return .refused("empty") }
+            return .known(item)
+        case .correction(let id):
+            guard let index = memories.firstIndex(where: { $0.id == id }) else { return .refused("empty") }
+            if memories[index].text.lowercased() == cleaned.lowercased() { return .known(memories[index]) }
+            memories[index].previousText = memories[index].text
+            // The old wording is out of date: earlier turns that repeat it stay out of recall (undo brings it back).
+            forget(memories[index].text)
+            memories[index].text = cleaned
+            memories[index].updatedAt = Date()
+            memories[index].threadID = threadID ?? memories[index].threadID
+            memories[index].runID = runID
+            memories[index].messageID = messageID
+            memories[index].learned = learned ? true : nil
+            return .updated(memories[index])
+        case .new:
+            var item = MemoryItem(accountID: currentAccountID, section: section, text: cleaned, source: source)
+            item.threadID = threadID; item.runID = runID; item.messageID = messageID
+            item.learned = learned ? true : nil
+            memories.insert(item, at: 0)
+            return .added(item)
+        }
+    }
+
+    /// Undo for a save: a correction goes back to what it said before, a new memory goes away.
+    public func undoMemorySave(_ id: String) {
+        guard let index = memories.firstIndex(where: { $0.id == id }) else { return }
+        if let previous = memories[index].previousText, !previous.isEmpty {
+            memories[index].text = previous
+            memories[index].previousText = nil
+            memories[index].messageID = nil
+            memories[index].learned = nil
+            memories[index].updatedAt = Date()
+        } else {
+            deleteMemory(id)
+        }
+    }
+
+    /// Pinned notes go with every request, whatever it's about.
+    public func setMemoryPinned(_ id: String, _ pinned: Bool) {
+        guard let index = memories.firstIndex(where: { $0.id == id }) else { return }
+        memories[index].pinned = pinned ? true : nil
+    }
+
     public func deleteMemory(_ id: String) {
+        if let gone = memories.first(where: { $0.id == id }) { forget(gone.text) }
         memories.removeAll { $0.id == id }
         rememberDeletion(id)
     }
@@ -608,7 +712,11 @@ public final class OkidokiStore: ObservableObject {
     }
 
     public func deleteSkill(_ id: String) {
-        if let skill = skills.first(where: { $0.id == id }) { SkillFrames.remove(skill: skill) }
+        if let skill = skills.first(where: { $0.id == id }) {
+            SkillFrames.remove(skill: skill)
+            // A password the skill remembered goes with it.
+            SkillSecrets.forget(skillID: skill.id, names: SkillSecrets.names(in: skill))
+        }
         skills.removeAll { $0.id == id }
         rememberDeletion(id)
     }
@@ -724,13 +832,16 @@ public final class OkidokiStore: ObservableObject {
     public static let maxPins = 12
 
     /// Pins a site, or does nothing when its host is already pinned. Returns false when the grid is full.
+    /// `index` places it among the pins (a tab dropped between two); nil or out of range adds it at the end.
     @discardableResult
-    public func pin(url: String, title: String) -> Bool {
+    public func pin(url: String, title: String, at index: Int? = nil) -> Bool {
         var list = pins ?? []
         let host = BrowserPin.host(of: url)
+        guard !host.isEmpty, !url.isEmpty else { return false }
         if list.contains(where: { $0.host == host }) { return true }
         guard list.count < Self.maxPins else { return false }
-        list.append(BrowserPin(url: url, title: title.isEmpty ? host : title))
+        let pin = BrowserPin(url: url, title: title.isEmpty ? host : title)
+        if let index, index >= 0, index < list.count { list.insert(pin, at: index) } else { list.append(pin) }
         pins = list
         return true
     }
@@ -784,6 +895,16 @@ public final class OkidokiStore: ObservableObject {
         return true
     }
 
+    /// Bookmarks a page unless it's already saved (never toggles off: a drag or "Bookmark" twice keeps one).
+    /// `index` places it in the list (an undo puts it back where it was). Returns false for a duplicate.
+    @discardableResult
+    public func addBookmark(url: String, title: String, at index: Int? = nil) -> Bool {
+        guard !url.isEmpty, !bookmarks.contains(where: { $0.url == url }) else { return false }
+        let bookmark = Bookmark(url: url, title: title.isEmpty ? BrowserPin.host(of: url) : title)
+        bookmarks.insert(bookmark, at: min(max(index ?? 0, 0), bookmarks.count))
+        return true
+    }
+
     public func removeBookmark(_ id: String) {
         bookmarks.removeAll { $0.id == id }
     }
@@ -812,11 +933,14 @@ public final class OkidokiStore: ObservableObject {
         saveWork?.cancel()
         let horizon = Date().addingTimeInterval(-Self.deletionMemory)
         deletions = deletions.filter { $0.value > horizon }
+        let forgetHorizon = Date().addingTimeInterval(-Self.forgetLifetime)
+        forgottenMemories = forgottenMemories.filter { $0.value > forgetHorizon }
         let state = AppState(accounts: accounts, currentAccountID: currentAccountID,
                              settings: settings, threads: threads, memories: memories, runs: runs,
                              skills: skills, routines: routines, connectors: connectors,
                              deletions: deletions, syncCursors: syncCursors, unreadable: unreadable,
-                             pins: pins, bookmarks: bookmarks)
+                             pins: pins, bookmarks: bookmarks,
+                             forgotten: forgottenMemories.isEmpty ? nil : forgottenMemories)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // Fractional seconds: two edits a moment apart stay apart, so they shouldn't round off on save.

@@ -453,6 +453,11 @@ final class BrowserController: NSObject, WKNavigationDelegate, WKUIDelegate,
                 self.onShellKey?(key)
                 return nil
             }
+            // ⌘D bookmarks the page, ⌘⇧D pins its site (the shell toasts with Undo).
+            if let key = event.charactersIgnoringModifiers?.lowercased(), key == "d" {
+                self.onShellKey?(flags == .command ? "d" : "D")
+                return nil
+            }
             let tab = self.activeTab
             switch event.charactersIgnoringModifiers {
             case "r": tab.webView.reload()

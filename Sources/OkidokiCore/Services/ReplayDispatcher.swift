@@ -42,6 +42,9 @@ public enum ReplayDispatcher {
             if let noun = skill.itemNoun { row["itemNoun"] = noun }
             let inputs = (skill.inputs ?? []).filter { $0.source != "page" }.map(\.name)
             if !inputs.isEmpty { row["inputs"] = inputs }
+            // List inputs with their fields, so the router can hand a list over as entries.
+            let lists = (skill.inputs ?? []).filter { $0.kind == "list" && $0.source != "page" }
+            if !lists.isEmpty { row["lists"] = Dictionary(lists.map { ($0.name, $0.fields ?? []) }, uniquingKeysWith: { first, _ in first }) }
             if skill.template == true { row["template"] = true }
             return row
         }
@@ -49,7 +52,7 @@ public enum ReplayDispatcher {
 
     /// The one other skill that does `skill`'s job with inputs: it starts on the same site, and its name
     /// is the same or contains it ("acme filing" → "acme filing smart"). Nil when none or several fit.
-    static func smartSibling(of skill: Skill, in skills: [Skill]) -> Skill? {
+    public static func smartSibling(of skill: Skill, in skills: [Skill]) -> Skill? {
         func host(_ s: Skill) -> String? {
             (s.startURL ?? s.steps.first { $0.url?.isEmpty == false }?.url).map { BrowserSteps.host(of: $0) }
         }

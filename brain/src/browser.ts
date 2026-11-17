@@ -4,6 +4,7 @@
 
 import { callModel, conversationBroken, unsupportedField, type ModelReply } from "./computer2";
 import { drivingModel, readUsage, type ModelUsage } from "./computer";
+import { recallNotesFor } from "./memory";
 
 export type BrowserObservation = {
   url: string;
@@ -41,6 +42,8 @@ export type BrowserRequest = {
   context?: Array<{ role: string; text: string }>;
   /** What okidoki knows about the person (sizes, address, preferences), one fact per line. */
   memory?: string[];
+  /** The current okidoki account, so recall stays within it (plus shared memories). */
+  accountId?: string;
   /** The Mac's own log of what the run did so far, for a session that had to start again. */
   progress?: string[];
   settings?: { claudeModel?: string };
@@ -171,12 +174,12 @@ function contextLines(context: BrowserRequest["context"]): string[] {
 }
 
 /** `fresh`: the first turn of this conversation, which carries the task (also when a lost session restarts mid-run). */
-function observationText(request: BrowserRequest, fresh: boolean, recap?: string[]): string {
+function observationText(request: BrowserRequest, fresh: boolean, recap?: string[], recalled: string[] = []): string {
   const obs = request.observation;
   const lines: string[] = [];
   if (fresh) {
     lines.push(...contextLines(request.context));
-    const memory = (request.memory ?? []).map((line) => line.trim()).filter(Boolean).slice(0, 40);
+    const memory = [...(request.memory ?? []), ...recalled].map((line) => line.trim()).filter(Boolean).slice(0, 46);
     if (memory.length) lines.push("About the user:", ...memory.map((line) => `- ${line}`));
     lines.push(`Task: ${request.goal}`);
     if (request.logins?.length) lines.push(`Saved logins: ${request.logins.join(", ")}`);
@@ -221,6 +224,8 @@ type Session = {
   nudgedAt?: number;
   /** A plain log of every action the run took, so a session that has to restart can pick up where it was. */
   recap: string[];
+  /** Notes the memory index found for the task by meaning, beyond the ones the Mac sent. Looked up once per run. */
+  recalled?: string[];
   /** Turns in a row where the model wrote no tool call, and was told to use one. */
   silent?: number;
   /** The last turn's actions in words, matched to the Mac's results on the next turn for the recap. */
@@ -284,7 +289,7 @@ function userTurn(session: Session, request: BrowserRequest, recap?: string[]): 
   if (request.observation.screenshotBase64) {
     page.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: request.observation.screenshotBase64 } });
   }
-  page.push({ type: "text", text: observationText(request, session.messages.length === 0, recap) });
+  page.push({ type: "text", text: observationText(request, session.messages.length === 0, recap, session.recalled) });
   if (session.pendingIds.length === 0) return { role: "user", content: page };
   // Every tool call of the last turn gets its result. The new page rides inside the last one, so the
   // API's context editing can clear old pages server-side: turns stay small and quick without this
@@ -436,6 +441,9 @@ export async function browserStep(
   // A session that's gone (the brain restarted, or it idled out) mid-run: start a new conversation that
   // knows the task and what the Mac reports it already did, instead of a page with no task at all.
   const lost = session.messages.length === 0 && request.step > 0;
+  if (session.messages.length === 0 && session.recalled === undefined) {
+    session.recalled = await recallNotesFor(request.goal, request.accountId, request.memory);
+  }
   recordResults(session, request);
 
   const model = drivingModel(request.settings?.claudeModel);

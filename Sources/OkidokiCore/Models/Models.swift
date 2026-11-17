@@ -73,7 +73,7 @@ public enum DrawingStyle: String, Codable, CaseIterable, Identifiable, Sendable 
 }
 
 public struct AppSettings: Codable, Equatable, Sendable {
-    public static let summonModes = ["auto", "act", "browser", "chat"]
+    public static let summonModes = ["auto", "act", "browser", "chat", "agent"]
     public static var defaultVaultFolder: String {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/Okidoki Vault", isDirectory: true).path
     }
@@ -122,6 +122,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var drivePace: String = "fast"
     /// Where computer-use runs happen: "mac" is this Mac, "vm" is okidoki's private Mac (a macOS VM).
     public var computerTarget: String = "mac"
+    /// Memory for the private Mac in GB. 0 picks it from this Mac's memory (half, 4 to 8 GB).
+    public var privateMacMemoryGB: Int = 0
     /// What a request typed at the cursor is for: "auto" lets the brain decide, "act" drives the Mac,
     /// "browser" works in okidoki's own browser, "chat" just answers.
     public var summonMode: String = "auto"
@@ -146,6 +148,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// MCP servers okidoki can call. Their secrets (env vars, headers) live in the Mac's key file, not here.
     public var mcpServers: [MCPServer] = []
 
+    /// Coding agents (Claude Code, Codex, Amp…) okidoki hands file, terminal and code jobs to. No secrets:
+    /// each agent uses its own sign-in.
+    public var codingAgents: CodingAgentSettings = CodingAgentSettings()
+
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -156,9 +162,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
         case appleCalendar, automationGranted, inputMonitoringGranted
         case onboardingComplete, tourComplete, showedWelcome
-        case claudeModel, mcpServers, drivePace, computerTarget
+        case claudeModel, mcpServers, drivePace, computerTarget, privateMacMemoryGB
         case screenContext, summonMode, vaultFolder
         case hybridReplay, shakeToSummon, summonHotkey
+        case codingAgents
     }
 
     public init(from decoder: Decoder) throws {
@@ -201,8 +208,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         showedWelcome = bool(.showedWelcome, false)
         claudeModel = string(.claudeModel, "claude-haiku-5-5")
         mcpServers = (try? c.decodeIfPresent([MCPServer].self, forKey: .mcpServers)).flatMap { $0 } ?? []
+        codingAgents = (try? c.decodeIfPresent(CodingAgentSettings.self, forKey: .codingAgents)).flatMap { $0 } ?? CodingAgentSettings()
         drivePace = string(.drivePace, "fast")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
+        privateMacMemoryGB = max(0, (try? c.decodeIfPresent(Int.self, forKey: .privateMacMemoryGB)).flatMap { $0 } ?? 0)
         let mode = string(.summonMode, "auto")
         summonMode = Self.summonModes.contains(mode) ? mode : "auto"
         vaultFolder = string(.vaultFolder, Self.defaultVaultFolder)
@@ -289,11 +298,23 @@ public struct MemoryItem: Identifiable, Codable, Equatable, Sendable {
     public var source: String
     public var createdAt: Date
     public var updatedAt: Date
+    /// Pinned notes go with every request, whatever it's about. Nil (not false) when unpinned, so older saves match.
+    public var pinned: Bool?
+    /// Where it came from, so the chat can show "saved to memory" beside the turn and the Memory page
+    /// can say which chat or run taught it. All nil for memories typed on the Memory page or imported.
+    public var threadID: String?
+    public var runID: String?
+    /// The person's message it was saved from.
+    public var messageID: String?
+    /// What it said before a correction replaced it, so Undo can put it back.
+    public var previousText: String?
+    /// Picked up on its own from what the person said or a run confirmed, not asked for. Nil when asked.
+    public var learned: Bool?
 
     public init(id: String = UUID().uuidString, accountID: String = "", section: MemorySection, text: String,
-                source: String = "you", createdAt: Date = Date(), updatedAt: Date = Date()) {
+                source: String = "you", createdAt: Date = Date(), updatedAt: Date = Date(), pinned: Bool? = nil) {
         self.id = id; self.accountID = accountID; self.section = section; self.text = text; self.source = source
-        self.createdAt = createdAt; self.updatedAt = updatedAt
+        self.createdAt = createdAt; self.updatedAt = updatedAt; self.pinned = pinned == true ? true : nil
     }
 
     public init(from decoder: Decoder) throws {
@@ -306,6 +327,12 @@ public struct MemoryItem: Identifiable, Codable, Equatable, Sendable {
         source = (try? c.decodeIfPresent(String.self, forKey: .source)).flatMap { $0 } ?? "you"
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)).flatMap { $0 } ?? createdAt
+        pinned = (try? c.decodeIfPresent(Bool.self, forKey: .pinned)).flatMap { $0 } == true ? true : nil
+        threadID = (try? c.decodeIfPresent(String.self, forKey: .threadID)).flatMap { $0 }
+        runID = (try? c.decodeIfPresent(String.self, forKey: .runID)).flatMap { $0 }
+        messageID = (try? c.decodeIfPresent(String.self, forKey: .messageID)).flatMap { $0 }
+        previousText = (try? c.decodeIfPresent(String.self, forKey: .previousText)).flatMap { $0 }
+        learned = (try? c.decodeIfPresent(Bool.self, forKey: .learned)).flatMap { $0 } == true ? true : nil
     }
 }
 
@@ -354,6 +381,7 @@ public struct ChatThread: Identifiable, Codable, Equatable, Sendable {
 
 public enum RunKind: String, Codable, CaseIterable, Sendable {
     case answer, quickAction = "quick_action", watch, borrow, computerUse = "computer_use", browser, routine, connector
+    case codingAgent = "coding_agent"
     public var label: String {
         switch self {
         case .answer: return "answer"
@@ -364,6 +392,7 @@ public enum RunKind: String, Codable, CaseIterable, Sendable {
         case .browser: return "browser"
         case .routine: return "routine"
         case .connector: return "connector"
+        case .codingAgent: return "coding agent"
         }
     }
 
@@ -472,6 +501,10 @@ public struct AgentRun: Identifiable, Codable, Equatable, Sendable {
     /// When the person last looked at the run (opened its card, chat or tab). A run that finished after
     /// it is unread.
     public var seenAt: Date?
+    /// Coding agent runs: which agent did the job, and its own session id, so a follow-up in the same
+    /// conversation resumes that session instead of starting cold.
+    public var agentID: String?
+    public var agentSession: String?
 
     public init(id: String = UUID().uuidString, accountID: String, kind: RunKind,
                 title: String, prompt: String, threadID: String? = nil,
@@ -843,6 +876,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         case browser
         case overlay
         case connector
+        case codingAgent = "coding_agent"
     }
 
     public var kind: Kind
@@ -874,6 +908,9 @@ public struct BrainDecision: Codable, Equatable, Sendable {
     public var connectorCallJSON: String?
     /// What the model saw in front of them: "watching", "reading", "working" or "other".
     public var scene: String?
+    /// For coding_agent: the self-contained job, and the connected agent that should do it.
+    public var agentTask: String?
+    public var agentID: String?
 
     public init(kind: Kind, title: String, answer: String, speak: String = "",
                 risk: RiskLevel = .low, previewSummary: String = "", previewSteps: [String] = [],
@@ -907,6 +944,7 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         case overlayWidthSnake = "overlay_width"
         case overlayHeightSnake = "overlay_height"
         case scene
+        case agentTask, agentID = "agentId"
     }
 
     /// A list, or a single string the model sent where a list belonged (one item, or one per line).
@@ -950,6 +988,8 @@ public struct BrainDecision: Codable, Equatable, Sendable {
             ?? (try? c.decodeIfPresent(Int.self, forKey: .overlayHeightSnake))
         connectorCallJSON = try? c.decodeIfPresent(String.self, forKey: .connectorCallJSON)
         scene = try? c.decodeIfPresent(String.self, forKey: .scene)
+        agentTask = try? c.decodeIfPresent(String.self, forKey: .agentTask)
+        agentID = try? c.decodeIfPresent(String.self, forKey: .agentID)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -981,6 +1021,8 @@ public struct BrainDecision: Codable, Equatable, Sendable {
         try c.encodeIfPresent(overlayHeight, forKey: .overlayHeight)
         try c.encodeIfPresent(connectorCallJSON, forKey: .connectorCallJSON)
         try c.encodeIfPresent(scene, forKey: .scene)
+        try c.encodeIfPresent(agentTask, forKey: .agentTask)
+        try c.encodeIfPresent(agentID, forKey: .agentID)
     }
 }
 
@@ -1073,6 +1115,9 @@ public struct AppState: Codable, Sendable {
     /// Sites pinned in the sidebar, in order. Nil until the shell seeds them once.
     public var pins: [BrowserPin]?
     public var bookmarks: [Bookmark]
+    /// Memory text the person deleted or replaced (folded text → when), so earlier turns that repeat it
+    /// aren't recalled. Kept as long as those turns are indexed, then dropped.
+    public var forgotten: [String: Date]?
     /// Items in the saved file that couldn't be read (a newer build's data, say). Not saved.
     public private(set) var droppedItems = 0
 
@@ -1081,17 +1126,17 @@ public struct AppState: Codable, Sendable {
                 memories: [MemoryItem] = [], runs: [AgentRun] = [], skills: [Skill] = [],
                 routines: [Routine] = [], connectors: [Connector] = [],
                 deletions: [String: Date] = [:], syncCursors: [String: Int] = [:], unreadable: [UnreadableItem] = [],
-                pins: [BrowserPin]? = nil, bookmarks: [Bookmark] = []) {
+                pins: [BrowserPin]? = nil, bookmarks: [Bookmark] = [], forgotten: [String: Date]? = nil) {
         self.version = version; self.accounts = accounts; self.currentAccountID = currentAccountID
         self.settings = settings; self.threads = threads; self.memories = memories; self.runs = runs
         self.skills = skills; self.routines = routines; self.connectors = connectors
         self.deletions = deletions; self.syncCursors = syncCursors; self.unreadable = unreadable
-        self.pins = pins; self.bookmarks = bookmarks
+        self.pins = pins; self.bookmarks = bookmarks; self.forgotten = forgotten
     }
 
     enum CodingKeys: String, CodingKey {
         case version, accounts, currentAccountID, settings, threads, memories, runs, skills, routines, connectors
-        case deletions, syncCursors, unreadable, pins, bookmarks
+        case deletions, syncCursors, unreadable, pins, bookmarks, forgotten
     }
 
     /// One item that fails to decode (an unknown enum value from a newer build, say) must not take
@@ -1129,6 +1174,7 @@ public struct AppState: Codable, Sendable {
         unreadable = Self.items(UnreadableItem.self, c, .unreadable, dropped: &dropped) ?? []
         pins = Self.items(BrowserPin.self, c, .pins, dropped: &dropped)
         bookmarks = Self.items(Bookmark.self, c, .bookmarks, dropped: &dropped) ?? []
+        forgotten = (try? c.decodeIfPresent([String: Date].self, forKey: .forgotten)).flatMap { $0 }
         droppedItems = dropped
     }
 }

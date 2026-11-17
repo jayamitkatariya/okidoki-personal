@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useDashboard } from "../store";
+import { toast } from "@/components/ui/toast";
 import { ConfirmModal, PixelIcon, type ConfirmRequest } from "../components/ui";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Thread } from "../types";
@@ -24,7 +25,13 @@ export function ChatMenu({ thread, className, onGone }: { thread: Thread; classN
           <DropdownMenuItem
             onClick={() => {
               invoke("archiveThread", { id: thread.id });
-              notify(thread.archived ? "Back in your chats" : "Archived", title, "info");
+              // Archiving is one toggle, so it undoes for free: no dialog, an Undo instead.
+              toast({
+                message: thread.archived ? "Back in your chats" : "Archived",
+                description: title,
+                state: "info",
+                action: { label: "Undo", run: () => invoke("archiveThread", { id: thread.id }) },
+              });
               if (!thread.archived) onGone?.();
             }}
           >

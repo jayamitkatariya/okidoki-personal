@@ -10,7 +10,10 @@ export function relativeTime(value: string | null | undefined): string {
   if (seconds < 45) return "just now";
   if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86400)}d ago`;
+  if (seconds < 7 * 86400) return `${Math.round(seconds / 86400)}d ago`;
+  // Past a week, "540d ago" makes you do math; a date doesn't.
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
 }
 
 export function futureTime(value: string | null | undefined): string {

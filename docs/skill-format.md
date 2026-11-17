@@ -119,6 +119,11 @@ as version 1, and version 1 files replay exactly as before.
 - `pattern` is a regular expression the value must match before it's typed.
 - `source` and `hint` say where to find the value, usually a document in the vault.
 - `sensitive` values never reach logs.
+- `{{password}}` is a password the request itself gave when the skill was learned ("sign in with password …").
+  The value is never in the file: it's remembered in this Mac's `keys.json` for that skill, and a replay that
+  isn't given one uses it. Passwords the request didn't give are `{{vault:<site>.password}}`, filled from the vault.
+- A plain recording (no inputs) replayed with values it has no placeholder for is refused, not replayed with
+  the recorded details; its smart version (same site, with inputs) is used instead when there is one.
 - A `list` holds JSON entries with the named `fields`.
 
 ### Step fields

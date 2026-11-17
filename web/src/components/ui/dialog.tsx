@@ -38,7 +38,7 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
 
 const dialogContentVariants = cva(
 
-  'fixed top-1/2 left-1/2 z-[91] grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-3xl bg-popover px-7 pt-7 pb-5 text-sm text-popover-foreground ring-1 ring-foreground/10 shadow-2xl duration-250 ease-out outline-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-98 data-closed:slide-out-to-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-4 motion-reduce:data-closed:zoom-out-100 motion-reduce:data-closed:slide-out-to-bottom-0 motion-reduce:data-open:zoom-in-100 motion-reduce:data-open:slide-in-from-bottom-0',
+  'fixed top-1/2 left-1/2 z-[91] grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain -translate-x-1/2 -translate-y-1/2 gap-4 rounded-3xl bg-popover px-7 pt-7 pb-5 text-sm text-popover-foreground ring-1 ring-foreground/10 shadow-2xl duration-250 ease-out outline-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-98 data-closed:slide-out-to-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-4 motion-reduce:data-closed:zoom-out-100 motion-reduce:data-closed:slide-out-to-bottom-0 motion-reduce:data-open:zoom-in-100 motion-reduce:data-open:slide-in-from-bottom-0',
   {
     variants: {
       size: {

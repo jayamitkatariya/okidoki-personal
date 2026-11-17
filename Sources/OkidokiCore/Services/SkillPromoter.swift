@@ -148,11 +148,28 @@ public enum SkillPromoter {
         return step
     }
 
-    /// The skill's steps with the think step at `index` replaced by `steps`.
+    /// The skill's steps with the think step at `index` replaced by `steps`. For a plain step whose element
+    /// had to be revealed first (`steps` = the clicks that showed it, then the step itself), the step stays
+    /// what it was (its checks, condition, anchor) on the element found, with those clicks before it.
     public static func replacing(_ skill: [SkillStep], at index: Int, with steps: [SkillStep]) -> [SkillStep] {
-        guard skill.indices.contains(index), skill[index].mode == "think" else { return skill }
+        guard skill.indices.contains(index) else { return skill }
         var out = skill
-        out.replaceSubrange(index...index, with: steps)
+        if skill[index].mode == "think" {
+            out.replaceSubrange(index...index, with: steps)
+            return out
+        }
+        let original = skill[index]
+        guard steps.count > 1, let found = steps.last, found.action == original.action,
+              steps.dropLast().allSatisfy({ $0.action == "click" }) else { return skill }
+        var healed = original
+        healed.selectors = (found.selectors ?? []) + (original.selectors ?? []).filter { !(found.selectors ?? []).contains($0) }
+        let reveal = steps.dropLast().map { click -> SkillStep in
+            var copy = click
+            copy.when = original.when
+            copy.anchor = original.anchor
+            return copy
+        }
+        out.replaceSubrange(index...index, with: reveal + [healed])
         return out
     }
 }

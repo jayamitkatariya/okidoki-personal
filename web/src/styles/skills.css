@@ -183,17 +183,31 @@
   font-size: 12px;
   color: var(--faint);
 }
+/* The tools float over the head's end instead of holding four buttons' worth of room open at rest,
+   which cut a two-column card's name down to a word. When they show, a fade under them ends the name. */
+.skill-head {
+  position: relative;
+}
 .skill-tools {
+  position: absolute;
+  top: -4px;
+  right: -6px;
   display: flex;
   align-items: center;
-  align-self: flex-start;
-  margin: -4px -6px 0 0;
+  padding-left: 24px;
+  /* Only the name's line is faded; the meta line under it stays readable. */
+  background: linear-gradient(to right, transparent, var(--skill-tools-bg, var(--tile)) 22px) 0 4px / 100% 20px no-repeat;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s;
+}
+.skill-tile:hover {
+  --skill-tools-bg: var(--tile-hover);
 }
 .skill-tile:hover .skill-tools,
 .skill-tools:focus-within {
   opacity: 1;
+  pointer-events: auto;
 }
 .skill-summary {
   margin-top: 12px;

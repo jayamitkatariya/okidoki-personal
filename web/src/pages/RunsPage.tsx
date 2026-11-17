@@ -13,6 +13,7 @@ const kindGlyph: Record<RunKind, string> = {
   browser: "globe",
   routine: "clock",
   connector: "link",
+  coding_agent: "code",
 };
 
 const kindName: Record<RunKind, string> = {
@@ -24,6 +25,7 @@ const kindName: Record<RunKind, string> = {
   browser: "Browser",
   routine: "Routine",
   connector: "Connector",
+  coding_agent: "Coding agent",
 };
 
 type FilterId = "all" | "waiting" | "running" | "done" | "failed";
@@ -140,6 +142,7 @@ export function RunsPage() {
                 <button
                   key={run.id}
                   className={cx("run-row", current?.id === run.id && "is-selected")}
+                  title={run.title}
                   onClick={() => setSelected(run.id)}
                   aria-current={current?.id === run.id ? "true" : undefined}
                 >
@@ -188,8 +191,16 @@ export function RunsPage() {
           />
         ) : (
           <div className="runs-empty">
-            <Empty icon="runs" title="No runs yet">
-              Shake your mouse and ask for something. You’ll see the plan before anything touches your Mac.
+            <Empty
+              icon="runs"
+              title="No runs yet"
+              action={
+                <Button size="sm" variant="secondary" icon="spark" onClick={() => (window.location.hash = "#/home")}>
+                  Ask something
+                </Button>
+              }
+            >
+              Ask okidoki to do something. You’ll see the plan before anything touches your Mac.
             </Empty>
           </div>
         )}
@@ -313,7 +324,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
               </Button>
             ) : null}
             <IconButton icon="share" label="Share run" onClick={onShare} size={15} />
-            {run.kind !== "connector" && run.kind !== "watch" && (run.status === "running" || run.status === "paused") ? (
+            {run.kind !== "connector" && run.kind !== "watch" && run.kind !== "coding_agent" && (run.status === "running" || run.status === "paused") ? (
               <Button
                 variant="secondary"
                 size="sm"
@@ -560,7 +571,7 @@ function RunDetail({ run, onRedirect, onShare }: { run: Run; onRedirect: () => v
           </span>
           <div className="run-result-copy">
             <strong>{run.status === "done" ? "Done" : run.status === "cancelled" ? "Stopped" : "Didn’t finish"}</strong>
-            <span>{run.summary || run.status}</span>
+            <span>{run.summary || (run.status === "done" ? "Finished with nothing to report." : run.status === "cancelled" ? "Stopped before it finished." : "Something went wrong before it finished. Try it again.")}</span>
           </div>
           <div className="run-result-side">
             {run.freedBytes ? (

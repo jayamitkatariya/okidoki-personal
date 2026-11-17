@@ -5,13 +5,15 @@ import type { DriveRequest } from "./types";
 import { checkToken } from "./apify";
 import { closeAll, forget, reconcile, validateMcpServer } from "./mcp";
 import { mcpCatalog, runConnector, stopConnector, stopAllConnectors, validateConnectorRun } from "./connectors";
-import { closeMemory, memoryStatus, syncMemory, warmMemory } from "./memory";
+import { closeMemory, memoryStatus, searchNotes, syncMemory, warmMemory } from "./memory";
+import { extractMemories, type ExtractRequest } from "./memorycapture";
 import { anthropicKey, apifyToken, mossCredentials } from "./keys";
 import { findDocument } from "./finder";
 import type { ComputerRequest, ConnectorRunRequest, McpServerConfig, MemorySyncRequest, ThinkRequest } from "./types";
 import { browserStep, type BrowserRequest } from "./browser";
 import { compileSkill, resolveValues, routeRequest, type CompileRequest, type ResolveRequest, type RouteRequest } from "./skillcompile";
 import { macStep, type MacStepRequest } from "./macstep";
+import { buildCommand, runCodingAgent, stopAllCodingAgents, stopCodingAgent, type AgentRunRequest } from "./codingagents";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
@@ -307,8 +309,30 @@ async function route(request: Request): Promise<Response> {
       }
     }
 
+    // Memory creation: lasting facts from the person's own words (or an agent's proposals, checked),
+    // gated against secrets and injected instructions, and reconciled with what's already known.
+    if (url.pathname === "/memory/extract" && request.method === "POST") {
+      const payload = await body<ExtractRequest>(request);
+      const key = anthropicKey(request.headers.get("x-anthropic-key"));
+      return json(await extractMemories(payload, key, fetchUntil(request.signal)));
+    }
+
     if (url.pathname === "/memory/status" && request.method === "GET") {
       return json(memoryStatus());
+    }
+
+    // The Memory page's search by meaning. `hits` is null when there's no index to ask.
+    if (url.pathname === "/memory/search" && request.method === "POST") {
+      const { text, accountId, limit } = await body<{ text?: unknown; accountId?: unknown; limit?: unknown }>(request);
+      const hits = await searchNotes(String(text ?? ""), typeof accountId === "string" && accountId ? accountId : undefined,
+        typeof limit === "number" ? Math.max(1, Math.min(limit, 50)) : 20);
+      return json({ hits });
+    }
+
+    // The Moss key was removed on the Mac: stop recalling from an index the Mac no longer keeps current.
+    if (url.pathname === "/memory/close" && request.method === "POST") {
+      await closeMemory();
+      return json({ ok: true, ...memoryStatus() });
     }
 
     if (url.pathname === "/apify/check" && request.method === "POST") {
@@ -330,10 +354,50 @@ async function route(request: Request): Promise<Response> {
       }
     }
 
+    // A coding agent (Claude Code, Codex…) doing one job, streamed as newline-delimited JSON: {type:"event"}
+    // for each thing it says or does, then {type:"end"} with its answer and session. /stop ends it.
+    if (url.pathname === "/agent/run/stream" && request.method === "POST") {
+      const payload = await body<AgentRunRequest>(request);
+      if (!payload.runId || !payload.agent || !payload.prompt || !payload.cwd) return json({ error: "runId, agent, prompt and cwd required" }, 400);
+      try {
+        buildCommand(payload);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "bad agent" }, 400);
+      }
+      const stream = new ReadableStream({
+        cancel() {
+          stopCodingAgent(payload.runId);
+        },
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let closed = false;
+          const send = (line: Record<string, unknown>) => {
+            if (closed) return;
+            try {
+              controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+            } catch {
+              closed = true;
+            }
+          };
+          try {
+            const outcome = await runCodingAgent(payload, (event) => send({ type: "event", event }));
+            send({ type: "end", ...outcome });
+          } catch (error) {
+            send({ type: "end", ok: false, answer: "", denials: [], stopped: false, tools: 0, exitCode: null, error: error instanceof Error ? error.message : "the agent failed" });
+          } finally {
+            closed = true;
+            try { controller.close(); } catch {}
+          }
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache", ...corsHeaders } });
+    }
+
     if (url.pathname === "/stop" && request.method === "POST") {
       const { runId } = await body<{ runId?: unknown }>(request);
       if (typeof runId !== "string" || !runId) return json({ error: "runId required" }, 400);
-      return json({ stopped: stopConnector(runId) });
+      const agent = stopCodingAgent(runId);
+      return json({ stopped: stopConnector(runId) || agent });
     }
 
     return json({ error: "not found" }, 404);
@@ -352,6 +416,7 @@ function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   stopAllConnectors();
+  stopAllCodingAgents();
   closeAll(); // don't leave MCP server processes behind
   void closeMemory();
   server.stop(true);

@@ -26,14 +26,26 @@ public enum PrivateMacSpec {
         return min(max(wanted, minimum), max(minimum, maximum))
     }
 
-    /// Half the host's memory, between 4 and 8 GB, inside what the hypervisor allows.
-    public static func memoryBytes(host: UInt64, minimum: UInt64, maximum: UInt64) -> UInt64 {
+    /// Half the host's memory, between 4 and 8 GB, inside what the hypervisor allows. A `preferredGB`
+    /// the person picked wins, still inside those limits and never more than the host minus 4 GB.
+    public static func memoryBytes(host: UInt64, minimum: UInt64, maximum: UInt64, preferredGB: Int = 0) -> UInt64 {
         let gib: UInt64 = 1024 * 1024 * 1024
         let half = host / 2
-        let wanted = min(max(half, 4 * gib), 8 * gib)
+        var wanted = min(max(half, 4 * gib), 8 * gib)
+        if preferredGB > 0 {
+            let roomy = host > 8 * gib ? host - 4 * gib : host / 2
+            wanted = min(UInt64(preferredGB) * gib, max(roomy, 4 * gib))
+        }
         let clamped = min(max(wanted, minimum), max(minimum, maximum))
         // The hypervisor wants a multiple of 1 MiB.
         return clamped - clamped % (1024 * 1024)
+    }
+
+    /// Sizes worth offering on this host: 4 GB up, leaving the host at least 4 GB.
+    public static func memoryChoicesGB(host: UInt64) -> [Int] {
+        let gib: UInt64 = 1024 * 1024 * 1024
+        let room = host > 8 * gib ? host - 4 * gib : 4 * gib
+        return [4, 6, 8, 12, 16].filter { UInt64($0) * gib <= room }
     }
 
     /// The folder every VM file lives in: restore image, disk, auxiliary storage, identity.

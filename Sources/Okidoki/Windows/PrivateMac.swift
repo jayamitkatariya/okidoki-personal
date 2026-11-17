@@ -61,6 +61,10 @@ final class PrivateMacService: NSObject, ObservableObject {
     var macOSVersion: String { defaults.string(forKey: versionKey) ?? "" }
     var restoreImageDownloaded: Bool { FileManager.default.fileExists(atPath: PrivateMacSpec.restoreImageURL.path) }
 
+    /// The person's pick from Settings (0 = automatic). Read when the VM starts.
+    var preferredMemoryGB = 0
+    private var bootedMemoryBytes: UInt64 = 0
+
     var cpuCount: Int {
         PrivateMacSpec.cpuCount(host: ProcessInfo.processInfo.processorCount,
                                 minimum: VZVirtualMachineConfiguration.minimumAllowedCPUCount,
@@ -70,7 +74,8 @@ final class PrivateMacService: NSObject, ObservableObject {
     var memoryBytes: UInt64 {
         PrivateMacSpec.memoryBytes(host: ProcessInfo.processInfo.physicalMemory,
                                    minimum: VZVirtualMachineConfiguration.minimumAllowedMemorySize,
-                                   maximum: VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+                                   maximum: VZVirtualMachineConfiguration.maximumAllowedMemorySize,
+                                   preferredGB: preferredMemoryGB)
     }
 
     /// What the dashboard and onboarding show for the current phase.
@@ -280,7 +285,8 @@ final class PrivateMacService: NSObject, ObservableObject {
                                                          maximum: VZVirtualMachineConfiguration.maximumAllowedCPUCount)
         configuration.memorySize = PrivateMacSpec.memoryBytes(host: ProcessInfo.processInfo.physicalMemory,
                                                               minimum: minimumMemory,
-                                                              maximum: VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+                                                              maximum: VZVirtualMachineConfiguration.maximumAllowedMemorySize,
+                                                              preferredGB: preferredMemoryGB)
 
         let graphics = VZMacGraphicsDeviceConfiguration()
         graphics.displays = [VZMacGraphicsDisplayConfiguration(widthInPixels: PrivateMacSpec.displayWidthPixels,
@@ -336,13 +342,14 @@ final class PrivateMacService: NSObject, ObservableObject {
         error = nil
         do {
             let vm: VZVirtualMachine
-            if let existing = machine, existing.state == .stopped {
+            if let existing = machine, existing.state == .stopped, bootedMemoryBytes == memoryBytes {
                 vm = existing
             } else {
                 vm = VZVirtualMachine(configuration: try makeConfiguration(requirements: nil))
                 vm.delegate = self
                 machine = vm
             }
+            bootedMemoryBytes = memoryBytes
             ensureWindow(for: vm)
             try await vm.start()
             bootedAt = Date()
@@ -433,6 +440,69 @@ final class PrivateMacService: NSObject, ObservableObject {
         guard let window = windowController?.window else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
         if !window.isVisible { window.orderBack(nil) }
+    }
+
+    // MARK: Mirror
+
+    private var mirrorTask: Task<Void, Never>?
+    private var mirrorTarget: (window: CGWindowID, content: SCWindow)?
+
+    /// Streams small stills of the guest display to `frame` while `on`, so the shell can show the
+    /// private Mac live in its own view. `wanted` is asked each tick (the dashboard window has to be
+    /// on screen), so nothing is captured while nobody can see it.
+    func mirror(_ on: Bool, wanted: @escaping @MainActor () -> Bool = { true }, frame: @escaping @MainActor (String) -> Void = { _ in }) {
+        mirrorTask?.cancel()
+        mirrorTask = nil
+        guard on else { return }
+        mirrorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.isRunning, wanted(), let image = await self.displaySnapshot(maxWidth: 1440) {
+                    let url = await Task.detached(priority: .utility) { Self.jpegDataURL(image) }.value
+                    if let url, !Task.isCancelled { frame(url) }
+                }
+                try? await Task.sleep(nanoseconds: self.isRunning ? 250_000_000 : 1_000_000_000)
+            }
+        }
+    }
+
+    /// The guest display alone (no title bar), at most `maxWidth` pixels wide.
+    private func displaySnapshot(maxWidth: CGFloat) async -> CGImage? {
+        guard let window, let view, CGPreflightScreenCaptureAccess() else { return nil }
+        ensureOnScreen()
+        let windowID = CGWindowID(window.windowNumber)
+        do {
+            if mirrorTarget?.window != windowID {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                guard let target = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
+                mirrorTarget = (windowID, target)
+            }
+            guard let target = mirrorTarget?.content else { return nil }
+            let frame = target.frame
+            guard frame.width > 0, frame.height > 0 else { return nil }
+            let scale = min(max(window.backingScaleFactor, 1), maxWidth / frame.width)
+            let config = SCStreamConfiguration()
+            config.width = Int((frame.width * scale).rounded())
+            config.height = Int((frame.height * scale).rounded())
+            config.showsCursor = false
+            config.ignoreShadowsSingleWindow = true
+            let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: target),
+                                                                   configuration: config)
+            let inWindow = view.convert(view.bounds, to: nil)
+            let top = window.frame.height - inWindow.maxY
+            let crop = CGRect(x: inWindow.minX * scale, y: top * scale,
+                              width: inWindow.width * scale, height: inWindow.height * scale).integral
+            return image.cropping(to: crop)
+        } catch {
+            mirrorTarget = nil
+            return nil
+        }
+    }
+
+    nonisolated private static func jpegDataURL(_ image: CGImage) -> String? {
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.72]) else { return nil }
+        return "data:image/jpeg;base64," + data.base64EncodedString()
     }
 
     private static func describe(_ error: Error) -> String {

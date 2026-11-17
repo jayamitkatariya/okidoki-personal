@@ -1,6 +1,8 @@
 import type { Decision, NativeContext, ThinkRequest } from "./types";
 import { checkConnectorDecision, connectorPrompt, mcpCatalog, type McpCatalogEntry } from "./connectors";
 import { recall, recallPrompt } from "./memory";
+import { checkCodingAgentDecision, codingAgentPrompt } from "./codingagents";
+import { secretKind } from "./memorycapture";
 
 /** /think's budget: the Mac gives up at 90 s, so the model calls together stay under 85. */
 const THINK_TOTAL_MS = 85_000;
@@ -9,13 +11,13 @@ const THINK_FIRST_CALL_MS = 55_000;
 const responseTool = {
   name: "okidoki_respond",
   description:
-    "Always respond with this. Decide how to help: answer, quick_action, borrow, watch, memory, routine, browser, computer_use, overlay, or connector.",
+    "Always respond with this. Decide how to help: answer, quick_action, borrow, watch, memory, routine, browser, computer_use, overlay, connector, or coding_agent.",
   input_schema: {
     type: "object",
     properties: {
       kind: {
         type: "string",
-        enum: ["answer", "quick_action", "borrow", "watch", "memory", "routine", "browser", "computer_use", "overlay", "connector"],
+        enum: ["answer", "quick_action", "borrow", "watch", "memory", "routine", "browser", "computer_use", "overlay", "connector", "coding_agent"],
       },
       title: { type: "string", description: "short lowercase title, max 6 words" },
       answer: { type: "string", description: "the response to show in the card; short, warm, concrete, markdown allowed" },
@@ -75,6 +77,8 @@ const responseTool = {
         },
         required: ["connector"],
       },
+      agent_task: { type: "string", description: "for coding_agent: the complete job for the coding agent, self-contained" },
+      agent: { type: "string", description: "for coding_agent: the agent id they named, else empty" },
       builtin: { type: "string" },
       clarification: { type: "string", description: "leave empty. never ask them to choose show or do." },
       actions: { type: "array", items: { type: "string" } },
@@ -98,6 +102,8 @@ const KEY_MAP: Record<string, string> = {
   overlay_width: "overlayWidth",
   overlay_height: "overlayHeight",
   connector_call: "connectorCall",
+  agent_task: "agentTask",
+  agent: "agentId",
 };
 
 // The Mac appends this to driving replies itself. When it also appears in the history the model
@@ -131,7 +137,7 @@ export function normalize(input: Record<string, unknown>): Decision {
     if (field in mapped) mapped[field] = asList(mapped[field]);
   }
   if (Array.isArray(mapped.memory)) {
-    mapped.memory = mapped.memory.filter((fact): fact is string => typeof fact === "string" && isDurableFact(fact));
+    mapped.memory = mapped.memory.filter((fact): fact is string => typeof fact === "string" && isDurableFact(fact) && !secretKind(fact));
   }
   return mapped as unknown as Decision;
 }
@@ -202,6 +208,9 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     `- "watch me" → watch`,
     `- live web data, or a job one of their connected services (below) can do → connector, with connector_call and a preview`,
     `- a durable fact → memory. Put every fact they told you into the memory list, one item each: "remember X and Y" is two items, and your answer only says you saved what is in the list.`,
+    `  kind memory is only for a turn that just tells you something to keep. When they also ask or want something done, pick the kind for that (answer it, do it) and still put the facts in the memory list; okidoki shows what it saved under your reply.`,
+    `  Phrase each fact short and subject first ("Manager is Ravi", "Prefers aisle seats"). A correction ("actually my manager is now Ravi") is the new fact; okidoki replaces the old one.`,
+    `  Never put a secret in memory: passwords, PINs, one-time codes, card or bank numbers, API keys, ID numbers. Say those belong in the Vault (Settings → Vault) instead, and keep the memory list empty for them.`,
     `- a recurring job → routine`,
     `Never ask them to choose between explaining and doing, and leave clarification empty. If they want to understand something ("how do I", "explain"), answer. If they want it done for them ("make me a…", "export this", "send it", "book it"), use browser or computer_use and start.`,
     ``,
@@ -237,6 +246,7 @@ function systemPrompt(request: ThinkRequest, catalog: McpCatalogEntry[], recalle
     native?.frontWindow ? `Front window: ${native.frontWindow}` : "",
     request.documentName ? `Attached document: ${request.documentName}` : "",
     connectors ? `\nConnected services:\n${connectors}` : "",
+    codingAgentPrompt(request.codingAgents),
     modeRule(request.mode),
   ];
   return lines.filter(Boolean).join("\n");
@@ -249,6 +259,8 @@ export function modeRule(mode: ThinkRequest["mode"]): string {
       return `\nThe person picked Act: they want it done on this Mac, not explained. Choose the route that does the work (quick_action, browser, computer_use, connector). Answer only when there is truly nothing to do.`;
     case "browser":
       return `\nThe person picked Browser: do it on the web in okidoki's own browser. kind must be browser unless it truly needs a Mac app or just a spoken answer.`;
+    case "agent":
+      return `\nThe person picked their coding agent: kind must be coding_agent, with agent_task the full job, unless they only said something to remember.`;
     case "chat":
       return `\nThe person picked Chat: just talk. kind must be answer (or memory when they tell you something to remember). Never act or touch the screen; if it needs doing, say how and that Act will do it.`;
     default:
@@ -335,7 +347,10 @@ function declined(text: string): { decision: Decision; usedModel: true; error: s
   };
 }
 
-const REFUSAL_WORDS = /\b(can'?t|cannot|won'?t|unable|not able|not allowed|not comfortable|don'?t (feel comfortable|have the ability)|rather not|decline)\b/i;
+/** Prose that says something was done, is being done or will be done: never shown as an answer. */
+const ACTION_WORDS = /\b(done|i'?ve|i have|i'?ll|i will|i'?m (going to|now)|let me|sent|sending|booked|booking|ordered|ordering|bought|buying|paid|paying|deleted|deleting|submitted|submitting|scheduled|cancel(l)?ed|opened|opening|clicked|filled|saved|added|created|installed|ran|running)\b/i;
+
+const REFUSAL_WORDS =/\b(can'?t|cannot|won'?t|unable|not able|not allowed|not comfortable|don'?t (feel comfortable|have the ability)|rather not|decline)\b/i;
 
 type ModelBlock = { type: string; text?: string; name?: string; input?: Record<string, unknown>; id?: string };
 type ModelReply = { content?: ModelBlock[]; stop_reason?: string };
@@ -453,11 +468,16 @@ export async function think(request: ThinkRequest, apiKey: string | undefined, f
       if (!decisionBlock) {
         const prose = proseOf(blocks);
         if (REFUSAL_WORDS.test(prose)) return declined(prose);
+        // A plain answer that skipped the tool (it happens a few percent of the time on questions) is
+        // safe to show: nothing runs from it. Anything that claims or promises an action still stops.
+        if (prose && !ACTION_WORDS.test(prose)) {
+          return { decision: normalize({ kind: "answer", title: "", answer: prose.slice(0, 4000), speak: "" }), usedModel: true };
+        }
       }
     }
 
     if (decisionBlock?.input) {
-      return { decision: checkConnectorDecision(normalize(decisionBlock.input), request.connectors, catalog), usedModel: true };
+      return { decision: checkCodingAgentDecision(checkConnectorDecision(normalize(decisionBlock.input), request.connectors, catalog), request.codingAgents, request.text ?? ""), usedModel: true };
     }
     return stopped("the model did not return a structured decision; nothing was executed");
   } catch (error) {

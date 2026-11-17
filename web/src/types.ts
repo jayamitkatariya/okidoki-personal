@@ -54,8 +54,10 @@ export interface Settings {
   drivePace: "calm" | "fast";
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
+  /** Private Mac memory in GB; 0 is automatic. */
+  privateMacMemoryGB?: number;
   /** What a request typed at the cursor is for. Missing on older builds. */
-  summonMode?: "auto" | "act" | "browser" | "chat";
+  summonMode?: "auto" | "act" | "browser" | "chat" | "agent";
   /** The vault folder on disk. Missing on older builds. */
   vaultFolder?: string;
   /** Hybrid replay: skills bind values from documents, check steps, pick themselves, and hand off to the agent. */
@@ -64,6 +66,45 @@ export interface Settings {
   shakeToSummon?: boolean;
   /** Global summon shortcut, like "option+space". Empty turns it off. */
   summonHotkey?: string;
+  /** Coding agents okidoki hands file, terminal and code jobs to. Missing on older builds. */
+  codingAgents?: CodingAgentSettings;
+}
+
+/** One coding agent: a known CLI (id "claude", "codex"…) or a custom command (a UUID id). */
+export interface CodingAgentConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Custom: the command with {prompt} and {cwd}. Known CLIs: an optional path to the program. */
+  command: string;
+  access: "workspace" | "full";
+}
+
+export interface CodingAgentSettings {
+  agents: CodingAgentConfig[];
+  defaultID: string;
+  /** Empty means the vault folder. */
+  workingFolder: string;
+  autoRoute: boolean;
+}
+
+/** A known coding agent CLI and where it was found on this Mac (null: not installed). */
+export interface DetectedCodingAgent {
+  id: string;
+  name: string;
+  path?: string | null;
+  /** Where its non-interactive flags were checked: its --help, or its docs. */
+  verified: "help" | "docs";
+  /** No permission layer of its own, so every job waits for an okay. */
+  unguarded: boolean;
+  site: string;
+}
+
+export interface CodingAgentsState {
+  detected: DetectedCodingAgent[];
+  folder: string;
+  /** Per configured agent id: what it may touch, in words. */
+  access: Record<string, string>;
 }
 
 export type PrivateMacPhase = "unsupported" | "notSetUp" | "downloading" | "installing" | "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -81,6 +122,7 @@ export interface PrivateMacState {
   macOSVersion: string;
   cpuCount: number;
   memoryGB: number;
+  memoryChoicesGB?: number[];
   bytesOnDisk: number;
   downloadGB: number;
 }
@@ -111,6 +153,8 @@ export interface ServicesState {
     documents: number;
     notes: number;
     messages: number;
+    runs?: number;
+    skills?: number;
     tools: number;
     lastSyncAt?: string | null;
     error?: string | null;
@@ -130,7 +174,7 @@ export interface KeyProvider {
   builtin: boolean;
 }
 
-export type RunKind = "answer" | "quick_action" | "watch" | "borrow" | "computer_use" | "browser" | "routine" | "connector";
+export type RunKind = "answer" | "quick_action" | "watch" | "borrow" | "computer_use" | "browser" | "routine" | "connector" | "coding_agent";
 export type RunStatus = "previewing" | "waiting" | "running" | "paused" | "done" | "failed" | "cancelled" | "asked";
 export type Risk = "low" | "medium" | "high";
 
@@ -183,6 +227,9 @@ export interface Run {
   updatedAt?: string | null;
   /** While paused: what the person is doing for the run. */
   waitingFor?: string | null;
+  /** Coding agent runs: which agent, and its own session id (follow-ups resume it). */
+  agentID?: string | null;
+  agentSession?: string | null;
 }
 
 export interface Message {
@@ -214,6 +261,22 @@ export interface Memory {
   source: string;
   createdAt: string;
   updatedAt: string;
+  /** Goes with every request, whatever it's about. */
+  pinned?: boolean;
+  /** Where it was saved from: the chat, the run, and the person's message. */
+  threadID?: string | null;
+  runID?: string | null;
+  messageID?: string | null;
+  /** What it said before a correction replaced it. */
+  previousText?: string | null;
+  /** Picked up on its own from what they said or a run confirmed, not asked for. */
+  learned?: boolean | null;
+}
+
+/** The Memory page's last search by meaning: matching memory ids, best first. No `ids` while looking or without an index. */
+export interface MemorySearch {
+  query: string;
+  ids?: string[] | null;
 }
 
 /** Another assistant whose memory can be brought in. `files` are the memory files it keeps on this Mac; empty for hosted ones. */
@@ -351,6 +414,14 @@ export interface LiveState {
   steps: LiveStep[];
 }
 
+/** The okidoki skill (SKILL.md in each agent's skills folder) and the `okidoki` command on PATH. */
+export interface AgentSkillState {
+  installed: boolean;
+  cli: boolean;
+  /** SKILL.md files that are in place. */
+  paths: string[];
+}
+
 export interface NativeState {
   /** Missing in the demo. */
   watching?: Watching;
@@ -362,6 +433,7 @@ export interface NativeState {
   runs: Run[];
   threads: Thread[];
   memories: Memory[];
+  memorySearch?: MemorySearch;
   /** Missing on older builds. */
   memorySources?: MemorySource[];
   skills: Skill[];
@@ -387,6 +459,9 @@ export interface NativeState {
   mcpSecretNames?: Record<string, string[]>;
   /** Missing in the demo, where there is no VM to report on. */
   privateMac?: PrivateMacState | null;
+  /** The okidoki skill and `okidoki` command other agents use. Missing on older builds. */
+  agentSkill?: AgentSkillState | null;
+  codingAgents?: CodingAgentsState | null;
   /** The vault folder and sealed logins. Missing in the browser preview. */
   vault?: VaultState | null;
   /** Browsers to import passwords from, and the last import. Missing in older builds. */

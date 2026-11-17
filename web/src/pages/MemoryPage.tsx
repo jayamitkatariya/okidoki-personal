@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, relativeTime } from "../lib";
 import type { Memory, MemorySource, ServicesState } from "../types";
-import { Button, Chip, ConfirmModal, IconButton, isComposing, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, type ConfirmRequest } from "../components/ui";
+import { Button, Chip, ConfirmModal, IconButton, isComposing, Modal, PageTitle, PixelIcon, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 import { isNative } from "../bridge";
+import { orderMemories, searchMemories } from "../memorySearch";
+import { memorySourceLabel } from "../shell/MemoryChips";
 
 type Section = "aboutYou" | "rightNow";
 
@@ -11,12 +13,12 @@ const SECTIONS: Record<Section, { title: string; hint: string; example: string; 
   aboutYou: {
     title: "About you",
     hint: "Who you are and how you like to work.",
-    example: "I'm a designer. I use Figma and VS Code. Keep replies short.",
-    placeholder: "I'm a student. I use Figma and VS Code. Keep it short.",
+    example: "I’m a designer. I use Figma and VS Code. Keep replies short.",
+    placeholder: "I’m a student. I use Figma and VS Code. Keep it short.",
   },
   rightNow: {
     title: "Right now",
-    hint: "What you're focused on this week.",
+    hint: "What you’re focused on this week.",
     example: "Shipping the new onboarding flow this week.",
     placeholder: "Building okidoki and redesigning the Workro onboarding.",
   },
@@ -29,8 +31,20 @@ export function MemoryPage() {
   const [editing, setEditing] = useState<Memory | null>(null);
   const [editText, setEditText] = useState("");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  const about = state.memories.filter((memory) => memory.section === "aboutYou");
-  const now = state.memories.filter((memory) => memory.section === "rightNow");
+  const [query, setQuery] = useState("");
+  const memoryIndex = state.services?.memory;
+  // Search by meaning only when the index is up; otherwise matching words is all there is.
+  const indexed = Boolean(isNative() && memoryIndex?.configured && memoryIndex.ready && !memoryIndex.error);
+  useEffect(() => {
+    if (!indexed) return;
+    // Wait for a pause in typing so the index isn't asked about every keystroke.
+    const timer = window.setTimeout(() => invoke("searchMemory", { query: query.trim() }), query.trim() ? 220 : 0);
+    return () => window.clearTimeout(timer);
+  }, [query, indexed, invoke]);
+  const searched = searchMemories(orderMemories(state.memories), query, state.memorySearch, indexed);
+  const searching = Boolean(query.trim());
+  const about = searched.memories.filter((memory) => memory.section === "aboutYou");
+  const now = searched.memories.filter((memory) => memory.section === "rightNow");
   const calendar = state.connectors.find((connector) => connector.id === "calendar");
   const sources = state.memorySources ?? [];
   const onThisMac = sources.filter((source) => source.files.length > 0);
@@ -74,6 +88,11 @@ export function MemoryPage() {
         notify("Forgotten", "Removed from memory", "info");
       },
     });
+  };
+
+  const pin = (memory: Memory) => {
+    invoke("pinMemory", { id: memory.id, pinned: !memory.pinned });
+    notify(memory.pinned ? "Unpinned" : "Pinned", memory.pinned ? "Used when it fits the request" : "Goes with every request", "info");
   };
 
   const fillExample = (target: Section) => {
@@ -143,7 +162,7 @@ export function MemoryPage() {
           <header className="tile-head">
             <h2>Nudges</h2>
           </header>
-          <p className="memory-nudges-copy">A quick heads-up before meetings, using only apps you've connected.</p>
+          <p className="memory-nudges-copy">A quick heads-up before meetings, using only apps you’ve connected.</p>
           <div className="memory-setting">
             <span className="kind-icon small">
               <PixelIcon name="bell" size={14} />
@@ -233,9 +252,27 @@ export function MemoryPage() {
         ) : null}
       </section>
 
+      {state.memories.length ? (
+        <div className="memory-search reveal reveal-3">
+          <TextField value={query} onChange={setQuery} icon="search" placeholder={indexed ? "Search memories by meaning or words" : "Search memories"} />
+          {searching ? (
+            <span className="memory-search-count" aria-live="polite">
+              {searched.memories.length} {searched.memories.length === 1 ? "match" : "matches"}
+              {searched.related.size ? ` · ${searched.related.size} by meaning` : ""}
+              {searched.pending ? " · looking…" : ""}
+            </span>
+          ) : (
+            <span className="memory-search-count">
+              {state.memories.length} {state.memories.length === 1 ? "memory" : "memories"}
+            </span>
+          )}
+          {searching ? <IconButton icon="x" label="Clear search" size={14} onClick={() => setQuery("")} /> : null}
+        </div>
+      ) : null}
+
       <div className="memory-lists">
-        <MemoryList section="aboutYou" memories={about} onEdit={startEdit} onDelete={remove} onExample={fillExample} />
-        <MemoryList section="rightNow" memories={now} onEdit={startEdit} onDelete={remove} onExample={fillExample} />
+        <MemoryList section="aboutYou" memories={about} searching={searching} related={searched.related} onEdit={startEdit} onDelete={remove} onPin={pin} onExample={fillExample} />
+        <MemoryList section="rightNow" memories={now} searching={searching} related={searched.related} onEdit={startEdit} onDelete={remove} onPin={pin} onExample={fillExample} />
       </div>
 
       <footer className="memory-footer">
@@ -262,8 +299,10 @@ export function MemoryPage() {
             disabled={!editText.trim()}
             onClick={() => {
               if (!editing) return;
-              invoke("updateMemory", { id: editing.id, text: editText.trim() });
-              notify("Memory updated", editText.trim());
+              if (editText.trim() !== editing.text) {
+                invoke("updateMemory", { id: editing.id, text: editText.trim() });
+                notify("Memory updated", editText.trim());
+              }
               setEditing(null);
             }}
           >
@@ -279,14 +318,20 @@ export function MemoryPage() {
 function MemoryList({
   section,
   memories,
+  searching,
+  related,
   onEdit,
   onDelete,
+  onPin,
   onExample,
 }: {
   section: Section;
   memories: Memory[];
+  searching: boolean;
+  related: Set<string>;
   onEdit: (memory: Memory) => void;
   onDelete: (memory: Memory) => void;
+  onPin: (memory: Memory) => void;
   onExample: (section: Section) => void;
 }) {
   const copy = SECTIONS[section];
@@ -304,15 +349,24 @@ function MemoryList({
               <button className="memory-copy" onClick={() => onEdit(memory)} title="Edit">
                 <span className="memory-text">{memory.text}</span>
                 <span className="memory-meta">
-                  {memory.source} · {relativeTime(memory.updatedAt)}
+                  {memory.pinned ? <span className="memory-flag">Pinned · </span> : null}
+                  {related.has(memory.id) ? <span className="memory-flag">Related · </span> : null}
+                  {memory.learned ? <span className="memory-flag memory-learned" title="okidoki picked this up on its own. Edit or delete it if it's wrong.">Learned · </span> : null}
+                  {memorySourceLabel(memory)} · {relativeTime(memory.updatedAt)}
                 </span>
               </button>
-              <div className="memory-actions">
+              <div className={cx("memory-actions", memory.pinned && "is-pinned")}>
+                <IconButton icon="pin" label={memory.pinned ? "Unpin" : "Pin: send with every request"} size={14} className={cx(memory.pinned && "is-on")} onClick={() => onPin(memory)} />
                 <IconButton icon="edit" label="Edit" size={14} onClick={() => onEdit(memory)} />
                 <IconButton icon="trash" label="Delete" size={14} onClick={() => onDelete(memory)} />
               </div>
             </div>
           ))}
+        </div>
+      ) : searching ? (
+        <div className="memory-empty">
+          <strong>No matches</strong>
+          <span>Nothing here matches that search.</span>
         </div>
       ) : (
         <div className="memory-empty">
@@ -328,27 +382,32 @@ function MemoryList({
 }
 
 /** What the Moss index holds, so "searched with Moss" is a fact rather than a promise. */
-function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix?: () => void }) {
+export function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix?: () => void }) {
   const memory = services.memory;
-  // Keys live in the Mac app's Settings; on the web there's nowhere to send you.
-  if (!memory.configured && !onFix) {
-    return (
-      <span className="memory-index is-off">
-        <i />
-        Moss off · exact matches only
-      </span>
-    );
-  }
+  // Without a key, recall still works: notes that share words with the request go to the model.
   if (!memory.configured) {
-    return (
-      <button className="memory-index is-off" onClick={onFix} title="Add a Moss key in Settings › Keys">
+    const label = (
+      <>
         <i />
-        Moss off · exact matches only
+        Moss off · matching by words
+      </>
+    );
+    // Keys live in the Mac app's Settings; on the web there's nowhere to send you.
+    return onFix ? (
+      <button className="memory-index is-off" onClick={onFix} title="Add a Moss key in Settings › Keys to recall by meaning">
+        {label}
       </button>
+    ) : (
+      <span className="memory-index is-off">{label}</span>
     );
   }
   if (memory.error) {
-    return (
+    return onFix ? (
+      <button className="memory-index is-warn" onClick={onFix} title={`${memory.error} · open Settings › Keys`}>
+        <i />
+        Moss error
+      </button>
+    ) : (
       <span className="memory-index is-warn" title={memory.error}>
         <i />
         Moss error
@@ -357,15 +416,16 @@ function MemoryIndexBadge({ services, onFix }: { services: ServicesState; onFix?
   }
   if (!memory.ready) {
     return (
-      <span className="memory-index">
+      <span className="memory-index" title="Building the index on this Mac">
         <i />
-        Moss loading…
+        Moss indexing…
       </span>
     );
   }
-  const items = memory.notes + memory.messages;
+  const items = memory.documents;
+  const parts = [`${memory.notes} memories`, `${memory.messages} recent turns`, `${memory.runs ?? 0} tasks`, `${memory.skills ?? 0} skills`];
   return (
-    <span className="memory-index is-on" title={`${memory.notes} memories · ${memory.messages} recent turns`}>
+    <span className="memory-index is-on" title={parts.join(" · ")}>
       <i />
       Moss · {items} item{items === 1 ? "" : "s"} indexed{memory.lastSyncAt ? ` · ${relativeTime(memory.lastSyncAt)}` : ""}
     </span>

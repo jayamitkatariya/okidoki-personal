@@ -47,6 +47,13 @@ final class SkillCompilerTests: XCTestCase {
             capture: .init(name: "reference", example: "REF-448990", description: "reference number"))
     }
 
+    func testACaptureDescribedWithItsOwnArticleReadsOnce() throws {
+        var answer = compiled()
+        answer.capture = .init(name: "reference_number", example: "REF-1", description: "The reference number shown on the 'Return filed' page")
+        let smart = try XCTUnwrap(SkillCompiler.apply(answer, to: ashaRun()))
+        XCTAssertEqual(smart.steps.last?.text, "read the reference number shown on the 'Return filed' page")
+    }
+
     func testARunBecomesASmartSkill() throws {
         let smart = try XCTUnwrap(SkillCompiler.apply(compiled(), to: ashaRun()))
         let inputs = smart.steps.map(\.input)
@@ -63,6 +70,7 @@ final class SkillCompilerTests: XCTestCase {
         XCTAssertEqual(thinks.map(\.offset), [8, 10], "each goes right before the step that leaves its page")
         XCTAssertEqual(thinks.map(\.element.when), ["{{gains}}", "{{deductions}}"])
         XCTAssertEqual(smart.steps.last?.capture, "reference")
+        XCTAssertEqual(smart.steps.last?.text, "read the reference number")
         XCTAssertEqual(smart.steps.first { $0.text.hasPrefix("click “Submit") }?.irreversible, true)
 
         XCTAssertEqual(Set(smart.inputs?.map(\.name) ?? []), ["name", "pan", "income", "regime", "gains", "deductions", "reference"])

@@ -4,6 +4,7 @@ section, an add-row table, a review page and a submit that returns a reference n
 
 Every submission is kept, so the eval checks what was actually filed, not what a run claimed.
 `drift` changes labels, ids and order and adds a survey popup: the same flow, a different page.
+`redesign` rebuilds the form: no labels (aria-label only, new wording) and two steps on one page (SPA).
 Hard mode (randomIds, slow, popups, expire, busy) is described in site/app.js.
 
   scripts/replay-fixture/server.py --port 8777            # serve
@@ -19,7 +20,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent / "site"
-CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False, "captcha": False, "decoys": False, "captchaSlow": False, "newBox": False}
+CONFIG = {"drift": False, "banner": False, "randomIds": False, "slow": False, "popups": False, "expire": False, "busy": False, "random": False, "wipe": False, "captcha": False, "decoys": False, "captchaSlow": False, "newBox": False, "redesign": False}
 BUSY_SEEN = set()
 SUBMISSIONS = []
 

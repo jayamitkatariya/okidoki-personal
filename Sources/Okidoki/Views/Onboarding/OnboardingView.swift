@@ -27,10 +27,16 @@ struct OnboardingView: View {
     @State private var vaultPassNote: String?
     @State private var memorySources: [MemorySource] = []
     @State private var memoryAdded: [String: Int] = [:]
+    @FocusState private var focusedField: Field?
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private enum Field: Hashable { case name, key, about, vault, vaultAgain }
+    private var t: OKShell { OKShell(scheme) }
 
     var body: some View {
         ZStack {
-            OnboardingCanvas()
+            OnboardingDesk()
             VStack(spacing: 0) {
                 topBar
                 Spacer(minLength: 16)
@@ -40,7 +46,6 @@ struct OnboardingView: View {
             .padding(.horizontal, 32)
         }
         .frame(minWidth: 760, minHeight: 620)
-        .preferredColorScheme(.light)
         .onAppear {
             name = store.activeAccount.name == "you" ? "" : store.activeAccount.name
             inputMode = store.settings.defaultInput
@@ -50,7 +55,7 @@ struct OnboardingView: View {
         .onDisappear { env.suspendSummonForTour = false }
         .onReceive(env.$shakePulse.dropFirst()) { _ in
             guard step == .tour else { return }
-            withAnimation(OKMotion.spring) { didShake = true }
+            withAnimation(stateChange) { didShake = true }
         }
         // Permissions are granted in System Settings; re-check whenever the user comes back.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -73,18 +78,18 @@ struct OnboardingView: View {
             HStack(spacing: 6) {
                 ForEach(OnboardStep.allCases, id: \.self) { item in
                     Capsule()
-                        .fill(item.rawValue <= step.rawValue ? OKBrand.greenInk : OKBrand.ink.opacity(0.1))
-                        .frame(width: item == step ? 22 : 6, height: 6)
+                        .fill(item.rawValue <= step.rawValue ? t.accent : t.lineStrong)
+                        .frame(width: item == step ? 18 : 6, height: 6)
                 }
             }
-            .animation(OKMotion.spring, value: step)
+            .animation(reduceMotion ? nil : OKShell.easeOut(0.24), value: step)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Step \(step.rawValue + 1) of \(OnboardStep.allCases.count)")
             HStack {
                 Spacer()
                 if step != .done {
                     Button("Skip setup") { finish() }
-                        .buttonStyle(.plain)
-                        .font(.okBody(12.5, .medium))
-                        .foregroundStyle(OKBrand.faint)
+                        .buttonStyle(ShellLinkButtonStyle())
                 }
             }
         }
@@ -96,38 +101,44 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             stepContent
                 .id(step)
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .offset(x: forward ? 24 : -24)),
-                    removal: .opacity.combined(with: .offset(x: forward ? -24 : 24))
-                ))
+                .transition(stepTransition)
             footer.padding(.top, 28)
         }
         .padding(.horizontal, 36)
         .padding(.top, 34)
         .padding(.bottom, 26)
         .frame(width: 540)
-        .background(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(Color.white.opacity(0.78))
-                .background(VisualEffectBlur(material: .popover, blending: .withinWindow).clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous)))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.9), lineWidth: 1)
-        )
-        .shadow(color: Color(hex: 0x0E1512).opacity(0.06), radius: 2, y: 1)
-        .shadow(color: Color(hex: 0x00372C).opacity(0.12), radius: 40, y: 24)
+        // The composer-box surface: --c-bg at r16 with --lift (one ring on dark ground).
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(t.dark ? t.soft : t.card))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(t.dark ? t.lineStrong : Color.black.opacity(0.05), lineWidth: 1))
+        .shadow(color: .black.opacity(t.dark ? 0 : 0.04), radius: 1.5, y: 1)
+        .shadow(color: Color(hex: 0x102018).opacity(t.dark ? 0 : 0.16), radius: 16, y: 12)
     }
+
+    /// Steps trade places with a short fade and an 8pt nudge in the direction of travel:
+    /// ease-out in, a quicker symmetric curve out. Reduce Motion keeps only the fade.
+    private var stepTransition: AnyTransition {
+        let shift: CGFloat = reduceMotion ? 0 : 8
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(x: forward ? shift : -shift))
+                .animation(OKShell.easeOut(0.24)),
+            removal: .opacity.combined(with: .offset(x: forward ? -shift : shift))
+                .animation(OKShell.easeExit(0.15))
+        )
+    }
+
+    /// In-step state changes (a choice picked, a gesture done): one quick ease-out.
+    private var stateChange: Animation? { reduceMotion ? nil : OKShell.easeOut(0.2) }
 
     private var footer: some View {
         HStack(spacing: 10) {
             if step != .welcome && step != .done {
                 Button("Back") { go(to: OnboardStep(rawValue: step.rawValue - 1) ?? .welcome) }
-                    .buttonStyle(OKButtonStyle(kind: .ghost))
+                    .buttonStyle(ShellButtonStyle(kind: .ghost))
             }
             Spacer()
             Button(primaryTitle) { primaryAction() }
-                .buttonStyle(OKButtonStyle(kind: .primary))
+                .buttonStyle(ShellButtonStyle(kind: .primary))
                 .keyboardShortcut(.defaultAction)
         }
     }
@@ -156,11 +167,12 @@ struct OnboardingView: View {
             fieldLabel("What should I call you?").padding(.top, 26)
             TextField("Your name", text: $name)
                 .textFieldStyle(.plain)
-                .font(.okBody(15))
-                .padding(.horizontal, 14)
-                .frame(height: 46)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
+                .font(.shellUI(14))
+                .foregroundStyle(t.ink)
+                .focused($focusedField, equals: .name)
+                .padding(.horizontal, 13)
+                .frame(height: 40)
+                .shellField(t, focused: focusedField == .name)
                 .onSubmit { primaryAction() }
         }
     }
@@ -182,14 +194,14 @@ struct OnboardingView: View {
                     request(.accessibility)
                 }
             }
-            .groupBox()
+            .groupBox(t)
             .padding(.top, 22)
 
             fieldLabel("Apple apps").padding(.top, 20)
             VStack(spacing: 0) {
                 appleRow("calendar", symbol: "calendar", title: "Calendar", connected: store.settings.appleCalendar)
             }
-            .groupBox()
+            .groupBox(t)
         }
     }
 
@@ -216,15 +228,15 @@ struct OnboardingView: View {
                     if busy {
                         ProgressView(value: env.privateMac.progress)
                             .progressViewStyle(.linear)
-                            .tint(OKBrand.greenInk)
+                            .tint(t.green)
                             .frame(width: 120)
                     } else {
                         Image(systemName: phase == .running || phase == .stopped ? "checkmark.circle.fill" : "arrow.down.circle")
-                            .foregroundStyle(OKBrand.greenInk)
+                            .foregroundStyle(t.green)
                     }
                     Text(workspaceHint(phase: phase))
-                        .font(.okBody(12.5))
-                        .foregroundStyle(OKBrand.muted)
+                        .font(.shellUI(12.5))
+                        .foregroundStyle(t.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
@@ -247,27 +259,28 @@ struct OnboardingView: View {
         let selected = workspace == id
         return Button {
             guard enabled else { return }
-            withAnimation(OKMotion.spring) { workspace = id }
+            withAnimation(stateChange) { workspace = id }
         } label: {
             HStack(spacing: 12) {
                 iconTile(symbol, active: selected)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
-                    Text(detail).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+                    Text(title).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
+                    Text(detail).font(.shellUI(12.5)).foregroundStyle(t.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 ZStack {
-                    Circle().strokeBorder(selected ? OKBrand.greenInk : OKBrand.ink.opacity(0.18), lineWidth: 1.5)
+                    Circle().strokeBorder(selected ? t.accent : t.lineStrong, lineWidth: 1.5)
                         .frame(width: 18, height: 18)
-                    if selected { Circle().fill(OKBrand.greenInk).frame(width: 9, height: 9) }
+                    if selected { Circle().fill(t.accent).frame(width: 8, height: 8) }
                 }
             }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(selected ? 0.95 : 0.7)))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(selected ? OKBrand.green.opacity(0.45) : OKBrand.ink.opacity(0.07)))
-            .opacity(enabled ? 1 : 0.55)
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.vertical, 12)
+            .padding(.leading, 12)
+            .padding(.trailing, 14)
+            .shellRow(t, selected: selected)
+            .opacity(enabled ? 1 : 0.5)
+            .contentShape(RoundedRectangle(cornerRadius: OKShell.radiusCard, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -280,21 +293,22 @@ struct OnboardingView: View {
             HStack {
                 fieldLabel("Default")
                 Spacer()
-                OKSegmented(options: InputMode.allCases, label: { $0 == .voice ? "Voice" : "Typing" }, selection: $inputMode)
+                ShellSegmented(options: InputMode.allCases, label: { $0 == .voice ? "Voice" : "Typing" }, selection: $inputMode)
             }
             .padding(.top, 24)
             fieldLabel(env.hasKey("anthropic") ? "Anthropic key · set" : "Anthropic key").padding(.top, 22)
             SecureField(env.hasKey("anthropic") ? "Saved — paste a new one to replace it" : "sk-ant-…", text: $anthropicKey)
                 .textFieldStyle(.plain)
-                .font(.okBody(15))
-                .padding(.horizontal, 14)
-                .frame(height: 46)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
+                .font(.shellUI(14))
+                .foregroundStyle(t.ink)
+                .focused($focusedField, equals: .key)
+                .padding(.horizontal, 13)
+                .frame(height: 40)
+                .shellField(t, focused: focusedField == .key)
                 .onSubmit { primaryAction() }
             Text(checkingKey ? "Checking the key…" : keyCheck ?? "Get one at console.anthropic.com. You can add it later in Settings › Keys.")
-                .font(.okBody(12))
-                .foregroundStyle(OKBrand.faint)
+                .font(.shellUI(12.5))
+                .foregroundStyle(t.muted)
                 .padding(.top, 8)
         }
     }
@@ -306,21 +320,22 @@ struct OnboardingView: View {
             ZStack(alignment: .topLeading) {
                 if about.isEmpty {
                     Text("I'm a designer, I live in Figma, keep answers short…")
-                        .font(.okBody(14))
-                        .foregroundStyle(OKBrand.faint)
+                        .font(.shellUI(14))
+                        .foregroundStyle(t.faint)
                         .padding(.horizontal, 15)
                         .padding(.vertical, 13)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $about)
-                    .font(.okBody(14))
+                    .font(.shellUI(14))
+                    .foregroundStyle(t.ink)
                     .scrollContentBackground(.hidden)
+                    .focused($focusedField, equals: .about)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
             }
             .frame(height: 112)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
+            .shellField(t, focused: focusedField == .about, radius: OKShell.radiusTile)
             .padding(.top, 24)
             HStack(spacing: 6) {
                 ForEach(["I'm a student", "I use Figma", "Keep it short", "I'm building a startup"], id: \.self) { suggestion in
@@ -328,13 +343,8 @@ struct OnboardingView: View {
                         about = about.isEmpty ? suggestion : about + ", " + suggestion.lowercasedFirst
                     } label: {
                         Text(suggestion)
-                            .font(.okBody(12, .medium))
-                            .foregroundStyle(OKBrand.muted)
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(Capsule().fill(OKBrand.ink.opacity(0.045)))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ShellChipButtonStyle())
                 }
             }
             .padding(.top, 12)
@@ -365,7 +375,7 @@ struct OnboardingView: View {
                             HStack(spacing: 12) {
                                 iconTile("globe", active: false)
                                 Text(status.scanned ? "No browsers with saved passwords found." : "Looking for browsers…")
-                                    .font(.okBody(12.5)).foregroundStyle(OKBrand.faint)
+                                    .font(.shellUI(12.5)).foregroundStyle(t.muted)
                                 Spacer()
                             }
                             .padding(.horizontal, 14)
@@ -379,24 +389,24 @@ struct OnboardingView: View {
                         HStack(spacing: 12) {
                             iconTile("doc.text", active: false)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("From a CSV file").font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
-                                Text(csvDetail(status)).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+                                Text("From a CSV file").font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
+                                Text(csvDetail(status)).font(.shellUI(12.5)).foregroundStyle(t.muted)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer(minLength: 8)
                             if status.csvToTrash != nil {
                                 Button("Trash CSV") { env.finishVaultImportCSV(trash: true) }
-                                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                                    .buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
                             } else {
                                 Button(status.busy == "csv" ? "Importing…" : "Choose…") { env.importPasswordCSV(passphrase: importPassphrase) }
-                                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                                    .buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
                                     .disabled(!ready || status.busy != nil)
                             }
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 11)
                     }
-                    .groupBox()
+                    .groupBox(t)
 
                     fieldLabel("Memory").padding(.top, 20)
                     VStack(spacing: 0) {
@@ -404,7 +414,7 @@ struct OnboardingView: View {
                             HStack(spacing: 12) {
                                 iconTile("brain", active: false)
                                 Text("No other assistants' notes on this Mac. You can import an export later from Memory.")
-                                    .font(.okBody(12.5)).foregroundStyle(OKBrand.faint)
+                                    .font(.shellUI(12.5)).foregroundStyle(t.muted)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Spacer()
                             }
@@ -416,7 +426,7 @@ struct OnboardingView: View {
                             memoryRow(source)
                         }
                     }
-                    .groupBox()
+                    .groupBox(t)
                 }
             }
             .frame(maxHeight: 380)
@@ -428,36 +438,38 @@ struct OnboardingView: View {
         return VStack(alignment: .leading, spacing: 8) {
             Text(setting ? "Pick a vault passphrase first. Passwords are sealed with it before they're saved."
                          : "Unlock your vault so imported passwords are sealed with the same passphrase.")
-                .font(.okBody(12.5)).foregroundStyle(OKBrand.muted)
+                .font(.shellUI(12.5)).foregroundStyle(t.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            passField(setting ? "Vault passphrase" : "Your vault passphrase", text: $vaultPass)
-            if setting { passField("Same passphrase again", text: $vaultPassAgain) }
+            passField(setting ? "Vault passphrase" : "Your vault passphrase", text: $vaultPass, field: .vault)
+            if setting { passField("Same passphrase again", text: $vaultPassAgain, field: .vaultAgain) }
             HStack {
                 Toggle("Remember on this Mac", isOn: $rememberVault)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .tint(OKBrand.greenInk)
-                    .font(.okBody(12.5))
+                    .tint(t.accent)
+                    .font(.shellUI(12.5))
+                    .foregroundStyle(t.ink2)
                 Spacer()
                 Button(setting ? "Set passphrase" : "Unlock") { useVaultPassphrase() }
-                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                    .buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
                     .disabled(vaultPass.isEmpty || (setting && vaultPassAgain.isEmpty))
             }
             if let vaultPassNote {
-                Text(vaultPassNote).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+                Text(vaultPassNote).font(.shellUI(12.5)).foregroundStyle(t.muted)
             }
         }
         .padding(.bottom, 12)
     }
 
-    private func passField(_ placeholder: String, text: Binding<String>) -> some View {
+    private func passField(_ placeholder: String, text: Binding<String>, field: Field) -> some View {
         SecureField(placeholder, text: text)
             .textFieldStyle(.plain)
-            .font(.okBody(14))
+            .font(.shellUI(13.5))
+            .foregroundStyle(t.ink)
+            .focused($focusedField, equals: field)
             .padding(.horizontal, 12)
-            .frame(height: 38)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
+            .frame(height: 36)
+            .shellField(t, focused: focusedField == field)
             .onSubmit { useVaultPassphrase() }
     }
 
@@ -504,8 +516,8 @@ struct OnboardingView: View {
         return HStack(spacing: 12) {
             iconTile(done ? "checkmark" : "key", active: done)
             VStack(alignment: .leading, spacing: 1) {
-                Text(browser.name).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
-                Text(detail).font(.okBody(12)).foregroundStyle(done ? OKBrand.greenInk : OKBrand.faint)
+                Text(browser.name).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
+                Text(detail).font(.shellUI(12.5)).foregroundStyle(done ? t.green : t.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -513,7 +525,7 @@ struct OnboardingView: View {
                 Button(status.cookiesBusy == browser.id ? "Signing in…" : "Sign-ins") {
                     env.importBrowserCookies(id: browser.id)
                 }
-                .buttonStyle(OKButtonStyle(kind: .ghost, compact: true))
+                .buttonStyle(ShellButtonStyle(kind: .ghost, small: true))
                 .disabled(status.cookiesBusy != nil || browser.error != nil)
                 .help("Stay signed in to your sites in okidoki's browser")
             }
@@ -523,7 +535,7 @@ struct OnboardingView: View {
                 Button(status.busy == browser.id ? "Importing…" : "Import") {
                     env.importBrowserPasswords(id: browser.id, passphrase: importPassphrase)
                 }
-                .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                .buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
                 .disabled(!ready || status.busy != nil || browser.error != nil || browser.logins == 0)
             }
         }
@@ -547,9 +559,9 @@ struct OnboardingView: View {
         return HStack(spacing: 12) {
             iconTile(added != nil ? "checkmark" : "brain", active: added != nil)
             VStack(alignment: .leading, spacing: 1) {
-                Text(source.name).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+                Text(source.name).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
                 Text(added.map { $0 == 0 ? "Nothing new to remember." : "\($0) \($0 == 1 ? "memory" : "memories") added." } ?? source.blurb)
-                    .font(.okBody(12)).foregroundStyle(added != nil ? OKBrand.greenInk : OKBrand.faint)
+                    .font(.shellUI(12.5)).foregroundStyle(added != nil ? t.green : t.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -557,7 +569,7 @@ struct OnboardingView: View {
                 statusPill("Imported")
             } else {
                 Button("Import") { memoryAdded[source.id] = env.importMemory(sourceID: source.id) ?? 0 }
-                    .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                    .buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
             }
         }
         .padding(.horizontal, 14)
@@ -579,9 +591,9 @@ struct OnboardingView: View {
                                 if env.store.settings.summonHotkey.isEmpty { env.store.settings.summonHotkey = "option+space" }
                                 env.store.settings.shakeToSummon = false
                                 env.store.saveNow()
-                                withAnimation(OKMotion.spring) { didShake = true }
+                                withAnimation(stateChange) { didShake = true }
                             }
-                            .buttonStyle(OKButtonStyle(kind: .ghost, compact: true))
+                            .buttonStyle(ShellButtonStyle(kind: .ghost, small: true))
                             .padding(.top, 8)
                         }
                     }
@@ -605,10 +617,10 @@ struct OnboardingView: View {
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
-                Circle().fill(OKBrand.green.opacity(0.14)).frame(width: 64, height: 64)
+                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(t.greenSoft).frame(width: 56, height: 56)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(OKBrand.greenInk)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(t.green)
             }
             .padding(.bottom, 22)
             title("You're all set\(name.isEmpty ? "" : ", \(firstName)").")
@@ -620,7 +632,7 @@ struct OnboardingView: View {
                 divider
                 hintRow(keys: "⌘K", detail: "Ask from the dashboard")
             }
-            .groupBox()
+            .groupBox(t)
             .padding(.top, 24)
         }
     }
@@ -679,7 +691,8 @@ struct OnboardingView: View {
 
     private func go(to next: OnboardStep) {
         forward = next.rawValue > step.rawValue
-        withAnimation(OKMotion.spring) { step = next }
+        // The step views carry their own curves (stepTransition); this frames the rest of the change.
+        withAnimation(reduceMotion ? .linear(duration: 0.15) : OKShell.easeOut(0.24)) { step = next }
     }
 
     private func finish() {
@@ -711,63 +724,63 @@ struct OnboardingView: View {
 
     private func title(_ text: String) -> some View {
         Text(text)
-            .font(.okBody(28, .semibold))
-            .tracking(-0.6)
-            .foregroundStyle(OKBrand.ink)
+            .font(.shellUI(26, .semibold))
+            .tracking(-0.45)
+            .foregroundStyle(t.ink)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private func subtitle(_ text: String) -> some View {
         Text(text)
-            .font(.okBody(14.5))
-            .foregroundStyle(OKBrand.muted)
-            .lineSpacing(3)
+            .font(.shellUI(14))
+            .foregroundStyle(t.muted)
+            .lineSpacing(2.5)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 8)
     }
 
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
-            .font(.okBody(13, .medium))
-            .foregroundStyle(OKBrand.ink.opacity(0.78))
+            .font(.shellUI(13, .semibold))
+            .foregroundStyle(t.ink2)
             .padding(.bottom, 8)
     }
 
     private var divider: some View {
-        Rectangle().fill(OKBrand.ink.opacity(0.06)).frame(height: 1).padding(.leading, 58)
+        Rectangle().fill(t.line).frame(height: 1).padding(.leading, 56)
     }
 
     private func iconTile(_ symbol: String, active: Bool) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(active ? OKBrand.greenInk : OKBrand.muted)
+            .foregroundStyle(active ? t.green : t.muted)
             .frame(width: 32, height: 32)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(active ? OKBrand.green.opacity(0.13) : OKBrand.ink.opacity(0.045)))
+            .background(RoundedRectangle(cornerRadius: OKShell.radiusControl, style: .continuous).fill(active ? t.greenSoft : t.well))
     }
 
     private func statusPill(_ text: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
-            Text(text).font(.okBody(12, .medium))
+            Image(systemName: "checkmark").font(.system(size: 9.5, weight: .bold))
+            Text(text).font(.shellUI(12, .semibold))
         }
-        .foregroundStyle(OKBrand.greenInk)
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .background(Capsule().fill(OKBrand.green.opacity(0.12)))
+        .foregroundStyle(t.green)
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .background(Capsule().fill(t.greenSoft))
     }
 
     private func accessRow(symbol: String, title: String, detail: String, granted: Bool, grant: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             iconTile(symbol, active: granted)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
-                Text(detail).font(.okBody(12)).foregroundStyle(OKBrand.faint)
+                Text(title).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
+                Text(detail).font(.shellUI(12.5)).foregroundStyle(t.muted)
             }
             Spacer(minLength: 8)
             if granted {
                 statusPill("Allowed")
             } else {
-                Button("Allow", action: grant).buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                Button("Allow", action: grant).buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
             }
         }
         .padding(.horizontal, 14)
@@ -777,7 +790,7 @@ struct OnboardingView: View {
     private func appleRow(_ id: String, symbol: String, title: String, connected: Bool) -> some View {
         HStack(spacing: 12) {
             iconTile(symbol, active: connected)
-            Text(title).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
+            Text(title).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
             Spacer(minLength: 8)
             if connected {
                 statusPill("Connected")
@@ -790,7 +803,7 @@ struct OnboardingView: View {
                         refreshPermissions()
                     }
                 }
-                .buttonStyle(OKButtonStyle(kind: .secondary, compact: true))
+                .buttonStyle(ShellButtonStyle(kind: .secondary, small: true))
                 .disabled(connecting != nil)
             }
         }
@@ -804,30 +817,29 @@ struct OnboardingView: View {
             HStack(spacing: 12) {
                 iconTile(done ? "checkmark" : symbol, active: done)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.okBody(13.5, .medium)).foregroundStyle(OKBrand.ink)
-                    Text(detail).font(.okBody(12)).foregroundStyle(done ? OKBrand.greenInk : OKBrand.faint)
+                    Text(title).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
+                    Text(detail).font(.shellUI(12.5)).foregroundStyle(done ? t.green : t.muted)
                 }
                 Spacer()
             }
             content()
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(done ? 0.95 : 0.7)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(done ? OKBrand.green.opacity(0.35) : OKBrand.ink.opacity(0.07)))
-        .animation(OKMotion.spring, value: done)
+        .padding(12)
+        .shellRow(t, selected: done)
+        .animation(stateChange, value: done)
     }
 
     private func hintRow(keys: String, detail: String) -> some View {
         HStack(spacing: 12) {
             Text(keys)
-                .font(.okBody(12, .semibold))
-                .foregroundStyle(OKBrand.ink)
+                .font(.shellUI(12, .semibold))
+                .foregroundStyle(t.ink2)
                 .padding(.horizontal, 8)
                 .frame(minWidth: 46)
-                .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.1)))
-            Text(detail).font(.okBody(13.5)).foregroundStyle(OKBrand.muted)
+                .frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(t.soft))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(t.lineStrong))
+            Text(detail).font(.shellUI(13.5)).foregroundStyle(t.muted)
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -836,9 +848,30 @@ struct OnboardingView: View {
 }
 
 private extension View {
-    func groupBox() -> some View {
-        background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.7)))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.07)))
+    /// A list of rows on the card: --c-bg with the 1px ring (the shell's need-row / settings group).
+    func groupBox(_ t: OKShell) -> some View {
+        shellRow(t, selected: false)
+    }
+
+    /// One bordered surface at the card radius. Selected adds the green ring the shell uses
+    /// for a picked option, so the choice also reads without colour alone (radio dot / check).
+    func shellRow(_ t: OKShell, selected: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: OKShell.radiusCard, style: .continuous)
+        return background(shape.fill(t.card))
+            .overlay(shape.strokeBorder(selected ? t.green.opacity(0.55) : t.ring, lineWidth: selected ? 1.25 : 1))
+            .background(
+                shape.fill(Color.black.opacity(0.0001))
+                    .shadow(color: .black.opacity(t.dark ? 0 : 0.04), radius: 2, y: 1)
+            )
+    }
+
+    /// Text input chrome: --c-bg, a strong hairline at rest, the --focus halo when editing.
+    func shellField(_ t: OKShell, focused: Bool, radius: CGFloat = OKShell.radiusControl) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return background(shape.fill(t.card))
+            .overlay(shape.strokeBorder(focused ? t.greenBright.opacity(0.9) : t.lineStrong, lineWidth: 1))
+            .overlay(shape.inset(by: -3).strokeBorder(focused ? t.focus : .clear, lineWidth: 3))
+            .animation(OKShell.easeOut(0.16), value: focused)
     }
 }
 
@@ -846,24 +879,182 @@ private extension String {
     var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }
 
-/// Soft green canvas with a faint grid, shared visual language with the dashboard.
-private struct OnboardingCanvas: View {
+/// The shell's ground: the --desk gradient over behind-window vibrancy, so the window frosts
+/// like the dashboard does. No grid; dark mode swaps in the dark desk.
+private struct OnboardingDesk: View {
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
         ZStack {
-            Color(hex: 0xEEF2EF)
-            RadialGradient(colors: [Color(hex: 0x3DDC97).opacity(0.24), .clear], center: .topLeading, startRadius: 0, endRadius: 620)
-            RadialGradient(colors: [Color(hex: 0x00483C).opacity(0.12), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 560)
-            Canvas { context, size in
-                var path = Path()
-                var x: CGFloat = 0
-                while x < size.width { path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x, y: size.height)); x += 32 }
-                var y: CGFloat = 0
-                while y < size.height { path.move(to: CGPoint(x: 0, y: y)); path.addLine(to: CGPoint(x: size.width, y: y)); y += 32 }
-                context.stroke(path, with: .color(.black.opacity(0.04)), lineWidth: 0.6)
-            }
-            .mask(RadialGradient(colors: [.black, .clear], center: .topLeading, startRadius: 40, endRadius: 640))
+            VisualEffectBlur(material: .underWindowBackground, blending: .behindWindow)
+            OKShell(scheme).desk.opacity(scheme == .dark ? 0.9 : 0.86)
         }
         .ignoresSafeArea()
+    }
+}
+
+// MARK: - Shell controls (onboarding-local; other surfaces keep OKButtonStyle)
+
+enum ShellButtonKind { case primary, secondary, ghost }
+
+/// The shell's .btn family: r9 (r8 small), 13 / 550, solid --ok-accent primary, --c-bg +
+/// strong hairline secondary, quiet ghost. Press is a 0.97 scale on a 120ms ease-out.
+struct ShellButtonStyle: ButtonStyle {
+    var kind: ShellButtonKind = .primary
+    var small = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        ShellButtonBody(configuration: configuration, kind: kind, small: small)
+    }
+}
+
+private struct ShellButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let kind: ShellButtonKind
+    let small: Bool
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let t = OKShell(scheme)
+        let shape = RoundedRectangle(cornerRadius: small ? 8 : OKShell.radiusControl, style: .continuous)
+        let pressed = configuration.isPressed && enabled
+        configuration.label
+            .font(.shellUI(small ? 12.5 : 13, .medium))
+            .lineLimit(1)
+            .foregroundStyle(foreground(t))
+            .padding(.horizontal, small ? 10 : 15)
+            .frame(height: small ? 28 : 36)
+            .background(shape.fill(fill(t, pressed: pressed)))
+            .overlay(shape.strokeBorder(border(t), lineWidth: 1))
+            .contentShape(shape)
+            .opacity(enabled ? 1 : 0.42)
+            .scaleEffect(pressed && !reduceMotion ? (small ? 0.96 : 0.97) : 1)
+            .animation(OKShell.easeOut(0.12), value: pressed)
+            .animation(OKShell.easeOut(0.15), value: hovering)
+            .onHover { hovering = $0 }
+    }
+
+    private func foreground(_ t: OKShell) -> Color {
+        switch kind {
+        case .primary: return t.onAccent
+        case .secondary: return t.ink
+        case .ghost: return hovering ? t.ink : t.muted
+        }
+    }
+
+    private func fill(_ t: OKShell, pressed: Bool) -> Color {
+        switch kind {
+        case .primary: return hovering || pressed ? t.accentHover : t.accent
+        case .secondary: return pressed ? t.well : (hovering ? t.soft : t.card)
+        case .ghost: return pressed ? t.press : (hovering ? t.hover : .clear)
+        }
+    }
+
+    private func border(_ t: OKShell) -> Color {
+        switch kind {
+        case .primary, .ghost: return .clear
+        case .secondary: return hovering ? t.ink.opacity(0.22) : t.lineStrong
+        }
+    }
+}
+
+/// The shell's .link-btn: 13pt muted text that darkens on hover.
+struct ShellLinkButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ShellLinkBody(configuration: configuration)
+    }
+}
+
+private struct ShellLinkBody: View {
+    let configuration: ButtonStyle.Configuration
+    @State private var hovering = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let t = OKShell(scheme)
+        configuration.label
+            .font(.shellUI(13))
+            .foregroundStyle(hovering ? t.ink : t.muted)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering ? t.hover : .clear))
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .animation(OKShell.easeOut(0.15), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// The shell's .starter chip: --c-soft, r10, 13pt ink-2.
+struct ShellChipButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ShellChipBody(configuration: configuration)
+    }
+}
+
+private struct ShellChipBody: View {
+    let configuration: ButtonStyle.Configuration
+    @State private var hovering = false
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let t = OKShell(scheme)
+        configuration.label
+            .font(.shellUI(12.5))
+            .foregroundStyle(t.ink2)
+            .lineLimit(1)
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hovering ? t.well : t.soft))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .animation(OKShell.easeOut(0.12), value: configuration.isPressed)
+            .animation(OKShell.easeOut(0.15), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// A two-up segmented control in the shell's tokens: a --c-well track with a raised --c-bg thumb.
+struct ShellSegmented<T: Hashable>: View {
+    let options: [T]
+    let label: (T) -> String
+    @Binding var selection: T
+    @Namespace private var namespace
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let t = OKShell(scheme)
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                let on = selection == option
+                Button {
+                    withAnimation(reduceMotion ? nil : OKShell.easeOut(0.2)) { selection = option }
+                } label: {
+                    Text(label(option))
+                        .font(.shellUI(12.5, .medium))
+                        .foregroundStyle(on ? t.ink : t.muted)
+                        .padding(.horizontal, 13)
+                        .frame(height: 28)
+                        .background {
+                            if on {
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(t.dark ? Color.white.opacity(0.1) : t.card)
+                                    .shadow(color: .black.opacity(t.dark ? 0 : 0.08), radius: 2, y: 1)
+                                    .matchedGeometryEffect(id: "seg", in: namespace)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(t.well))
     }
 }
 
@@ -873,6 +1064,9 @@ enum OnboardStep: Int, CaseIterable {
 
 struct TourCanvas: View {
     @Binding var done: Bool
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var t: OKShell { OKShell(scheme) }
     @State private var points: [CGPoint] = []
     @State private var active: [CGPoint] = []
 
@@ -880,20 +1074,20 @@ struct TourCanvas: View {
         Canvas { context, size in
             let center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
             let dot = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
-            context.fill(Path(ellipseIn: dot), with: .color(OKBrand.green))
+            context.fill(Path(ellipseIn: dot), with: .color(t.greenBright))
             let ring = CGRect(x: center.x - 26, y: center.y - 26, width: 52, height: 52)
-            context.stroke(Path(ellipseIn: ring), with: .color(OKBrand.green.opacity(0.22)),
+            context.stroke(Path(ellipseIn: ring), with: .color(t.greenBright.opacity(0.35)),
                            style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
             for stroke in [points, active] where !stroke.isEmpty {
                 var path = Path()
                 path.move(to: stroke[0])
                 for point in stroke.dropFirst() { path.addLine(to: point) }
-                context.stroke(path, with: .color(OKBrand.greenInk),
+                context.stroke(path, with: .color(t.green),
                                style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(OKBrand.ink.opacity(0.025)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(OKBrand.ink.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: OKShell.radiusControl, style: .continuous).fill(t.soft))
+        .overlay(RoundedRectangle(cornerRadius: OKShell.radiusControl, style: .continuous).strokeBorder(t.line))
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 0)
@@ -912,7 +1106,7 @@ struct TourCanvas: View {
                     }
                     if length > 60 {
                         points = active
-                        withAnimation(OKMotion.spring) { done = true }
+                        withAnimation(reduceMotion ? nil : OKShell.easeOut(0.2)) { done = true }
                     }
                     active = []
                 }

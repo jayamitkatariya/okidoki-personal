@@ -50,11 +50,29 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
+      const root = document.documentElement;
       const theme = resolveTheme(settings.appearance);
-      document.documentElement.dataset.theme = theme;
-      document.documentElement.style.colorScheme = theme;
-      // Kobra components key their dark styles off a `dark` class.
-      document.documentElement.classList.toggle("dark", theme === "dark");
+      const swap = () => {
+        root.dataset.theme = theme;
+        root.style.colorScheme = theme;
+        // Kobra components key their dark styles off a `dark` class.
+        root.classList.toggle("dark", theme === "dark");
+      };
+      // First paint and unchanged themes switch at once. A real change crossfades one snapshot of the
+      // page (a view transition) instead of every surface running its own color transition at its own
+      // speed, which is what made the switch feel like a hard cut.
+      const changed = root.dataset.theme !== undefined && root.dataset.theme !== theme;
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const start = (document as Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } }).startViewTransition;
+      if (!changed || reduce || !start) {
+        swap();
+        return;
+      }
+      root.classList.add("theme-switching");
+      start
+        .call(document, swap)
+        .finished.catch(() => undefined)
+        .finally(() => root.classList.remove("theme-switching"));
     };
     apply();
     media.addEventListener("change", apply);

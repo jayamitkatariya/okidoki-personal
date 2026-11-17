@@ -719,7 +719,8 @@ function ToastStack({
       }}
       className={cn(
         'pointer-events-none fixed inset-x-0 z-100',
-        side === 'top' ? 'top-4' : 'bottom-4',
+        // okidoki: the shell lifts bottom toasts off the sidebar's library and account (--toast-bottom).
+        side === 'top' ? 'top-4' : 'bottom-[var(--toast-bottom,1rem)]',
       )}
     >
       {/* okidoki: step the native page aside while a toast overlaps it. */}

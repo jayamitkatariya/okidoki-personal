@@ -459,7 +459,8 @@ final class HybridBrowserReplayer {
                 }
             }
 
-            var outcome = await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item)
+            var outcome = await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item,
+                                        next: cursor + 1 < plan.count ? plan[cursor + 1].step : nil)
             // A lookup whose page came out differently (a wrong password's "invalid" message instead of the
             // secure area): when all that's left is reading, what the page says now is the answer.
             if case .lost(let why) = outcome, step.irreversible != true, cursor + 1 < plan.count,
@@ -608,7 +609,7 @@ final class HybridBrowserReplayer {
     }
 
     private func perform(_ planned: HybridReplay.Planned, skill: Skill, inputs: [String: SkillInput], values: [String: String],
-                         tab: BrowserTab, item: SkillBinder.Bound) async -> StepOutcome {
+                         tab: BrowserTab, item: SkillBinder.Bound, next: SkillStep? = nil) async -> StepOutcome {
         guard let env, let runID else { return .failed("okidoki quit") }
         let step = planned.step
         let action = step.action ?? "click"
@@ -740,6 +741,20 @@ final class HybridBrowserReplayer {
             waited += 1
         }
         var healedSelectors: [String]?
+        // What the rescue pressed first to bring the element into view (a "Next" that shows the rest of the
+        // same form): kept as plain steps before this one, so the next replay needs no model here.
+        var revealedBy: [Touched] = []
+        // A click that only got you to the next step's element (a "Next" learned on a form that showed
+        // everything at once again): when that element is already showing here, the click isn't needed.
+        if !result.ok, action == "click", step.irreversible != true, let next, ["type", "select", "click"].contains(next.action ?? ""),
+           next.mode != "think", let wanted = next.selectors, !wanted.isEmpty, step.anchor?.path == next.anchor?.path {
+            var showing = false
+            for selector in wanted.prefix(4) where !selector.contains("{{") { if await tab.isPresent(selector) { showing = true; break } }
+            if showing {
+                env.replayLog(runID, "→ \(item.label): “\(step.label ?? "that click")” isn't needed here — the next field is already showing")
+                return .done
+            }
+        }
         if !result.ok {
             // None of the saved ways find it. The model picks the element that does this step's job on
             // today's page (a renamed button counts), for this one step; what it picked becomes the fix.
@@ -749,10 +764,11 @@ final class HybridBrowserReplayer {
                 }
             }
             if !result.ok {
-                guard let (fixed, selectors) = await rescueByPurpose(step, typed: payload["secret"] == nil ? (payload["value"] as? String ?? input) : nil,
+                guard let (fixed, selectors, before) = await rescueByPurpose(step, typed: payload["secret"] == nil ? (payload["value"] as? String ?? input) : nil,
                                                                      row: planned.iteration.map { $0 + 1 }, values: scoped, tab: tab) else {
                     return .lost("\(step.label.map { "“\($0)”" } ?? "the element") isn't on the page")
                 }
+                if planned.iteration == nil { revealedBy = before }
                 result = fixed
                 if !selectors.isEmpty { result.selectors = selectors; result.matched = -2 }
             }
@@ -840,6 +856,12 @@ final class HybridBrowserReplayer {
             }
         }
         if let doubt { return .doubt(doubt) }
+        if !revealedBy.isEmpty {
+            // Promoted at the end of the run: the reveal, then this step on the element the rescue used.
+            let actions = revealedBy + [Touched(action: action, selectors: result.selectors, label: result.label ?? step.label,
+                                                role: result.role ?? step.role, input: typed ?? input, url: tab.webView.url?.absoluteString)]
+            return .learned(actions.map { SkillPromoter.Action(action: $0.action, selectors: $0.selectors, label: $0.label, role: $0.role, input: $0.input, url: $0.url) })
+        }
         if let healedSelectors { return .healed(healedSelectors) }
         return .done
     }
@@ -858,7 +880,8 @@ final class HybridBrowserReplayer {
 
     /// One step by the model, told what the step is for: the label it had, the page it was on, and
     /// where it should lead. Returns the act result and the selectors of the element it used.
-    private func rescueByPurpose(_ step: SkillStep, typed: String?, row: Int? = nil, values: [String: String] = [:], tab: BrowserTab) async -> (BrowserActResult, [String])? {
+    private func rescueByPurpose(_ step: SkillStep, typed: String?, row: Int? = nil, values: [String: String] = [:],
+                                 tab: BrowserTab) async -> (BrowserActResult, [String], [Touched])? {
         guard let env, env.hasKey("anthropic") else { return nil }
         let action = step.action ?? "click"
         var goal = "One step of a recorded task, on the current page: \(action) the element that does what "
@@ -871,11 +894,25 @@ final class HybridBrowserReplayer {
         if let landmark = step.anchor?.landmark { goal += " It's on the page headed “\(landmark)”." }
         if let row { goal += " This is entry \(row) of a list: use the control that belongs to entry \(row) (its label or row number is \(row)), not another row's." }
         goal += " Its label may have changed; pick the element with the same purpose. Close a popup first if one is in the way."
+            + " If it isn't showing because the form now comes in parts on this same page, press the control that shows the next part"
+            + " (a “Next” that reveals more fields without submitting anything or leaving the page) first."
             + " Do only this one step, then finish with success true; if nothing on the page does this, finish with success false."
-        let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 3, tag: "fix-\(step.id)")
-        guard result.ok, let last = result.touched.last(where: { $0.action == action || action == "click" }) else { return nil }
-        if let runID { env.replayLog(runID, "→ found “\(step.label ?? action)” as “\(last.label ?? "an element")”") }
-        return (BrowserActResult(ok: true, detail: nil, selectors: last.selectors, matched: -2, label: last.label, role: step.role), last.selectors)
+        let startPath = URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path
+        let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 4, tag: "fix-\(step.id)")
+        guard result.ok, let index = result.touched.lastIndex(where: { $0.action == action || action == "click" }) else { return nil }
+        let last = result.touched[index]
+        // Clicks before it that only showed more of the page (same address, nothing risky) are kept as steps.
+        let before = Array(result.touched[..<index])
+        let revealing = !before.isEmpty && before.allSatisfy { touched in
+            touched.action == "click" && !touched.selectors.isEmpty && !MacReplay.isRisky(touched.label ?? "")
+                && URLComponents(string: touched.url ?? "")?.path == startPath
+        } && URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path == startPath
+        if let runID {
+            let shown = revealing ? before.compactMap(\.label).map { "“\($0)”, then " }.joined() : ""
+            env.replayLog(runID, "→ found “\(step.label ?? action)” as \(shown)“\(last.label ?? "an element")”")
+        }
+        return (BrowserActResult(ok: true, detail: nil, selectors: last.selectors, matched: -2, label: last.label, role: step.role), last.selectors,
+                revealing ? before : [])
     }
 
     private func check(_ expect: StepExpectation, tab: BrowserTab) async -> [String] {

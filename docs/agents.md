@@ -7,10 +7,14 @@ okidoki itself must be running. Anything risky still waits for the person's okay
 ## Install
 
 ```sh
-make install                                   # builds the app and puts `okidoki` in ~/.local/bin
-scripts/install-cli.sh                         # just the command, for an app that's already installed
-claude mcp add okidoki -- okidoki mcp          # the same, as MCP tools
+make install                     # builds the app, puts `okidoki` in ~/.local/bin and installs the okidoki skill
+scripts/install-cli.sh           # the command and the skill, for an app that's already installed
+scripts/install-cli.sh --no-skill  # just the command
 ```
+
+Or open okidoki → Settings › Agents, which does the same from the app.
+
+The **okidoki skill** (`mcp/skill/SKILL.md`) is how agents learn the command: it goes to `~/.claude/skills/okidoki/` (Claude Code), `~/.agents/skills/okidoki/` (agents that read the shared folder) and `~/.codex/skills/okidoki/` when Codex is installed. Once it's there, an agent picks it up whenever the person asks for something on a website or in a Mac app. There is no MCP server for okidoki: the skill and the command are the one way in.
 
 ## The command
 
@@ -62,7 +66,7 @@ Exit codes:
 
 ## HTTP
 
-The command and the MCP server sit on a small HTTP endpoint at `127.0.0.1`. Its port and token are in `~/Library/Application Support/Okidoki Personal/control.json`, which only the owner can read. Every request needs `Authorization: Bearer <token>`, and requests that carry an `Origin` header are refused, so web pages can't reach it.
+The command sits on a small HTTP endpoint at `127.0.0.1`. Its port and token are in `~/Library/Application Support/Okidoki Personal/control.json`, which only the owner can read. Every request needs `Authorization: Bearer <token>`, and requests that carry an `Origin` header are refused, so web pages can't reach it.
 
 `GET /` lists the routes:
 
@@ -95,3 +99,29 @@ A run, as every route returns it:
   "result": "file a return · done for Asha, Ravi", "said": ["…"], "seconds": 14.2, "modelCalls": 1,
   "needs": "…only while it waits on the person…", "thread": "…" }
 ```
+
+## The other way: okidoki hands work to your coding agent
+
+Settings › Agents also lists the coding agents installed on this Mac — Claude Code, Codex, Amp, Pi, OpenCode,
+Gemini CLI, Cursor Agent — plus any command you add (`{prompt}` and `{cwd}` are filled in, safely quoted).
+Turn one or more on, pick a default and a working folder (the vault unless you choose another).
+
+Jobs on files, folders, documents, code and the terminal then go to that agent (or pick **Agent** under Where in
+the composer to send anything). okidoki runs it without a window in the working folder, streams each command and
+edit into the chat, lets you stop it, and resumes the same session for follow-ups in that conversation. The agent
+is told `okidoki` is there for the web, logins, Mac apps, skills, memory and the vault.
+
+Access defaults to the safest mode that can still do the job:
+
+| agent | working folder (default) | full access |
+|---|---|---|
+| Claude Code | `--permission-mode acceptEdits` + an allow-list of safe commands; `rm`, `sudo`, installs, `curl` denied — denied steps come back as "allow and continue" | `bypassPermissions` |
+| Codex | `codex exec -s workspace-write` (writes only in the folder, no network) | `--dangerously-bypass-approvals-and-sandbox` |
+| Gemini CLI | `--approval-mode auto_edit` | `--approval-mode yolo` |
+| OpenCode | its own permission config | `--auto` |
+| Cursor Agent | its sandbox and allow-list | `--force` |
+| Amp | its own permission rules | same |
+| Pi, custom commands | no permission layer: every job waits for your okay | same |
+
+Full access, Pi and custom commands always wait for your okay before a job starts. Each agent uses its own
+sign-in; okidoki never passes it a key.

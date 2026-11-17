@@ -413,6 +413,8 @@ struct MemoryIndexStatus: Codable, Equatable {
     var documents: Int = 0
     var notes: Int = 0
     var messages: Int = 0
+    var runs: Int?
+    var skills: Int?
     var tools: Int = 0
     var lastSyncAt: Date?
     var error: String?
@@ -447,6 +449,16 @@ struct BrainThinkPayload: Encodable {
     var accountId: String
     /// act · browser · chat from the cursor card; left out for auto.
     var mode: String?
+    /// Coding agents the person turned on, so file, terminal and code jobs can go to one.
+    var codingAgents: BrainCodingAgentsPayload?
+}
+
+struct BrainCodingAgentsPayload: Encodable {
+    struct Agent: Encodable { var id: String; var name: String }
+    var agents: [Agent]
+    var defaultId: String
+    var folder: String
+    var threadAgent: String?
 }
 
 /// What the brain's Moss memory index is built from: the Mac's own items, as stored.
@@ -478,7 +490,8 @@ final class BrainClient {
     func think(text: String, request: BrainRequest, history: [BrainMessage], memory: [String],
                events: [BrainNativeEvent], settings: AppSettings, account: Account,
                frontWindow: String,
-               connectors: BrainConnectorsPayload) async -> BrainThinkOutcome {
+               connectors: BrainConnectorsPayload,
+               codingAgents: BrainCodingAgentsPayload? = nil) async -> BrainThinkOutcome {
         // What they circled wins; otherwise the display shot from summon time gives the brain context.
         let circled = request.screenshotPNG
         let screenshot = circled ?? request.screen?.screenshotPNG
@@ -508,7 +521,8 @@ final class BrainClient {
                                               screenshotIsDisplay: circled == nil && screenshot != nil),
             connectors: connectors,
             accountId: account.id,
-            mode: request.mode == "auto" ? nil : request.mode
+            mode: request.mode == "auto" ? nil : request.mode,
+            codingAgents: codingAgents
         )
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("think"))
         urlRequest.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
@@ -615,6 +629,68 @@ final class BrainClient {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let status = try? Self.statusDecoder.decode(MemoryIndexStatus.self, from: data) else { return nil }
         return (json["ok"] as? Bool == true, status)
+    }
+
+    /// Memory ids matching a search by meaning, best first. Nil when there's no index or the brain is unreachable.
+    func memorySearch(_ text: String, accountID: String) async -> [String]? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("memory/search"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "accountId": accountID])
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hits = json["hits"] as? [[String: Any]] else { return nil }
+        return hits.compactMap { $0["id"] as? String }
+    }
+
+    /// Tells the brain to drop its index (the Moss key is gone). Best effort.
+    func memoryClose() async {
+        var request = URLRequest(url: baseURL.appendingPathComponent("memory/close"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// One fact the brain decided to keep: add, update a known memory (a correction), or skip (known).
+    struct MemoryOp: Decodable {
+        var op: String
+        var text: String
+        var id: String?
+        var section: String?
+    }
+    struct MemoryExtract: Decodable {
+        var ok: Bool?
+        var ops: [MemoryOp]?
+        var secret: String?
+        var usedModel: Bool?
+        var error: String?
+    }
+
+    /// Lasting facts from one turn, gated and reconciled by the brain (see brain/src/memorycapture.ts).
+    /// `mode`: chat (picked up from what they said) · explicit (they asked) · agent (a run proposed them).
+    /// Nil when the brain can't be reached.
+    func extractMemories(text: String, reply: String = "", mode: String, task: String = "", facts: [String] = [],
+                         known: [MemoryItem], model: String?) async -> MemoryExtract? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("memory/extract"))
+        request.setValue("Bearer \(BrainConnection.token)", forHTTPHeaderField: "Authorization")
+        request.httpMethod = "POST"
+        request.timeoutInterval = 40
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let key = KeyStore.get("anthropic"), !key.isEmpty { request.setValue(key, forHTTPHeaderField: "x-anthropic-key") }
+        var body: [String: Any] = [
+            "text": String(text.prefix(4000)), "reply": String(reply.prefix(800)), "mode": mode,
+            "task": String(task.prefix(2000)), "facts": facts,
+            "known": known.prefix(400).map { ["id": $0.id, "text": $0.text] },
+        ]
+        if let model, model.lowercased().contains("haiku") { body["model"] = model }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+        return try? JSONDecoder().decode(MemoryExtract.self, from: data)
     }
 
     /// The index as the brain sees it, without sending anything. Nil when the brain is unreachable.

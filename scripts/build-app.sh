@@ -31,12 +31,13 @@ if command -v bun >/dev/null 2>&1 && [ -f brain/src/server.ts ]; then
   fi
 fi
 
-# --- the okidoki CLI and MCP server, for other agents (one file, run by bun) ---
+# --- the okidoki CLI and its skill, for other agents (one file run by bun, plus SKILL.md) ---
 if command -v bun >/dev/null 2>&1 && [ -f mcp/okidoki.ts ]; then
   echo "▸ Bundling the okidoki command…"
   rm -rf Resources/cli
   mkdir -p Resources/cli
   bun build mcp/okidoki.ts --outfile Resources/cli/okidoki.js --target=bun >/dev/null
+  cp mcp/skill/SKILL.md Resources/cli/SKILL.md
 fi
 
 # --- react control panel ---

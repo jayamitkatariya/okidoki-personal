@@ -102,6 +102,11 @@ struct DashboardWatchPayload: Encodable {
     var replaying: Bool
 }
 
+struct DashboardMemorySearchPayload: Encodable {
+    var query: String
+    var ids: [String]?
+}
+
 struct DashboardMemorySourcePayload: Encodable {
     var id: String
     var name: String
@@ -118,6 +123,8 @@ struct DashboardPayload: Encodable {
     var runs: [AgentRun]
     var threads: [ChatThread]
     var memories: [MemoryItem]
+    /// The Memory page's last search by meaning (ids best first); `ids` nil while looking or without an index.
+    var memorySearch: DashboardMemorySearchPayload
     /// Other assistants whose memory can be brought in, with the files each keeps on this Mac.
     var memorySources: [DashboardMemorySourcePayload]
     var skills: [Skill]
@@ -145,6 +152,10 @@ struct DashboardPayload: Encodable {
     var live: DashboardLivePayload?
     /// okidoki's private Mac: whether this Mac can run one, and where setup or the VM is right now.
     var privateMac: DashboardPrivateMacPayload
+    /// The okidoki skill and `okidoki` command other agents use: installed, and where.
+    var agentSkill: AgentSkill.Status
+    /// Coding agents found on this Mac (Claude Code, Codex…), where they work, and what each may touch.
+    var codingAgents: DashboardCodingAgentsPayload
     /// The vault folder's files and the sealed logins.
     var vault: DashboardVaultPayload
     /// Browsers to import passwords from, and how the last import went.
@@ -228,6 +239,8 @@ struct DashboardServicesPayload: Encodable {
         var documents: Int
         var notes: Int
         var messages: Int
+        var runs: Int
+        var skills: Int
         var tools: Int
         var lastSyncAt: Date?
         var error: String?
@@ -266,6 +279,8 @@ struct DashboardPrivateMacPayload: Encodable {
     var macOSVersion: String
     var cpuCount: Int
     var memoryGB: Int
+    /// Sizes Settings offers on this Mac.
+    var memoryChoicesGB: [Int]
     var bytesOnDisk: Int64
     var downloadGB: Int
 }
@@ -552,9 +567,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                           documents: env.memoryIndex.documents,
                           notes: env.memoryIndex.notes,
                           messages: env.memoryIndex.messages,
+                          runs: env.memoryIndex.runs ?? 0,
+                          skills: env.memoryIndex.skills ?? 0,
                           tools: env.memoryIndex.tools,
                           lastSyncAt: env.memoryIndex.lastSyncAt,
-                          error: env.memoryIndex.error),
+                          error: env.mossKeyProblem ?? env.memoryIndex.error),
             mcp: .init(enabled: mcpEnabled,
                        servers: servers.count,
                        connected: servers.filter { env.mcpStatus[$0.id]?.ok == true }.count,
@@ -633,6 +650,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             runs: env.store.activeRuns.sorted { $0.createdAt > $1.createdAt },
             threads: env.store.activeThreads,
             memories: env.store.activeMemories,
+            memorySearch: .init(query: env.memorySearch.query, ids: env.memorySearch.ids),
             memorySources: memorySources(),
             skills: env.store.activeSkills,
             routines: env.store.activeRoutines,
@@ -674,8 +692,11 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 macOSVersion: env.privateMac.macOSVersion,
                 cpuCount: env.privateMac.cpuCount,
                 memoryGB: Int(env.privateMac.memoryBytes / (1024 * 1024 * 1024)),
+                memoryChoicesGB: PrivateMacSpec.memoryChoicesGB(host: ProcessInfo.processInfo.physicalMemory),
                 bytesOnDisk: env.privateMac.isSetUp || env.privateMac.restoreImageDownloaded ? PrivateMacSpec.bytesOnDisk() : 0,
                 downloadGB: Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)),
+            agentSkill: AgentSkill.status(),
+            codingAgents: env.codingAgentsDashboard(),
             vault: DashboardVaultPayload(
                 folder: env.vault.folderURL.path,
                 available: env.vault.available,
@@ -834,9 +855,26 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         case "addMemory":
             if let text = payload["text"] as? String {
                 let section = MemorySection(rawValue: payload["section"] as? String ?? "aboutYou") ?? .aboutYou
-                env.store.addMemory(text, section: section)
+                // Same rules as everywhere: no secrets, and a new value for something known replaces it.
+                switch env.store.saveMemory(text, section: section, source: "you") {
+                case .refused(let why) where why.hasPrefix("secret:"):
+                    env.toast(title: "not saved", detail: MemoryPolicy.vaultNote(String(why.dropFirst(7))), kind: .warning,
+                              undoLabel: nil, onUndo: nil, editLabel: "vault", onEdit: { [weak env] in env?.openDashboard(.vault) }, runID: nil)
+                case .updated(let item):
+                    env.toast(title: "updated", detail: "\(item.text) (was: \(item.previousText ?? ""))", kind: .success,
+                              undoLabel: "undo", onUndo: { [weak env] in env?.store.undoMemorySave(item.id); env?.store.saveNow() },
+                              editLabel: nil, onEdit: nil, runID: nil)
+                case .known:
+                    env.toast(title: "already known", detail: text, kind: .info, undoLabel: nil, onUndo: nil,
+                              editLabel: nil, onEdit: nil, runID: nil)
+                default:
+                    break
+                }
                 env.store.saveNow()
             }
+        case "undoMemory":
+            // The chat's "saved to memory" chip: a correction goes back, a new memory goes away.
+            if let id = payload["id"] as? String { env.store.undoMemorySave(id); env.store.saveNow() }
         case "updateMemory":
             if let id = payload["id"] as? String, let text = payload["text"] as? String {
                 env.store.updateMemory(id, text: text)
@@ -844,6 +882,13 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "deleteMemory":
             if let id = payload["id"] as? String { env.store.deleteMemory(id); env.store.saveNow() }
+        case "pinMemory":
+            if let id = payload["id"] as? String {
+                env.store.setMemoryPinned(id, payload["pinned"] as? Bool ?? true)
+                env.store.saveNow()
+            }
+        case "searchMemory":
+            env.searchMemory(payload["query"] as? String ?? "")
         case "updateSettings":
             // Dates go to the page as ISO 8601 (see payloadJSON), so they come back that way.
             let decoder = JSONDecoder()
@@ -964,6 +1009,12 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             case "start": Task { await env.privateMac.start(showWindow: true) }
             case "stop": Task { await env.privateMac.stop() }
             case "show": env.privateMac.show()
+            // From the shell's Private Mac view: boot without throwing its window in front of the person.
+            case "startQuiet": Task { await env.privateMac.start(showWindow: false) }
+            case "mirror":
+                let on = payload["on"] as? Bool ?? false
+                env.privateMac.mirror(on, wanted: { [weak env] in env?.dashboard?.window?.isVisible == true && env?.dashboard?.window?.occlusionState.contains(.visible) == true },
+                                      frame: { [weak self] url in self?.replyToPage("okidoki-vm-frame", url) })
             case "hide": env.privateMac.hide()
             case "firstBootDone": env.privateMac.markFirstBootDone()
             case "delete":
@@ -1017,12 +1068,18 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.shellFreeze { [weak self] url in self?.replyToPage("okidoki-freeze", url ?? "") }
         case "toggleBookmark":
             env.shellToggleBookmark(tabID: payload["tabID"] as? String)
+        case "addBookmark":
+            if let url = payload["url"] as? String {
+                env.store.addBookmark(url: url, title: payload["title"] as? String ?? "", at: payload["index"] as? Int)
+            }
         case "removeBookmark":
             if let id = payload["id"] as? String { env.store.removeBookmark(id) }
         case "pinTab":
-            env.shellPinTab(tabID: payload["tabID"] as? String)
+            env.shellPinTab(tabID: payload["tabID"] as? String, at: payload["index"] as? Int)
         case "pinSite":
-            if let url = payload["url"] as? String { env.store.pin(url: url, title: payload["title"] as? String ?? "") }
+            if let url = payload["url"] as? String {
+                env.store.pin(url: url, title: payload["title"] as? String ?? "", at: payload["index"] as? Int)
+            }
         case "unpin":
             if let id = payload["id"] as? String { env.store.unpin(id) }
         case "reorderPins":
@@ -1049,6 +1106,33 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             }
         case "openDataFolder":
             NSWorkspace.shared.open(AppPaths.support)
+        case "installAgentSkill":
+            do {
+                let folders = try AgentSkill.install()
+                let cli = AgentSkill.launcher.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+                env.toast(title: "okidoki skill installed", detail: "\(folders.count) agent skill folders · command at \(cli)", kind: .success,
+                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            } catch {
+                env.toast(title: "couldn't install the skill", detail: error.localizedDescription, kind: .warning,
+                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            }
+            sendState()
+        case "rescanCodingAgents":
+            _ = env.detectedCodingAgents(refresh: true)
+            sendState()
+        case "pickCodingAgentFolder":
+            env.pickCodingAgentFolder()
+            sendState()
+        case "uninstallAgentSkill":
+            do {
+                try AgentSkill.uninstall()
+                env.toast(title: "okidoki skill removed", detail: "agents won't load it anymore", kind: .success,
+                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            } catch {
+                env.toast(title: "couldn't remove the skill", detail: error.localizedDescription, kind: .warning,
+                          undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            }
+            sendState()
         case "quit":
             NSApp.terminate(nil)
         default:

@@ -76,7 +76,8 @@ extension AppEnvironment {
     /// A finished browser run. One that worked can be kept as a skill that replays without the model.
     func browserRunFinished(_ run: AgentRun, success: Bool, summary: String, learned: [SkillStep]) {
         let source = LearnedBrowserRun(title: run.title, goal: run.prompt, summary: summary, steps: learned,
-                                       pages: learnedPages.removeValue(forKey: run.id) ?? [:])
+                                       pages: learnedPages.removeValue(forKey: run.id) ?? [:],
+                                       secrets: learnedSecrets.removeValue(forKey: run.id) ?? [:])
         lastBrowserRun = success && !learned.isEmpty ? source : nil
         // A lookup that only went to an address is a skill too (the address carries the data; a read step is added).
         if success, !learned.isEmpty {
@@ -138,6 +139,8 @@ extension AppEnvironment {
         let site = steps.compactMap { $0.url.map(BrowserSteps.host(of:)) }.first { !$0.isEmpty } ?? "the web"
         let skill = store.createSkill(name: name, summary: "\(actions) \(actions == 1 ? "step" : "steps") on \(site), in okidoki's browser",
                                       steps: steps, source: source)
+        // A password the request gave is remembered for this skill (keys.json), so replays don't need it again.
+        for (name, value) in learnedFrom?.secrets ?? [:] { SkillSecrets.remember(value, name: name, skillID: skill.id) }
         store.saveNow()
         // Smart replay: the skill is saved as recorded right away, then generalized in the background.
         // If that doesn't work out it simply stays as recorded.

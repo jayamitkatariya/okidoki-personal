@@ -335,7 +335,7 @@ Pick a skill only when it does the same job the request asks for (same site or a
 When several skills do the same job, pick the one whose inputs cover what changes between items. A skill with no inputs repeats exactly what was recorded, so it only fits a request for that same data once.
 
 items: every person, invoice, order or row the request wants it done for, in order, as named ("for Jay, Jia and Neha" → ["Jay", "Jia", "Neha"]; "for invoices 4471 and 4472" → ["4471", "4472"]). Empty for a single unnamed pass. "everyone in X.csv" → ["every row in X.csv"].
-overrides: only values the request states outright, keyed by the skill's input names.
+overrides: only values the request states outright, keyed by the skill's input names. A list input (named under "lists", with its fields) is a JSON array of objects with those fields: "deductions 80C 150000 and 80D 50000" → [{"section":"80C","amount":"150000"},{"section":"80D","amount":"50000"}].
 confidence: how sure you are this skill is right for this request, 0-1:
 - 0.9-1: the skill's intent is the job the request asks for, on the same site or app; only the data differs (other people, other values, other documents). Different data is the point of a skill, never a reason for doubt.
 - 0.6-0.8: same site, but the request asks for a noticeably different action or an extra step the skill doesn't cover.

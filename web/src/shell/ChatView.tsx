@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
-import { cx, relativeTime } from "../lib";
+import { copyText, cx, relativeTime } from "../lib";
+import { askAndOpen } from "./ask";
 import { Button, Markdown, PixelIcon, RiskBadge } from "../components/ui";
 import { AskedReply } from "../pages/RunsPage";
 import type { Message, Run, Thread } from "../types";
@@ -10,6 +11,8 @@ import { PlanCard } from "@/components/ui/plan-card";
 import { Button as KButton } from "@/components/ui/button";
 import { ACTIVE, actionLines, runUnread, threadUnread, workingFor } from "./model";
 import { thumbURL, useNow } from "./media";
+import { MemoryChips } from "./MemoryChips";
+import type { Memory } from "../types";
 
 const KIND_ICON: Record<Run["kind"], string> = {
   answer: "spark",
@@ -20,6 +23,7 @@ const KIND_ICON: Record<Run["kind"], string> = {
   borrow: "hand",
   routine: "clock",
   connector: "link",
+  coding_agent: "code",
 };
 
 const KIND_NAME: Record<Run["kind"], string> = {
@@ -31,6 +35,7 @@ const KIND_NAME: Record<Run["kind"], string> = {
   borrow: "Replay",
   routine: "Routine",
   connector: "Connected service",
+  coding_agent: "Coding agent",
 };
 
 type Item = { at: number; message?: Message; run?: Run };
@@ -65,6 +70,25 @@ export function ChatView({
     for (const run of runs) if (run.kind !== "answer") list.push({ at: Date.parse(run.createdAt) + 1, run });
     return list.sort((a, b) => a.at - b.at);
   }, [thread.messages, runs]);
+
+  // What each turn saved to memory sits under okidoki's reply to it (or the person's message, before the
+  // reply lands); what a run learned sits under its card.
+  const memoryAnchors = useMemo(() => {
+    const byAnchor = new Map<string, Memory[]>();
+    const add = (key: string, memory: Memory) => byAnchor.set(key, [...(byAnchor.get(key) ?? []), memory]);
+    for (const memory of state.memories ?? []) {
+      if (memory.threadID !== thread.id) continue;
+      if (memory.messageID) {
+        const at = thread.messages.findIndex((message) => message.id === memory.messageID);
+        if (at < 0) continue;
+        const reply = thread.messages.slice(at + 1).find((message) => message.role === "assistant");
+        add(reply?.id ?? memory.messageID, memory);
+      } else if (memory.runID) {
+        add(memory.runID, memory);
+      }
+    }
+    return byAnchor;
+  }, [state.memories, thread.id, thread.messages]);
 
   // Opening a conversation reads it.
   const unreadRuns = runs.filter(runUnread).map((run) => run.id).join(",");
@@ -120,9 +144,15 @@ export function ChatView({
           </header>
           {items.map((item) =>
             item.message ? (
-              <MessageBubble key={item.message.id} message={item.message} />
+              <Fragment key={item.message.id}>
+                <MessageBubble message={item.message} />
+                <MemoryChips memories={memoryAnchors.get(item.message.id) ?? []} />
+              </Fragment>
             ) : item.run ? (
-              <RunCard key={item.run.id} run={item.run} now={now} thumbVersion={state.thumbs?.[item.run.id]} tabID={tabs.find((tab) => tab.ownerRunID === item.run!.id)?.id} onOpenTab={onOpenTab} />
+              <Fragment key={item.run.id}>
+                <RunCard run={item.run} now={now} thumbVersion={state.thumbs?.[item.run.id]} tabID={tabs.find((tab) => tab.ownerRunID === item.run!.id)?.id} onOpenTab={onOpenTab} />
+                <MemoryChips memories={memoryAnchors.get(item.run.id) ?? []} />
+              </Fragment>
             ) : null,
           )}
           {items.length === 0 ? <p className="chat-empty">Ask anything below. okidoki answers here, and anything it does shows up as it happens.</p> : null}
@@ -152,10 +182,36 @@ export function MessageBubble({ message }: { message: Message }) {
       ) : (
         <div className="msg-answer">
           <span className="msg-mark" aria-hidden="true" />
-          <Markdown text={message.text} />
+          <div className="msg-answer-body">
+            <Markdown text={message.text} />
+            <CopyAnswer text={message.text} />
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** Copies an answer; the icon turns into a check for a moment so you know it worked. */
+function CopyAnswer({ text }: { text: string }) {
+  const { notify } = useDashboard();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      className={cx("msg-copy", copied && "is-copied")}
+      aria-label={copied ? "Copied" : "Copy answer"}
+      title={copied ? "Copied" : "Copy answer"}
+      onClick={() => void copyText(text).then((ok) => (ok ? setCopied(true) : notify("Couldn’t copy", "The clipboard isn’t available", "info")))}
+    >
+      <PixelIcon name={copied ? "check" : "copy"} size={14} />
+      <span>{copied ? "Copied" : "Copy"}</span>
+    </button>
   );
 }
 
@@ -180,7 +236,7 @@ export function RunCard({ run, now, thumbVersion, tabID, onOpenTab }: { run: Run
             : run.status === "done"
               ? `Done${took ? ` in ${took}` : ""}`
               : run.status === "failed"
-                ? "Didn't finish"
+                ? "Didn’t finish"
                 : "Stopped";
 
   // Waiting for an OK with a plan: Kobra's plan card carries the steps and the decision.
@@ -222,7 +278,7 @@ export function RunCard({ run, now, thumbVersion, tabID, onOpenTab }: { run: Run
       <header className="run-card-head">
         <span className="run-kind">
           <PixelIcon name={KIND_ICON[run.kind]} size={14} />
-          {KIND_NAME[run.kind]}
+          {run.kind === "coding_agent" && run.preview?.apps[0] ? run.preview.apps[0] : KIND_NAME[run.kind]}
         </span>
         <span className={cx("run-state", run.status === "running" && "is-live")}>
           {run.status === "running" ? <span className="pulse-dot" aria-hidden="true" /> : null}
@@ -285,9 +341,11 @@ export function RunCard({ run, now, thumbVersion, tabID, onOpenTab }: { run: Run
                 Open tab
               </Button>
             ) : null}
-            <Button size="sm" variant="secondary" icon={run.status === "paused" ? "play" : "pause"} onClick={() => invoke("pauseRun", { id: run.id })}>
-              {run.status === "paused" ? "Hand back" : "Pause"}
-            </Button>
+            {run.kind === "coding_agent" ? null : (
+              <Button size="sm" variant="secondary" icon={run.status === "paused" ? "play" : "pause"} onClick={() => invoke("pauseRun", { id: run.id })}>
+                {run.status === "paused" ? "Hand back" : "Pause"}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="danger"
@@ -300,6 +358,18 @@ export function RunCard({ run, now, thumbVersion, tabID, onOpenTab }: { run: Run
               Stop
             </Button>
           </>
+        ) : null}
+        {(run.status === "failed" || run.status === "cancelled") && run.prompt ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon="refresh"
+            onClick={() => {
+              if (askAndOpen(invoke, { text: run.prompt, mode: "auto", threadID: run.threadID ?? undefined })) notify("Trying again", run.title || run.prompt);
+            }}
+          >
+            Try again
+          </Button>
         ) : null}
       </footer>
     </article>

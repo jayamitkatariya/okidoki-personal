@@ -8,6 +8,8 @@ import { useDialog } from "../components/useDialog";
 import { Favicon, useCover } from "./media";
 import { hostOf, LIBRARY, looksLikeAddress, siteLabel, threadInfo, type View } from "./model";
 import { askAndOpen } from "./ask";
+import type { BrowserTab } from "../types";
+import { bookmarkFor, canSave, pinFor, siteOf, useSiteActions } from "./siteActions";
 
 interface Result {
   id: string;
@@ -25,7 +27,10 @@ export function Palette({
   onNavigate,
   onOpenTab,
   onOpenURL,
+  tab = null,
 }: {
+  /** The tab in front, for "Pin this tab", "Bookmark this tab" and the like. */
+  tab?: BrowserTab | null;
   open: boolean;
   onClose: () => void;
   onNavigate: (view: View) => void;
@@ -33,6 +38,7 @@ export function Palette({
   onOpenURL: (url: string) => void;
 }) {
   const { state, invoke } = useDashboard();
+  const actions = useSiteActions();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -75,6 +81,20 @@ export function Palette({
         }),
       });
     }
+    if (tab && canSave(tab.address)) {
+      const site = siteOf(tab);
+      const pinned = pinFor(state, tab.address);
+      const saved = bookmarkFor(state, tab.address);
+      const commands: Array<[string, string, string, string, () => void]> = [
+        ["pin", pinned ? "Unpin this tab" : "Pin this tab", "⇧⌘D", "pin", () => actions.togglePin(site)],
+        ["bookmark", saved ? "Remove bookmark" : "Bookmark this tab", "⌘D", "bookmark", () => actions.toggleBookmark(site)],
+        ["copy", "Copy link", tab.host, "link", () => actions.copyLink(tab.address)],
+        ["duplicate", "Duplicate tab", tab.host, "copy", () => actions.duplicate(tab.address)],
+      ];
+      for (const [id, label, detail, icon, run] of commands) {
+        if (q && has(label, id === "pin" ? "pinned sites unpin" : id === "bookmark" ? "bookmarks save" : undefined)) list.push({ id: `cmd-${id}`, group: "This tab", label, detail, icon: <PixelIcon name={icon} size={16} />, run: close(run) });
+      }
+    }
     for (const tab of state.browser?.tabs ?? []) {
       if (tab.blank) continue;
       const label = siteLabel(tab.title, tab.address);
@@ -101,7 +121,7 @@ export function Palette({
       }
     }
     return list.slice(0, 40);
-  }, [query, state, invoke, onClose, onNavigate, onOpenTab, onOpenURL]);
+  }, [query, state, invoke, onClose, onNavigate, onOpenTab, onOpenURL, tab, actions]);
 
   // Results shrink as you type: keep the selection on something that exists.
   const at = Math.min(index, Math.max(0, results.length - 1));
@@ -114,8 +134,9 @@ export function Palette({
       {open ? (
         <motion.div
           className="palette2-scrim"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1, transition: { duration: 0.16 } }}
+          // Opened from the keyboard dozens of times a day: it appears at once, and only fades on the way out.
+          initial={false}
+          animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0.12 } }}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) onClose();
@@ -128,8 +149,8 @@ export function Palette({
             aria-modal="true"
             aria-label="Go anywhere or ask okidoki"
             tabIndex={-1}
-            initial={{ opacity: 0, scale: 0.97 }}
-            animate={{ opacity: 1, scale: 1, transition: { duration: 0.2, ease: [0.23, 1, 0.32, 1] } }}
+            initial={false}
+            animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.12, ease: [0.4, 0, 0.6, 1] } }}
           >
             <div className="palette2-input">

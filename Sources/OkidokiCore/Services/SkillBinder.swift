@@ -38,6 +38,12 @@ public enum SkillBinder {
             let key = ParameterFill.key(rawKey)
             if key == "ref" || key == "id" { continue }
             if let exact = inputs.first(where: { ParameterFill.key($0.name) == key }) {
+                // A list given in words ("80C 150000 and 80D 50000", as a router or a person writes it) isn't
+                // one yet: left over, so the resolver turns it into entries instead of it reading as no entries.
+                if exact.kind == "list", let list = listGivenInWords(value) {
+                    if list.isEmpty { matched[exact.name] = "[]" } else { leftover[exact.name] = value }
+                    continue
+                }
                 matched[exact.name] = value
                 continue
             }
@@ -49,6 +55,14 @@ public enum SkillBinder {
             }
         }
         return (matched, leftover)
+    }
+
+    /// Nil when `value` is a JSON list (or empty); "" for a plain "none"; else the words as given.
+    static func listGivenInWords(_ value: String) -> String? {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty || (text.hasPrefix("[") && (try? JSONSerialization.jsonObject(with: Data(text.utf8))) is [Any]) { return nil }
+        if ["none", "no", "nil", "n/a", "na", "-", "no deductions"].contains(text.lowercased()) { return "" }
+        return text
     }
 
     /// The vault folder that is this item's: its last path component equals the item (or its first word,

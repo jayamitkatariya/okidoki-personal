@@ -28,6 +28,16 @@ final class PrivateMacSpecTests: XCTestCase {
         XCTAssertEqual(odd % (1024 * 1024), 0)
     }
 
+    func testPickedMemoryWinsButLeavesTheHostRoom() {
+        // 4 GB on a big Mac really is 4 GB, not the automatic 8.
+        XCTAssertEqual(PrivateMacSpec.memoryBytes(host: 32 * gib, minimum: gib, maximum: 64 * gib, preferredGB: 4), 4 * gib)
+        XCTAssertEqual(PrivateMacSpec.memoryBytes(host: 32 * gib, minimum: gib, maximum: 64 * gib, preferredGB: 16), 16 * gib)
+        // Never more than the host minus 4 GB.
+        XCTAssertEqual(PrivateMacSpec.memoryBytes(host: 16 * gib, minimum: gib, maximum: 64 * gib, preferredGB: 16), 12 * gib)
+        XCTAssertEqual(PrivateMacSpec.memoryChoicesGB(host: 16 * gib), [4, 6, 8, 12])
+        XCTAssertEqual(PrivateMacSpec.memoryChoicesGB(host: 8 * gib), [4])
+    }
+
     func testDisplayIsRetinaAtTheModelFriendlySize() {
         XCTAssertEqual(PrivateMacSpec.displayPointWidth, 1440)
         XCTAssertEqual(PrivateMacSpec.displayPointHeight, 900)

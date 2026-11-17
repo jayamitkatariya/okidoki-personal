@@ -1,5 +1,6 @@
 import type { Decision, ThinkRequest } from "./types";
 import { clipboardFor } from "./llm";
+import { checkCodingAgentDecision, looksLikeAgentWork } from "./codingagents";
 
 const weekdays: Record<string, number> = {
   sunday: 1,
@@ -168,6 +169,19 @@ export function localRouter(request: ThinkRequest): Decision {
 
   if (t.startsWith("watch me") || t.includes("record what i do")) {
     return { kind: "watch", title: "watching you", answer: "go ahead — do it once, slowly. i'll watch app changes and clicks, then repeat it back as plain steps. click stop in the notch when you're done.", speak: "I'm watching. Do it once." };
+  }
+
+  const agents = request.codingAgents;
+  if (agents?.agents?.length && !isQuestion(t) && (request.mode === "agent" || (request.mode !== "chat" && request.mode !== "browser" && looksLikeAgentWork(raw)))) {
+    return checkCodingAgentDecision({
+      kind: "coding_agent",
+      title: shortTitle(raw),
+      answer: "handing it to your coding agent.",
+      risk: "medium",
+      previewSummary: shortTitle(raw),
+      previewSteps: ["start the coding agent in the working folder", "let it work through the files", "bring back what it did"],
+      agentTask: raw,
+    }, agents, raw);
   }
 
   const openMatch = raw.match(/^(?:please\s+)?(?:open|launch|start)\s+(?:the\s+)?([\w .+]+?)(?:\s+app)?[.!?]*$/i);

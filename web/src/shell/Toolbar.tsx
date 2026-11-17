@@ -8,6 +8,7 @@ import { MenuItem } from "./Popover";
 import { hostOf, looksLikeAddress, looksLikeTask } from "./model";
 import { askAndOpen } from "./ask";
 import { Tip } from "./Tip";
+import { canSave, pinFor, siteOf, useSiteActions } from "./siteActions";
 import { AnimatePresence, motion } from "motion/react";
 
 type Choice = "open" | "search" | "ask";
@@ -63,6 +64,8 @@ export function Toolbar({
   const { invoke, state } = useDashboard();
   const working = Boolean(tab?.status || tab?.ownerRunID);
   const recording = state.browser?.recording ?? false;
+  const actions = useSiteActions();
+  const pinned = Boolean(tab && !tab.blank && pinFor(state, tab.address));
 
   return (
     <div className={cx("toolbar", working && "is-agent")}>
@@ -85,7 +88,7 @@ export function Toolbar({
       ) : crumb ? (
         <div className="tool-crumb">
           <PixelIcon name={crumb.icon} size={15} />
-          <span>{crumb.title}</span>
+          <span title={crumb.title}>{crumb.title}</span>
         </div>
       ) : (
         <Address tab={tab} focusTick={focusTick} onSearched={onSearched} onAsked={onAsked} onAskedHere={onAskedHere} />
@@ -103,7 +106,12 @@ export function Toolbar({
               </Tip>
             ) : null}
             <ToolButton tip="left" icon="record" label={recording ? `Save recording (${state.browser?.recordedSteps ?? 0} steps)` : "Record a skill"} active={recording} className={cx(recording && "is-recording")} onClick={() => invoke("browserRecord")} />
-            <ToolButton tip="left" icon="bookmark" label={tab.bookmarked ? "Remove bookmark" : "Bookmark"} active={tab.bookmarked} onClick={() => invoke("toggleBookmark", { tabID: tab.id })} />
+            {canSave(tab.address) ? (
+              <>
+                <ToolButton tip="left" icon="pin" label={pinned ? `Unpin ${tab.host} (⇧⌘D)` : `Pin ${tab.host} (⇧⌘D)`} active={pinned} className={cx(pinned && "is-filled")} onClick={() => actions.togglePin(siteOf(tab))} />
+                <ToolButton tip="left" icon="bookmark" label={tab.bookmarked ? "Remove bookmark (⌘D)" : "Bookmark this page (⌘D)"} active={tab.bookmarked} className={cx(tab.bookmarked && "is-filled")} onClick={() => actions.toggleBookmark(siteOf(tab))} />
+              </>
+            ) : null}
           </>
         ) : null}
         {tab && !tab.blank ? <ToolButton tip="left" icon="chat" label={assistantOpen ? "Hide okidoki (⌘J)" : "Ask okidoki about this page (⌘J)"} active={assistantOpen} onClick={onToggleAssistant} /> : null}

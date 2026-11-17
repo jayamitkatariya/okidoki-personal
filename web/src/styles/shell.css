@@ -512,8 +512,14 @@ html.shell2-on:not(.is-native) body::before {
 .shell2 .srow.has-close:focus-within .srow-close {
   opacity: 1;
 }
-.shell2 .srow.has-close:hover .srow-trailing {
+/* The close/⋯ button sits over the row's end, so whenever it shows, the row's own mark (spinner,
+   unread dot) steps out of its way, and a row with no mark keeps its label clear of the button. Focus
+   counts as well as hover: closing a chat's menu hands focus back to its ⋯. */
+.shell2 .srow.has-close:is(:hover, :focus-within, :has(.srow-close[aria-expanded="true"])) .srow-trailing {
   opacity: 0;
+}
+.shell2 .srow.has-close:is(:hover, :focus-within, :has(.srow-close[aria-expanded="true"])) .srow-main:not(:has(.srow-trailing)) {
+  padding-right: 32px;
 }
 @media (hover: hover) and (pointer: fine) {
   .shell2 .srow-close:hover {
@@ -650,6 +656,14 @@ html.shell2-on:not(.is-native) body::before {
 }
 .shell2.is-sidebar-hidden .card {
   margin-left: var(--gutter);
+}
+/* Toasts sit bottom-left. With the sidebar out, that corner is the library and your account, so
+   they rise just above them instead of covering the controls for as long as they show. */
+.shell2 {
+  --toast-bottom: 106px;
+}
+.shell2.is-sidebar-hidden {
+  --toast-bottom: 1rem;
 }
 .shell2 .card-body {
   position: relative;
@@ -1302,6 +1316,26 @@ html.shell2-on:not(.is-native) body::before {
   line-height: 1.5;
   text-wrap: pretty;
 }
+.shell2 .nt-needs-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  max-width: 560px;
+  font-size: 13px;
+  color: var(--s-muted);
+  text-align: center;
+  text-wrap: pretty;
+}
+.shell2 .nt-needs-key > .icon {
+  color: var(--amber, var(--s-muted));
+  flex: none;
+}
+.shell2 .nt-needs-key .link-btn {
+  color: var(--green);
+  font-weight: 500;
+}
 .shell2 .nt-starters > div {
   display: flex;
   flex-wrap: wrap;
@@ -1696,6 +1730,51 @@ html.shell2-on:not(.is-native) body::before {
   -webkit-mask: var(--mark) center / contain no-repeat;
   mask: var(--mark) center / contain no-repeat;
 }
+.shell2 .msg-answer-body {
+  min-width: 0;
+}
+/* Copy sits quietly under an answer: faint at rest, full on hover of the answer or on focus. */
+.shell2 .msg-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 0 -6px;
+  padding: 3px 7px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--s-faint);
+  opacity: 0;
+  transition: opacity 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+.shell2 .msg-okidoki:last-child .msg-copy,
+.shell2 .msg-copy.is-copied,
+.shell2 .msg-copy:focus-visible {
+  opacity: 1;
+}
+.shell2 .msg-copy:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.shell2 .msg-copy:active {
+  transform: scale(0.97);
+}
+.shell2 .msg-copy.is-copied {
+  color: var(--green, var(--s-ink));
+}
+@media (hover: hover) and (pointer: fine) {
+  .shell2 .msg-okidoki:hover .msg-copy {
+    opacity: 1;
+  }
+  .shell2 .msg-copy:hover {
+    background: var(--s-hover);
+    color: var(--s-ink);
+  }
+}
+@media (hover: none) {
+  .shell2 .msg-copy {
+    opacity: 1;
+  }
+}
 .shell2 .msg-system {
   text-align: center;
   font-size: 12.5px;
@@ -2056,13 +2135,14 @@ html.shell2-on:not(.is-native) body::before {
   opacity: 1;
   background: var(--s-press);
 }
-.shell2 .srow.has-close:has(.srow-close[aria-expanded="true"]) .srow-trailing {
-  opacity: 0;
-}
 
 /* A chat's own ⋯ menu, top right of its header. */
 .shell2 .chat-head {
   position: relative;
+}
+/* A long title wraps before it reaches the ⋯, never under it. */
+.shell2 .chat-head > h1 {
+  padding-right: 40px;
 }
 .shell2 .chat-menu {
   position: absolute;
@@ -2089,4 +2169,387 @@ html.shell2-on:not(.is-native) body::before {
 /* Dark logos (GitHub, Notion, X…) vanish on dark ground: a faint light rim keeps them readable. */
 .shell2-on[data-theme="dark"] img.fav {
   filter: drop-shadow(0 0 0.6px rgba(255, 255, 255, 0.75)) drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.25));
+}
+
+/* ---------- private Mac, live in the card ---------- */
+.shell2 .vm-icon {
+  color: var(--s-ink-2);
+}
+.shell2 .vm-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green-bright);
+  box-shadow: 0 0 0 1.5px var(--c-bg);
+}
+.shell2 .vm-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+.shell2 .vm-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+.shell2 .vm-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--s-muted);
+  background: var(--s-hover);
+}
+.shell2 .vm-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+.shell2 .vm-state.is-live {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.shell2 .vm-state.is-live i {
+  opacity: 1;
+  background: var(--green-bright);
+}
+.shell2 .vm-state.is-working i {
+  animation: vm-pulse 1.6s var(--ease-in-out) infinite;
+}
+@keyframes vm-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.shell2 .vm-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--s-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell2 .vm-meta em {
+  font-style: normal;
+  font-weight: 450;
+  font-size: 12px;
+  color: var(--s-faint);
+  font-variant-numeric: tabular-nums;
+}
+.shell2 .vm-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.shell2 .vm-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.shell2 .vm-screen {
+  position: relative;
+  /* The guest display is 1440×900: keep it, whatever the card's shape. */
+  aspect-ratio: 16 / 10;
+  width: min(100%, calc((100% - 30px) * 16 / 10));
+  max-height: calc(100% - 30px);
+  border: 0;
+  padding: 0;
+  border-radius: var(--r-card);
+  overflow: hidden;
+  background: var(--c-well);
+  box-shadow: var(--ring-shadow);
+  cursor: pointer;
+  transition: box-shadow 0.18s var(--ease-out), transform 0.14s var(--ease-out);
+}
+.shell2 .vm-screen.is-on {
+  background: #0d1110;
+}
+@media (hover: hover) and (pointer: fine) {
+  .shell2 .vm-screen:hover {
+    box-shadow: var(--ring-shadow-hover);
+  }
+}
+.shell2 .vm-screen:active {
+  transform: scale(0.995);
+}
+.shell2 .vm-screen:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-shadow), var(--focus);
+}
+.shell2 .vm-screen img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+.shell2 .vm-idle {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px;
+  font-size: 13px;
+  color: var(--s-muted);
+  text-align: center;
+  text-wrap: pretty;
+}
+.shell2 .vm-screen.is-on .vm-idle {
+  color: rgba(255, 255, 255, 0.6);
+}
+.shell2 .vm-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--s-faint);
+}
+.shell2 .vm-setup {
+  display: grid;
+  gap: 10px;
+  min-width: 260px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell2 .vm-state.is-working i {
+    animation: none;
+  }
+}
+
+/* Organizing tabs: right-click menus on rows, and drags between the pins, Bookmarks and Tabs. */
+.shell2 .srow-ctx {
+  display: contents;
+}
+.shell2 .srow.is-dragging,
+.shell2 .pin.is-dragging {
+  opacity: 0.45;
+}
+/* What a drop here will do, shown on each section that takes one while something's dragged. */
+.shell2 .side-drop {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  margin: 2px 0 4px;
+  border-radius: 8px;
+  border: 1px dashed var(--c-line-strong);
+  color: var(--s-faint);
+  font-size: 12.5px;
+  pointer-events: none;
+  animation: side-drop-in 150ms var(--ease-out);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.shell2 .side-section.is-drop-over .side-drop {
+  border-style: solid;
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+@keyframes side-drop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.shell2 .side-empty {
+  margin: 0;
+  padding: 4px 8px 6px;
+  font-size: 12.5px;
+  color: var(--s-faint);
+}
+.shell2 .side-empty kbd {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--c-line-strong);
+}
+/* The pins while a tab or bookmark is dragged over them: a bar where it lands, a ring on the pin it replaces. */
+.shell2 .pins.is-drop-ready {
+  border-radius: calc(var(--r-tile) + 4px);
+  outline: 1px dashed var(--c-line-strong);
+  outline-offset: 4px;
+  transition: outline-color 120ms ease;
+}
+.shell2 .pins.is-drop-over {
+  outline-color: var(--green);
+}
+.shell2 .pin[data-insert="before"]::after,
+.shell2 .pin[data-insert="after"]::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--green);
+  pointer-events: none;
+}
+.shell2 .pin[data-insert="before"]::after {
+  left: -5px;
+}
+.shell2 .pin[data-insert="after"]::after {
+  right: -5px;
+}
+.shell2 .pin.is-replace,
+.shell2 .pin.is-same {
+  box-shadow: inset 0 0 0 2px var(--green);
+}
+.shell2 .pin-swap {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+}
+.shell2 .pin-drop {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--c-line-strong);
+  background: transparent;
+  box-shadow: none;
+  color: var(--s-faint);
+  font-size: 12.5px;
+}
+.shell2 .pin-drop[data-insert="on"] {
+  border-style: solid;
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+.shell2 .pins-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--s-faint);
+}
+/* Pinned and bookmarked: the toolbar's icon fills in. */
+.shell2 .tool-btn.is-filled .icon path {
+  fill: currentColor;
+  fill-opacity: 1;
+}
+.shell2 .tool-btn.is-filled .icon path + path {
+  fill: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell2 .side-drop {
+    animation: none;
+  }
+}
+
+/* "Saved to memory" under the turn that saved it: quiet, one line, Undo and Edit at hand. */
+.shell2 .mem-chips {
+  display: grid;
+  gap: 6px;
+  margin: -6px 0 0 32px;
+}
+.shell2 .mem-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 6px 5px 10px;
+  border-radius: 10px;
+  background: var(--c-well);
+  color: var(--s-muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+  animation: mem-chip-in 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.shell2 .mem-chip > svg {
+  flex: none;
+  color: var(--green, var(--s-ink));
+}
+.shell2 .mem-chip-label {
+  flex: none;
+  font-weight: 550;
+  color: var(--s-ink);
+}
+.shell2 .mem-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell2 .mem-chip-text em {
+  font-style: normal;
+  color: var(--s-faint);
+}
+.shell2 .mem-chip-input {
+  min-width: 220px;
+  flex: 1;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--c-bg);
+  color: var(--s-ink);
+  font: inherit;
+  box-shadow: var(--focus);
+  outline: none;
+}
+.shell2 .mem-chip-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+.shell2 .mem-chip-actions button {
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--s-faint);
+  font: inherit;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.shell2 .mem-chip-actions button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.shell2 .mem-chip-actions button:active {
+  transform: scale(0.97);
+}
+@media (hover: hover) and (pointer: fine) {
+  .shell2 .mem-chip-actions button:hover {
+    background: var(--s-hover);
+    color: var(--s-ink);
+  }
+}
+@keyframes mem-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell2 .mem-chip {
+    animation: none;
+  }
 }
