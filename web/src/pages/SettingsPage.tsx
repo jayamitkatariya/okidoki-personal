@@ -41,8 +41,8 @@ const SECTIONS = [
   { id: "you", label: "You", icon: "user" },
   { id: "voice", label: "Voice", icon: "mic" },
   { id: "safety", label: "Safety", icon: "hand" },
-  { id: "connectors", label: "Connectors", icon: "link" },
-  { id: "other-agents", label: "Agents", icon: "code" },
+  { id: "advanced", label: "Advanced", icon: "link" },
+  { id: "agents", label: "Use from agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
   { id: "summon", label: "Summon", icon: "spark" },
   { id: "general", label: "General", icon: "gear" },
@@ -101,6 +101,8 @@ export function SettingsPage() {
 
   const jump = (id: string) => {
     setActive(id);
+    // Advanced is collapsed by default; jumping to it opens it so the section isn't an empty scroll.
+    if (id === "advanced") document.getElementById("settings-advanced")?.setAttribute("open", "");
     if (jumping.current !== null) window.clearTimeout(jumping.current);
     jumping.current = window.setTimeout(() => (jumping.current = null), 700);
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -382,32 +384,49 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="connectors" title="Connectors" description="Services and tools okidoki can reach for you. Each one asks before it changes anything.">
-            <div className="pref-group">
-              {connectors.map((connector) => (
-                <ConnectorRow key={connector.id} connector={connector} />
-              ))}
-              {!connectors.length ? (
-                <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
-                  <span className="pref-hint">Mac only</span>
-                </PrefRow>
-              ) : null}
+          {/* The agent-platform surface: connectors and outbound coding-agent delegation. Kept, but
+              collapsed and off the beaten path — okidoki's loop works fully without any of it. */}
+          <details className="settings-section settings-advanced" id="settings-advanced">
+            <summary className="settings-advanced-summary">
+              <span className="settings-advanced-head">
+                <PixelIcon name="link" size={15} />
+                <span>
+                  <strong>Advanced</strong>
+                  <em>Connectors, and handing work to coding agents. okidoki works fully without these.</em>
+                </span>
+              </span>
+              <PixelIcon name="chevron-down" size={14} className="settings-advanced-caret" />
+            </summary>
+            <div className="settings-advanced-body">
+              <h3 className="settings-subhead">Connectors</h3>
+              <p className="settings-advanced-note">Services and tools okidoki can reach for you. Each one asks before it changes anything.</p>
+              <div className="pref-group">
+                {connectors.map((connector) => (
+                  <ConnectorRow key={connector.id} connector={connector} />
+                ))}
+                {!connectors.length ? (
+                  <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
+                    <span className="pref-hint">Mac only</span>
+                  </PrefRow>
+                ) : null}
+              </div>
+              <div className="pref-group">
+                {mcpConnector ? (
+                  <ConnectorRow connector={mcpConnector} />
+                ) : (
+                  <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
+                    <span className="pref-hint">Mac only</span>
+                  </PrefRow>
+                )}
+                {mcpConnector?.enabled ? <McpServers /> : null}
+              </div>
+              <h3 className="settings-subhead">Hand work to coding agents</h3>
+              <p className="settings-advanced-note">okidoki hands files, the terminal and code to Claude Code, Codex and other coding agents. Each uses its own sign-in.</p>
+              <CodingAgents />
             </div>
-            <div className="pref-group">
-              {mcpConnector ? (
-                <ConnectorRow connector={mcpConnector} />
-              ) : (
-                <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
-                  <span className="pref-hint">Mac only</span>
-                </PrefRow>
-              )}
-              {mcpConnector?.enabled ? <McpServers /> : null}
-            </div>
-          </SettingsSection>
+          </details>
 
-          <SettingsSection id="other-agents" title="Agents" description="Work both ways with Claude Code, Codex and other coding agents: okidoki hands them files, the terminal and code, and they hand okidoki the web, your logins and your Mac’s apps.">
-            <CodingAgents />
-            <h3 className="settings-subhead">Let agents use okidoki</h3>
+          <SettingsSection id="agents" title="Use from agents" description="Claude Code, Codex and other agents hand okidoki the web, your logins and your Mac’s apps: they look for a saved skill first, replay it, and ask for the rest. Risky steps still wait for your okay.">
             <UseFromAgents />
           </SettingsSection>
 

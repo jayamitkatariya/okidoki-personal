@@ -195,14 +195,6 @@ export const demoState: NativeState = {
       colorHex: "44E45E",
       createdAt: iso(-57600),
     },
-    {
-      id: "acct-work",
-      name: "jay at workro",
-      email: "jay@workro.com",
-      kind: "work",
-      colorHex: "7A8CFF",
-      createdAt: iso(-28800),
-    },
   ],
   currentAccountID: "acct-jay",
   settings: {
