@@ -169,6 +169,14 @@ final class CollabServer {
             replyData(connection, status: 200, type: "image/jpeg", data: frame, extra: "Cache-Control: no-store\r\n")
             return
         }
+        if request.method == "GET", parts == ["api", "state"] {
+            guard let token = request.query["token"], let you = session.participant(forToken: token) else {
+                reply(connection, status: 401, body: ["error": "unauthorized"])
+                return
+            }
+            reply(connection, status: 200, body: ["you": Self.encode(you), "session": Self.encode(snapshot())])
+            return
+        }
         if request.method == "GET", parts.first != "api" {
             serveStatic(connection, path: request.path)
             return
