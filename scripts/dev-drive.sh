@@ -9,7 +9,7 @@
 # OKIDOKI_SCENARIO_DIR picks where screenshots and logs go (default build/scenarios).
 set -euo pipefail
 
-STATE="$HOME/Library/Application Support/Okidoki Personal/state.json"
+STATE="${OKIDOKI_SUPPORT_DIR:-$HOME/Library/Application Support/Okidoki}/state.json"
 OUT="${OKIDOKI_SCENARIO_DIR:-build/scenarios}"
 TIMEOUT="${OKIDOKI_SCENARIO_TIMEOUT:-240}"
 mkdir -p "$OUT"
@@ -24,7 +24,7 @@ post() {
 }
 
 if [ "${1:-}" = "--stop" ]; then
-  post "dev.okidoki.personal.dev.stop" ""
+  post "dev.okidoki.mac.dev.stop" ""
   exit 0
 fi
 
@@ -34,16 +34,16 @@ GOAL="${1:?goal required}"
 SLUG="$(printf '%s' "$GOAL" | tr -cs 'a-zA-Z0-9' '-' | cut -c1-48 | sed 's/-$//')"
 STAMP="$(date +%H%M%S)"
 
-if ! pgrep -xq OkidokiPersonal; then
+if ! pgrep -xq Okidoki; then
   echo "okidoki isn't running" >&2
   exit 1
 fi
 
 count_before=$(python3 -c "import json;print(len(json.load(open('$STATE'))['runs']))")
 if [ "$MODE" = "ask" ]; then
-  post "dev.okidoki.personal.dev.ask" "$GOAL"
+  post "dev.okidoki.mac.dev.ask" "$GOAL"
 else
-  post "dev.okidoki.personal.dev.drive" "$GOAL"
+  post "dev.okidoki.mac.dev.drive" "$GOAL"
 fi
 
 echo "▸ $MODE: $GOAL"
@@ -79,13 +79,13 @@ EOF
   esac
   if [ $(( $(date +%s) - started )) -ge "$TIMEOUT" ]; then
     echo "✗ timed out after ${TIMEOUT}s"
-    post "dev.okidoki.personal.dev.stop" ""
+    post "dev.okidoki.mac.dev.stop" ""
     result=""
     break
   fi
 done
 
-if ! pgrep -xq OkidokiPersonal; then
+if ! pgrep -xq Okidoki; then
   echo "✗ OKIDOKI CRASHED during this scenario"
   ls -t ~/Library/Logs/DiagnosticReports/Okidoki* 2>/dev/null | head -1
   exit 2

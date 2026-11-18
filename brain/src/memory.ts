@@ -33,7 +33,7 @@ export interface MemoryEngine {
 function defaultCacheDir(): string {
   if (process.env.OKIDOKI_SUPPORT_DIR) return join(process.env.OKIDOKI_SUPPORT_DIR, "moss");
   return process.platform === "darwin"
-    ? join(homedir(), "Library", "Application Support", "Okidoki Personal", "moss")
+    ? join(homedir(), "Library", "Application Support", "Okidoki", "moss")
     : join(homedir(), ".okidoki", "moss");
 }
 

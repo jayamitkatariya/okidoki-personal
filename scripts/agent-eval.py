@@ -28,8 +28,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SUPPORT = Path.home() / "Library/Application Support/Okidoki Personal"
-DOMAIN = "dev.okidoki.personal"
+SUPPORT = Path(os.environ.get("OKIDOKI_SUPPORT_DIR") or Path.home() / "Library/Application Support/Okidoki")
+DOMAIN = "dev.okidoki.mac"
 SITE = "https://the-internet.herokuapp.com"
 
 # name → (skill name, [(request, answer regex)] — the first is learned, the rest are replays with new data)
@@ -129,7 +129,7 @@ def main():
     parser.add_argument("--replays-only", action="store_true")
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
-    if subprocess.run(["pgrep", "-xq", "OkidokiPersonal"]).returncode != 0:
+    if subprocess.run(["pgrep", "-xq", "Okidoki"]).returncode != 0:
         sys.exit("okidoki isn't running — OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh")
     status = api("GET", "/status")
     if status.get("error"):

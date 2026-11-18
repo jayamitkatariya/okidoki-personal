@@ -21,5 +21,11 @@ screen, a group chat, your skills one tap away, and okidoki acting while everyon
 - **Hardening**: CI compiles the whole app and runs the logic suites; `scripts/golden-path.sh` walks
   the whole loop on an isolated profile with independent checks; `docs/quality.md` sets the release
   bar and how to record eval baselines.
+- **One name: okidoki.** The app sheds the "Personal" split — it installs as `/Applications/Okidoki.app`
+  (bundle id `dev.okidoki.mac`, data in `~/Library/Application Support/Okidoki`) and adopts an
+  existing Personal installation's data by copy on first launch, so nothing is lost and the older
+  app keeps working until it's replaced. The CLI, the eval scripts and the docs follow.
+- **CI runs again** — every run since the repo's creation had failed at startup on the retired
+  `macos-15` runner image; the workflow now tracks `macos-latest`.
 
 Earlier releases predate this changelog.

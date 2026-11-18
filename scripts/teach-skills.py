@@ -25,8 +25,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-STATE = Path.home() / "Library/Application Support/Okidoki Personal/state.json"
-DOMAIN = "dev.okidoki.personal"
+STATE = Path(os.environ.get("OKIDOKI_SUPPORT_DIR") or Path.home() / "Library/Application Support/Okidoki") / "state.json"
+DOMAIN = "dev.okidoki.mac"
 TERMINAL = {"done", "failed", "cancelled", "asked"}
 
 # template id → three requests (learn, replay, replay) and what a right answer contains.
@@ -123,7 +123,7 @@ def main():
     parser.add_argument("--replays-only", action="store_true")
     parser.add_argument("--timeout", type=int, default=240)
     args = parser.parse_args()
-    if subprocess.run(["pgrep", "-xq", "OkidokiPersonal"]).returncode != 0:
+    if subprocess.run(["pgrep", "-xq", "Okidoki"]).returncode != 0:
         sys.exit("okidoki isn't running — OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh")
     wanted = [w.strip() for w in args.only.split(",") if w.strip()] or list(LESSONS)
     post("dev.browser", "hybrid on")

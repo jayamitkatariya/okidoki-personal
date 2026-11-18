@@ -28,15 +28,19 @@ app:
 run: install
 
 demo: app
-	OKIDOKI_DEMO=1 OKIDOKI_OPEN_DASHBOARD=1 "./build/Okidoki Personal.app/Contents/MacOS/OkidokiPersonal"
+	OKIDOKI_DEMO=1 OKIDOKI_OPEN_DASHBOARD=1 "./build/Okidoki.app/Contents/MacOS/Okidoki"
 
-# Installs as "/Applications/Okidoki Personal.app" (bundle id dev.okidoki.personal). Only that app is
-# quit or replaced; any other okidoki on this Mac is left alone.
+# Installs as "/Applications/Okidoki.app" (bundle id dev.okidoki.mac). Only okidoki's own apps are
+# quit or replaced; any other okidoki on this Mac is left alone. An older "Okidoki Personal" is
+# moved aside (not deleted) and its data is adopted by copy on the new app's first launch.
 install: app
+	-osascript -e 'tell application id "dev.okidoki.mac" to quit' >/dev/null 2>&1
 	-osascript -e 'tell application id "dev.okidoki.personal" to quit' >/dev/null 2>&1
-	@for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pgrep -xq OkidokiPersonal || break; sleep 0.25; done
-	rm -rf "/Applications/Okidoki Personal.app"
-	cp -R "build/Okidoki Personal.app" /Applications/
+	@for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do pgrep -xq Okidoki || pgrep -xq OkidokiPersonal || break; sleep 0.25; done
+	@[ ! -d "/Applications/Okidoki Personal.app" ] || mv "/Applications/Okidoki Personal.app" "build/Okidoki Personal (0.9.1).app"
+	rm -rf "/Applications/Okidoki.app"
+	cp -R "build/Okidoki.app" /Applications/
+	-launchctl bootout "gui/$(id -u)/dev.okidoki.personal.launch" 2>/dev/null || true
 	-./scripts/install-cli.sh
 	./scripts/launch-app.sh
 

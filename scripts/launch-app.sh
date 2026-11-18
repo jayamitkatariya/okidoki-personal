@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launches /Applications/Okidoki Personal.app through launchd, the way login items start.
+# Launches /Applications/Okidoki.app through launchd, the way login items start.
 #
 # Why not `open`: an app opened from a terminal (even via Finder or AppleScript from that terminal)
 # is attributed to the terminal as its "responsible process", so macOS files Okidoki's Accessibility
