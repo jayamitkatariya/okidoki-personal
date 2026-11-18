@@ -692,6 +692,10 @@ struct OnboardingView: View {
                 hintRow(keys: "Esc", detail: "Dismiss")
                 divider
                 hintRow(keys: "⌘K", detail: "Ask from the dashboard")
+                if mode == "collab" {
+                    divider
+                    hintRow(keys: "Settings", detail: "Shared session — invite people with the code")
+                }
             }
             .groupBox(t)
             .padding(.top, 24)

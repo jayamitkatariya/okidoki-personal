@@ -69,7 +69,7 @@ async function route(request: Request): Promise<Response> {
     if (url.pathname === "/health") {
       return json({
         ok: true,
-        version: "0.9.1",
+        version: "0.9.2",
         runtime: `bun ${Bun.version}`,
         port,
       });

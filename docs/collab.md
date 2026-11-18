@@ -4,6 +4,10 @@ One Mac hosts its **private Mac** (the VM). Everyone on the same WiFi joins in a
 and gets a live screen, a group chat, and okidoki acting in the VM. **Collab shares okidoki's Mac,
 never yours.** The host approves anything risky in the notch, exactly as today.
 
+This is collab mode — the choice onboarding asks for and Settings › Mode sets. In personal mode it
+stays out of sight entirely; a session also ends the moment the mode switches back, so nothing shares
+where the host can't see it.
+
 This is the same loop as stage 1, shared: the host's saved skills are one tap away, and okidoki does
 the task in the shared Mac while everyone watches and talks.
 

@@ -231,6 +231,19 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.refreshMCP() }
             .store(in: &cancellables)
 
+        // Switching back to personal mode ends any live session: sharing is collab's whole point,
+        // so it never continues somewhere the person can no longer see it.
+        store.$settings.map(\.useMode).removeDuplicates()
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] mode in
+                guard let self, mode != "collab", self.collab?.session != nil else { return }
+                self.stopCollab()
+                self.toast(title: "session ended", detail: "you switched okidoki back to just you",
+                           kind: .info, undoLabel: nil, onUndo: nil, editLabel: nil, onEdit: nil, runID: nil)
+            }
+            .store(in: &cancellables)
+
         // Taken synchronously (the store is on the main actor), so a save landing, which the store
         // marks as housekeeping, doesn't schedule the next index push and the next after that.
         store.objectWillChange
