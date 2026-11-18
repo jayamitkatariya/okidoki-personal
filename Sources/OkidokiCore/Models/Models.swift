@@ -122,6 +122,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var drivePace: String = "fast"
     /// Where computer-use runs happen: "mac" is this Mac, "vm" is okidoki's private Mac (a macOS VM).
     public var computerTarget: String = "mac"
+    /// How okidoki is used: "personal" (just this Mac) or "collab" (adds shared sessions on your
+    /// WiFi). Settings and onboarding shape themselves around it; the loop is the same either way.
+    public var useMode: String = "personal"
     /// Memory for the private Mac in GB. 0 picks it from this Mac's memory (half, 4 to 8 GB).
     public var privateMacMemoryGB: Int = 0
     /// What a request typed at the cursor is for: "auto" lets the brain decide, "act" drives the Mac,
@@ -162,7 +165,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
         case appleCalendar, automationGranted, inputMonitoringGranted
         case onboardingComplete, tourComplete, showedWelcome
-        case claudeModel, mcpServers, drivePace, computerTarget, privateMacMemoryGB
+        case claudeModel, mcpServers, drivePace, computerTarget, useMode, privateMacMemoryGB
         case screenContext, summonMode, vaultFolder
         case hybridReplay, shakeToSummon, summonHotkey
         case codingAgents
@@ -211,6 +214,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         codingAgents = (try? c.decodeIfPresent(CodingAgentSettings.self, forKey: .codingAgents)).flatMap { $0 } ?? CodingAgentSettings()
         drivePace = string(.drivePace, "fast")
         computerTarget = string(.computerTarget, "mac") == "vm" ? "vm" : "mac"
+        useMode = string(.useMode, "personal") == "collab" ? "collab" : "personal"
         privateMacMemoryGB = max(0, (try? c.decodeIfPresent(Int.self, forKey: .privateMacMemoryGB)).flatMap { $0 } ?? 0)
         let mode = string(.summonMode, "auto")
         summonMode = Self.summonModes.contains(mode) ? mode : "auto"

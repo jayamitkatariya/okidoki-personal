@@ -54,6 +54,8 @@ export interface Settings {
   drivePace: "calm" | "fast";
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
+  /** How okidoki is used: personal, or collab (adds shared sessions). Missing on older builds = personal. */
+  useMode?: "personal" | "collab";
   /** Private Mac memory in GB; 0 is automatic. */
   privateMacMemoryGB?: number;
   /** What a request typed at the cursor is for. Missing on older builds. */

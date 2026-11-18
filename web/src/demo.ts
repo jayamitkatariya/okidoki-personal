@@ -245,6 +245,7 @@ export const demoState: NativeState = {
     },
     drivePace: "fast",
     computerTarget: "mac",
+    useMode: "personal",
     mcpServers: [
       { id: "mcp-github", name: "GitHub", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], url: "", enabled: true },
       { id: "mcp-wiki", name: "Team wiki", transport: "http", command: "", args: [], url: "https://wiki.example.com/mcp", enabled: true },

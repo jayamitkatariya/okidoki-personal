@@ -15,11 +15,13 @@ export function SessionApp({ host }: { host: Host }) {
 
   if (state.phase === "ended") {
     return (
-      <div className="collab-gate">
-        <div className="collab-gate-card">
-          <Logo size={44} glow />
-          <h1>Session ended</h1>
-          <p>The host closed the session. Ask them to start another if you want back in.</p>
+      <div className="auth">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <Logo size={44} glow />
+            <h1>Session ended</h1>
+            <p>The host closed the session. Ask them to start another if you want back in.</p>
+          </div>
           <Button variant="secondary" size="lg" onClick={() => window.location.reload()}>
             Back to join
           </Button>
@@ -44,12 +46,14 @@ function JoinGate({ session }: { session: ReturnType<typeof useSession> }) {
   };
 
   return (
-    <div className="collab-gate">
-      <div className="collab-gate-card">
-        <Logo size={44} glow />
-        <h1>Join the session</h1>
-        <p>Watch okidoki work in a shared Mac, chat with everyone, and ask it to do things. Everything stays on the host's Mac.</p>
-        <div className="collab-gate-form">
+    <div className="auth">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <Logo size={44} glow />
+          <h1>Join the session</h1>
+          <p>Watch okidoki work in a shared Mac, chat with everyone, and ask it to do things.</p>
+        </div>
+        <div className="auth-fields">
           <label className="form-label">Your name</label>
           <TextField value={name} onChange={setName} placeholder="What everyone calls you" autoFocus />
           <label className="form-label">Session code</label>
@@ -61,8 +65,8 @@ function JoinGate({ session }: { session: ReturnType<typeof useSession> }) {
             onEnter={submit}
           />
           {state.error ? (
-            <p className="collab-gate-error" role="alert">
-              <PixelIcon name="hand" size={14} /> {state.error}
+            <p className="field-error" role="alert">
+              {state.error}
             </p>
           ) : null}
           <Button variant="primary" size="lg" disabled={!name.trim() || !code.trim() || joining} onClick={submit}>

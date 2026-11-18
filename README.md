@@ -31,9 +31,13 @@ git clone https://github.com/<you>/okidoki-personal && cd okidoki-personal
 make run        # builds, installs "/Applications/Okidoki Personal.app", starts it
 ```
 
-Onboarding asks for Accessibility and Screen Recording (needed to see and drive the screen) and your
-[Anthropic key](https://console.anthropic.com/settings/keys). Optional keys — Cartesia (voices), Moss
-(semantic recall), Apify (web data) — go in **Settings › Keys**. Keys live in
+Onboarding asks how you'll use okidoki — **just you**, or **with people** (shared sessions on your
+WiFi) — where it should work (this Mac or its own private Mac), for Accessibility and Screen
+Recording (needed to see and drive the screen), and your
+[Anthropic key](https://console.anthropic.com/settings/keys). Any of it changes later in Settings.
+Optional keys — Cartesia (voices), Moss (semantic recall), Apify (web data) — go in **Settings ›
+Keys**. Keys live in
+`~/Library/Application Support/Okidoki Personal/keys.json`, readable only by you.
 `~/Library/Application Support/Okidoki Personal/keys.json`, readable only by you.
 
 ## Your first skill (2 minutes)
