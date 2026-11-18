@@ -122,7 +122,8 @@ independently of what the model claimed:
 - `scripts/replay-eval.py` — the full agent vs classic replay vs smart replay, A/B on the same tasks.
 - `scripts/agent-eval.py` — learn → save → replay on public practice sites, through the control API.
 
-Run them before and after any change to driving or replay. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Run them before and after any change to driving or replay. The release bar, the golden path
+(`scripts/golden-path.sh`) and how to record baselines: [docs/quality.md](docs/quality.md).
 
 ## License
 

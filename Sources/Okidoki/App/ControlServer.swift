@@ -142,7 +142,7 @@ final class ControlServer {
 
     /// What other agents can do, for `GET /` and the CLI's help.
     static let routes: [String] = [
-        "GET  /status                      what's running, whether a key is set, smart replay on or off",
+        "GET  /status                      what's running, key, smart replay, private Mac phase, session on or off",
         "POST /tasks {text, mode?, thread?, wait?}   a task in plain words; mode auto|browser|computer|chat",
         "GET  /runs?limit=                 recent runs",
         "GET  /runs/<id>?log=1             one run: status, result, what it's waiting for",
@@ -179,7 +179,9 @@ final class ControlServer {
         case ("GET", "status"):
             let live = env.store.runs.filter { $0.status.isActive }
             return (200, ["ok": true, "key": env.hasKey("anthropic"), "smartReplay": env.store.settings.hybridReplay,
-                          "brain": env.sidecar.status.isReady, "running": live.map { Self.json($0, env: env, log: false) }])
+                          "brain": env.sidecar.status.isReady, "privateMac": env.privateMac.phase.rawValue,
+                          "collab": env.collab?.session != nil,
+                          "running": live.map { Self.json($0, env: env, log: false) }])
         case ("POST", "tasks"):
             return await task(request, env: env)
         case ("GET", "runs") where parts.count == 1:

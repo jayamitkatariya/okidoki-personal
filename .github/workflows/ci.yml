@@ -8,10 +8,16 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Brain
         run: cd brain && bun install && bun run typecheck && bun test tests
-      - name: Control panel
+      - name: Control panel (both pages build self-contained)
         run: cd web && bun install && bunx tsc --noEmit -p . && bun test tests && bun run build
-      - name: Swift (logic only; the full suite drives real apps)
+      # Compile the whole app, not just the test target's dependencies: the app target is where
+      # the notch, the servers and the VM live, and a test-only build never sees its errors.
+      - name: Swift (build the app)
+        run: swift build
+      # Logic suites only — no screen, no accessibility, no real apps. The full suite (make test)
+      # drives real Macs and runs locally; scripts/golden-path.sh is the end-to-end gate.
+      - name: Swift (logic tests)
         env:
           OKIDOKI_SUPPORT_DIR: ${{ runner.temp }}/okidoki
           OKIDOKI_KEYS_FILE: ${{ runner.temp }}/okidoki/keys.json
-        run: swift test --filter 'ChatCommandsTests|SkillRecordsTests|VaultCommandTests|LocalVaultTests|SkillBundleTests|NoteCommandTests|WatchPipelineTests|WatchRecorderTests|DrivePolicyTests|KeyStoreTests|LessonRoutingTests|PlanReviewTests|ShakeGestureTests|ImageFitTests'
+        run: swift test --filter 'ChatCommandsTests|SkillRecordsTests|LocalVaultTests|SkillBundleTests|WatchPipelineTests|WatchRecorderTests|DrivePolicyTests|KeyStoreTests|ShakeGestureTests|ImageFitTests|CollabTests|PrivateMacSpecTests|MacLocatorTests|FrameMatcherTests|SkillLibraryTests|ReplayDispatcherTests|MemoryRecallTests|SkillSecretsTests|ShellStoreTests|SafetyAndPersistenceTests'

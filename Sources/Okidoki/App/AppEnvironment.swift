@@ -372,6 +372,35 @@ final class AppEnvironment: ObservableObject {
             let command = (note.object as? String) ?? ""
             Task { @MainActor in self?.devBrowser(command) }
         }
+        // The shared session, for scripts/golden-path.sh: start writes collab.json (code + port) beside
+        // the state file once the listener is up; stop ends it. Off unless OKIDOKI_DEV_HOOKS=1.
+        center.addObserver(forName: Notification.Name(domain + ".dev.collab"), object: nil, queue: .main) { [weak self] note in
+            let command = (note.object as? String) ?? ""
+            Task { @MainActor in
+                guard let self else { return }
+                if command == "start" {
+                    self.startCollab()
+                    self.writeCollabInfo(tries: 20)
+                } else if command == "stop" {
+                    self.stopCollab()
+                    try? FileManager.default.removeItem(at: AppPaths.support("collab.json"))
+                }
+            }
+        }
+    }
+
+    /// The session's code and port for test scripts, written once the listener has bound.
+    private func writeCollabInfo(tries: Int) {
+        guard let server = collab, let session = server.session else { return }
+        let port = server.port
+        if port == 0, tries > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.writeCollabInfo(tries: tries - 1) }
+            return
+        }
+        let info: [String: Any] = ["code": session.code, "port": Int(port)]
+        if let data = try? JSONSerialization.data(withJSONObject: info) {
+            try? data.write(to: AppPaths.support("collab.json"))
+        }
     }
 
     /// A goal starting with "[fresh] " gets its own conversation, so scripted runs of the same task
@@ -541,6 +570,9 @@ final class AppEnvironment: ObservableObject {
     func stop() {
         store.saveNow()
         control?.stop()
+        // Tell everyone in a shared session it's over before the listener goes down with the app.
+        collab?.stop()
+        collab = nil
         speech.stop()
         speaker.stop()
         shake.stop()
