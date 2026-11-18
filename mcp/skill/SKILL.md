@@ -89,7 +89,7 @@ okidoki vault "<query>"                # find documents in their vault
 
 ## If `okidoki` isn't on PATH
 
-- Run the bundled CLI directly: `bun "/Applications/Okidoki Personal.app/Contents/Resources/cli/okidoki.js" <command>`
+- Run the bundled CLI directly: `bun "/Applications/Okidoki.app/Contents/Resources/cli/okidoki.js" <command>`
   (or `~/.local/bin/okidoki` if it exists but isn't on PATH).
 - Or ask the person to open okidoki → Settings › Agents, which installs the command and this skill.
 - "okidoki isn't running on this Mac (no control.json)" means the app is closed: ask the person to open it.

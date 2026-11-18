@@ -2,14 +2,19 @@
  * The okidoki app's control endpoint (127.0.0.1, token in control.json), for the `okidoki` CLI (and the okidoki skill that teaches agents to use it).
  * No dependencies. Everything risky the app does for another agent still waits for the person's okay.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type Json = Record<string, unknown>;
 
 export function supportDir(): string {
-  return process.env.OKIDOKI_SUPPORT_DIR || join(homedir(), "Library", "Application Support", "Okidoki Personal");
+  if (process.env.OKIDOKI_SUPPORT_DIR) return process.env.OKIDOKI_SUPPORT_DIR;
+  const home = homedir();
+  const current = join(home, "Library", "Application Support", "Okidoki");
+  // 0.9.1 kept its data in "Okidoki Personal"; reach back for it if the new folder isn't there yet.
+  const legacy = join(home, "Library", "Application Support", "Okidoki Personal");
+  return existsSync(join(current, "control.json")) || existsSync(current) ? current : legacy;
 }
 
 function control(): { port: number; token: string } {
@@ -17,7 +22,7 @@ function control(): { port: number; token: string } {
     const info = JSON.parse(readFileSync(join(supportDir(), "control.json"), "utf8")) as { port?: number; token?: string };
     if (info.port && info.token) return { port: info.port, token: info.token };
   } catch {}
-  throw new Error("okidoki isn't running on this Mac (no control.json). Open Okidoki Personal and try again.");
+  throw new Error("okidoki isn't running on this Mac (no control.json). Open Okidoki and try again.");
 }
 
 export async function call(method: "GET" | "POST", path: string, body?: Json, timeoutSeconds = 0): Promise<Json> {

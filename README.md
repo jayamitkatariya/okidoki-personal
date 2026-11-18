@@ -28,7 +28,7 @@ shared session) need Apple silicon.
 
 ```bash
 git clone https://github.com/<you>/okidoki-personal && cd okidoki-personal
-make run        # builds, installs "/Applications/Okidoki Personal.app", starts it
+make run        # builds, installs "/Applications/Okidoki.app", starts it
 ```
 
 Onboarding asks how you'll use okidoki — **just you**, or **with people** (shared sessions on your
@@ -37,8 +37,8 @@ Recording (needed to see and drive the screen), and your
 [Anthropic key](https://console.anthropic.com/settings/keys). Any of it changes later in Settings.
 Optional keys — Cartesia (voices), Moss (semantic recall), Apify (web data) — go in **Settings ›
 Keys**. Keys live in
-`~/Library/Application Support/Okidoki Personal/keys.json`, readable only by you.
-`~/Library/Application Support/Okidoki Personal/keys.json`, readable only by you.
+`~/Library/Application Support/Okidoki/keys.json`, readable only by you.
+`~/Library/Application Support/Okidoki/keys.json`, readable only by you.
 
 ## Your first skill (2 minutes)
 
@@ -106,14 +106,14 @@ waits for your okay in the notch, and captchas are always yours. See [docs/agent
 | Control panel | `web/` (React, Vite) | the shell, bundled into the app |
 | CLI + agent skill | `mcp/okidoki.ts`, `mcp/skill/SKILL.md` | okidoki for other agents, through the app's local control endpoint |
 
-Data: `~/Library/Application Support/Okidoki Personal/` (state, keys, skill pictures, telemetry).
+Data: `~/Library/Application Support/Okidoki/` (state, keys, skill pictures, telemetry).
 The vault: `~/Desktop/Okidoki Vault` unless you move it in the Vault page. More in
 [docs/architecture.md](docs/architecture.md).
 
 ## Develop
 
 ```bash
-make app                        # build/Okidoki Personal.app
+make app                        # build/Okidoki.app
 make verify                     # everything that needs no real screen: brain, panel, Swift logic
 make test                       # Swift tests (some drive real apps; see CONTRIBUTING)
 cd brain && bun test tests      # brain

@@ -15,7 +15,7 @@
 #   scripts/dev-browser.sh newtab https://example.com | tab 2 | tabs  # open, pick, list tabs
 set -euo pipefail
 
-SUPPORT="$HOME/Library/Application Support/Okidoki Personal"
+SUPPORT="${OKIDOKI_SUPPORT_DIR:-$HOME/Library/Application Support/Okidoki}"
 STATE="$SUPPORT/state.json"
 TIMEOUT="${OKIDOKI_SCENARIO_TIMEOUT:-240}"
 
@@ -28,7 +28,7 @@ post() {
     }' "$1" "$2" >/dev/null
 }
 
-pgrep -xq OkidokiPersonal || { echo "okidoki isn't running" >&2; exit 1; }
+pgrep -xq Okidoki || { echo "okidoki isn't running" >&2; exit 1; }
 cmd="${1:?command required}"; shift || true
 arg="${1:-}"
 
@@ -59,28 +59,28 @@ EOF
 )
     [ -n "$out" ] && { echo "$out"; break; }
     if [ $(( $(date +%s) - started )) -ge "$TIMEOUT" ]; then
-      echo "✗ timed out after ${TIMEOUT}s"; post "dev.okidoki.personal.dev.stop" ""; exit 1
+      echo "✗ timed out after ${TIMEOUT}s"; post "dev.okidoki.mac.dev.stop" ""; exit 1
     fi
   done
-  pgrep -xq OkidokiPersonal || { echo "✗ OKIDOKI CRASHED"; exit 2; }
+  pgrep -xq Okidoki || { echo "✗ OKIDOKI CRASHED"; exit 2; }
 }
 
 case "$cmd" in
   browse)
-    before=$(newest); post "dev.okidoki.personal.dev.browse" "$arg"; echo "▸ browse: $arg"; wait_run "$before" ;;
+    before=$(newest); post "dev.okidoki.mac.dev.browse" "$arg"; echo "▸ browse: $arg"; wait_run "$before" ;;
   answer)
-    before=$(newest); post "dev.okidoki.personal.dev.browser" "answer $arg"; echo "▸ answer: $arg"; wait_run "$before" ;;
+    before=$(newest); post "dev.okidoki.mac.dev.browser" "answer $arg"; echo "▸ answer: $arg"; wait_run "$before" ;;
   ask)
     # As if typed in the address bar and sent with “Ask okidoki”: `ask <task>` or `ask <tab number> <task>`.
-    before=$(newest); post "dev.okidoki.personal.dev.browser" "ask $arg"; echo "▸ ask: $arg"; wait_run "$before" ;;
+    before=$(newest); post "dev.okidoki.mac.dev.browser" "ask $arg"; echo "▸ ask: $arg"; wait_run "$before" ;;
   ask-bg)
-    post "dev.okidoki.personal.dev.browser" "ask $arg"; echo "▸ started: $arg" ;;
+    post "dev.okidoki.mac.dev.browser" "ask $arg"; echo "▸ started: $arg" ;;
   replay)
-    before=$(newest); post "dev.okidoki.personal.dev.browser" "replay $arg"; echo "▸ replay: $arg"; wait_run "$before" ;;
+    before=$(newest); post "dev.okidoki.mac.dev.browser" "replay $arg"; echo "▸ replay: $arg"; wait_run "$before" ;;
   eval|dash|winfo|tabs)
-    rm -f "$SUPPORT/dev-browser.json"; post "dev.okidoki.personal.dev.browser" "$cmd${arg:+ $arg}"
+    rm -f "$SUPPORT/dev-browser.json"; post "dev.okidoki.mac.dev.browser" "$cmd${arg:+ $arg}"
     for _ in $(seq 1 40); do [ -f "$SUPPORT/dev-browser.json" ] && break; sleep 0.25; done
     cat "$SUPPORT/dev-browser.json" 2>/dev/null; echo ;;
   *)
-    post "dev.okidoki.personal.dev.browser" "$cmd${arg:+ $arg}" ;;
+    post "dev.okidoki.mac.dev.browser" "$cmd${arg:+ $arg}" ;;
 esac

@@ -48,7 +48,7 @@ for (const fixture of [
         cwd: root,
         env: {
           ...Bun.env, PATH: `${join(root, "bin")}:${Bun.env.PATH}`,
-          OKIDOKI_CODESIGN_IDENTITY: "", OKIDOKI_SCRATCH: ".build", OKIDOKI_APP_DIR: "build/Okidoki Personal.app",
+          OKIDOKI_CODESIGN_IDENTITY: "", OKIDOKI_SCRATCH: ".build", OKIDOKI_APP_DIR: "build/Okidoki.app",
           OKIDOKI_SIGN_FIXTURE: join(root, "identities.txt"), OKIDOKI_SIGN_STATUS: String(fixture.status),
           OKIDOKI_SIGN_LOG: join(root, "sign.log"),
         },
@@ -59,13 +59,13 @@ for (const fixture of [
       ]);
       expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
       expect(stdout).toContain(`Signing with: ${fixture.identity}`);
-      const app = join(root, "build/Okidoki Personal.app/Contents");
-      expect(await readFile(join(app, "MacOS/OkidokiPersonal"), "utf8")).toBe("fixture binary");
+      const app = join(root, "build/Okidoki.app/Contents");
+      expect(await readFile(join(app, "MacOS/Okidoki"), "utf8")).toBe("fixture binary");
       // Bring your own key: a .env in the repo never ends up in the app.
       expect(await access(join(app, "Resources/service.env")).then(() => true, () => false)).toBe(false);
       const info = await readFile(join(app, "Info.plist"), "utf8");
-      expect(info).toContain("<string>dev.okidoki.personal</string>");
-      expect(info).toContain("<string>OkidokiPersonal</string>");
+      expect(info).toContain("<string>dev.okidoki.mac</string>");
+      expect(info).toContain("<string>Okidoki</string>");
       expect(await readFile(join(root, "sign.log"), "utf8")).toContain(`--sign ${fixture.identity}`);
     } finally {
       await rm(root, { recursive: true, force: true });

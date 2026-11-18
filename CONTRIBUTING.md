@@ -6,7 +6,7 @@ touched pass.
 ## Setup
 
 ```bash
-make app && make run     # installs "/Applications/Okidoki Personal.app" and starts it via launchd
+make app && make run     # installs "/Applications/Okidoki.app" and starts it via launchd
 ```
 
 Run the installed copy, not `build/`. macOS ties Accessibility and Screen Recording grants to the app's

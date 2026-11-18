@@ -66,7 +66,7 @@ Exit codes:
 
 ## HTTP
 
-The command sits on a small HTTP endpoint at `127.0.0.1`. Its port and token are in `~/Library/Application Support/Okidoki Personal/control.json`, which only the owner can read. Every request needs `Authorization: Bearer <token>`, and requests that carry an `Origin` header are refused, so web pages can't reach it.
+The command sits on a small HTTP endpoint at `127.0.0.1`. Its port and token are in `~/Library/Application Support/Okidoki/control.json`, which only the owner can read. Every request needs `Authorization: Bearer <token>`, and requests that carry an `Origin` header are refused, so web pages can't reach it.
 
 `GET /` lists the routes:
 

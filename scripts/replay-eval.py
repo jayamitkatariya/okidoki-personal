@@ -24,9 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 # A test build (scripts/build-app.sh with OKIDOKI_BUNDLE_ID/OKIDOKI_SUPPORT_DIR) is driven the same way:
 # its dev hooks listen on its own bundle id, and its state lives in its own support folder.
-SUPPORT = Path(os.environ.get("OKIDOKI_SUPPORT_DIR") or Path.home() / "Library/Application Support/Okidoki Personal")
+SUPPORT = Path(os.environ.get("OKIDOKI_SUPPORT_DIR") or Path.home() / "Library/Application Support/Okidoki")
 STATE = SUPPORT / "state.json"
-DOMAIN = os.environ.get("OKIDOKI_BUNDLE_ID") or "dev.okidoki.personal"
+DOMAIN = os.environ.get("OKIDOKI_BUNDLE_ID") or "dev.okidoki.mac"
 FIXTURE = "http://127.0.0.1:8777"
 TERMINAL = {"done", "failed", "cancelled"}
 
@@ -484,7 +484,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
 
-    if subprocess.run(["pgrep", "-xq", os.environ.get("OKIDOKI_EXEC") or "OkidokiPersonal"]).returncode != 0:
+    if subprocess.run(["pgrep", "-xq", os.environ.get("OKIDOKI_EXEC") or "Okidoki"]).returncode != 0:
         sys.exit("okidoki isn't running — OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh")
     spec = json.loads((ROOT / "scripts/replay-scenarios.json").read_text())
     proc = start_fixture()

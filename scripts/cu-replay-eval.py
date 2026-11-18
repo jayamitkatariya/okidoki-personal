@@ -28,9 +28,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SUPPORT = Path.home() / "Library/Application Support/Okidoki Personal"
+SUPPORT = Path(os.environ.get("OKIDOKI_SUPPORT_DIR") or Path.home() / "Library/Application Support/Okidoki")
 STATE = SUPPORT / "state.json"
-DOMAIN = "dev.okidoki.personal"
+DOMAIN = "dev.okidoki.mac"
 TERMINAL = {"done", "failed", "cancelled"}
 FIXTURE_APP = ROOT / "build/cu-fixture/AcmeDesk.app"
 # The fixture's own folder for this eval: config, submissions, its log. Deleted at the end. Not under
@@ -346,7 +346,7 @@ def main():
                         help="let agent and classic modes take over the real mouse and keyboard (private Mac only)")
     args = parser.parse_args()
 
-    if subprocess.run(["pgrep", "-xq", "OkidokiPersonal"]).returncode != 0:
+    if subprocess.run(["pgrep", "-xq", "Okidoki"]).returncode != 0:
         sys.exit("okidoki isn't running — OKIDOKI_DEV_HOOKS=1 scripts/launch-app.sh")
     if not FIXTURE_APP.exists():
         subprocess.run([str(ROOT / "scripts/cu-fixture/build.sh")], check=True)

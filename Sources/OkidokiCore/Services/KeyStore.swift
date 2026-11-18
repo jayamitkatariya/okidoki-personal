@@ -1,7 +1,7 @@
 import Foundation
 
 /// API keys and MCP secrets, saved in a private file in okidoki's folder:
-/// `~/Library/Application Support/Okidoki Personal/keys.json`, readable only by you.
+/// `~/Library/Application Support/Okidoki/keys.json`, readable only by you.
 /// The file never leaves this Mac. Bring your own keys: nothing ships with the app.
 public enum KeyStore {
     private static let lock = NSLock()

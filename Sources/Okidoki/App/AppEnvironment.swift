@@ -347,7 +347,7 @@ final class AppEnvironment: ObservableObject {
     private func installDevHooks() {
         let center = DistributedNotificationCenter.default()
         // Namespaced by bundle id, so a test build (its own bundle id) never answers another build's scripts.
-        let domain = Bundle.main.bundleIdentifier ?? "dev.okidoki.personal"
+        let domain = Bundle.main.bundleIdentifier ?? "dev.okidoki.mac"
         center.addObserver(forName: Notification.Name(domain + ".dev.drive"), object: nil, queue: .main) { [weak self] note in
             guard let goal = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { return }
             Task { @MainActor in await self?.devDrive(goal: goal) }
