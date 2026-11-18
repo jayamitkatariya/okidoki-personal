@@ -810,7 +810,7 @@ final class AppEnvironment: ObservableObject {
         guard let run = store.run(runID) else { return }
         let card = AnswerCardModel(title: "one thing first", text: question,
                                    actions: [CardAction(title: "decline", kind: .secondary) { [weak self] in
-                                       self?.declineQuestion(runID)
+                                       self?.declineQuestion(runID: runID)
                                    }],
                                    threadTitle: run.threadID.flatMap { store.thread($0)?.title },
                                    runID: runID, threadID: run.threadID)
