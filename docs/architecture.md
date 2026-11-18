@@ -34,6 +34,10 @@ okidoki is three local processes and one optional one:
   (AES-GCM; the panel seals them, the Mac stores ciphertext only).
 - **`ControlServer`** — local tools reach the app here. It listens on 127.0.0.1 only, needs a
   bearer token, and refuses browser origins.
+- **`CollabServer`** — the shared session. The one listener that goes beyond localhost, only while
+  you start one from Settings: it serves the joiner page on your WiFi (code + per-participant tokens,
+  [docs/collab.md](collab.md)), streams the private Mac's screen, and relays the group chat and asks.
+  Joiners drive only the private Mac — never your screen, files or keys.
 
 ## The brain
 
@@ -49,3 +53,8 @@ The brain is a Bun HTTP server started by the app. The app holds its token. It o
 Nothing leaves the Mac except model calls (to Anthropic with your key) and services you add keys
 for. Screenshots are sent with a request and never stored, apart from the small per-step pictures
 skills keep for replay.
+
+The one exception is a **shared session you start**: then okidoki's private Mac's screen, the
+session's chat and your skills' names and inputs are shared with the people you invited, on your
+WiFi, until you end it. Never your own screen, keys, vault or memory — see
+[SECURITY.md](../SECURITY.md).

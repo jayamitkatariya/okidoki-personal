@@ -67,6 +67,8 @@ okidoki to do something (it drives the shared Mac), or **take the wheel** and dr
 everyone watches their cursor. Anything risky still waits for your okay in the notch. Ending the
 session stops sharing and disconnects everyone. See [docs/collab.md](docs/collab.md).
 
+![A live session: the private Mac's screen, the group chat, skill cards](https://api.replicas.dev/v1/media/public/02be8f45-ff11-4444-897d-0d9df703d1b8/0BuXQfOBnQh6RR-rHAFYPjUn5ELbszdpWmS1baCtnh8)
+
 ## Use it from Claude Code, Cursor and other agents
 
 Other agents hand okidoki work through the **okidoki skill** and the `okidoki` command it teaches them.

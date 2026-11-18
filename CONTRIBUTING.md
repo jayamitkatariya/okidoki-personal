@@ -38,4 +38,10 @@ they are local gates. The release bar and how to record baselines live in [docs/
 
 ## Good first issues
 
-- Example skills in `skills/`
+- **Library templates** (`Resources/skills/*.okiskill`) — a ready-made skill for a site you use;
+  the format is [docs/skill-format.md](docs/skill-format.md).
+- **Eval scenarios** (`scripts/cu-scenarios.json`, `scripts/replay-scenarios.json`) — one more task
+  with its own independent check.
+- **Swift 6 readiness** — `swift build` prints a handful of actor-isolation warnings; each is a
+  small, self-contained fix.
+- **The session joiner page** (`web/src/collab/`) — small UX wins on a self-contained page.
