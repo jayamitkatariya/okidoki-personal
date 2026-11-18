@@ -11,6 +11,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { canSave, MAX_PINS, pinFor, siteOf, useSiteActions, type Site } from "./siteActions";
 import { ACTIVE, draggedTabOrder, hostOf, LIBRARY, showsPrivateMac, siteLabel, splitTabs, threadInfo, type View } from "./model";
+import { jumpToSettingsSection } from "../nav";
 
 const OPEN_KEY = "okidoki.shell.sections";
 const CHATS_SHOWN = 6;
@@ -87,7 +88,10 @@ export function Sidebar({
   const vmShown = showsPrivateMac(state);
   const vmPhase = state.privateMac?.phase;
   const vmWorking = vmShown && state.runs.some((run) => run.kind === "computer_use" && ACTIVE.has(run.status));
-  const agentCount = agent.length + (vmShown ? 1 : 0);
+  // A live shared session sits with the private Mac it drives, so the host always sees it sharing.
+  const sessionLive = Boolean(state.collab?.active);
+  const sessionHere = state.collab?.participants?.length ?? 0;
+  const agentCount = agent.length + (vmShown ? 1 : 0) + (sessionLive ? 1 : 0);
   const chats = useMemo(() => threadInfo(state), [state]);
   const pins = state.pins ?? [];
   const viewingTab = view.kind === "tab" ? tabs.find((tab) => tab.id === (view.id === "@active" ? activeTabID : view.id)) : null;
@@ -223,6 +227,24 @@ export function Sidebar({
                     animate={{ height: "auto", opacity: 1, transition: { duration: 0.2, ease: [0.23, 1, 0.32, 1] } }}
                     exit={{ height: 0, opacity: 0, transition: { duration: 0.14, ease: [0.4, 0, 0.6, 1] } }}
                   >
+                    {sessionLive ? (
+                      <Row
+                        icon={
+                          <span className="tab-icon vm-icon">
+                            <PixelIcon name="people" size={15} />
+                            <span className="vm-dot" aria-hidden="true" />
+                          </span>
+                        }
+                        label="Shared session"
+                        title={`Live · ${sessionHere} here · click to see the code and the people`}
+                        active={view.kind === "page" && view.page === "settings"}
+                        onClick={() => {
+                          onNavigate({ kind: "page", page: "settings" });
+                          jumpToSettingsSection("session");
+                        }}
+                        trailing={<span className="srow-count tnum">{sessionHere}</span>}
+                      />
+                    ) : null}
                     {vmShown ? (
                       <Row
                         icon={

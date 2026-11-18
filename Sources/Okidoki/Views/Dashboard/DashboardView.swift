@@ -661,7 +661,7 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             onboardingOpen: env.onboardingOpen,
             dashboardOpen: env.dashboardOpen,
             sidecar: env.sidecar.status.label,
-            version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.1",
+            version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.9.2",
             hostName: Host.current().localizedName ?? "Mac",
             services: services(env),
             keyProviders: KeyProviders.all.map { spec in
