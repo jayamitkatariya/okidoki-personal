@@ -29,6 +29,8 @@ Point test data away from your own with `OKIDOKI_SUPPORT_DIR=/tmp/okidoki-test`.
 CI (`.github/workflows/ci.yml`) runs the brain and panel suites, compiles the whole app, and runs the
 logic-only Swift suites on every push. The golden path and the evals need a key and macOS grants, so
 they are local gates. The release bar and how to record baselines live in [docs/quality.md](docs/quality.md).
+(While the repository is private, Actions needs billing — macOS runners bill at 10×; public
+repositories run CI free, macOS runners included.)
 
 ## Style
 
