@@ -73,7 +73,7 @@ extension AppEnvironment {
         let url = port > 0 ? "http://\(host).local:\(port)/" : nil
         return CollabHostStatePayload(active: true, code: session.code, url: url, port: Int(port),
                                       participants: session.participants, wheelHolder: session.wheelHolder,
-                                      runID: session.activeRunID, error: nil)
+                                      runID: session.activeRunID, error: server.listenError)
     }
 
     // MARK: Tasks

@@ -855,6 +855,11 @@ function SharedSession() {
   const people = collab?.participants ?? [];
   return (
     <div className="pref-group">
+      {collab?.error ? (
+        <PrefRow title="The network isn't open" detail={collab.error}>
+          <span className="pref-status is-warn">Can't share</span>
+        </PrefRow>
+      ) : null}
       <div className="pref-row is-stack">
         <span className="pref-copy">
           <strong>Join code</strong>

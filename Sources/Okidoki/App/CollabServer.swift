@@ -17,6 +17,8 @@ final class CollabServer {
     private weak var env: AppEnvironment?
     private var listener: NWListener?
     private(set) var port: UInt16 = 0
+    /// Why the listener never came up (local-network permission denied, no free port), for the host panel.
+    private(set) var listenError: String?
     private(set) var session: CollabSession?
     private var clients: [UUID: NWConnection] = [:]
     private var latestFrame: Data?
@@ -72,6 +74,7 @@ final class CollabServer {
         latestFrame = nil
         session = nil
         port = 0
+        listenError = nil
         env?.objectWillChange.send()
     }
 
@@ -80,7 +83,7 @@ final class CollabServer {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "0.0.0.0", port: port)
         guard let listener = try? NWListener(using: parameters) else {
-            if candidate != 0 { listen(on: 0) }
+            if candidate != 0 { listen(on: 0) } else { failListen() }
             return
         }
         listener.service = NWListener.Service(name: session?.hostName ?? "okidoki", type: "_okidoki._tcp")
@@ -93,11 +96,12 @@ final class CollabServer {
                 switch state {
                 case .ready:
                     self.port = listener.port?.rawValue ?? candidate
+                    self.listenError = nil
                     self.env?.objectWillChange.send()
                 case .failed:
                     listener.cancel()
                     self.listener = nil
-                    if candidate != 0 { self.listen(on: 0) }
+                    if candidate != 0 { self.listen(on: 0) } else { self.failListen() }
                 default:
                     break
                 }
@@ -105,6 +109,13 @@ final class CollabServer {
         }
         listener.start(queue: .main)
         self.listener = listener
+    }
+
+    /// The listener never came up. The usual cause on macOS 15+ is the Local Network permission; the
+    /// host panel says so instead of showing a code that leads nowhere.
+    private func failListen() {
+        listenError = "couldn't open the network — check Local Network permission for okidoki in System Settings › Privacy & Security"
+        env?.objectWillChange.send()
     }
 
     // MARK: HTTP
