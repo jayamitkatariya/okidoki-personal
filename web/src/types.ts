@@ -54,6 +54,8 @@ export interface Settings {
   drivePace: "calm" | "fast";
   /** Where computer-use runs happen: this Mac, or okidoki's private Mac (a macOS VM). */
   computerTarget: "mac" | "vm";
+  /** How okidoki is used: personal, or collab (adds shared sessions). Missing on older builds = personal. */
+  useMode?: "personal" | "collab";
   /** Private Mac memory in GB; 0 is automatic. */
   privateMacMemoryGB?: number;
   /** What a request typed at the cursor is for. Missing on older builds. */
@@ -127,8 +129,28 @@ export interface PrivateMacState {
   downloadGB: number;
 }
 
-export interface McpServer {
+/** A person in a shared session (the host's view). Mirrors collab/protocol.ts Participant. */
+export interface CollabParticipant {
   id: string;
+  name: string;
+  colorHex: string;
+  joinedAt: string;
+  isHost?: boolean;
+}
+
+/** The host dashboard's view of its shared session. Missing on older builds. */
+export interface CollabHostState {
+  active: boolean;
+  code?: string | null;
+  url?: string | null;
+  port?: number;
+  participants?: CollabParticipant[];
+  wheelHolder?: string | null;
+  runID?: string | null;
+  error?: string | null;
+}
+
+export interface McpServer {  id: string;
   name: string;
   transport: "stdio" | "http";
   command: string;
@@ -459,6 +481,8 @@ export interface NativeState {
   mcpSecretNames?: Record<string, string[]>;
   /** Missing in the demo, where there is no VM to report on. */
   privateMac?: PrivateMacState | null;
+  /** The shared session: live, join code and URL, who's in it. Missing on older builds. */
+  collab?: CollabHostState | null;
   /** The okidoki skill and `okidoki` command other agents use. Missing on older builds. */
   agentSkill?: AgentSkillState | null;
   codingAgents?: CodingAgentsState | null;

@@ -195,14 +195,6 @@ export const demoState: NativeState = {
       colorHex: "44E45E",
       createdAt: iso(-57600),
     },
-    {
-      id: "acct-work",
-      name: "jay at workro",
-      email: "jay@workro.com",
-      kind: "work",
-      colorHex: "7A8CFF",
-      createdAt: iso(-28800),
-    },
   ],
   currentAccountID: "acct-jay",
   settings: {
@@ -253,6 +245,7 @@ export const demoState: NativeState = {
     },
     drivePace: "fast",
     computerTarget: "mac",
+    useMode: "personal",
     mcpServers: [
       { id: "mcp-github", name: "GitHub", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], url: "", enabled: true },
       { id: "mcp-wiki", name: "Team wiki", transport: "http", command: "", args: [], url: "https://wiki.example.com/mcp", enabled: true },

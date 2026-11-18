@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { copyText, cx, relativeTime } from "../lib";
 import { joinCommand, parseServerJSON, serversFromConfig, splitCommand } from "../mcp";
@@ -36,13 +36,14 @@ const CONNECTOR_ICON: Record<string, string> = {
 const HIDDEN_CONNECTORS = new Set(["notes", "reminders"]);
 
 const SECTIONS = [
+  { id: "mode", label: "Mode", icon: "people" },
   { id: "keys", label: "Keys", icon: "key" },
   { id: "permissions", label: "Permissions", icon: "lock" },
   { id: "you", label: "You", icon: "user" },
   { id: "voice", label: "Voice", icon: "mic" },
   { id: "safety", label: "Safety", icon: "hand" },
-  { id: "connectors", label: "Connectors", icon: "link" },
-  { id: "other-agents", label: "Agents", icon: "code" },
+  { id: "advanced", label: "Advanced", icon: "link" },
+  { id: "agents", label: "Use from agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
   { id: "summon", label: "Summon", icon: "spark" },
   { id: "general", label: "General", icon: "gear" },
@@ -63,6 +64,18 @@ export function SettingsPage() {
     setEmail(account.email);
   }, [account.id, account.name, account.email]);
 
+  // The mode shapes the page: collab adds the Shared session section (after Private Mac, which a
+  // session drives); personal keeps sharing out of sight. Same loop either way.
+  const collab = settings.useMode === "collab";
+  const sections = useMemo(() => {
+    const base = SECTIONS.filter((section) => native || section.id !== "keys");
+    if (!collab) return base;
+    const at = base.findIndex((section) => section.id === "private-mac");
+    return at >= 0
+      ? [...base.slice(0, at + 1), { id: "session", label: "Shared session", icon: "people" }, ...base.slice(at + 1)]
+      : base;
+  }, [native, collab]);
+
   // Highlight the section at the top of the scroll area. Driven by scroll position, so the
   // last sections still light up at the bottom, and a click holds its section while the
   // smooth scroll passes the others.
@@ -79,12 +92,12 @@ export function SettingsPage() {
       // whose last rows are still peeking in at the top.
       const top = root.getBoundingClientRect().top + Math.max(96, root.clientHeight * 0.3);
       // Keys only exists in the Mac app, so start from the first section actually on the page
-      let current: string = SECTIONS.find((section) => document.getElementById(`settings-${section.id}`))?.id ?? SECTIONS[0].id;
-      for (const section of SECTIONS) {
+      let current: string = sections.find((section) => document.getElementById(`settings-${section.id}`))?.id ?? sections[0].id;
+      for (const section of sections) {
         const node = document.getElementById(`settings-${section.id}`);
         if (node && node.getBoundingClientRect().top <= top) current = section.id;
       }
-      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4) current = SECTIONS[SECTIONS.length - 1].id;
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4) current = sections[sections.length - 1].id;
       setActive(current);
     };
     const onScroll = () => {
@@ -97,10 +110,12 @@ export function SettingsPage() {
       cancelAnimationFrame(frame);
       if (jumping.current !== null) window.clearTimeout(jumping.current);
     };
-  }, []);
+  }, [sections]);
 
   const jump = (id: string) => {
     setActive(id);
+    // Advanced is collapsed by default; jumping to it opens it so the section isn't an empty scroll.
+    if (id === "advanced") document.getElementById("settings-advanced")?.setAttribute("open", "");
     if (jumping.current !== null) window.clearTimeout(jumping.current);
     jumping.current = window.setTimeout(() => (jumping.current = null), 700);
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -139,7 +154,7 @@ export function SettingsPage() {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.filter((section) => native || section.id !== "keys").map((section) => (
+          {sections.map((section) => (
             <button key={section.id} className={cx("settings-nav-item", active === section.id && "is-active")} onClick={() => jump(section.id)}>
               <PixelIcon name={section.icon} size={15} />
               {section.label}
@@ -149,6 +164,33 @@ export function SettingsPage() {
         </nav>
 
         <div className="settings-body">
+          <SettingsSection id="mode" title="Mode" description="The same loop either way — show it once, it does it forever. This only changes what's offered here.">
+            <div className="pref-group">
+              <PrefRow
+                title="How you use okidoki"
+                detail={
+                  collab
+                    ? "Shared sessions are on: people on your WiFi can watch okidoki's private Mac live, chat, and ask — joining needs your code."
+                    : "Everything stays on this Mac. Switch on to share live sessions with people on your WiFi."
+                }
+              >
+                <Segmented<"personal" | "collab">
+                  options={[
+                    { value: "personal", label: "Just me" },
+                    { value: "collab", label: "With people" },
+                  ]}
+                  value={settings.useMode ?? "personal"}
+                  onChange={(value) => updateSettings({ useMode: value })}
+                />
+              </PrefRow>
+              {collab ? (
+                <PrefRow title="Sharing" detail="Invite people from Shared session below. A session drives the private Mac — never your own screen — and anything risky still waits for your okay.">
+                  <span className="pref-status is-on">Collab on</span>
+                </PrefRow>
+              ) : null}
+            </div>
+          </SettingsSection>
+
           {/* Keys: only inside the Mac app, which holds the key file. */}
           {native ? (
             <SettingsSection id="keys" title="Keys" description="Bring your own keys. Each goes in a private file on this Mac, readable only by you, and is sent only to the service it belongs to.">
@@ -382,32 +424,49 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="connectors" title="Connectors" description="Services and tools okidoki can reach for you. Each one asks before it changes anything.">
-            <div className="pref-group">
-              {connectors.map((connector) => (
-                <ConnectorRow key={connector.id} connector={connector} />
-              ))}
-              {!connectors.length ? (
-                <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
-                  <span className="pref-hint">Mac only</span>
-                </PrefRow>
-              ) : null}
+          {/* The agent-platform surface: connectors and outbound coding-agent delegation. Kept, but
+              collapsed and off the beaten path — okidoki's loop works fully without any of it. */}
+          <details className="settings-section settings-advanced" id="settings-advanced">
+            <summary className="settings-advanced-summary">
+              <span className="settings-advanced-head">
+                <PixelIcon name="link" size={15} />
+                <span>
+                  <strong>Advanced</strong>
+                  <em>Connectors, and handing work to coding agents. okidoki works fully without these.</em>
+                </span>
+              </span>
+              <PixelIcon name="chevron-down" size={14} className="settings-advanced-caret" />
+            </summary>
+            <div className="settings-advanced-body">
+              <h3 className="settings-subhead">Connectors</h3>
+              <p className="settings-advanced-note">Services and tools okidoki can reach for you. Each one asks before it changes anything.</p>
+              <div className="pref-group">
+                {connectors.map((connector) => (
+                  <ConnectorRow key={connector.id} connector={connector} />
+                ))}
+                {!connectors.length ? (
+                  <PrefRow title="Connectors" detail="Open this in the okidoki app on your Mac to see what it can connect to.">
+                    <span className="pref-hint">Mac only</span>
+                  </PrefRow>
+                ) : null}
+              </div>
+              <div className="pref-group">
+                {mcpConnector ? (
+                  <ConnectorRow connector={mcpConnector} />
+                ) : (
+                  <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
+                    <span className="pref-hint">Mac only</span>
+                  </PrefRow>
+                )}
+                {mcpConnector?.enabled ? <McpServers /> : null}
+              </div>
+              <h3 className="settings-subhead">Hand work to coding agents</h3>
+              <p className="settings-advanced-note">okidoki hands files, the terminal and code to Claude Code, Codex and other coding agents. Each uses its own sign-in.</p>
+              <CodingAgents />
             </div>
-            <div className="pref-group">
-              {mcpConnector ? (
-                <ConnectorRow connector={mcpConnector} />
-              ) : (
-                <PrefRow title="MCP" detail="Open this in the okidoki app on your Mac to add servers.">
-                  <span className="pref-hint">Mac only</span>
-                </PrefRow>
-              )}
-              {mcpConnector?.enabled ? <McpServers /> : null}
-            </div>
-          </SettingsSection>
+          </details>
 
-          <SettingsSection id="other-agents" title="Agents" description="Work both ways with Claude Code, Codex and other coding agents: okidoki hands them files, the terminal and code, and they hand okidoki the web, your logins and your Mac’s apps.">
-            <CodingAgents />
-            <h3 className="settings-subhead">Let agents use okidoki</h3>
+          <SettingsSection id="agents" title="Use from agents" description="Claude Code, Codex and other agents hand okidoki the web, your logins and your Mac’s apps: they look for a saved skill first, replay it, and ask for the rest. Risky steps still wait for your okay.">
             <UseFromAgents />
           </SettingsSection>
 
@@ -424,6 +483,12 @@ export function SettingsPage() {
               confirm={setConfirm}
             />
           </SettingsSection>
+
+          {collab ? (
+            <SettingsSection id="session" title="Shared session" description="Let everyone on your WiFi watch okidoki work in the private Mac, chat, and ask it to do things. They join in a browser — no install. You approve anything risky here, in the notch. Collab shares okidoki's Mac, never yours.">
+              <SharedSession />
+            </SettingsSection>
+          ) : null}
 
           <SettingsSection id="summon" title="Summon" description="How you call okidoki from anywhere on your Mac. The notch’s Ask button and the menu bar always work too.">
             <div className="pref-group">
@@ -784,6 +849,114 @@ function PrivateMacSettings({
         </div>
       ) : null}
     </>
+  );
+}
+
+function SharedSession() {
+  const { state, invoke, notify, native } = useDashboard();
+  const collab = state.collab ?? null;
+  const supported = Boolean(state.privateMac?.supported);
+  const active = Boolean(collab?.active);
+  const act = (action: string, extra: Record<string, unknown> = {}) => invoke("collab", { action, ...extra });
+
+  if (!native) {
+    return (
+      <div className="pref-group">
+        <PrefRow title="Shared session" detail="Open this in the okidoki app on your Mac to start a session.">
+          <span className="pref-hint">Mac only</span>
+        </PrefRow>
+      </div>
+    );
+  }
+
+  if (!active) {
+    return (
+      <div className="pref-group">
+        <PrefRow
+          title="Share the private Mac"
+          detail={supported ? "Start a session and give everyone the code. The private Mac starts when a run needs it." : "A shared session needs the private Mac, which needs Apple silicon."}
+        >
+          <Button
+            variant="primary"
+            size="sm"
+            icon="people"
+            disabled={!supported}
+            onClick={() => {
+              act("start");
+              notify("Session live", "Give everyone the code below", "success");
+            }}
+          >
+            Start a session
+          </Button>
+        </PrefRow>
+      </div>
+    );
+  }
+
+  const people = collab?.participants ?? [];
+  return (
+    <div className="pref-group">
+      {collab?.error ? (
+        <PrefRow title="The network isn't open" detail={collab.error}>
+          <span className="pref-status is-warn">Can't share</span>
+        </PrefRow>
+      ) : null}
+      <div className="pref-row is-stack">
+        <span className="pref-copy">
+          <strong>Join code</strong>
+          <em>Everyone on your WiFi opens the link and enters this code.</em>
+        </span>
+        <div className="session-code">{collab?.code}</div>
+        {collab?.url ? (
+          <div className="pref-row-foot">
+            <code className="mcp-cmd">{collab.url}</code>
+            <IconButton icon="copy" label="Copy link" onClick={() => void copyText(collab.url!).then(() => notify("Copied", "Paste it to everyone", "info"))} />
+          </div>
+        ) : null}
+      </div>
+      <div className="pref-row is-stack">
+        <span className="pref-copy">
+          <strong>Participants</strong>
+          <em>{people.length} here · they see okidoki's Mac, never yours</em>
+        </span>
+        <div className="session-people">
+          {people.map((person) => (
+            <div key={person.id} className="session-person">
+              <span className="session-dot" style={{ background: `#${person.colorHex}` }}>
+                {person.name.split(" ").slice(0, 2).map((word) => word[0]).join("").toUpperCase()}
+              </span>
+              <span className="session-name">{person.name}{person.isHost ? " (host)" : ""}</span>
+              {collab?.wheelHolder === person.id ? <em className="session-driving">driving</em> : null}
+              {!person.isHost ? <IconButton icon="x" label={`Remove ${person.name}`} onClick={() => act("kick", { id: person.id })} /> : null}
+            </div>
+          ))}
+          {!people.length ? <span className="pref-hint">No one has joined yet.</span> : null}
+        </div>
+      </div>
+      <div className="pref-row">
+        <span className="pref-copy">
+          <strong>End the session</strong>
+          <em>Stops sharing and disconnects everyone.</em>
+        </span>
+        <span className="pref-control">
+          {collab?.wheelHolder ? (
+            <Button size="sm" onClick={() => act("reclaimWheel")}>
+              Reclaim wheel
+            </Button>
+          ) : null}
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => {
+              act("stop");
+              notify("Session ended", "No longer sharing", "info");
+            }}
+          >
+            End session
+          </Button>
+        </span>
+      </div>
+    </div>
   );
 }
 

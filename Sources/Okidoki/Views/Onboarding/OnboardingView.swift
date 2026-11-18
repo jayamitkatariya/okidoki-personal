@@ -16,6 +16,7 @@ struct OnboardingView: View {
     @State private var didShake = false
     @State private var didCircle = false
     @State private var workspace = "mac"
+    @State private var mode = "personal"
     @State private var anthropicKey = ""
     @State private var keyCheck: String?
     @State private var checkingKey = false
@@ -50,6 +51,7 @@ struct OnboardingView: View {
             name = store.activeAccount.name == "you" ? "" : store.activeAccount.name
             inputMode = store.settings.defaultInput
             workspace = store.settings.computerTarget
+            mode = store.settings.useMode
             refreshPermissions()
         }
         .onDisappear { env.suspendSummonForTour = false }
@@ -146,6 +148,7 @@ struct OnboardingView: View {
     @ViewBuilder private var stepContent: some View {
         switch step {
         case .welcome: welcomeStep
+        case .mode: modeStep
         case .access: accessStep
         case .workspace: workspaceStep
         case .brain: brainStep
@@ -205,6 +208,64 @@ struct OnboardingView: View {
         }
     }
 
+    /// The one question that shapes everything else: solo, or shared sessions with the people
+    /// around you. Either way it's the same loop — show it once, it does it forever.
+    private var modeStep: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            title("Who's okidoki for?")
+            subtitle("You can switch anytime in Settings — it only changes what's offered there.")
+            VStack(spacing: 10) {
+                modeCard(id: "personal", symbol: "person.crop.circle",
+                         title: "Just me",
+                         detail: "Your own teammate. Skills, replays and memory — everything stays on this Mac.")
+                modeCard(id: "collab", symbol: "person.2.crop.square.stack",
+                         title: "Me and my people",
+                         detail: "Everything personal has, plus live shared sessions on your WiFi: one Mac hosts, everyone joins in a browser and watches okidoki work.")
+            }
+            .padding(.top, 22)
+            if mode == "collab" {
+                HStack(spacing: 10) {
+                    Image(systemName: "macwindow.on.rectangle")
+                        .foregroundStyle(t.green)
+                    Text("A shared session drives okidoki's private Mac — never anyone's own screen. Pick it on the next step.")
+                        .font(.shellUI(12.5))
+                        .foregroundStyle(t.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                .padding(.top, 14)
+            }
+        }
+    }
+
+    private func modeCard(id: String, symbol: String, title: String, detail: String) -> some View {
+        let selected = mode == id
+        return Button {
+            withAnimation(stateChange) { mode = id }
+        } label: {
+            HStack(spacing: 12) {
+                iconTile(symbol, active: selected)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.shellUI(14, .semibold)).foregroundStyle(t.ink)
+                    Text(detail).font(.shellUI(12.5)).foregroundStyle(t.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                ZStack {
+                    Circle().strokeBorder(selected ? t.accent : t.lineStrong, lineWidth: 1.5)
+                        .frame(width: 18, height: 18)
+                    if selected { Circle().fill(t.accent).frame(width: 8, height: 8) }
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.leading, 12)
+            .padding(.trailing, 14)
+            .shellRow(t, selected: selected)
+            .contentShape(RoundedRectangle(cornerRadius: OKShell.radiusCard, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var workspaceStep: some View {
         let supported = PrivateMacService.isSupported
         let phase = env.privateMac.phase
@@ -218,7 +279,7 @@ struct OnboardingView: View {
                               enabled: true)
                 workspaceCard(id: "vm", symbol: "macwindow.on.rectangle", title: "A private Mac",
                               detail: supported
-                                  ? "Its own macOS in a window. You keep working while it does. A one-time \(Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)) GB download."
+                                  ? "Its own macOS in a window. You keep working while it does.\(mode == "collab" ? " Shared sessions drive this one." : "") A one-time \(Int(PrivateMacSpec.approximateDownloadBytes / 1_000_000_000)) GB download."
                                   : "Needs a Mac with Apple silicon.",
                               enabled: supported)
             }
@@ -657,6 +718,9 @@ struct OnboardingView: View {
             if !trimmed.isEmpty { account.name = trimmed }
             store.updateAccount(account)
             store.saveNow()
+        case .mode:
+            store.settings.useMode = mode
+            store.saveNow()
         case .workspace:
             store.settings.computerTarget = workspace
             store.saveNow()
@@ -1059,7 +1123,7 @@ struct ShellSegmented<T: Hashable>: View {
 }
 
 enum OnboardStep: Int, CaseIterable {
-    case welcome, access, workspace, brain, about, bring, tour, done
+    case welcome, mode, access, workspace, brain, about, bring, tour, done
 }
 
 struct TourCanvas: View {

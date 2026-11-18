@@ -40,6 +40,12 @@
 	<string>Okidoki borrows your screen only when you ask it to see or do something, and never stores screenshots.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Okidoki uses Apple events to add calendar events and to drive apps when you ask it to.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Okidoki shares its private Mac with people you invite on your WiFi. Nothing else on your Mac is shared, and only while a session is open.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_okidoki._tcp</string>
+	</array>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Okidoki reads your calendar only to answer questions and time its nudges.</string>
 	<key>NSContactsUsageDescription</key>

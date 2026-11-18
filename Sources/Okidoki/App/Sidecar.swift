@@ -273,6 +273,9 @@ final class BrainSidecar: ObservableObject {
     /// The first port after `start` that nothing is bound to, within a short range.
     nonisolated static func freePort(after start: Int) -> Int? {
         for candidate in (start + 1)...(start + 40) {
+            // The shared session's LAN port belongs to CollabServer; the brain must never take it,
+            // or every joiner would hit a brain that answers 401.
+            if candidate == Int(CollabServer.defaultPort) { continue }
             let socketFD = socket(AF_INET, SOCK_STREAM, 0)
             guard socketFD >= 0 else { continue }
             defer { close(socketFD) }

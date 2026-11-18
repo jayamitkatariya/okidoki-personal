@@ -637,3 +637,122 @@
 .mcp-row.is-missing .mcp-dot {
   opacity: 0.4;
 }
+
+/* Advanced: the agent-platform surface, collapsed by default so the loop keeps the spotlight. */
+.settings-advanced {
+  border-top: 1px solid var(--tile-line);
+  padding-top: 22px;
+}
+.settings-advanced-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 4px;
+  cursor: pointer;
+  list-style: none;
+}
+.settings-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+.settings-advanced-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.settings-advanced-head .icon {
+  color: var(--faint);
+  margin-top: 2px;
+  flex: none;
+}
+.settings-advanced-head strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.settings-advanced-head em {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-style: normal;
+  color: var(--ok-muted);
+}
+.settings-advanced-caret {
+  color: var(--faint);
+  flex: none;
+  transition: transform 0.18s ease;
+}
+.settings-advanced[open] .settings-advanced-caret {
+  transform: rotate(180deg);
+}
+.settings-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 18px;
+}
+.settings-advanced-body .settings-subhead {
+  margin: 6px 4px 0;
+}
+.settings-advanced-note {
+  margin: -8px 4px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ok-muted);
+}
+
+/* Shared session: the join code and who's in it. */
+.session-code {
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  padding: 10px 16px;
+  border-radius: var(--r-md, 12px);
+  background: var(--well);
+  border: 1px solid var(--tile-line);
+  align-self: flex-start;
+}
+.session-people {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.session-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--r-md, 12px);
+  background: var(--well);
+}
+.session-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #141311;
+  flex: none;
+}
+.session-name {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+}
+.session-driving {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--accent-ink);
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--well-strong);
+}

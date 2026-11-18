@@ -32,7 +32,8 @@ if pgrep -xq "$OKIDOKI_EXEC"; then
 fi
 
 env_block=""
-for name in OKIDOKI_DEV_HOOKS OKIDOKI_OPEN_DASHBOARD OKIDOKI_OPEN_ONBOARDING OKIDOKI_DEMO OKIDOKI_BRAIN_PORT; do
+for name in OKIDOKI_DEV_HOOKS OKIDOKI_OPEN_DASHBOARD OKIDOKI_OPEN_ONBOARDING OKIDOKI_DEMO OKIDOKI_BRAIN_PORT \
+            OKIDOKI_SUPPORT_DIR OKIDOKI_KEYS_FILE OKIDOKI_CONTROL_PORT; do
   value="${!name:-}"
   [ -n "$value" ] && env_block+="<key>$name</key><string>$value</string>"
 done
