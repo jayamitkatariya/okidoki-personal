@@ -10,7 +10,7 @@ import WebKit
 @MainActor
 enum RunThumbs {
     static let keep = 60
-    static let width: CGFloat = 640
+    nonisolated static let width: CGFloat = 640
     private static var lastAt: [String: Date] = [:]
 
     static var folder: URL {
