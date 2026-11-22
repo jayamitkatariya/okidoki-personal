@@ -299,9 +299,16 @@ public enum SkillCompiler {
                 }
             }
             // The same control chosen the same way more than once: the first time already did it, and a
-            // replay that does it again re-opens a menu it closed (the model then gets asked why).
+            // replay that does it again re-opens a menu it closed. Keyed on the *control* (its label and
+            // selectors), not the value alone — two dropdowns both set to "Resident" (a person and their
+            // spouse, adults and children both "1") are two different controls, and dropping the second
+            // silently left the form at its default.
+            let controlKey = (steps[index].label ?? "").lowercased() + "|"
+                + (steps[index].selectors ?? []).joined(separator: ",")
             let earlier = steps[..<index].contains { other in
-                other.action == "select" && (other.input ?? "").lowercased() == chosen && !chosen.isEmpty
+                guard other.action == "select", !chosen.isEmpty, (other.input ?? "").lowercased() == chosen else { return false }
+                let key = (other.label ?? "").lowercased() + "|" + (other.selectors ?? []).joined(separator: ",")
+                return key == controlKey
             }
             if earlier { drop.insert(index) }
         }
@@ -386,10 +393,22 @@ public enum SkillCompiler {
         for index in steps.indices where steps[index].mode == "think" {
             let goal = steps[index].text
             guard let control = Self.singleControl(in: goal) else { continue }
-            var made = SkillStep.browser("click", text: "click “\(control)”", url: steps[index].url ?? "",
+            let was = steps[index]
+            var made = SkillStep.browser("click", text: "click “\(control)”", url: was.url ?? "",
                                          selectors: ["role=button|\(control)", "text=button|\(control)"],
                                          label: control)
             made.delay = 0.6
+            // Everything that made the think step conditional or positioned carried over: turning a
+            // conditional think step into a plain click made it run on every pass, including the ones
+            // where the branch it belonged to doesn't apply.
+            made.when = was.when
+            made.anchor = was.anchor
+            made.expect = was.expect
+            made.irreversible = was.irreversible
+            made.repeatOver = was.repeatOver
+            made.repeatLength = was.repeatLength
+            made.surface = was.surface
+            made.app = was.app
             steps[index] = made
         }
 
@@ -567,19 +586,28 @@ public enum SkillCompiler {
         let has = { (name: String) in inputs.contains { ParameterFill.key($0.name) == ParameterFill.key(name) } }
         // A value the recording never varied ("cabin: economy", "adults: 1") isn't something to ask for
         // every pass: it is what the skill does. Asking anyway made a replay refuse to start over a value
-        // it already knew. Its example becomes its default, and it stops being required.
+        // it already knew.
         //
-        // A value the skill *types into a field for the pass* is different: origin, destination, a date.
-        // Seeding those with the learned trip's example made every replay fly the recorded route — the
-        // input was there, the binding filled it with the example, and the new values never arrived.
+        // Two things must NOT be defaulted, and both were:
+        //  * a value the skill types into a field for the pass (origin, destination, a date) — seeding it
+        //    with the learned trip's example made every replay fly the recorded route;
+        //  * a value that comes from a document or the request (a PAN, a name, a salary). Defaulting that
+        //    to the recorded person's value meant a pass whose documents were missing silently filed the
+        //    *other* person's details: `SkillBinder` saw a value, so nothing was missing, and the run
+        //    reported success.
+        // Only a constant — no source at all, never typed, never sensitive — gets its example as a value.
         let passDriven = Set(made.steps.compactMap { step -> String? in
             guard step.action == "type" || step.action == "select" else { return nil }
             return ParameterFill.names(in: step.input ?? "").first.map(ParameterFill.key)
         })
-        for index in inputs.indices where inputs[index].source != "page" && inputs[index].source != "record" {
-            guard let example = inputs[index].example, !example.isEmpty else { continue }
+        for index in inputs.indices {
+            let input = inputs[index]
+            guard let example = input.example, !example.isEmpty else { continue }
+            // A document or request value is the whole point of a pass: it is never assumed.
+            let fromData = ["document", "request", "record"].contains(input.source ?? "")
+            guard !fromData, !input.isSensitive else { continue }
             inputs[index].required = false
-            if inputs[index].value == nil, !passDriven.contains(ParameterFill.key(inputs[index].name)) {
+            if input.value == nil, !passDriven.contains(ParameterFill.key(input.name)) {
                 inputs[index].value = example
             }
         }

@@ -338,8 +338,10 @@ extension SkillCompilerPruneTests {
         var skill = Skill(accountID: "a", name: "book a flight", summary: "")
         skill.steps = [.browser("navigate", text: "navigate", url: "https://x.example?c={{cabin}}&n={{adults}}",
                                 input: "https://x.example?c={{cabin}}&n={{adults}}")]
-        skill.inputs = [SkillInput(name: "cabin", kind: "text", source: "request", required: true, example: "economy"),
-                        SkillInput(name: "adults", kind: "number", source: "request", required: true, example: "1")]
+        // No source: the skill always flies economy for one adult. A value that comes from the request or a
+        // document is never assumed (see testADocumentValueIsNeverDefaultedToTheRecordedPersons).
+        skill.inputs = [SkillInput(name: "cabin", kind: "text", required: true, example: "economy"),
+                        SkillInput(name: "adults", kind: "number", required: true, example: "1")]
         let finished = SkillCompiler.finishing(skill, goal: "book a flight")
         let cabin = try XCTUnwrap(finished.inputs?.first { $0.name == "cabin" })
         XCTAssertEqual(cabin.value, "economy")
@@ -485,7 +487,8 @@ extension SkillCompilerLiteralInputTests {
         s.steps = [typed("{{origin}}", into: "Where from?"), typed("{{destination}}", into: "Where to?")]
         s.inputs = [SkillInput(name: "origin", description: "departure city", kind: "text", source: "request", example: "San Francisco"),
                     SkillInput(name: "destination", description: "arrival city", kind: "text", source: "request", example: "Lisbon"),
-                    SkillInput(name: "cabin", description: "cabin class", kind: "text", source: "request", example: "economy")]
+                    // No source: the skill always flies economy. A request-sourced value is the pass's own.
+                    SkillInput(name: "cabin", description: "cabin class", kind: "text", example: "economy")]
         let finished = SkillCompiler.finishing(s, goal: "search flights")
         let byName = Dictionary(uniqueKeysWithValues: (finished.inputs ?? []).map { ($0.name, $0) })
         XCTAssertNil(byName["origin"]?.value, "a typed-for-the-pass value keeps the pass's own value")
@@ -525,5 +528,64 @@ extension SkillCompilerPruneTests {
         for (a, b) in zip(navigates, navigates.dropFirst()) {
             XCTAssertNotEqual(b, a + 1, "two navigates in a row: \(finished.steps.map { $0.action ?? "" })")
         }
+    }
+}
+
+/// A value that comes from a document or the request is the whole point of a pass; assuming the recorded
+/// person's value for it filed the wrong person's data and still reported success.
+final class SkillCompilerDefaultSafetyTests: XCTestCase {
+    func testADocumentValueIsNeverDefaultedToTheRecordedPersons() {
+        var s = Skill(accountID: "a", name: "file a return", summary: "")
+        s.steps = [.browser("type", text: "type “{{pan}}” in “PAN”", url: "https://tax.example/form",
+                            selectors: ["#pan"], label: "PAN", input: "{{pan}}")]
+        s.inputs = [SkillInput(name: "pan", description: "the person's PAN", kind: "text", source: "document",
+                               required: true, example: "ABCPR1234K")]
+        let finished = SkillCompiler.finishing(s, goal: "file a return")
+        let pan = finished.inputs?.first { $0.name == "pan" }
+        XCTAssertNil(pan?.value, "another person's PAN is never assumed")
+        XCTAssertEqual(pan?.isRequired, true)
+    }
+
+    func testAPassValueIsNeverDefaulted() {
+        var s = Skill(accountID: "a", name: "book a flight", summary: "")
+        s.steps = [.browser("type", text: "type “{{origin}}” in “From”", url: "https://x.example",
+                            selectors: ["#from"], label: "From", input: "{{origin}}")]
+        s.inputs = [SkillInput(name: "origin", description: "departure city", kind: "text", source: "request",
+                               required: true, example: "San Francisco")]
+        XCTAssertNil(SkillCompiler.finishing(s, goal: "fly").inputs?.first?.value)
+    }
+
+    func testAConstantWithNoSourceBecomesItsDefault() {
+        var s = Skill(accountID: "a", name: "book a flight", summary: "")
+        s.steps = [.browser("navigate", text: "navigate", url: "https://x.example?c={{cabin}}", input: "https://x.example?c={{cabin}}")]
+        s.inputs = [SkillInput(name: "cabin", kind: "text", required: true, example: "economy")]
+        let cabin = SkillCompiler.finishing(s, goal: "fly").inputs?.first
+        XCTAssertEqual(cabin?.value, "economy")
+        XCTAssertEqual(cabin?.isRequired, false)
+    }
+}
+
+/// The value comparison a replay uses to decide a field took what was typed.
+final class HybridReplaySameValueTests: XCTestCase {
+    func testADateTheFieldReformattedIsTheSameDate() {
+        // Typed 2026-12-18, shown 18/12/2026: comparing digits said "not the same", so every replay typed
+        // the date twice and logged a doubt.
+        XCTAssertTrue(HybridReplay.sameValue(typed: "2026-12-18", field: "18/12/2026"))
+        XCTAssertTrue(HybridReplay.sameValue(typed: "2026-12-18", field: "Dec 18, 2026"))
+        XCTAssertTrue(HybridReplay.sameValue(typed: "Dec 18, 2026", field: "2026-12-18"))
+    }
+
+    func testADifferentDateIsDifferent() {
+        XCTAssertFalse(HybridReplay.sameValue(typed: "2026-12-18", field: "2026-12-19"))
+    }
+
+    func testLeadingZerosAreFormattingNotAValue() {
+        XCTAssertTrue(HybridReplay.sameValue(typed: "78", field: "078"))
+        XCTAssertTrue(HybridReplay.sameValue(typed: "1250000", field: "12,50,000"))
+    }
+
+    func testTextStillComparesLoosely() {
+        XCTAssertTrue(HybridReplay.sameValue(typed: "Asha Rao", field: "ASHA RAO"))
+        XCTAssertFalse(HybridReplay.sameValue(typed: "Asha Rao", field: "Bharat Mehta"))
     }
 }

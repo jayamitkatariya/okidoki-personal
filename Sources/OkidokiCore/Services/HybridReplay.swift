@@ -406,11 +406,31 @@ public enum HybridReplay {
     /// so numbers compare by digits and text by letters and digits, ignoring case and spacing.
     public static func sameValue(typed: String, field: String) -> Bool {
         if typed == field { return true }
+        // A date the field reformatted ("2026-12-18" typed, "18/12/2026" shown) is the same date. Comparing
+        // digits made every replayed date look wrong: the step was typed twice, a doubt was logged, and any
+        // irreversible step after it then paused on every single replay.
+        if let a = parsedDate(typed), let b = parsedDate(field) { return a == b }
         let digitsTyped = typed.filter(\.isNumber), digitsField = field.filter(\.isNumber)
         let numeric = !digitsTyped.isEmpty && typed.allSatisfy { $0.isNumber || ",. ₹$€£-".contains($0) }
-        if numeric { return digitsTyped == digitsField }
+        // Leading zeros are formatting ("078" and "78"), not a different number.
+        if numeric { return Int(digitsTyped) == Int(digitsField) }
         let norm: (String) -> String = { $0.lowercased().filter { $0.isLetter || $0.isNumber } }
         return norm(typed) == norm(field)
+    }
+
+    /// A date written in any of the shapes a form shows: ISO, day-first, month-first, "Dec 18, 2026".
+    static func parsedDate(_ text: String) -> Date? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 6, trimmed.contains(where: \.isNumber) else { return nil }
+        for format in ["yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "dd-MM-yyyy", "yyyy/MM/dd",
+                       "d MMM yyyy", "MMM d, yyyy", "d MMMM yyyy", "MMMM d, yyyy", "yyyy-MM-dd HH:mm"] {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = format
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            if let date = formatter.date(from: trimmed) { return date }
+        }
+        return nil
     }
 
     // MARK: - Capture

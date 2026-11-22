@@ -679,9 +679,13 @@ final class HybridBrowserReplayer {
                 SkillPromoter.Action(action: $0.action, selectors: $0.selectors, label: $0.label, role: $0.role, input: $0.input, url: $0.url)
             })
         case "read":
-            guard let name = step.capture else { return .done }
+            // A read with nothing to capture isn't a step at all; saying done would claim work it didn't do.
+            guard let name = step.capture else { return .failed("this read step doesn't say what to read") }
             if let value = await read(step, inputs: inputs, tab: tab, values: scoped, label: item.label) { return .captured(name, value) }
-            return .doubt("couldn't read the \(name.replacingOccurrences(of: "_", with: " "))")
+            // The steps ran but the answer is missing: that is the whole job of a read, so it fails,
+            // loudly and in the log. As a "doubt" it was invisible — the pass reported done and the run
+            // said "replayed once" with no answer in it.
+            return .failed("the steps ran, but couldn't read the \(name.replacingOccurrences(of: "_", with: " ")) from the page")
         default:
             break
         }
