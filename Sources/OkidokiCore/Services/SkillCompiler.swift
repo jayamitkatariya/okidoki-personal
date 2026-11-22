@@ -474,6 +474,28 @@ public enum SkillCompiler {
             let slug = clicked.replacingOccurrences(of: " ", with: "-")
             if target.contains(clicked) || target.contains(slug) { drop.insert(index) }
         }
+        // A `?q=` free-text address is a *search box*, not a result page. On Google Flights it opens the
+        // form with the words in it plus a "best flights" strip that has no route rows, so a read of "the
+        // cheapest nonstop" correctly answers that there are none. The recorded form steps (type the
+        // origin, type the destination, pick the date, press Search) are what actually produce results, so
+        // a templated `?q=` navigate is dropped when the skill still has the steps to fill the form itself.
+        if navigates.count >= 1 {
+            for index in navigates where (steps[index].url ?? "").contains("{{") {
+                let url = steps[index].url ?? ""
+                guard url.contains("?q=") || url.contains("&q=") else { continue }
+                let fills = ["{{origin}}", "{{destination}}", "{{departure_date}}", "{{depart_date}}"]
+                    .filter { url.contains($0) }
+                guard fills.count >= 2 else { continue }
+                // The form is still here to do it properly: typing into the real fields beats a query word.
+                let hasForm = steps.indices.contains { other in
+                    guard other != index, steps[other].action == "type" else { return false }
+                    let label = (steps[other].label ?? "").lowercased()
+                    return label.contains("where from") || label.contains("where to") || label.contains("depart")
+                        || label.contains("from") || label.contains("to")
+                }
+                if hasForm { drop.insert(index) }
+            }
+        }
         // A built search address from the run (?tfs=…, an encoded itinerary) carries the learned trip in
         // it. When a templated navigate exists it's the one that can fly other routes and the built one
         // goes (below). When it's the *only* navigate it is still the skill's starting page: dropping it

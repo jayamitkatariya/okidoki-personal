@@ -438,3 +438,31 @@ extension BrowserPageScriptTests {
         XCTAssertTrue(text.count <= 12_000)
     }
 }
+
+/// A custom dropdown opens on one turn and is picked from on the next. Reporting success on the turn that
+/// only opened it made every replayed choice silently not happen.
+extension BrowserPageScriptTests {
+    func testACustomDropdownReportsNotYetOnTheTurnThatOpensItThenPicks() async throws {
+        try await load("""
+        <html><body>
+          <div id="trip" tabindex="0" onclick="
+            if (!this.querySelector('ul')) this.innerHTML = this.innerHTML +
+              '<ul><li role=option>One way</li><li role=option>Round trip</li></ul>'
+          ">Round trip</div>
+        </body></html>
+        """)
+        let selectors = ["#trip"]
+        // First turn: the menu isn't open, so the action opens it and must say "not yet", not "done".
+        let first = try await object("return window.__okidoki.act({selectors: s, action: 'select', value: 'One way'})", ["s": selectors])
+        XCTAssertEqual(first["ok"] as? Bool, false, "\(first)")
+        XCTAssertEqual(first["detail"] as? String, "not on this page")
+        // Nothing marked as chosen yet: the menu is open, but no option was picked.
+        let chosenYet = try await call("return document.querySelectorAll('#trip [aria-selected=true]').length") as? Int
+        XCTAssertEqual(chosenYet, 0)
+        // Second turn: the list is there, so it picks.
+        let second = try await object("return window.__okidoki.act({selectors: s, action: 'select', value: 'One way'})", ["s": selectors])
+        XCTAssertEqual(second["ok"] as? Bool, true, "\(second)")
+        let text = try await call("return document.getElementById('trip').textContent") as? String
+        XCTAssertTrue(text?.contains("One way") == true, "\(text ?? "")")
+    }
+}

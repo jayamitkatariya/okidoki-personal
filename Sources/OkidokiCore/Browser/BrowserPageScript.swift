@@ -236,7 +236,20 @@ public enum BrowserPageScript {
       function find(selectors) {
         for (let i = 0; i < selectors.length; i++) {
           const found = candidates(selectors[i]).filter(visible);
-          if (found.length >= 1) return { el: found[0], matched: i, ambiguous: found.length > 1 };
+          if (found.length >= 1) {
+            // A label-matched list is often several nested elements that all read the same thing ("Round
+            // trip" is a div inside a div inside the combobox). Acting on the innermost one does nothing:
+            // prefer the one that is actually a control.
+            const interactive = found.find((el) => {
+              const r = el.getAttribute('role');
+              return r === 'combobox' || r === 'button' || r === 'option' || r === 'tab' || r === 'checkbox'
+                || r === 'radio' || r === 'switch' || r === 'link' || r === 'menuitem'
+                || el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SELECT'
+                || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.hasAttribute('onclick')
+                || el.getAttribute('tabindex') != null;
+            });
+            return { el: interactive || found[0], matched: i, ambiguous: found.length > 1 };
+          }
         }
         return null;
       }
@@ -438,26 +451,29 @@ public enum BrowserPageScript {
         if (submit) key(el, 'Enter');
       }
 
-      /// A custom dropdown is a div or button that opens a list of `role=option`s. Clicking it and
-      /// looking for the options on the same frame reads an empty list, because the menu renders on the
-      /// next one — so `act` answers "not on this page" and the caller looks again in a moment, which
-      /// is the same retry a slow page already gets. Returns true when it chose something now.
+      /// A custom dropdown is a div or button that opens a list of `role=option`s. The click that opens it
+      /// and the pick from the list are two turns: the list renders on the next frame, so this turn can
+      /// only open it and report "not on this page" — which the caller retries.
       function pickFromMenu(el, value) {
         const want = value.trim().toLowerCase();
         const options = deepAll('[role=option],[role=menuitem]').filter(visible);
         const pick = options.find((o) => clean(o.innerText, 80).toLowerCase() === want)
           || options.find((o) => clean(o.innerText, 80).toLowerCase().includes(want));
-        if (!pick) { click(el); return false; }
+        if (!pick) {
+          // Not open yet: open it. The next look finds the list.
+          if (!options.length) { click(el); return 'not on this page'; }
+          return 'opened it; pick the option next turn';
+        }
         click(pick);
-        return true;
+        return '';
       }
 
       function select(el, value) {
         if (el.tagName !== 'SELECT') {
           // A custom dropdown (Google Flights' "Round trip", a shop's size picker) is a button that
-          // opens a list. Opening it and picking in one step is what makes a replayed choice land,
-          // instead of relying on the next step finding a list that may already have closed.
-          return pickFromMenu(el, value) ? '' : 'not on this page';
+          // opens a list. Pass the note straight through: "not on this page" means "look again", and
+          // reporting success for it made every replayed choice silently not happen.
+          return pickFromMenu(el, value);
         }
         const want = value.trim().toLowerCase();
         const option = [...el.options].find(o => o.text.trim().toLowerCase() === want || o.value.toLowerCase() === want)
@@ -496,7 +512,16 @@ public enum BrowserPageScript {
               type(el, a.text ?? '', a.submit);
               break;
             }
-            case 'select': { const note = select(el, a.value ?? ''); if (note) return { ok: true, detail: note, selectors: selectorsFor(el), matched }; break; }
+            // A custom dropdown needs two passes: the first click opens its menu, the second picks from it.
+            // The first pass has to report "not yet" rather than success — returning ok with a note made
+            // the caller believe the choice had landed, so it never looked again and the field kept its
+            // old value. That one detail is why replayed trip-type choices never stuck.
+            case 'select': {
+              const note = select(el, a.value ?? '');
+              if (note === 'not on this page') return { ok: false, detail: note, selectors: selectorsFor(el), matched };
+              if (note) return { ok: true, detail: note, selectors: selectorsFor(el), matched };
+              break;
+            }
             case 'press': key(el || document.activeElement || document.body, a.key || 'Enter'); break;
             case 'scroll': scrollPage(a.direction); break;
             case 'locate': break;

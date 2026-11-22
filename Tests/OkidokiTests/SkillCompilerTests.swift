@@ -589,3 +589,32 @@ final class HybridReplaySameValueTests: XCTestCase {
         XCTAssertFalse(HybridReplay.sameValue(typed: "Asha Rao", field: "Bharat Mehta"))
     }
 }
+
+extension SkillCompilerPruneTests {
+    func testAQueryWordAddressGoesWhenTheFormStepsAreStillThere() {
+        // Google Flights answers `?q=flights from X to Y` with a form and a "best flights" strip that has
+        // no route rows, so the read after it reports no results. The form steps do the job properly.
+        let query = SkillStep.browser("navigate", text: "navigate",
+                                      url: "https://www.google.com/travel/flights?hl=en&q=flights+from+{{origin}}+to+{{destination}}+on+{{departure_date}}",
+                                      input: "https://www.google.com/travel/flights?hl=en&q=flights+from+{{origin}}+to+{{destination}}+on+{{departure_date}}")
+        let origin = SkillStep.browser("type", text: "type “{{origin}}” in “Where from?”",
+                                       url: "https://www.google.com/travel/flights",
+                                       selectors: ["input[aria-label=\"Where from?\"]"], label: "Where from?", input: "{{origin}}")
+        let destination = SkillStep.browser("type", text: "type “{{destination}}” in “Where to?”",
+                                           url: "https://www.google.com/travel/flights",
+                                           selectors: ["input[aria-label=\"Where to?\"]"], label: "Where to?", input: "{{destination}}")
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [query, origin, destination]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertFalse(pruned.steps.contains { ($0.action == "navigate") && ($0.url ?? "").contains("?q=") })
+        XCTAssertEqual(pruned.steps.filter { $0.action == "type" }.count, 2, "the form steps stay")
+    }
+
+    func testAQueryWordAddressIsKeptWhenItIsTheOnlyWayIn() {
+        let query = SkillStep.browser("navigate", text: "navigate",
+                                      url: "https://example.com/search?q={{term}}", input: "https://example.com/search?q={{term}}")
+        var skill = Skill(accountID: "a", name: "search", summary: "")
+        skill.steps = [query, .browser("read", text: "read", url: "https://example.com/search?q=x")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 2)
+    }
+}
