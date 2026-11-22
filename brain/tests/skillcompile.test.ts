@@ -75,6 +75,25 @@ describe("resolve", () => {
     expect(result.values.deductions!.confidence).toBe(1);
     expect(result.values.gains).toEqual({ value: "", confidence: 0 });
   });
+
+  test("a page to read gets the reading prompt, not the document one", async () => {
+    const { fetchImpl, sent } = modelReturning({ fare: { value: "$2,492, TAP Air Portugal, nonstop", confidence: 0.96 } });
+    const result = await resolveValues({
+      read: true,
+      item: "San Jose to Chicago",
+      inputs: [{ name: "fare", description: "the cheapest nonstop fare", kind: "text" }],
+      documents: [{ name: "the page", text: "7:15 PM\n2:20 PM+1\nTap Air Portugal\n11 hr 5 min\nNonstop\n$2,492" }],
+      request: "the cheapest fare among results marked Nonstop",
+    }, "key", fetchImpl);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.values.fare!.value).toBe("$2,492, TAP Air Portugal, nonstop");
+    // The system prompt has to tell it a rendered row's lines belong together; the document prompt
+    // ("if it isn't there, give ''") made it answer nothing on every fare list.
+    expect(sent[0].system).toMatch(/separate lines/);
+    expect(sent[0].system).not.toMatch(/An optional input that the documents show is absent/);
+    expect(JSON.stringify(sent[0].messages)).toContain("Question:");
+  });
 });
 
 describe("route", () => {

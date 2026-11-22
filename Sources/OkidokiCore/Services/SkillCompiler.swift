@@ -560,15 +560,28 @@ public enum SkillCompiler {
                 made.steps.insert(Self.startStep(url: url, near: first), at: 0)
             }
         }
+        // Pruned again: adding the opening page can leave two navigates in a row (the skill's own first
+        // step was a navigate to another page), and that pair reloads the page the read depends on.
+        made = pruneStale(made)
         var inputs = made.inputs ?? []
         let has = { (name: String) in inputs.contains { ParameterFill.key($0.name) == ParameterFill.key(name) } }
         // A value the recording never varied ("cabin: economy", "adults: 1") isn't something to ask for
         // every pass: it is what the skill does. Asking anyway made a replay refuse to start over a value
         // it already knew. Its example becomes its default, and it stops being required.
+        //
+        // A value the skill *types into a field for the pass* is different: origin, destination, a date.
+        // Seeding those with the learned trip's example made every replay fly the recorded route — the
+        // input was there, the binding filled it with the example, and the new values never arrived.
+        let passDriven = Set(made.steps.compactMap { step -> String? in
+            guard step.action == "type" || step.action == "select" else { return nil }
+            return ParameterFill.names(in: step.input ?? "").first.map(ParameterFill.key)
+        })
         for index in inputs.indices where inputs[index].source != "page" && inputs[index].source != "record" {
             guard let example = inputs[index].example, !example.isEmpty else { continue }
             inputs[index].required = false
-            if inputs[index].value == nil { inputs[index].value = example }
+            if inputs[index].value == nil, !passDriven.contains(ParameterFill.key(inputs[index].name)) {
+                inputs[index].value = example
+            }
         }
         // A step still typing the value the run was learned with, in a *different form* than the input's
         // example ("San Francisco" while the example is "SFO"), keeps the literal — and then every replay

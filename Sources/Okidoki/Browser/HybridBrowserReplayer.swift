@@ -655,6 +655,10 @@ final class HybridBrowserReplayer {
             // `navigate` already settles the new page (BrowserTab.navigate awaits settle with a longer
             // limit), so settling again here was a second wait for the same quiet on every replay.
             await tab.navigate(url)
+            // A search address that the site answers with its home page instead of results (Google
+            // Flights' `?q=…` often lands on the form with the fields filled in) leaves the next step
+            // staring at a page with no results. Say so once, cheaply, so the read that follows waits on
+            // content rather than on an address.
             return .done
         case "login":
             let site = BrowserSteps.vaultReference(in: step.input ?? "")?.site ?? BrowserSteps.host(of: step.url ?? "")
@@ -1117,22 +1121,46 @@ final class HybridBrowserReplayer {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         if !ready { await tab.settle(limit: 3) }
+        // The address carried the search but the site answered with its form (Google Flights' `?q=…`
+        // sometimes lands on the search page with the fields filled in). The results the step wants are
+        // one button away, and pressing it is far cheaper than asking the model to read nothing.
+        if !ready {
+            let pressed = await tab.act(["action": "click",
+                                         "selectors": ["role=button|Search", "button[aria-label=\"Search\"]",
+                                                       "role=button|Search for flights", "text=button|Search"]])
+            if pressed.ok {
+                env.replayLog(runID, "→ \(label): the address opened the form, so pressed Search")
+                await tab.settle(limit: 6, fresh: true)
+                for _ in 0..<40 {
+                    let probe = await tab.fill()
+                    if probe.len > 600, !probe.loading { ready = true; break }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+        }
         // A token with a shape (a reference number) is read in code, no model needed.
         if let pattern = input?.pattern, !pattern.isEmpty,
            let value = HybridReplay.capture(in: await tab.pageText(), example: input?.example, pattern: pattern) { return value }
-        for attempt in 0..<2 {
+        // Content-first text: the fare list has to be inside the cap the model is given.
+        let content = await tab.readText()
+        for attempt in 0..<3 {
             if attempt > 0 {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
                 // A results list that hasn't arrived after the first look: ask the page for it again. A
                 // reload is what a person does when a page sits on "Loading results", and it costs one
                 // second against the model call the alternative spends.
                 let probe = await tab.fill()
-                if probe.loading {
+                if probe.loading, attempt == 1 {
                     tab.webView.reload()
                     await tab.settle(limit: 6)
                 }
             }
-            if let value = await readOnce(step, input: input, name: name, values: values, label: label, tab: tab, env: env, runID: runID) {
+            // The third look gives the model the page in its own order and unfiltered: a read that keeps
+            // coming back empty on a page that clearly has the content is usually the filtered text
+            // losing the one line that mattered.
+            let text = attempt < 2 ? content : await tab.pageText()
+            if let value = await readOnce(step, input: input, name: name, values: values, label: label, tab: tab,
+                                          env: env, runID: runID, page: text) {
                 return value
             }
         }
@@ -1140,19 +1168,23 @@ final class HybridBrowserReplayer {
     }
 
     private func readOnce(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
-                          tab: BrowserTab, env: AppEnvironment, runID: String) async -> String? {
+                          tab: BrowserTab, env: AppEnvironment, runID: String, page text: String? = nil) async -> String? {
         // Content-first text: the fare list has to be inside the cap the model is given.
-        let page = await tab.readText()
+        var page = ""
+        if let text { page = text } else { page = await tab.readText() }
         guard !page.isEmpty else { return nil }
         let what = ParameterFill.fill(input?.description.isEmpty == false ? input!.description : step.text, values: values).text
         let given = values.filter { !$0.key.hasPrefix("today") && !$0.key.hasPrefix("item.") && $0.key != "ref" && !$0.value.isEmpty }
             .sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "; ")
         let payload: [String: Any] = [
+            // A page to read, not documents to fill a form from: a rendered list puts a fare, its airline
+            // and the word "Nonstop" on separate lines, which the document prompt refuses to group.
+            "read": true,
             "item": label.isEmpty ? name : label,
             "inputs": [["name": name, "description": what, "kind": "text", "required": true,
                         "hint": "Answer it the way a person would tell someone: the value with its unit and context, one or two short sentences, exactly as the page says."]],
             "documents": [["name": "the page (\(tab.webView.title ?? ""))", "text": String(page.prefix(18_000))]],
-            "request": "Read from this page: \(what)" + (given.isEmpty ? "" : " (for \(given))"),
+            "request": what,
         ]
         env.store.countModelCall(runID)
         guard let reply = await BrainClient.shared.smartReplay("skill/resolve", body: payload) else {

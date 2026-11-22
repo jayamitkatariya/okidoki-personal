@@ -476,3 +476,54 @@ final class SkillCompilerLiteralInputTests: XCTestCase {
         XCTAssertEqual(passwordStep?.input, "{{vault:x.example.password}}")
     }
 }
+
+extension SkillCompilerLiteralInputTests {
+    func testAValueTheSkillTypesForThePassIsNotSeededWithTheLearnedExample() {
+        // Origin and destination are typed for every pass: seeding them with the recorded trip made the
+        // replay fly San Francisco→Lisbon no matter what it was asked for.
+        var s = Skill(accountID: "a", name: "book a flight", summary: "")
+        s.steps = [typed("{{origin}}", into: "Where from?"), typed("{{destination}}", into: "Where to?")]
+        s.inputs = [SkillInput(name: "origin", description: "departure city", kind: "text", source: "request", example: "San Francisco"),
+                    SkillInput(name: "destination", description: "arrival city", kind: "text", source: "request", example: "Lisbon"),
+                    SkillInput(name: "cabin", description: "cabin class", kind: "text", source: "request", example: "economy")]
+        let finished = SkillCompiler.finishing(s, goal: "search flights")
+        let byName = Dictionary(uniqueKeysWithValues: (finished.inputs ?? []).map { ($0.name, $0) })
+        XCTAssertNil(byName["origin"]?.value, "a typed-for-the-pass value keeps the pass's own value")
+        XCTAssertNil(byName["destination"]?.value)
+        XCTAssertEqual(byName["cabin"]?.value, "economy", "a value never typed is what the skill always does")
+    }
+}
+
+extension SkillCompilerPruneTests {
+    func testTwoNavigatesInARowLeaveOnlyTheOneThatCanFlyOtherRoutes() {
+        // Recorded: open the search home, then the address the search produced. Replaying both reloads the
+        // results page, and the read after it then reads a half-built page.
+        let home = SkillStep.browser("navigate", text: "navigate", url: "https://www.google.com/travel/flights?hl=en",
+                                     input: "https://www.google.com/travel/flights?hl=en")
+        let search = SkillStep.browser("navigate", text: "navigate",
+                                       url: "https://www.google.com/travel/flights?hl=en&q=from+{{origin}}+to+{{destination}}",
+                                       input: "https://www.google.com/travel/flights?hl=en&q=from+{{origin}}+to+{{destination}}")
+        var s = Skill(accountID: "a", name: "book a flight", summary: "")
+        s.steps = [home, search]
+        let pruned = SkillCompiler.pruneStale(s)
+        XCTAssertEqual(pruned.steps.count, 1, "\(pruned.steps.map { $0.url ?? "" })")
+        XCTAssertTrue((pruned.steps.first?.url ?? "").contains("{{origin}}"))
+    }
+}
+
+extension SkillCompilerPruneTests {
+    func testTheOpeningPageNeverLeavesTwoNavigatesInARow() {
+        // The skill's first step was already a navigate, so `finishing` doesn't add one — but when it does
+        // (a skill that begins with a click), the pair must still collapse.
+        var s = Skill(accountID: "a", name: "book a flight", summary: "")
+        s.steps = [.browser("click", text: "click “Search”", url: "https://www.google.com/travel/flights?hl=en",
+                            selectors: ["role=button|Search"], label: "Search"),
+                   .browser("navigate", text: "navigate", url: "https://www.google.com/travel/flights/search",
+                            input: "https://www.google.com/travel/flights/search")]
+        let finished = SkillCompiler.finishing(s, goal: "search flights")
+        let navigates = finished.steps.indices.filter { finished.steps[$0].action == "navigate" }
+        for (a, b) in zip(navigates, navigates.dropFirst()) {
+            XCTAssertNotEqual(b, a + 1, "two navigates in a row: \(finished.steps.map { $0.action ?? "" })")
+        }
+    }
+}

@@ -257,6 +257,12 @@ export interface ResolveRequest {
   documents: { name: string; text: string }[];
   /** What the request said, which may hold values too ("…with income 9 lakh"). */
   request?: string;
+  /**
+   * True when the "documents" are really a page to read a value off, not papers to fill a form from. A
+   * rendered fare list puts the price, the airline and the word "Nonstop" on separate lines, and the
+   * document prompt ("if it isn't there, give ''") refuses to join them.
+   */
+  read?: boolean;
 }
 
 export interface ResolvedValue { value: unknown; confidence: number; source?: string }
@@ -274,6 +280,23 @@ Rules:
 - An optional input that the documents show is absent (no capital gains, no deductions) is "" or [] with high confidence.
 - confidence: 0.95+ when read plainly from a document, ~0.7 when inferred (e.g. a total you added up), below 0.5 when unsure.
 - source: the document name and where in it ("Form16.pdf, Part B").`;
+
+/** A page to read a value off, rather than documents to fill a form from. */
+const READ_SYSTEM = `You read one thing off a web page, exactly as the page shows it.
+
+The document is the page's text, in reading order. A rendered list (search results, a table, a feed) often puts the
+parts of one row on separate lines — a price, an airline, times, a duration, a word like "Nonstop" — and those lines
+belong to the same row. Group them by position, not by grammar.
+
+Rules:
+- Answer the question asked, using only the page. Never invent a value or a name that isn't on it.
+- If the question asks for a lowest/cheapest/best one, compare the rows that match the stated condition and give the
+  one that wins, with the details the question asks for.
+- Quote numbers, prices and codes exactly as shown ("$2,492", "11 hr 5 min", "REF-448990"). Do not reformat them.
+- Keep the answer to one or two short sentences, the way a person would say it out loud.
+- If the page genuinely doesn't show it (still loading, an empty list, an error), give value "" and confidence 0.
+- confidence: 0.95+ when the page states it plainly, below 0.5 when the page is ambiguous.
+- source: a short note of where on the page it was ("the first nonstop row").`;
 
 export async function resolveValues(request: ResolveRequest, key: string | undefined, fetchImpl: Fetch = fetch, model = RESOLVE_MODEL):
   Promise<{ ok: true; values: Record<string, ResolvedValue> } | { ok: false; error: string }> {
@@ -295,13 +318,20 @@ export async function resolveValues(request: ResolveRequest, key: string | undef
     input_schema: { type: "object", properties, required: request.inputs.map((i) => i.name) },
   };
   const docs = request.documents.slice(0, 12).map((d) => `<document name="${d.name}">\n${d.text.slice(0, 20_000)}\n</document>`).join("\n\n");
-  const user = [
-    `Item: ${request.item}`,
-    request.request ? `The request: ${request.request}` : "",
-    `Inputs to fill:\n${JSON.stringify(request.inputs.map((i) => ({ name: i.name, description: i.description, kind: i.kind, fields: i.fields, choices: i.choices, hint: i.hint, required: i.required ?? true })), null, 1)}`,
-    docs ? `Documents:\n${docs}` : "No documents were found for this item.",
-  ].filter(Boolean).join("\n\n");
-  const result = await forcedTool<Record<string, ResolvedValue>>({ key, model, system: RESOLVE_SYSTEM, user, tool, maxTokens: 16000, timeoutMs: 90_000, fetchImpl, effort: "low" });
+  const reading = request.read === true;
+  const user = reading
+    ? [
+        `Question: ${request.request ?? `read ${request.inputs[0]?.name ?? "the value"} off this page`}`,
+        `The page (${request.item}):`,
+        docs || "The page is empty.",
+      ].filter(Boolean).join("\n\n")
+    : [
+        `Item: ${request.item}`,
+        request.request ? `The request: ${request.request}` : "",
+        `Inputs to fill:\n${JSON.stringify(request.inputs.map((i) => ({ name: i.name, description: i.description, kind: i.kind, fields: i.fields, choices: i.choices, hint: i.hint, required: i.required ?? true })), null, 1)}`,
+        docs ? `Documents:\n${docs}` : "No documents were found for this item.",
+      ].filter(Boolean).join("\n\n");
+  const result = await forcedTool<Record<string, ResolvedValue>>({ key, model, system: reading ? READ_SYSTEM : RESOLVE_SYSTEM, user, tool, maxTokens: 16000, timeoutMs: 90_000, fetchImpl, effort: "low" });
   if (!result.ok) return result;
   const values: Record<string, ResolvedValue> = {};
   for (const input of request.inputs) {
