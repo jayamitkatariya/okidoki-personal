@@ -273,6 +273,16 @@ public enum SkillCompiler {
         /// Where a date picker's walk was replaced: (the walk's first index, the goal, the field).
         var dateReplacement: (at: Int, goal: String, near: SkillStep)?
 
+        // A step inside a loop body repeats the same control *by design*: three deduction rows are three
+        // of "choose Section", three of "type Amount". Both dedupes below have to leave a loop alone, or
+        // they silently shorten it — the loop head survived and its body vanished, so the replay clicked
+        // "Add deduction" three times and filled nothing.
+        var inLoop = Set<Int>()
+        for head in steps.indices {
+            guard let length = steps[head].repeatLength, length > 0 else { continue }
+            for offset in 0..<length where head + offset < steps.count { inLoop.insert(head + offset) }
+        }
+
         for index in steps.indices {
             let step = steps[index]
             guard step.action == "select" else { continue }
@@ -305,7 +315,7 @@ public enum SkillCompiler {
             // silently left the form at its default.
             let controlKey = (steps[index].label ?? "").lowercased() + "|"
                 + (steps[index].selectors ?? []).joined(separator: ",")
-            let earlier = steps[..<index].contains { other in
+            let earlier = !inLoop.contains(index) && steps[..<index].contains { other in
                 guard other.action == "select", !chosen.isEmpty, (other.input ?? "").lowercased() == chosen else { return false }
                 let key = (other.label ?? "").lowercased() + "|" + (other.selectors ?? []).joined(separator: ",")
                 return key == controlKey
@@ -417,7 +427,7 @@ public enum SkillCompiler {
         // moved into place (a date picker's Done closes it, and the second press hits something else).
         // The page is part of the key so "Next" on two different pages is kept.
         var seenClicks: Set<String> = []
-        for index in steps.indices where steps[index].action == "click" {
+        for index in steps.indices where steps[index].action == "click" && !inLoop.contains(index) {
             let page = URLComponents(string: steps[index].url ?? "")?.path ?? (steps[index].url ?? "")
             let key = page.lowercased() + "|" + (steps[index].label ?? steps[index].text).lowercased()
                 + "|" + (steps[index].selectors ?? []).joined(separator: ",")
@@ -428,7 +438,7 @@ public enum SkillCompiler {
         // value matters, and replaying both types it twice. Matched exactly on purpose: "Where from?" and
         // "Where to?" are two different airports and both must be typed.
         var typedField: [String: Int] = [:]
-        for index in steps.indices where steps[index].action == "type" {
+        for index in steps.indices where steps[index].action == "type" && !inLoop.contains(index) {
             let label = (steps[index].label ?? "").lowercased()
             guard !label.isEmpty else { continue }
             if let earlier = typedField[label] { drop.insert(earlier) }
@@ -501,6 +511,22 @@ public enum SkillCompiler {
         // goes (below). When it's the *only* navigate it is still the skill's starting page: dropping it
         // left the replay on whatever tab happened to be open, so the first click missed and the whole
         // run handed over to the agent.
+        // A hard-coded search address from the learned trip (?tfs=…, #flt=…) can only ever fly that trip,
+        // and it *overrides* the fields the steps just typed: a skill whose form steps set this pass's
+        // cities still arrived at the recorded route, and the read then honestly said "the page is for
+        // San Francisco to Lisbon". When the skill fills the form itself, the built address goes.
+        let fillsTheForm = steps.contains { step in
+            guard step.action == "type", let input = step.input, input.contains("{{") else { return false }
+            let key = ParameterFill.key(input)
+            return ["origin", "destination", "from", "to", "departure_date", "depart_date", "date"]
+                .contains(where: { key.contains($0) })
+        }
+        if fillsTheForm {
+            for index in navigates {
+                let url = steps[index].url ?? ""
+                if !url.contains("{{"), url.contains("?tfs=") || url.contains("#flt=") { drop.insert(index) }
+            }
+        }
         if navigates.count > 1,
            let templated = navigates.first(where: { (steps[$0].url ?? "").contains("{{") || (steps[$0].input ?? "").contains("{{") }) {
             for index in navigates where index != templated {

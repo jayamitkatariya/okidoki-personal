@@ -466,3 +466,22 @@ extension BrowserPageScriptTests {
         XCTAssertTrue(text?.contains("One way") == true, "\(text ?? "")")
     }
 }
+
+/// What a read is handed: a results list repeats the same price on every row.
+extension BrowserPageScriptTests {
+    func testRepeatedRowValuesSurviveSoEachRowKeepsItsPrice() async throws {
+        try await load("""
+        <html><body><h1>All flights</h1>
+          <div>8:20 AM<br>2:27 PM<br>AlaskaAmerican<br>4 hr 7 min<br>SEA–AUS<br>Nonstop<br>$159</div>
+          <div>9:15 AM<br>3:27 PM<br>Delta<br>4 hr 12 min<br>SEA–AUS<br>Nonstop<br>$159</div>
+          <div>11:48 AM<br>6:01 PM<br>AlaskaAmerican<br>4 hr 13 min<br>SEA–AUS<br>Nonstop<br>$159</div>
+        </body></html>
+        """)
+        let text = try await call("return window.__okidoki.readText()") as? String ?? ""
+        // De-duplicating lines left one "$159" at the top and three rows with none, and the model then
+        // correctly refused to tie a price to a row.
+        let prices = text.components(separatedBy: "$159").count - 1
+        XCTAssertEqual(prices, 3, "every row keeps its own price: \(text)")
+        XCTAssertEqual(text.components(separatedBy: "Nonstop").count - 1, 3)
+    }
+}

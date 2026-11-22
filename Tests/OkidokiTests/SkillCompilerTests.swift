@@ -618,3 +618,72 @@ extension SkillCompilerPruneTests {
         XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 2)
     }
 }
+
+extension SkillCompilerPruneTests {
+    func testABuiltAddressGoesWhenTheFormStepsFillTheTripThemselves() {
+        // The skill types this pass's cities, then a recorded `#flt=` address sends it to the learned
+        // trip anyway. The address wins over the fields, so the replay flew the wrong route and the read
+        // honestly reported the mismatch.
+        let home = SkillStep.browser("navigate", text: "navigate", url: "https://www.google.com/travel/flights?hl=en",
+                                     input: "https://www.google.com/travel/flights?hl=en")
+        func typed(_ placeholder: String, into label: String) -> SkillStep {
+            .browser("type", text: "type “{{\(placeholder)}}” in “\(label)”",
+                     url: "https://www.google.com/travel/flights?hl=en",
+                     selectors: ["input[aria-label=\"\(label)\"]"], label: label, input: "{{\(placeholder)}}")
+        }
+        let built = SkillStep.browser("navigate", text: "navigate",
+                                      url: "https://www.google.com/travel/flights#flt=SFO.LIS.2026-12-18;tt:o",
+                                      input: "https://www.google.com/travel/flights#flt=SFO.LIS.2026-12-18;tt:o")
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [home, typed("origin", into: "Where from?"), typed("destination", into: "Where to?"), built]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertFalse(pruned.steps.contains { ($0.url ?? "").contains("#flt=") }, "\(pruned.steps.map { $0.url ?? "" })")
+        XCTAssertTrue(pruned.steps.contains { $0.action == "navigate" }, "the opening page stays")
+        XCTAssertEqual(pruned.steps.filter { $0.action == "type" }.count, 2)
+    }
+
+    func testABuiltAddressStaysWhenItIsTheOnlyWayIn() {
+        let built = SkillStep.browser("navigate", text: "navigate",
+                                      url: "https://www.google.com/travel/flights?tfs=CBwQARoo", input: "https://www.google.com/travel/flights?tfs=CBwQARoo")
+        var skill = Skill(accountID: "a", name: "look up a fare", summary: "")
+        skill.steps = [built, .browser("read", text: "read", url: "https://www.google.com/travel/flights?tfs=CBwQARoo")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 2)
+    }
+}
+
+extension SkillCompilerPruneTests {
+    func testALoopBodySurvivesTheDedupesThatWouldShortenIt() {
+        // Three deduction rows are three of "choose Section" and three of "type Amount" by design. The
+        // duplicate-pruning used to shorten the body to one select and one type while the loop head still
+        // said "repeat 3", so the replay clicked Add deduction three times and filled nothing — which is
+        // exactly how the filing skill lost every deduction.
+        var head = SkillStep.browser("click", text: "click “Add deduction”", url: "https://tax.example/form",
+                                     selectors: ["#add"], label: "Add deduction")
+        head.repeatOver = "deductions"
+        head.repeatLength = 2
+        let section = SkillStep.browser("select", text: "choose “{{item.section}}” in “Section”",
+                                        url: "https://tax.example/form", selectors: ["#section"], label: "Section", input: "{{item.section}}")
+        let amount = SkillStep.browser("type", text: "type “{{item.amount}}” in “Amount”",
+                                       url: "https://tax.example/form", selectors: ["#amount"], label: "Amount", input: "{{item.amount}}")
+        // The recorded run repeated them once per row; pruning must keep the body intact.
+        var skill = Skill(accountID: "a", name: "file a return", summary: "")
+        skill.steps = [head, section, amount, section, amount, section, amount]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertTrue(pruned.steps.contains { $0.label == "Section" })
+        XCTAssertTrue(pruned.steps.contains { $0.label == "Amount" })
+        // The loop is still a loop of the same length, with its body present.
+        let loopHead = pruned.steps.first { $0.repeatOver == "deductions" }
+        XCTAssertEqual(loopHead?.repeatLength, 2)
+        XCTAssertGreaterThanOrEqual(pruned.steps.count, 3, "the body wasn't emptied: \(pruned.steps.map { $0.label ?? $0.action ?? "" })")
+    }
+
+    func testTheSameSelectOutsideALoopIsStillDeduped() {
+        func select(_ label: String, _ value: String) -> SkillStep {
+            .browser("select", text: "choose “\(value)” in “\(label)”", url: "https://x.example",
+                     selectors: ["#\(label)"], label: label, input: value)
+        }
+        var skill = Skill(accountID: "a", name: "x", summary: "")
+        skill.steps = [select("regime", "New"), select("regime", "New")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 1)
+    }
+}

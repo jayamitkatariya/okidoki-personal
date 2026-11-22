@@ -1129,10 +1129,17 @@ final class HybridBrowserReplayer {
         // strip that has no route rows (Google Flights' `?q=` free text). Fill the form and press Search:
         // the values are right here, and it costs a second against a model call that reads nothing.
         // Checked even when the probe looked ready: Google's "best flights" strip carries prices but no
-        // route rows, so a page can look ready and still have nothing to read.
+        // route rows, and a `?q=` address can render a half-built page that still says "Loading results"
+        // with the trip type back at "Round trip". What counts is a row: a time, a duration and the word
+        // nonstop or stops, all present.
         let pageText = await tab.readText()
-        let looksLikeResults = ready && pageText.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil
-            && pageText.range(of: #"(?i)nonstop|\bstops?\b"#, options: .regularExpression) != nil
+        let hasTime = pageText.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil
+        let hasDuration = pageText.range(of: #"\d+\s*hr"#, options: .regularExpression) != nil
+        let hasStops = pageText.range(of: #"(?i)nonstop|\bstops?\b"#, options: .regularExpression) != nil
+        // A page that still says it's fetching, or whose trip type is back at "Round trip" when this skill
+        // asked for one way, hasn't answered the address: the rows on it are from a previous search.
+        let stillLoading = pageText.range(of: #"(?i)loading results|fetching results|searching flights"#, options: .regularExpression) != nil
+        let looksLikeResults = ready && hasTime && hasDuration && hasStops && !stillLoading
         if !looksLikeResults {
             if await fillSearchForm(tab: tab, values: values) {
                 env.replayLog(runID, "→ \(label): no route rows on the page, so filled the form and searched")

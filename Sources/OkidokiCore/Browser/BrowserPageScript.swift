@@ -262,13 +262,25 @@ public enum BrowserPageScript {
       /// The page's text for a model to read. `pageText` in reading order caps at 12k, and on a modern app
       /// that cap can land inside the header: a flight list sat below it, so "read the cheapest fare" was
       /// handed a nav bar and answered nothing. Content lines (prices, times, codes, nonstop) come first.
-      /// Only reads use this — the anchor comparison wants the page in its own order.
+      ///
+      /// No de-duplication: a results list repeats the same price on every row ("$159" four times is four
+      /// flights), and removing the repeats left one price at the top and four rows that appeared to have
+      /// none — the model then correctly answered that it couldn't tie a price to a row.
       function readText() {
         const lines = (document.body?.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
         const signal = /\$|€|£|₹|\d{1,2}:\d{2}|\b[A-Z]{2,3}\b|\d{3,}|\bnonstop\b|\bstops?\b/i;
-        const rich = lines.filter((line) => signal.test(line));
-        const chosen = [...rich.slice(0, 400), ...lines.slice(0, 300)].filter((line, at, all) => all.indexOf(line) === at);
-        return chosen.join('\n').slice(0, 12000);
+        const looksContent = (line) => signal.test(line);
+        // One pass in document order, so a row's lines stay together and keep the order the page shows.
+        // Nothing is dropped until the cap, and then only from the least useful end.
+        const out = [];
+        let size = 0;
+        for (const line of lines) {
+          if (!looksContent(line) && out.length >= 300) continue;
+          out.push(line);
+          size += line.length + 1;
+          if (size > 11000) break;
+        }
+        return out.join('\n').slice(0, 12000);
       }
 
       /// A cheap readiness probe, for polling: `innerText` above forces a layout flush and costs tens of
