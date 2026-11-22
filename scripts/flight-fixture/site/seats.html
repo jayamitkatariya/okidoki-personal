@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Kestrel Air · Seats</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body>
+<h1>Kestrel <span>Air</span></h1>
+<p class="sub" id="summary"></p>
+<div class="seatmap" id="map"></div>
+<p class="total" id="total"></p>
+<button id="next">Continue to payment</button>
+<script>
+ready(() => {
+  const t = trip();
+  $("#summary").textContent = `${t.from} → ${t.to} · ${t.fare} · ${money(t.price || 0)}`;
+  // A stable map: three seats taken, the first free one (1A) is the recorded pick.
+  const taken = new Set(["2A", "3C", "5D"]);
+  const seats = [];
+  for (let row = 1; row <= 5; row++) for (const col of "ABCD") seats.push(row + col);
+  $("#map").innerHTML = seats.map((s) =>
+    `<button class="seat ${taken.has(s) ? "taken" : ""}" data-seat="${s}" ${taken.has(s) ? "disabled" : ""}>${s}</button>`).join("");
+  for (const button of document.querySelectorAll("[data-seat]:not(.taken)")) {
+    button.onclick = () => {
+      for (const other of document.querySelectorAll(".seat.picked")) other.classList.remove("picked");
+      button.classList.add("picked");
+      save({ seat: button.dataset.seat });
+      update();
+    };
+  }
+  function update() {
+    const seat = trip().seat;
+    $("#total").textContent = `Total ${money(trip().price || 0)}${seat ? " · seat " + seat : " · seat assigned at checkout"}`;
+  }
+  update();
+  $("#next").onclick = () => { location.href = "pay.html"; };
+});
+</script></body></html>

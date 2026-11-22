@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Kestrel Air · Payment</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body>
+<h1>Kestrel <span>Air</span></h1>
+<p class="sub" id="summary"></p>
+<form id="f"></form><p class="error" id="err"></p>
+<p class="total" id="total"></p>
+<script>
+ready(() => {
+  const t = trip();
+  $("#summary").textContent = `${t.from} → ${t.to} · ${t.fare}${t.seat ? " · seat " + t.seat : ""}`;
+  $("#f").innerHTML = `
+    <label for="${id("name")}">Passenger name</label>
+    <input id="${id("name")}" name="name" autocomplete="name" value="${t.passenger || ""}">
+    <label for="${id("email")}">Email</label>
+    <input id="${id("email")}" name="email" type="email" autocomplete="email" value="${t.email || ""}">
+    <button type="submit">${L("Pay now", "Confirm and pay")}</button>`;
+  $("#total").textContent = `Total ${money(t.price || 0)}`;
+  $("#f").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $("#" + id("name")).value.trim();
+    const email = $("#" + id("email")).value.trim();
+    if (!name || !email) { $("#err").textContent = "Enter your name and email"; return; }
+    const body = { ...trip(), passenger: name, email };
+    const response = await fetch("/book", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const result = await response.json();
+    sessionStorage.setItem("booking", JSON.stringify({ ...body, ref: result.ref }));
+    location.href = "done.html";
+  };
+});
+</script></body></html>

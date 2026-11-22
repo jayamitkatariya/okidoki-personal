@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Kestrel Air · Results</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body>
+<h1>Kestrel <span>Air</span></h1>
+<p class="sub" id="route"></p>
+<div id="list"></div>
+<script>
+ready(() => {
+  const t = trip();
+  $("#route").textContent = `${t.from || "?"} → ${t.to || "?"} · ${t.date || ""} · ${t.pax || 1} traveler(s)`;
+  // Three fares, in a stable order: the middle one ("Flex") is what the recording picks.
+  const fares = [
+    { name: "Saver", price: 189, note: "No checked bag" },
+    { name: "Flex", price: 249, note: "1 checked bag, changeable" },
+    { name: "Business", price: 690, note: "Lie-flat seat" },
+  ];
+  $("#list").innerHTML = fares.map((f) => `
+    <div class="fare">
+      <span><strong>${L(f.name, f.name === "Flex" ? "Flexible" : f.name)}</strong><em>${f.note}</em></span>
+      <span>${money(f.price)}</span>
+      <button data-fare="${f.name}">${L("Choose", "Select")} ${L(f.name, f.name === "Flex" ? "Flexible" : f.name)}</button>
+    </div>`).join("");
+  for (const button of document.querySelectorAll("[data-fare]")) {
+    button.onclick = () => {
+      const chosen = fares.find((f) => f.name === button.dataset.fare);
+      save({ fare: chosen.name, price: chosen.price });
+      location.href = "seats.html";
+    };
+  }
+});
+</script></body></html>

@@ -40,7 +40,7 @@ install: app
 	@if [ -d "/Applications/Okidoki Personal.app" ]; then mv "/Applications/Okidoki Personal.app" "build/Okidoki Personal (0.9.1).app" 2>/dev/null || rm -rf "/Applications/Okidoki Personal.app"; fi
 	rm -rf "/Applications/Okidoki.app"
 	cp -R "build/Okidoki.app" /Applications/
-	-launchctl bootout "gui/$(id -u)/dev.okidoki.personal.launch" 2>/dev/null || true
+	-launchctl bootout "gui/$$(id -u)/dev.okidoki.personal.launch" 2>/dev/null || true
 	-./scripts/install-cli.sh
 	./scripts/launch-app.sh
 

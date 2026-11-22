@@ -365,6 +365,14 @@ final class NotchController {
                 NotchSnapshots.run(env: self.env, metrics: self.model.metrics, into: directory)
             }
         }
+        if let directory = ProcessInfo.processInfo.environment["OKIDOKI_TOAST_SNAPSHOT"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                NotchSnapshots.renderToasts(into: directory) {
+                    FileHandle.standardError.write(Data("TOAST-SNAPSHOT done → \(directory)\n".utf8))
+                    NSApp.terminate(nil)
+                }
+            }
+        }
     }
 
     private func buildPanel() {

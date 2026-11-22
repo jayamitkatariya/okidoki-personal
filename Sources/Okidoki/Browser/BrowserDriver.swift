@@ -729,7 +729,16 @@ final class BrowserReplayer {
             // A redirect to some other site since recording: its login fields don't get this site's login.
             guard BrowserSteps.sameSite(here, site) else { return .failed("the page is \(here), not \(site), so the login wasn't filled") }
             guard let login = env.vaultLogin(for: site) else { return .failed("no unlocked vault login for \(site)") }
-            let result = await browser.fillLogin(username: login.username, password: login.password)
+            // The page may still be painting its form when the step arrives. A form that isn't there
+            // yet is "not yet", never "this site has no login": look again for a few seconds.
+            var result = await browser.fillLogin(username: login.username, password: login.password)
+            var tries = 0
+            while !result.ok, result.detail == "no login fields on this page" || result.detail == "the page is still loading",
+                  tries < 25, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                result = await browser.fillLogin(username: login.username, password: login.password)
+                tries += 1
+            }
             return result.ok ? .done : .failed(result.detail ?? "couldn't find the login fields")
         case "dialog":
             browser.dialogAnswer = BrowserSteps.dialogAnswer(ParameterFill.fill(step.input ?? "accept", values: values).text)
@@ -755,11 +764,16 @@ final class BrowserReplayer {
             if action == "type", let kind = Self.secretKind(step) { payload["secret"] = kind }
             if action == "select" { payload["value"] = input ?? "" }
             if action == "press" { payload["key"] = input ?? "Enter" }
-            // Pages that build themselves after load: give the element a moment to appear.
+            // Pages that build themselves after load, and pages mid-navigation: give the element a
+            // moment to appear. "Not on this page", "the page is still loading", and a call that
+            // answered nothing at all are all "not yet" — only a real answer counts as final.
+            let notYet: (BrowserActResult) -> Bool = { r in
+                !r.ok && (r.detail == nil || r.detail == "not on this page" || r.detail == "the page is still loading")
+            }
             var result = await browser.act(payload)
             var tries = 0
-            while !result.ok, result.detail == "not on this page", tries < 12, !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 250_000_000)
+            while notYet(result), tries < 40, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
                 result = await browser.act(payload)
                 tries += 1
             }

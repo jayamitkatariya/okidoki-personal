@@ -202,6 +202,27 @@ final class BrowserPageScriptTests: XCTestCase {
         XCTAssertEqual(values, ["jay", "pw1"])
     }
 
+    /// A rich editor (a mail body, a comment box) holds its text in the element, not a value: replaying
+    /// a recorded type into it has to replace what's there and announce the change, or the step silently
+    /// does nothing and everything after it lands in the wrong place.
+    func testTypingIntoARichEditorReplacesItsTextAndAnnouncesIt() async throws {
+        try await load("""
+        <html><body>
+          <div id="body" contenteditable="true"><p>old draft</p></div>
+        </body></html>
+        """)
+        // Count the input events the page hears, from the page's own world.
+        _ = try await webView.callAsyncJavaScript(
+            "window.seen = []; document.getElementById('body').addEventListener('input', e => window.seen.push(e.data))",
+            arguments: [:], in: nil, contentWorld: .page)
+        let typed = try await object("return window.__okidoki.act({selectors: ['#body'], action: 'type', text: 'hello from a replay'})")
+        XCTAssertEqual(typed["ok"] as? Bool, true, "\(typed)")
+        let text = try await call("return document.getElementById('body').innerText.trim()") as? String
+        XCTAssertEqual(text, "hello from a replay")
+        let announced = try await webView.callAsyncJavaScript("return window.seen", arguments: [:], in: nil, contentWorld: .page) as? [String]
+        XCTAssertEqual(announced, ["hello from a replay"], "the page must hear about it like a person's typing")
+    }
+
     /// The number the README quotes: one replayed step (find the element by its saved selectors, act on it).
     func testAReplayedStepTakesMillisecondsNotSeconds() async throws {
         let rows = (1...300).map { "<tr><td>row \($0)</td><td><button>Edit \($0)</button></td></tr>" }.joined()
@@ -313,5 +334,107 @@ final class BrowserDialogStepTests: XCTestCase {
         XCTAssertEqual(answer.text, "moved house")
         XCTAssertEqual(BrowserSteps.dialogAnswer(nil).accept, true)
         XCTAssertNil(BrowserSteps.dialogAnswer("accept").text)
+    }
+}
+
+/// The tidy that a recording goes through before it's kept: repeats cost a deterministic replay time
+/// and, worse, can undo what the step before achieved (a dropdown reopened after it was closed).
+final class BrowserRecordingCleanupTests: XCTestCase {
+    private func step(_ action: String, _ selectors: [String], input: String? = nil) -> SkillStep {
+        .browser(action, text: action, url: "https://shop.example/cart", selectors: selectors, input: input)
+    }
+
+    func testTypingTheSameFieldTwiceKeepsTheLastValue() {
+        let steps = [step("type", ["#email"], input: "ja"), step("type", ["#email"], input: "jay@okidoki.app")]
+        let tidied = BrowserRecordingCleanup.tidy(steps)
+        XCTAssertEqual(tidied.count, 1)
+        XCTAssertEqual(tidied.first?.input, "jay@okidoki.app")
+    }
+
+    func testTheSameActionOnTheSameControlTwiceIsKeptOnce() {
+        // An agent that re-opens the dropdown it just chose from: a replay would close what it opened.
+        let steps = [step("select", ["role=combobox|Round trip"]), step("select", ["role=combobox|Round trip"]),
+                     step("click", ["role=button|Search"])]
+        let tidied = BrowserRecordingCleanup.tidy(steps)
+        XCTAssertEqual(tidied.map(\.action), ["select", "click"])
+    }
+
+    func testDifferentControlsAndRepeatedKeysAreNotDropped() {
+        let steps = [step("click", ["#a"]), step("click", ["#b"]),
+                     step("press", ["#a"], input: "Enter"), step("press", ["#a"], input: "Enter")]
+        XCTAssertEqual(BrowserRecordingCleanup.tidy(steps).count, 4, "a second key press is a person pressing again")
+    }
+
+    func testATypedFieldThenAClickElsewhereKeepsBoth() {
+        let steps = [step("type", ["#search"], input: "shoes"), step("click", ["role=button|Go"])]
+        XCTAssertEqual(BrowserRecordingCleanup.tidy(steps).count, 2)
+    }
+}
+
+/// Reading what a control holds now, which is how a replay decides a step worked without asking the model.
+extension BrowserPageScriptTests {
+    func testACustomDropdownReportsItsChosenTextNotAnEmptyValue() async throws {
+        try await load("""
+        <html><body>
+          <div id="trip" role="combobox" aria-label="Trip type" tabindex="0">Round trip</div>
+          <ul role="listbox">
+            <li role="option" onclick="document.getElementById('trip').textContent='One way'">One way</li>
+            <li role="option">Round trip</li>
+          </ul>
+        </body></html>
+        """)
+        // A div has no `value`: before the fix this answered "" and every replayed choice looked failed.
+        let beforeValue = try await call("return JSON.stringify(window.__okidoki.valueOf(['#trip']))") as? String
+        XCTAssertEqual(beforeValue, #"{"value":"Round trip","text":"Round trip"}"#)
+        let chose = try await object("return window.__okidoki.act({selectors: ['#trip'], action: 'select', value: 'One way'})")
+        XCTAssertEqual(chose["ok"] as? Bool, true, "\(chose)")
+        let after = try await call("return document.getElementById('trip').textContent") as? String
+        XCTAssertEqual(after, "One way", "choosing in a custom dropdown picks the option in the same step")
+        let readBack = try await call("return JSON.stringify(window.__okidoki.valueOf(['#trip']))") as? String
+        XCTAssertEqual(readBack, #"{"value":"One way","text":"One way"}"#)
+    }
+}
+
+/// Whether the page says it's still working — the signal a replay waits on before reading or clicking.
+extension BrowserPageScriptTests {
+    func testAResultsPageThatSaysItIsLoadingCountsAsBusy() async throws {
+        try await load("<html><body><h1>Flight search</h1><p>Loading results</p></body></html>")
+        let busy = try await call("return window.__okidoki.busy()") as? Bool
+        XCTAssertEqual(busy, true, "before its list exists the page is still working")
+    }
+
+    func testAFinishedPageMentioningLoadingInItsTextIsNotBusy() async throws {
+        // A settled results page can carry the word "loading" in a placeholder or a help line; only the
+        // results-fetching phrases count, or every step would wait for nothing.
+        try await load("""
+        <html><body><h1>Flight search</h1>
+          <p>Nonstop flights. Loading times are shown per airport.</p>
+          <p>$185 Southwest, 6:05 AM – 12:10 PM</p>
+        </body></html>
+        """)
+        let busy = try await call("return window.__okidoki.busy()") as? Bool
+        XCTAssertEqual(busy, false)
+    }
+}
+
+/// What a read is handed. A page whose first 12k characters are chrome used to hide its own results.
+extension BrowserPageScriptTests {
+    func testTheTextKeepsTheContentEvenWhenChromeComesFirst() async throws {
+        let chrome = (1...400).map { "<a href='#'>nav item \($0)</a>" }.joined()
+        try await load("""
+        <html><body>
+          <nav>\(chrome)</nav>
+          <main>
+            <div class="fare">$185</div>
+            <div>Southwest · 6:05 AM – 12:10 PM · nonstop</div>
+            <div>SJC to MDW</div>
+          </main>
+          <footer>\(chrome)</footer>
+        </body></html>
+        """)
+        let text = try await call("return window.__okidoki.pageText()") as? String ?? ""
+        XCTAssertTrue(text.contains("$185"), "the fare survives the chrome")
+        XCTAssertTrue(text.contains("nonstop"), text)
+        XCTAssertTrue(text.count <= 12_000)
     }
 }

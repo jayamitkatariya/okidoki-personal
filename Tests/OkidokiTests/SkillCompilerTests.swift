@@ -241,3 +241,238 @@ final class SkillCompilerUndeclaredTests: XCTestCase {
         XCTAssertFalse(HybridReplay.carries("Category 12", all: ["1"]))
     }
 }
+
+/// The rule-based tidying of steps that can't work a second time — the ones that were spending a model
+/// call per attempt on Google Flights, because their selectors named the value chosen the first time.
+final class SkillCompilerPruneTests: XCTestCase {
+    private func selectors() -> [String] {
+        ["role=combobox|Round trip", "text=div|Round trip",
+         "div:nth-of-type(1) > div:nth-of-type(1) > div > div > div > div:nth-of-type(1)"]
+    }
+    private func select(_ chosen: String) -> SkillStep {
+        .browser("select", text: "choose “\(chosen)” in the field", url: "https://www.google.com/travel/flights",
+                 selectors: selectors(), input: chosen)
+    }
+    private func type(_ placeholder: String) -> SkillStep {
+        .browser("type", text: "type “{{\(placeholder)}}” in “Where from?”", url: "https://www.google.com/travel/flights",
+                 selectors: ["input[aria-label=\"Where from?\"]"], label: "Where from?", input: "{{\(placeholder)}}")
+    }
+
+    func testAChoiceKeepsTheSelectorsThatIdentifyTheControlAndLosesTheOnesReadOffItsValue() {
+        // "role=combobox|Round trip" can only match while the control still reads "Round trip".
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [select("One way"), type("origin")]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertEqual(pruned.steps.count, 2, "the choice itself is kept: it sets the trip type")
+        let kept = pruned.steps[0].selectors ?? []
+        XCTAssertFalse(kept.contains { $0.contains("Round trip") }, "value-read selectors go: \(kept)")
+        XCTAssertTrue(kept.contains { $0.contains("nth-of-type") }, "the structural one stays: \(kept)")
+    }
+
+    func testTheSameControlChosenTwiceInARowIsOneChoice() {
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [select("One way"), select("One way"), type("origin")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 2)
+    }
+
+    func testMenuWalkKeysStraightAfterAChoiceAreDropped() {
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        let down = SkillStep.browser("press", text: "press ArrowDown", url: "https://www.google.com/travel/flights", input: "ArrowDown")
+        let tab = SkillStep.browser("press", text: "press Tab", url: "https://www.google.com/travel/flights", input: "Tab")
+        skill.steps = [select("One way"), down, tab, type("origin")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.map(\.action), ["select", "type"])
+    }
+
+    func testAKeyPressThatIsTheJobIsKept() {
+        var skill = Skill(accountID: "a", name: "search", summary: "")
+        skill.steps = [type("query"), .browser("press", text: "press return", url: "https://example.com", input: "return")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 2)
+    }
+
+    func testALearnedTripsBuiltUrlGoesWhenATemplatedOneCanFlyOtherRoutes() {
+        let built = SkillStep.browser("navigate", text: "navigate", url: "https://www.google.com/travel/flights/search?tfs=CBwQARoj",
+                                      input: "https://www.google.com/travel/flights/search?tfs=CBwQARoj")
+        let templated = SkillStep.browser("navigate", text: "navigate",
+                                          url: "https://www.google.com/travel/flights?q=from+{{origin}}+to+{{destination}}",
+                                          input: "https://www.google.com/travel/flights?q=from+{{origin}}+to+{{destination}}")
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [built, templated]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertEqual(pruned.steps.count, 1)
+        XCTAssertTrue((pruned.steps.first?.url ?? "").contains("{{origin}}"))
+    }
+
+    func testANavigateWithNoAddressIsDropped() {
+        var skill = Skill(accountID: "a", name: "x", summary: "")
+        skill.steps = [.browser("navigate", text: "navigate", url: ""), type("origin")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.map(\.action), ["type"])
+    }
+
+    func testTheTidyRunsOnEveryCompiledSkill() {
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [select("One way"), type("origin")]
+        let finished = SkillCompiler.finishing(skill, goal: "search flights")
+        XCTAssertFalse((finished.steps.first?.selectors ?? []).contains { $0.contains("Round trip") })
+    }
+}
+
+extension SkillCompilerPruneTests {
+    func testAWholeSearchInTheAddressReplacesTheTypingBeforeIt() {
+        let learn = SkillStep.browser("navigate", text: "navigate", url: "https://www.google.com/travel/flights#flt=SFO.LIS.2026-12-18",
+                                      input: "https://www.google.com/travel/flights#flt=SFO.LIS.2026-12-18")
+        let choose = SkillStep.browser("select", text: "choose “One way”", url: "https://www.google.com/travel/flights",
+                                       selectors: ["div:nth-of-type(1)"], input: "One way")
+        let typed = SkillStep.browser("type", text: "type “San Francisco”", url: "https://www.google.com/travel/flights",
+                                      selectors: ["#from"], input: "San Francisco")
+        let templated = SkillStep.browser("navigate", text: "navigate",
+                                          url: "https://www.google.com/travel/flights?q=flights+from+{{origin}}+to+{{destination}}+on+{{departure_date}}",
+                                          input: "https://www.google.com/travel/flights?q=flights+from+{{origin}}+to+{{destination}}+on+{{departure_date}}")
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [learn, choose, typed, templated]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertEqual(pruned.steps.map(\.action), ["navigate"], "only the address that can fly other routes is left")
+        XCTAssertTrue((pruned.steps.first?.url ?? "").contains("{{origin}}"))
+    }
+
+    func testALiteralValueTheSkillAlwaysUsesBecomesItsDefaultNotAQuestion() throws {
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [.browser("navigate", text: "navigate", url: "https://x.example?c={{cabin}}&n={{adults}}",
+                                input: "https://x.example?c={{cabin}}&n={{adults}}")]
+        skill.inputs = [SkillInput(name: "cabin", kind: "text", source: "request", required: true, example: "economy"),
+                        SkillInput(name: "adults", kind: "number", source: "request", required: true, example: "1")]
+        let finished = SkillCompiler.finishing(skill, goal: "book a flight")
+        let cabin = try XCTUnwrap(finished.inputs?.first { $0.name == "cabin" })
+        XCTAssertEqual(cabin.value, "economy")
+        XCTAssertFalse(cabin.isRequired, "a value the recording decided is not a question")
+        // A pass with only the route still binds: the defaults fill the rest.
+        let bound = SkillBinder.finish(label: "trip", values: ["origin": "SFO", "destination": "LIS"], inputs: finished.inputs ?? [])
+        XCTAssertEqual(bound.missing, [])
+        XCTAssertEqual(bound.values["cabin"], "economy")
+    }
+}
+
+extension SkillCompilerPruneTests {
+    func testACalendarWalkBecomesOneStepThatSetsTheDate() {
+        // Recorded: click Departure → Next → "12" → "Done. Search…". The second pass must not click the
+        // same day again; it should set its own date.
+        func click(_ label: String) -> SkillStep {
+            .browser("click", text: "click “\(label)”", url: "https://www.google.com/travel/flights",
+                     selectors: ["role=button|\(label)"], label: label)
+        }
+        var date = SkillStep.browser("type", text: "type “{{departure_date}}” in “Departure”",
+                                     url: "https://www.google.com/travel/flights",
+                                     selectors: ["input[placeholder=\"Departure\"]"], label: "Departure", input: "{{departure_date}}")
+        date.action = "click"
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [date, click("Next"), click("12"),
+                       click("Done. Search for one-way flights, departing on January 12, 2027"), click("Search")]
+        let pruned = SkillCompiler.pruneStale(skill)
+        let actions = pruned.steps.map(\.action)
+        XCTAssertFalse(actions.contains("12"), "the day this run picked is gone: \(actions)")
+        XCTAssertTrue(pruned.steps.contains { $0.mode == "think" && $0.text.contains("date picker") },
+                      "the walk is replaced by one step that sets the date")
+        XCTAssertTrue(actions.contains("click"), "Search is still there: \(actions)")
+    }
+
+    func testAClickOnANumberThatIsNotACalendarIsKept() {
+        var skill = Skill(accountID: "a", name: "pick a quantity", summary: "")
+        skill.steps = [.browser("click", text: "click “2”", url: "https://shop.example/cart",
+                                selectors: ["#qty-2"], label: "2")]
+        XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 1, "no date field anywhere: nothing to replace")
+    }
+}
+
+/// Which think steps are really one button press — the model is paid per replay for these otherwise.
+final class SkillCompilerSingleControlTests: XCTestCase {
+    func testAClickOnOneNamedControlIsMechanical() {
+        XCTAssertEqual(SkillCompiler.singleControl(in: "Click the 'Stops' filter button."), "Stops")
+        XCTAssertEqual(SkillCompiler.singleControl(in: "Open the “Filters” panel."), "Filters")
+    }
+
+    func testAnythingNeedingJudgementStaysAThinkStep() {
+        // A value to type or choose.
+        XCTAssertNil(SkillCompiler.singleControl(in: "Click 'Where from?' and type {{origin}}."))
+        XCTAssertNil(SkillCompiler.singleControl(in: "Choose 'Nonstop only' from the Stops menu."))
+        // Two jobs in one step.
+        XCTAssertNil(SkillCompiler.singleControl(in: "Click the 'Stops' filter button, then choose 'Nonstop only'."))
+        // Two controls named.
+        XCTAssertNil(SkillCompiler.singleControl(in: "Click 'Stops' then 'Nonstop only'."))
+        // A list.
+        XCTAssertNil(SkillCompiler.singleControl(in: "For each row, click 'Edit'."))
+        // Nothing to press at all.
+        XCTAssertNil(SkillCompiler.singleControl(in: "Work out the cheapest nonstop fare on this page."))
+    }
+}
+
+extension SkillCompilerPruneTests {
+    /// The exact shape a rescue promoted on Google Flights, which was written back and kept costing a
+    /// model call on every replay after it.
+    func testAPromotedDatePickerWalkIsPrunedOnWriteBack() {
+        func click(_ label: String) -> SkillStep {
+            var s = SkillStep.browser("click", text: "click “\(label)”", url: "https://www.google.com/travel/flights",
+                                      selectors: ["role=button|\(label)"], label: label)
+            return s
+        }
+        var thinking = SkillStep(text: "Set “Done. Search…December 18, 2026” to the date this run used with the page's date picker", app: "", action: "think")
+        thinking.mode = "think"
+        var departure = click("Departure")
+        departure.action = "click"
+        let steps = [click("Departure"), click("12"),
+                     click("Done. Search for one-way flights, departing on December 18, 2026"),
+                     click("Done. Search for one-way flights, departing on December 18, 2026")]
+        let pruned = SkillCompiler.pruneStale(steps: steps)
+        let labels = pruned.map { $0.label ?? $0.text }
+        XCTAssertFalse(labels.contains("12"), "the day this run picked is gone: \(labels)")
+        XCTAssertTrue(pruned.contains { $0.mode == "think" }, "replaced with one step that sets the date")
+        // Running it twice is a no-op: a replay that heals and writes back must not grow the skill.
+        XCTAssertEqual(SkillCompiler.pruneStale(steps: pruned).count, pruned.count)
+    }
+}
+
+/// A typed literal that is really the learned trip's own value must become a placeholder, or every replay
+/// travels to the city the recording used.
+final class SkillCompilerLiteralInputTests: XCTestCase {
+    private func typed(_ value: String, into label: String) -> SkillStep {
+        .browser("type", text: "type “\(value)” in “\(label)”", url: "https://www.google.com/travel/flights",
+                 selectors: ["input[aria-label=\"\(label)\"]"], label: label, input: value)
+    }
+
+    private func skill(_ steps: [SkillStep]) -> Skill {
+        var s = Skill(accountID: "a", name: "book a flight", summary: "")
+        s.steps = steps
+        s.inputs = [SkillInput(name: "origin", description: "departure city", kind: "text", source: "request", example: "SFO"),
+                    SkillInput(name: "destination", description: "arrival city", kind: "text", source: "request", example: "LIS"),
+                    SkillInput(name: "depart_date", description: "departure date", kind: "date", source: "request", example: "2026-12-18"),
+                    SkillInput(name: "cheapest_nonstop_fare", description: "the cheapest nonstop fare", kind: "text",
+                               source: "page", example: "$2,492 TAP")]
+        return s
+    }
+
+    func testACityTypedAsItsFullNameBecomesItsPlaceholder() {
+        // The compiled input's example is "SFO" but the step types "San Francisco": without this the
+        // replay flew the recorded cities every time.
+        let finished = SkillCompiler.finishing(skill([typed("San Francisco", into: "Where from?"),
+                                                      typed("Lisbon", into: "Where to?")]),
+                                               goal: "search flights")
+        let inputs = finished.steps.map(\.input)
+        XCTAssertTrue(inputs.contains("{{origin}}"), "\(inputs)")
+        XCTAssertTrue(inputs.contains("{{destination}}"), "\(inputs)")
+        XCTAssertFalse(inputs.contains("San Francisco"))
+        XCTAssertFalse(inputs.contains("Lisbon"))
+    }
+
+    func testAValueThatIsNotOneOfTheInputsIsLeftAlone() {
+        // "1" for the passenger count with no such input is a real literal, not a placeholder.
+        let finished = SkillCompiler.finishing(skill([typed("1 adult", into: "Passengers")]), goal: "search flights")
+        XCTAssertEqual(finished.steps.last?.input, "1 adult")
+    }
+
+    func testASecretStepIsNeverRewritten() {
+        let secret = SkillStep.browser("type", text: "type the password", url: "https://x.example",
+                                       selectors: ["#pw"], label: "Password", input: "{{vault:x.example.password}}")
+        let finished = SkillCompiler.finishing(skill([secret]), goal: "sign in")
+        // The skill also gains a leading navigate (a browser skill opens its own page), so look the step up.
+        let passwordStep = finished.steps.first { $0.action == "type" }
+        XCTAssertEqual(passwordStep?.input, "{{vault:x.example.password}}")
+    }
+}

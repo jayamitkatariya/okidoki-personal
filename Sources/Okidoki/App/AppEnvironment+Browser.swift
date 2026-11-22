@@ -183,18 +183,4 @@ extension AppEnvironment {
     }
 }
 
-/// Recorded browser steps, tidied: typing the same field twice keeps the last, and a navigation the
-/// next step's page already implies (a click that led there) is dropped so the replay doesn't reload.
-enum BrowserRecordingCleanup {
-    static func tidy(_ steps: [SkillStep]) -> [SkillStep] {
-        var out: [SkillStep] = []
-        for step in steps {
-            if step.action == "type", let last = out.last, last.action == "type", last.selectors == step.selectors {
-                out[out.count - 1] = step
-                continue
-            }
-            out.append(step)
-        }
-        return out
-    }
-}
+/// Recorded browser steps are tidied by `BrowserRecordingCleanup` (in OkidokiCore, so it's testable).

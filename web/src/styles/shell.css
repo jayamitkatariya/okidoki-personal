@@ -687,9 +687,10 @@ html.shell2-on:not(.is-native) body::before {
 .shell2.is-sidebar-hidden .card {
   margin-left: var(--gutter);
 }
-/* Toasts sit bottom-left. With the sidebar out, that corner is the library and your account, so
-   they rise just above them instead of covering the controls for as long as they show. */
+/* Toasts sit in the top-right, just under the toolbar (50px), so they clear the back/forward,
+   address and page action controls that live on that edge. */
 .shell2 {
+  --toast-top: 56px;
   --toast-bottom: 122px;
 }
 .shell2.is-sidebar-hidden {
@@ -1196,6 +1197,21 @@ html.shell2-on:not(.is-native) body::before {
 .shell2-on .chip-btn[aria-expanded="true"] {
   background: var(--s-press);
   color: var(--s-ink);
+}
+/* The record chip while it's capturing: the same red dot and pulse the Replay page uses. */
+.shell2-on .chip-btn.is-recording {
+  color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 12%, transparent);
+}
+.shell2-on .chip-btn.is-recording .rec-dot {
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 28%, transparent);
+  animation: rec-pulse 1.3s var(--ease-in-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell2-on .chip-btn.is-recording .rec-dot {
+    animation: none;
+  }
 }
 .shell2-on .chip-caret {
   transform: rotate(90deg);
@@ -2233,7 +2249,51 @@ html.shell2-on:not(.is-native) body::before {
   color: var(--s-faint);
 }
 
-/* ---------- toasts sit above the card's corner ---------- */
+/* ---------- toasts: a notification card in the top-right ----------
+   One surface for the whole app: the same panel, radius, line and lift as a menu, so a
+   notification reads as part of okidoki rather than a system alert. */
+.shell2-on [data-slot="toast-stack"] {
+  --toast-w: 340px;
+}
+.shell2-on [data-slot="toast-stack"] > div {
+  /* Keep the column pinned to the card's right edge instead of the window's. */
+  padding-inline: 16px;
+}
+.shell2-on .toast-pill {
+  width: min(var(--toast-w), calc(100vw - 32px));
+  margin-inline-start: auto;
+  border-radius: var(--pop-radius);
+  background: var(--popover);
+  color: var(--s-ink);
+  box-shadow: var(--float);
+  /* The card's hairline, drawn as a ring so it sits inside the rounded edge. */
+  outline: 1px solid var(--c-line);
+  outline-offset: -1px;
+}
+.shell2-on .toast-body {
+  padding-block: 10px;
+}
+.shell2-on .toast-pill .toast-detail p {
+  color: var(--s-muted);
+  font-weight: 400;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.shell2-on .toast-pill [data-slot="toast-pill"] .h-9 {
+  min-height: 22px;
+}
+/* A warning keeps the card, and only its mark carries the colour. */
+.shell2-on .toast-pill[data-state="warning"] {
+  outline-color: color-mix(in srgb, var(--wait) 32%, var(--c-line));
+}
+.shell2-on .toast-pill[data-state="error"] {
+  outline-color: color-mix(in srgb, var(--fail) 32%, var(--c-line));
+}
+@media (prefers-reduced-transparency: reduce) {
+  .shell2-on .toast-pill {
+    background: var(--c-bg);
+  }
+}
 
 /* ---------- narrow windows ---------- */
 @media (max-width: 960px) {

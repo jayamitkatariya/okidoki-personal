@@ -147,7 +147,11 @@ final class HybridBrowserReplayer {
                     env.replayLog(runID, "→ learned “\(skill.steps[source].text.prefix(60))…” as \(plain.count) plain steps")
                     steps = SkillPromoter.replacing(steps, at: source, with: plain)
                 }
-                current.steps = promotions.isEmpty ? steps : SkillCompiler.deriveChecks(steps)
+                // Re-pruned, always. What a rescue promotes is a verbatim trace of what the model did
+                // ("click Departure, click 18, click Done") — the same date-picker walk and duplicate
+                // clicks the compiler prunes, and writing it back unpruned put them back into the skill.
+                // The next replay then paid for them again, and healed, and wrote them back again.
+                current.steps = SkillCompiler.pruneStale(steps: SkillCompiler.deriveChecks(steps))
                 if !popups.isEmpty {
                     let known = current.interrupts ?? []
                     current.interrupts = known + popups.filter { new in !known.contains { $0.whenText == new.whenText } }
@@ -155,7 +159,7 @@ final class HybridBrowserReplayer {
                 }
                 env.store.replaceSkill(current)
             } else if healed != skill.steps {
-                env.store.updateSkillSteps(skill.id, healed)
+                env.store.updateSkillSteps(skill.id, SkillCompiler.pruneStale(steps: healed))
             }
             // What the person did by hand while paused, that the skill doesn't do: theirs to add or not.
             if let taught, promotions.isEmpty, let current = env.store.skill(skill.id), current.steps.indices.contains(taught.before) {
@@ -401,14 +405,20 @@ final class HybridBrowserReplayer {
             status("\(prefix)\(cursor + 1)/\(plan.count) · \(ParameterFill.fill(step.text, values: planned.values).text)", in: tab)
 
             // Is this the place? Popups get cleared; a page that's further along (or behind) gets re-synced.
-            if let anchor = step.anchor, !anchor.isEmpty, action != "navigate", !(readingAnyway && action == "read") {
+            //
+            // A read is exempt: "read the cheapest fare on the results page" works on whatever page the
+            // action before it produced. Gating it on the address the run happened to be at (Google
+            // Flights navigates to /travel/flights?q=… while the recording expected /travel/flights/search)
+            // made a finished replay declare the page wrong and hand the whole tail to the agent.
+            if let anchor = step.anchor, !anchor.isEmpty, action != "navigate", action != "read", !readingAnyway {
                 var seen = await tab.observation()
                 if !HybridReplay.matches(anchor, seen) {
                     if await clearInterrupts(skill: skill, seen: seen, tab: tab) { seen = await tab.observation() }
                 }
                 if !HybridReplay.matches(anchor, seen) {
                     // The page may still be on its way: give it a moment before deciding it's elsewhere.
-                    for _ in 0..<8 where !HybridReplay.matches(anchor, seen) {
+                    for _ in 0..<8 {
+                        guard !HybridReplay.matches(anchor, seen) else { break }
                         try? await Task.sleep(nanoseconds: 200_000_000)
                         seen = await tab.observation()
                     }
@@ -429,13 +439,19 @@ final class HybridBrowserReplayer {
             // of this pass's details are there, something was lost on the way (a reset, an undo), and it
             // isn't submitted without asking.
             if step.irreversible == true {
-                // The page has to be built before it can be read (a slow review page fills in late).
-                for _ in 0..<40 where await tab.isBusy() {
+                // One bounded wait, not two: `perform` waits for the page and the control itself just
+                // before acting, and a `for … in 0..<N where await cond` loop evaluates `cond` N times
+                // even when it's already false — 40 wasted JS round-trips on every replay of a submit.
+                var idle = 0
+                while idle < 40, await tab.isBusy() {
                     if Task.isCancelled { break }
+                    idle += 1
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }
-                for _ in 0..<25 where await tab.label(of: step.selectors ?? []) == nil {
+                var looks = 0
+                while looks < 25, await tab.label(of: step.selectors ?? []) == nil {
                     if Task.isCancelled { break }
+                    looks += 1
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }
                 let page = await tab.pageText() + "\n" + (await tab.fieldValues())
@@ -459,8 +475,25 @@ final class HybridBrowserReplayer {
                 }
             }
 
-            var outcome = await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item,
-                                        next: cursor + 1 < plan.count ? plan[cursor + 1].step : nil)
+            let stepStarted = Date()
+            // No single step may hold the whole replay hostage. A page that never goes idle (Google
+            // Flights keeps loading trackers) once held `click "Search"` for 400 seconds — a replay that
+            // hangs is worse than one that moves on and lets the next step decide.
+            let worked: StepOutcome? = await withTimeout(seconds: 45) { [self] in
+                await perform(planned, skill: skill, inputs: inputs, values: values, tab: tab, item: item,
+                              next: cursor + 1 < plan.count ? plan[cursor + 1].step : nil)
+            }
+            let timedOut = worked == nil
+            var outcome: StepOutcome = worked ?? .done
+            if timedOut {
+                env.replayLog(runID, "✗ \(prefix)“\(step.text)” took more than 45s — moving on")
+            }
+            // How long each step took, in the run's own log: the only way to see where a replay spends its
+            // seconds (a fixed wait, a settle, a model call) without a debugger attached.
+            let stepTook = Date().timeIntervalSince(stepStarted)
+            if stepTook >= 0.75 {
+                env.replayLog(runID, "· \(prefix)\(String(format: "%.1f", stepTook))s · \(step.text.prefix(60))")
+            }
             // A lookup whose page came out differently (a wrong password's "invalid" message instead of the
             // secure area): when all that's left is reading, what the page says now is the answer.
             if case .lost(let why) = outcome, step.irreversible != true, cursor + 1 < plan.count,
@@ -619,8 +652,9 @@ final class HybridBrowserReplayer {
             guard let url = (step.input ?? step.url).flatMap({ BrowserSteps.addressURL(ParameterFill.fill($0, values: scoped).text) }) else {
                 return .failed("no address")
             }
+            // `navigate` already settles the new page (BrowserTab.navigate awaits settle with a longer
+            // limit), so settling again here was a second wait for the same quiet on every replay.
             await tab.navigate(url)
-            await tab.settle(limit: 6)
             return .done
         case "login":
             let site = BrowserSteps.vaultReference(in: step.input ?? "")?.site ?? BrowserSteps.host(of: step.url ?? "")
@@ -697,23 +731,29 @@ final class HybridBrowserReplayer {
             if typed != nil { typed = picked }
         }
 
-        // A page that says it's still loading isn't ready: its buttons may not do anything yet.
-        for _ in 0..<40 where await tab.isBusy() {
+        // A page that says it's still loading isn't ready: its buttons may not do anything yet. Bounded and
+        // polled properly — the element lookup below retries anyway, so this only covers the start of a load.
+        var busyWaits = 0
+        while busyWaits < 8, await tab.isBusy() {
             if Task.isCancelled { break }
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            busyWaits += 1
+            try? await Task.sleep(nanoseconds: 150_000_000)
         }
         if step.irreversible == true, let want = step.label.map({ ParameterFill.fill($0, values: scoped).text }), !want.isEmpty {
             // Something that can't be undone is pressed once, so only once it's really the control it was:
             // a button the page hasn't finished setting up yet (no label, no handler) would swallow it.
             let same: (String?) -> Bool = { got in got.map { HybridReplay.sameValue(typed: want, field: $0) } ?? false }
-            for _ in 0..<25 where !same(await tab.label(of: selectors)) {
+            var labelWaits = 0
+            while labelWaits < 25, !same(await tab.label(of: selectors)) {
                 if Task.isCancelled { break }
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                labelWaits += 1
+                try? await Task.sleep(nanoseconds: 150_000_000)
             }
             await tab.settle(limit: 2)
         }
         await clearBefore(step, selectors: selectors, skill: skill, tab: tab)
         let textBefore = step.irreversible == true ? await tab.pageText() : ""
+        let urlBefore = tab.webView.url?.absoluteString ?? ""
         var result = await tab.act(payload)
         // A page that builds itself after load: look again every 150ms, then clear popups. On the right
         // page, already settled, a missing element is really missing (renamed): a short look is enough.
@@ -728,10 +768,14 @@ final class HybridBrowserReplayer {
         }
         while notYet(result), !Task.isCancelled {
             if waited >= patience {
+                // Past the budget, only a page that still says it's loading is worth more time. One JS
+                // call, and bailing at once when the page is idle is what stops a step whose control is
+                // simply gone (a stale recorded button) from spending ten seconds on it and then two
+                // model rescues on top.
                 guard waited < patience + 53, await tab.isBusy() else { break }
             }
             if waited == min(4, patience - 1), !cleared,
-               await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab, allowModel: true) {
+               await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab, allowModel: false) {
                 cleared = true
                 result = await tab.act(payload)
                 continue
@@ -758,26 +802,27 @@ final class HybridBrowserReplayer {
         if !result.ok {
             // None of the saved ways find it. The model picks the element that does this step's job on
             // today's page (a renamed button counts), for this one step; what it picked becomes the fix.
-            if step.irreversible == true || action == "press" || action == "hover" {
-                if let rescued = await env.browserReplayer.rescueStep(step, input: input, tab: tab, runID: runID, pass: planned.iteration ?? 0) {
-                    result = rescued
-                }
+            //
+            // One rescue, not two: `rescueByPurpose` is the stronger of the two (it is told what the step
+            // is for and can scope by row), and running the weaker ref-based one first only added a model
+            // call's latency before the same work was done again.
+            guard let (fixed, selectors, before) = await rescueByPurpose(step, typed: payload["secret"] == nil ? (payload["value"] as? String ?? input) : nil,
+                                                                 row: planned.iteration.map { $0 + 1 }, values: scoped, tab: tab) else {
+                return .lost("\(step.label.map { "“\($0)”" } ?? "the element") isn't on the page")
             }
-            if !result.ok {
-                guard let (fixed, selectors, before) = await rescueByPurpose(step, typed: payload["secret"] == nil ? (payload["value"] as? String ?? input) : nil,
-                                                                     row: planned.iteration.map { $0 + 1 }, values: scoped, tab: tab) else {
-                    return .lost("\(step.label.map { "“\($0)”" } ?? "the element") isn't on the page")
-                }
-                if planned.iteration == nil { revealedBy = before }
-                result = fixed
-                if !selectors.isEmpty { result.selectors = selectors; result.matched = -2 }
-            }
+            if planned.iteration == nil { revealedBy = before }
+            result = fixed
+            if !selectors.isEmpty { result.selectors = selectors; result.matched = -2 }
         }
         if !templated, result.matched > 0 || result.matched == -2 { healedSelectors = BrowserReplayer.reordered(step.selectors ?? [], found: result.selectors) }
         if ["click", "press"].contains(action) {
-            await tab.settle(limit: 6, fresh: true)
+            // Only a click that took the page somewhere needs a real wait. A same-page click (a dropdown
+            // opening, a checkbox) is followed by the next step's own anchor check, which waits properly:
+            // six seconds here on every click was most of a replay's wall clock.
+            let movedPage = (tab.webView.url?.absoluteString ?? "") != urlBefore
+            await tab.settle(limit: movedPage ? 6 : 1.2, fresh: true)
         } else if action == "hover" {
-            await tab.settle(limit: 1.5, fresh: true)
+            await tab.settle(limit: 1.2, fresh: true)
         }
 
         // Did the field take it? Masks reformat, so this compares what matters.
@@ -831,15 +876,19 @@ final class HybridBrowserReplayer {
                     return .unconfirmed(unmet.joined(separator: ", ") + (said.map { " (the page says “\($0)”)" } ?? ""))
                 }
             } else if !unmet.isEmpty {
-                // Slow page, or a popup in the way.
-                let deadline = Date().addingTimeInterval(4)
+                // Slow page, or a popup in the way. A settle already waited for the page to stop moving,
+                // so a short look is enough: a single-page app that never changes its address was costing
+                // the full four seconds on every click (and a re-press on top of that).
+                var deadline = Date().addingTimeInterval(1.2)
                 while !unmet.isEmpty, !Task.isCancelled {
                     if await tab.humanCheck() != nil { break }
                     if Date() >= deadline {
                         let loading = await tab.isBusy()
-                        guard loading, Date() < deadline.addingTimeInterval(8) else { break }
+                        guard loading else { break }
+                        // It really is still loading: give the page the rest of its time.
+                        deadline = Date().addingTimeInterval(6)
                     }
-                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    try? await Task.sleep(nanoseconds: 150_000_000)
                     unmet = await check(expect, tab: tab)
                 }
                 if !unmet.isEmpty, await clearInterrupts(skill: skill, seen: await tab.observation(), tab: tab, allowModel: true) {
@@ -848,10 +897,18 @@ final class HybridBrowserReplayer {
                     unmet = await check(expect, tab: tab)
                 }
                 if !unmet.isEmpty {
-                    // The page refused (a validation message) or went somewhere else.
+                    // The page refused (a validation message) or went somewhere else. For an ordinary
+                    // click this is not a lost step: the page may simply be a single-page app that keeps
+                    // its address (Google Flights' Search stays on /travel/flights and fills the results
+                    // in place), and the next step finds its own element and checks the page itself.
+                    // Only an irreversible step treats this as a refusal, and that is above.
                     let page = await tab.pageText()
-                    let hint = page.split(separator: "\n").first { $0.lowercased().contains("should") || $0.lowercased().contains("required") || $0.lowercased().contains("invalid") || $0.lowercased().contains("fill") }
-                    return .lost(unmet.joined(separator: ", ") + (hint.map { " (the page says “\($0)”)" } ?? ""))
+                    let refused = page.split(separator: "\n").first { line in
+                        let l = line.lowercased()
+                        return ["required", "invalid", "must ", "wrong", "can't be", "cannot be"].contains { l.contains($0) }
+                    }
+                    guard let refused else { return .done }
+                    return .lost(unmet.joined(separator: ", ") + " (the page says “\(refused)”)")
                 }
             }
         }
@@ -864,6 +921,19 @@ final class HybridBrowserReplayer {
         }
         if let healedSelectors { return .healed(healedSelectors) }
         return .done
+    }
+
+    /// Runs `work`, giving up after `seconds` (nil). The work itself is cancelled: it holds the tab, and
+    /// a step still running in the background would fight the next one.
+    private func withTimeout(seconds: Double, _ work: @escaping () async -> StepOutcome) async -> StepOutcome? {
+        let task = Task { await work() }
+        let timer = Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            task.cancel()
+        }
+        let outcome = await task.value
+        timer.cancel()
+        return task.isCancelled ? nil : outcome
     }
 
     /// The text a step types: placeholders filled, and when the whole input is one value, that value
@@ -1020,16 +1090,48 @@ final class HybridBrowserReplayer {
     private func readByModel(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
                              tab: BrowserTab) async -> String? {
         guard let env, let runID, env.hasKey("anthropic") else { return nil }
-        // The page it was learned on (a results page), built: a search's results arrive after the address.
-        if let want = step.url.flatMap({ URLComponents(string: $0)?.path }), !want.isEmpty {
-            for _ in 0..<25 where URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path != want {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
+        // Wait for the page to hold what is being read. "results are on the page and it has stopped saying
+        // it's fetching" is the real condition; poll it directly so the read starts the moment it's true
+        // instead of sleeping out a fixed settle first.
+        //
+        // Readiness must not assume a price: a reference number, a confirmation code or an address is just
+        // as much a thing to read off a page, and requiring a currency symbol made those reads wait the
+        // whole budget and then answer nothing.
+        let wantsPrice = step.text.lowercased().contains("price") || step.text.lowercased().contains("fare")
+            || step.text.lowercased().contains("cost") || (input?.description.lowercased().contains("price") ?? false)
+        var ready = false
+        var stable = 0
+        var lastLength = -1
+        let startedAt = Date()
+        for _ in 0..<80 {
+            // The cheap probe, not pageText(): polling innerText stalls the page being waited for.
+            let probe = await tab.fill()
+            let priced = !wantsPrice || probe.priced
+            let enough = probe.len > 600 && priced
+            // "Enough content, and it stopped growing": true for a fare list, a confirmation and a code
+            // alike. A live page (a list still filling in) never stops growing, so after 2.5s enough
+            // content and the prices being there is enough — waiting for stillness would read nothing.
+            stable = (enough && probe.len == lastLength) ? stable + 1 : 0
+            lastLength = probe.len
+            if !probe.loading, (stable >= 2 || (enough && Date().timeIntervalSince(startedAt) > 2.5)) { ready = true; break }
+            try? await Task.sleep(nanoseconds: 150_000_000)
         }
-        for _ in 0..<40 where await tab.isBusy() { try? await Task.sleep(nanoseconds: 200_000_000) }
-        await tab.settle(limit: 3)
+        if !ready { await tab.settle(limit: 3) }
+        // A token with a shape (a reference number) is read in code, no model needed.
+        if let pattern = input?.pattern, !pattern.isEmpty,
+           let value = HybridReplay.capture(in: await tab.pageText(), example: input?.example, pattern: pattern) { return value }
         for attempt in 0..<2 {
-            if attempt > 0 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                // A results list that hasn't arrived after the first look: ask the page for it again. A
+                // reload is what a person does when a page sits on "Loading results", and it costs one
+                // second against the model call the alternative spends.
+                let probe = await tab.fill()
+                if probe.loading {
+                    tab.webView.reload()
+                    await tab.settle(limit: 6)
+                }
+            }
             if let value = await readOnce(step, input: input, name: name, values: values, label: label, tab: tab, env: env, runID: runID) {
                 return value
             }
@@ -1039,7 +1141,8 @@ final class HybridBrowserReplayer {
 
     private func readOnce(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
                           tab: BrowserTab, env: AppEnvironment, runID: String) async -> String? {
-        let page = await tab.pageText()
+        // Content-first text: the fare list has to be inside the cap the model is given.
+        let page = await tab.readText()
         guard !page.isEmpty else { return nil }
         let what = ParameterFill.fill(input?.description.isEmpty == false ? input!.description : step.text, values: values).text
         let given = values.filter { !$0.key.hasPrefix("today") && !$0.key.hasPrefix("item.") && $0.key != "ref" && !$0.value.isEmpty }
@@ -1052,9 +1155,20 @@ final class HybridBrowserReplayer {
             "request": "Read from this page: \(what)" + (given.isEmpty ? "" : " (for \(given))"),
         ]
         env.store.countModelCall(runID)
-        guard let reply = await BrainClient.shared.smartReplay("skill/resolve", body: payload),
-              let found = (reply["values"] as? [String: [String: Any]])?[name], let value = found["value"] as? String,
-              !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        guard let reply = await BrainClient.shared.smartReplay("skill/resolve", body: payload) else {
+            env.replayLog(runID, "✗ \(label): the reading model didn't answer")
+            return nil
+        }
+        guard let found = (reply["values"] as? [String: [String: Any]])?[name], let value = found["value"] as? String else {
+            // Saying why is the difference between "it read nothing" and "the page had nothing to read".
+            let said = (reply["error"] as? String) ?? "no value for \(name) in the answer"
+            env.replayLog(runID, "✗ \(label): \(said) · page \(page.count) chars, \(page.contains("$") ? "with prices" : "no prices")")
+            return nil
+        }
+        guard !value.trimmingCharacters(in: .whitespaces).isEmpty else {
+            env.replayLog(runID, "✗ \(label): the reading model returned an empty value · page \(page.count) chars")
+            return nil
+        }
         return value
     }
 

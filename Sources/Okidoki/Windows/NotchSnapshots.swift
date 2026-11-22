@@ -169,6 +169,55 @@ enum NotchSnapshots {
             done()
         }
     }
+
+    /// The top-right notification card, in both themes, as it looks over a page.
+    static func renderToasts(into directory: String, done: @escaping () -> Void) {
+        let url = URL(fileURLWithPath: directory, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let notes: [(String, ToastKind, String, String, String?)] = [
+            ("saved", .success, "saved as a skill", "12 steps · tax filing · replays in seconds, no model", "replay"),
+            ("failed", .warning, "couldn't finish the replay", "step 4 (“Submit”): the page is checkout.example.com, not billing.example.com", "open"),
+            ("info", .info, "recording in the browser", "do it once — press Save when you're done", nil),
+        ]
+        var queue: [ColorScheme] = [.light, .dark]
+        func next() {
+            guard !queue.isEmpty else { done(); return }
+            let scheme = queue.removeFirst()
+            let name = "toasts-\(scheme == .dark ? "dark" : "light")"
+            let model = ToastCenterModel()
+            for note in notes {
+                var n = ToastNote(title: note.2, detail: note.3, kind: note.1, expiresAt: .distantFuture)
+                n.actionLabel = note.4
+                model.add(n)
+            }
+            // The view reserves a transparent margin for the cards' shadow, so it's wider than a card.
+            let size = NSSize(width: ToastCenter.width + ToastCenter.shadowInset * 2,
+                              height: 260 + ToastCenter.shadowInset * 2)
+            let root = ZStack {
+                LinearGradient(colors: scheme == .dark ? [Color(hex: 0x101612), Color(hex: 0x1B241F)]
+                                                       : [Color(hex: 0xE4EFE9), Color(hex: 0xF4F7F4)],
+                               startPoint: .top, endPoint: .bottom)
+                ToastCenterView(model: model) { _ in }
+            }
+            .frame(width: size.width, height: size.height)
+            .environment(\.colorScheme, scheme)
+            let host = NSHostingView(rootView: root)
+            host.frame = NSRect(origin: .zero, size: size)
+            let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = host
+            window.orderFrontRegardless()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                    host.cacheDisplay(in: host.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("\(name).png"))
+                }
+                window.orderOut(nil)
+                next()
+            }
+        }
+        next()
+    }
 }
 
 extension NotchRunItem {

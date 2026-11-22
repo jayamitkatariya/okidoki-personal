@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Kestrel Air · Booked</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body>
+<h1>You're booked <span>✓</span></h1>
+<p class="sub" id="ref"></p>
+<script>
+const booking = JSON.parse(sessionStorage.getItem("booking") || "{}");
+document.getElementById("ref").textContent =
+  `${booking.from} → ${booking.to} · ${booking.fare} · ${booking.date} · ${booking.passenger} · confirmation ${booking.ref}`;
+</script></body></html>

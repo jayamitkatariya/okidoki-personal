@@ -246,6 +246,32 @@ public enum BrowserPageScript {
         return text.slice(0, 12000);
       }
 
+      /// The page's text for a model to read. `pageText` in reading order caps at 12k, and on a modern app
+      /// that cap can land inside the header: a flight list sat below it, so "read the cheapest fare" was
+      /// handed a nav bar and answered nothing. Content lines (prices, times, codes, nonstop) come first.
+      /// Only reads use this — the anchor comparison wants the page in its own order.
+      function readText() {
+        const lines = (document.body?.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+        const signal = /\$|€|£|₹|\d{1,2}:\d{2}|\b[A-Z]{2,3}\b|\d{3,}|\bnonstop\b|\bstops?\b/i;
+        const rich = lines.filter((line) => signal.test(line));
+        const chosen = [...rich.slice(0, 400), ...lines.slice(0, 300)].filter((line, at, all) => all.indexOf(line) === at);
+        return chosen.join('\n').slice(0, 12000);
+      }
+
+      /// A cheap readiness probe, for polling: `innerText` above forces a layout flush and costs tens of
+      /// milliseconds on a big page, so a loop that calls it ten times a second stalls the very page it is
+      /// waiting for. `textContent` skips layout, and the byte count is enough to tell "still filling in".
+      function fill() {
+        const body = document.body;
+        if (!body) return { len: 0, loading: true, priced: false };
+        const text = body.textContent || '';
+        return {
+          len: text.length,
+          loading: /(loading|fetching|searching) (results|flights|offers|prices)/i.test(text.slice(0, 2000)),
+          priced: text.includes('$') || text.includes('€') || text.includes('£') || text.includes('₹'),
+        };
+      }
+
       function snapshot() {
         refs = new Map();
         const lines = [];
@@ -392,10 +418,18 @@ public enum BrowserPageScript {
         el.scrollIntoView({ block: 'center' });
         el.focus();
         if (el.isContentEditable) {
-          // The editor's own document: a rich editor inside a frame (TinyMCE, CKEditor) has its own.
+          // The editor's own document: a rich editor inside a frame (TinyMCE, CKEditor) has its own,
+          // and execCommand only reaches the document whose selection is live. Selecting through it
+          // (not the top document's) is what makes "select all, then insert" replace the text.
           const doc = el.ownerDocument || document;
           doc.execCommand('selectAll');
           doc.execCommand('insertText', false, text);
+          // Some editors ignore a synthetic insertText: fall back to the element's own text, then
+          // announce it the way a person's typing would.
+          if ((el.innerText ?? '') !== text) {
+            el.textContent = text;
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText', composed: true }));
+          }
         } else {
           nativeValue(el, text);
           el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
@@ -404,8 +438,27 @@ public enum BrowserPageScript {
         if (submit) key(el, 'Enter');
       }
 
+      /// A custom dropdown is a div or button that opens a list of `role=option`s. Clicking it and
+      /// looking for the options on the same frame reads an empty list, because the menu renders on the
+      /// next one — so `act` answers "not on this page" and the caller looks again in a moment, which
+      /// is the same retry a slow page already gets. Returns true when it chose something now.
+      function pickFromMenu(el, value) {
+        const want = value.trim().toLowerCase();
+        const options = deepAll('[role=option],[role=menuitem]').filter(visible);
+        const pick = options.find((o) => clean(o.innerText, 80).toLowerCase() === want)
+          || options.find((o) => clean(o.innerText, 80).toLowerCase().includes(want));
+        if (!pick) { click(el); return false; }
+        click(pick);
+        return true;
+      }
+
       function select(el, value) {
-        if (el.tagName !== 'SELECT') { click(el); return 'opened it; pick the option next turn'; }
+        if (el.tagName !== 'SELECT') {
+          // A custom dropdown (Google Flights' "Round trip", a shop's size picker) is a button that
+          // opens a list. Opening it and picking in one step is what makes a replayed choice land,
+          // instead of relying on the next step finding a list that may already have closed.
+          return pickFromMenu(el, value) ? '' : 'not on this page';
+        }
         const want = value.trim().toLowerCase();
         const option = [...el.options].find(o => o.text.trim().toLowerCase() === want || o.value.toLowerCase() === want)
           || [...el.options].find(o => o.text.trim().toLowerCase().includes(want));
@@ -569,7 +622,19 @@ public enum BrowserPageScript {
         if (el.tagName === 'SELECT') { const o = el.options[el.selectedIndex]; return { value: el.value, text: o ? clean(o.text, 200) : '' }; }
         if (el.type === 'checkbox' || el.type === 'radio') return { value: el.checked ? 'on' : '', text: el.checked ? 'checked' : '' };
         if (el.isContentEditable) return { value: el.innerText, text: el.innerText };
-        return { value: el.value ?? '', text: el.value ?? '' };
+        // A custom dropdown (Google Flights' "Round trip") is a div or a button whose chosen text is
+        // its label, not a value: reading only `value` made every replayed choice look like it failed
+        // ("shows “”") and sent the step to the model for help it didn't need. Its whole subtree also
+        // holds every option, so the chosen one (aria-selected / aria-checked, else the first) is read
+        // — not the container's concatenated text, which made every check compare against a menu.
+        if (el.value != null && el.value !== '') return { value: el.value, text: el.value };
+        const chosenOption = [...el.querySelectorAll('[role=option],[role=menuitem]')]
+          .find(o => o.getAttribute('aria-selected') === 'true' || o.getAttribute('aria-checked') === 'true')
+          || el.querySelector('[aria-selected=true]');
+        const chosen = chosenOption
+          ? clean(chosenOption.innerText || chosenOption.getAttribute('aria-label') || '', 200)
+          : clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('aria-valuetext') || '', 200);
+        return { value: chosen, text: chosen };
       }
       function present(selector) { return candidates(selector).some(visible); }
       /** A dropdown's option texts, for matching a value written another way ("24(b)" → "24B"). */
@@ -689,12 +754,16 @@ public enum BrowserPageScript {
         if (document.readyState === 'loading') return true;
         if (deepAll('[aria-busy=true],[role=progressbar],.spinner,.loading,.loader,#loading').some(visible)) return true;
         const text = (document.body?.innerText || '').trim();
+        // A results page says it's fetching before its list exists ("Loading results", "Fetching results"):
+        // that's the page still working, even with no spinner in the tree. Only these phrases — a bare
+        // "loading" appears on plenty of finished pages and would make every step wait for nothing.
+        if (/\b(loading|fetching|searching) (results|flights|offers|prices|hotels|items)\b/i.test(text.slice(0, 1200))) return true;
         return text.length < 400 && /^(loading|please wait|just a moment)/im.test(text.split('\n').slice(-3).join('\n'));
       }
 
       window.__okidoki = {
         headings, valueOf, present, clickText, optionsOf: optionsAt, dialogs, clickInDialog, inDialog, busy, humanCheck, checkState,
-        snapshot, act, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
+        snapshot, act, fill, readText, find: (s) => { const hit = find(s); return hit ? { matched: hit.matched, label: labelFor(hit.el), ambiguous: hit.ambiguous } : null; },
         fillLogin, settle, pageText,
         record: (on) => { recording = !!on; return recording; },
         trustScripted: (on) => { trustScripted = !!on; return trustScripted; },

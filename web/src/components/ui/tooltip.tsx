@@ -65,7 +65,9 @@ function TooltipContent({
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"
           className={cn(
-            'z-50 inline-flex h-[var(--popup-height,auto)] w-[var(--popup-width,auto)] max-w-xs origin-(--transform-origin) items-center justify-center gap-1.5 rounded-lg bg-foreground px-[var(--tooltip-inset)] py-1.5 text-[0.8125rem] font-medium text-background transition-[width,height,transform,opacity] [--tooltip-inset:0.625rem] has-data-[slot=kbd]:pe-1.5 data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-ending-style:duration-100 data-instant:transition-none data-starting-style:scale-95 data-starting-style:opacity-0 **:data-[slot=kbd]:h-[1.125rem] **:data-[slot=kbd]:min-w-[1.125rem] **:data-[slot=kbd]:rounded-sm **:data-[slot=kbd]:text-[0.6875rem] **:data-[slot=kbd-group]:gap-0.5 motion-reduce:transition-none dark:bg-popover dark:text-popover-foreground dark:shadow-[0_2px_8px_rgb(0_0_0/0.4)] dark:ring-1 dark:ring-white/15',
+            // okidoki: a tooltip is the app's own small card, not an inverted system bubble. In light
+            // mode the old `bg-foreground` was near-black; now both themes use the popover surface.
+            'z-50 inline-flex h-[var(--popup-height,auto)] w-[var(--popup-width,auto)] max-w-xs origin-(--transform-origin) items-center justify-center gap-1.5 rounded-lg bg-popover px-[var(--tooltip-inset)] py-1.5 text-[0.8125rem] font-medium text-popover-foreground shadow-[var(--lift)] ring-1 ring-[var(--c-line)] transition-[width,height,transform,opacity] [--tooltip-inset:0.625rem] has-data-[slot=kbd]:pe-1.5 data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-ending-style:duration-100 data-instant:transition-none data-starting-style:scale-95 data-starting-style:opacity-0 **:data-[slot=kbd]:h-[1.125rem] **:data-[slot=kbd]:min-w-[1.125rem] **:data-[slot=kbd]:rounded-sm **:data-[slot=kbd]:text-[0.6875rem] **:data-[slot=kbd-group]:gap-0.5 motion-reduce:transition-none',
             TRAVEL,
             className,
           )}
@@ -84,7 +86,7 @@ function TooltipArrow({ className, ...props }: TooltipPrimitive.Arrow.Props) {
       data-slot="tooltip-arrow"
       className={cn(
 
-        'absolute size-2 rotate-45 rounded-[1px] bg-foreground data-[side=bottom]:-top-1 data-[side=inline-end]:-start-1 data-[side=inline-start]:-end-1 data-[side=left]:-right-1 data-[side=right]:-left-1 data-[side=top]:-bottom-1 dark:bg-popover',
+        'absolute size-2 rotate-45 rounded-[1px] bg-popover ring-1 ring-[var(--c-line)] data-[side=bottom]:-top-1 data-[side=inline-end]:-start-1 data-[side=inline-start]:-end-1 data-[side=left]:-right-1 data-[side=right]:-left-1 data-[side=top]:-bottom-1',
         className,
       )}
       {...props}

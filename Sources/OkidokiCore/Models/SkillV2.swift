@@ -31,13 +31,18 @@ public struct SkillInput: Codable, Equatable, Sendable, Identifiable {
     public var required: Bool?
     /// The value seen when the skill was learned, for the model's sense of shape (never for secrets).
     public var example: String?
+    /// A value the skill always uses ("economy", "1" adult): filled when a pass doesn't give one, so a
+    /// replay isn't refused over something the recording already decided.
+    public var value: String?
 
     public init(name: String, description: String = "", kind: String = "text", fields: [String]? = nil,
                 format: String? = nil, pattern: String? = nil, choices: [String]? = nil, source: String? = nil,
-                hint: String? = nil, sensitive: Bool? = nil, required: Bool? = nil, example: String? = nil) {
+                hint: String? = nil, sensitive: Bool? = nil, required: Bool? = nil, example: String? = nil,
+                value: String? = nil) {
         self.name = name; self.description = description; self.kind = kind; self.fields = fields
         self.format = format; self.pattern = pattern; self.choices = choices; self.source = source
         self.hint = hint; self.sensitive = sensitive; self.required = required; self.example = example
+        self.value = value
     }
 
     public var isRequired: Bool { required ?? true }

@@ -27,6 +27,9 @@ final class AppEnvironment: ObservableObject {
     private(set) var replayer: SkillReplayer!
     private(set) var watchHUD: WatchHUDController!
     private(set) var notch: NotchController!
+    /// Notifications: saved, failed, couldn't connect. Top-right, in the app's own card. The island
+    /// keeps what needs you — a run waiting, a recording, a caption.
+    let toastCenter = ToastCenter()
     private(set) var driver: ComputerUseDriver!
     /// okidoki's own browser window, made the first time it's needed.
     private(set) lazy var browser: BrowserController = BrowserController(environment: self)
@@ -2290,7 +2293,19 @@ final class AppEnvironment: ObservableObject {
         // Records name what was done ("INV-4471 done") and say more than a count.
         // The step log ("→ rescued by the model…") isn't a receipt.
         let receipts = (store.run(runID)?.output ?? "").split(separator: "\n").map(String.init)
-            .filter { !$0.isEmpty && !$0.hasPrefix("→") && !$0.hasPrefix("✗") }
+            .filter { !$0.isEmpty && !$0.hasPrefix("→") && !$0.hasPrefix("✗") && !$0.hasPrefix("·") }
+        // A skill that was meant to read something and didn't has done the steps but not the job:
+        // saying "replayed once" would hide that the answer is missing.
+        let output = store.run(runID)?.output ?? ""
+        let meantToRead = store.run(runID).map { run in
+            store.skill(run.pickedPath ?? "")?.steps.contains { $0.capture != nil } == true
+        } ?? false
+        let readFailed = meantToRead && receipts.isEmpty && output.contains("couldn't read")
+        if readFailed {
+            let why = output.split(separator: "\n").first { $0.contains("couldn't read") }.map(String.init) ?? "couldn't read the answer"
+            failReplay(runID: runID, reason: "the steps ran, but \(why) — the page may not have shown it yet. Check the page, then replay.")
+            return
+        }
         let line = !receipts.isEmpty ? receipts.joined(separator: "; ") : passes > 1 ? "replayed \(passes) times" : "replayed once"
         // Several records: one reply that lists them all.
         if receipts.count > 1, let threadID = store.run(runID)?.threadID {
@@ -2857,11 +2872,27 @@ final class AppEnvironment: ObservableObject {
         // A run's progress while the shell is in front is already on screen in its chat; the notch
         // opening over the window for it reads as the app jumping somewhere else.
         if runID != nil, kind != .warning, shellInFront { return }
-        let toast = NotchToast(title: title, detail: detail, kind: kind,
-                               undoLabel: undoLabel, editLabel: editLabel,
-                               runID: runID, expiresAt: Date().addingTimeInterval(6.5))
-        notch.model.addToast(toast, undo: onUndo, edit: onEdit)
-        notch.refresh()
+        // Approvals belong to the island: they're a decision waiting on you, in the place you already
+        // look for one. Everything else is a notification, and goes to the top-right card.
+        if kind == .approval {
+            let toast = NotchToast(title: title, detail: detail, kind: kind,
+                                   undoLabel: undoLabel, editLabel: editLabel,
+                                   runID: runID, expiresAt: Date().addingTimeInterval(6.5))
+            notch.model.addToast(toast, undo: onUndo, edit: onEdit)
+            notch.refresh()
+            return
+        }
+        // A card carries one action: Undo when there is one, otherwise the way in to see more.
+        var note = ToastNote(title: title, detail: detail, kind: kind,
+                             expiresAt: Date().addingTimeInterval(6.5))
+        if let undoLabel, let onUndo {
+            note.actionLabel = undoLabel
+            note.action = onUndo
+        } else if let editLabel, let onEdit {
+            note.actionLabel = editLabel
+            note.action = onEdit
+        }
+        toastCenter.show(note)
     }
 
     private var typedTurn = false

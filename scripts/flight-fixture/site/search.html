@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Kestrel Air · Search</title>
+<link rel="stylesheet" href="style.css"><script src="/config.js"></script><script src="app.js"></script></head>
+<body>
+<h1>Kestrel <span>Air</span></h1>
+<p class="sub">Book a flight in a few minutes.</p>
+<form id="f"></form><p class="error" id="err"></p>
+<script>
+ready(() => {
+  const out = trip().to || "";
+  $("#f").innerHTML = `
+    <label for="${id("from")}">From</label>
+    <input id="${id("from")}" name="from" placeholder="City or airport">
+    <label for="${id("to")}">To</label>
+    <input id="${id("to")}" name="to" placeholder="City or airport" value="${out}">
+    <label for="${id("date")}">Depart</label>
+    <input id="${id("date")}" name="date" placeholder="YYYY-MM-DD">
+    <label for="${id("pax")}">Travelers</label>
+    <select id="${id("pax")}" name="pax"><option value="1">1 adult</option><option value="2">2 adults</option></select>
+    <button type="submit">${L("Search flights", "Find fares")}</button>`;
+  $("#f").onsubmit = (e) => {
+    e.preventDefault();
+    const v = (n) => $("#" + id(n)).value.trim();
+    if (!v("from") || !v("to") || !v("date")) { $("#err").textContent = "Fill in the route and date"; return; }
+    save({ from: v("from"), to: v("to"), date: v("date"), pax: v("pax") });
+    location.href = "results.html";
+  };
+});
+</script></body></html>

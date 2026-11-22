@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover as KPopover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Favicon } from "./media";
+import { Tip } from "./Tip";
 import { looksLikeAddress, looksLikeTask, siteLabel } from "./model";
 
 export type ComposerMode = "search" | "ask";
@@ -365,6 +366,7 @@ export function Composer({
       {variant === "home" ? (
         <div className="composer-chips">
           <AttachButton onPick={(item) => setMentions((current) => [...current, item])} candidates={candidates} />
+          <RecordButton />
           <WhereChip value={settings.summonMode ?? "auto"} target={settings.computerTarget} agent={defaultCodingAgent(settings)} onChange={(value) => updateSettings({ summonMode: value })} />
           <GuardChip settings={settings} onChange={updateSettings} />
           <span className="chips-gap" />
@@ -373,6 +375,35 @@ export function Composer({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Record a skill from Home: the same start/stop the Replay page and the browser's record button use. */
+function RecordButton() {
+  const { state, invoke, notify } = useDashboard();
+  const watching = state.watching?.recording ?? false;
+  const steps = state.watching?.steps.length ?? 0;
+  return (
+    <Tip label={watching ? `Stop & save (${steps} ${steps === 1 ? "step" : "steps"})` : "Record a skill: show it once, replay it forever"} side="top">
+      <button
+        type="button"
+        className={cx("chip-btn", watching && "is-recording")}
+        aria-pressed={watching}
+        onClick={() => {
+          if (watching) {
+            invoke("stopWatching");
+            if (steps) notify("Saving skill", `${steps} ${steps === 1 ? "step" : "steps"} learned`);
+            else notify("Stopped", "Nothing was captured yet", "info");
+            return;
+          }
+          invoke("startWatching", { name: "" });
+          notify("Recording", "Do the task once. Save from the notch, or press this again.", "info");
+        }}
+      >
+        <span className="rec-dot" />
+        <span>{watching ? `Stop${steps ? ` · ${steps}` : ""}` : "Record"}</span>
+      </button>
+    </Tip>
   );
 }
 

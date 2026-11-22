@@ -41,8 +41,6 @@ const DETAIL_LIFETIME = 4000
 const ACTION_LIFETIME = 6000
 const GAP = 8
 
-const PEEK = 10
-const SHRINK = 0.03
 const DEPTH = 3
 const FADE = 0.15
 const REACH = 10
@@ -51,9 +49,7 @@ const FLICK = 380
 const MORPH = { type: 'spring', duration: 0.3, bounce: 0 } as const
 const EXIT = { type: 'spring', duration: 0.2, bounce: 0 } as const
 
-export const LINE_HEIGHT = 36
-
-const CARD_WIDTH = 340
+export const LINE_HEIGHT = 64
 
 export type ToastSide = 'top' | 'bottom'
 
@@ -135,11 +131,12 @@ export function tick(clock: ToastClock, at: number) {
 }
 
 export function pileSlot(index: number): StackSlot {
-  const depth = Math.min(index, DEPTH - 1)
+  // okidoki: notifications are a column, not a fanned deck. Everything past the second one is
+  // hidden behind the first two, so a burst never spills over the page.
   return {
-    y: depth * PEEK,
-    scale: 1 - depth * SHRINK,
-    opacity: index < DEPTH ? 1 - depth * FADE : 0,
+    y: 0,
+    scale: 1,
+    opacity: index === 0 ? 1 : index === 1 ? 0.55 : 0,
   }
 }
 
@@ -357,8 +354,8 @@ function ToastPill({
   return (
     <motion.div
       ref={pill}
-
-      style={{ borderRadius: LINE_HEIGHT / 2 }}
+      data-slot="toast-pill"
+      data-state={state ?? 'plain'}
       drag={behind ? false : true}
       dragSnapToOrigin
       dragElastic={0.6}
@@ -373,7 +370,8 @@ function ToastPill({
         else onDismiss()
       }}
       className={cn(
-        'toast-pill relative flex max-w-lg overflow-hidden bg-popover/80 text-sm text-foreground backdrop-blur-md',
+        'toast-pill relative flex overflow-hidden text-sm',
+        // okidoki: a notification card, not a floating pill — one width, the shell's own surface.
         behind ? 'pointer-events-none' : 'pointer-events-auto cursor-grab active:cursor-grabbing',
 
         action ? 'pe-2' : 'pe-4',
@@ -385,8 +383,7 @@ function ToastPill({
       <motion.div
         animate={{ opacity: behind ? 0 : 1 }}
         transition={MORPH}
-
-        className="grid min-w-max grid-cols-[auto_minmax(0,1fr)_auto] items-center"
+        className="toast-body grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start"
       >
 
         <div className="col-start-1 row-start-1 flex">
@@ -402,7 +399,7 @@ function ToastPill({
                 className="flex justify-end"
               >
 
-                <div className="flex w-max items-center pe-3">
+                <div className="flex h-9 w-max items-center pe-3">
 
                   <AnimatePresence initial={false} mode="popLayout">
                     <motion.span
@@ -473,13 +470,7 @@ function ToastPill({
           </AnimatePresence>
         </div>
 
-        <motion.div
-          aria-hidden
-          initial={false}
-          animate={{ width: description ? CARD_WIDTH - (state ? 12 : 16) - (action ? 8 : 16) : 0 }}
-          transition={MORPH}
-          className="col-span-3 col-start-1 row-start-3"
-        />
+        {/* The card is full width: no measuring spacer is needed behind the detail line. */}
       </motion.div>
     </motion.div>
   )
@@ -717,10 +708,13 @@ function ToastStack({
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
       }}
+      data-slot="toast-stack"
+      data-side={side}
       className={cn(
         'pointer-events-none fixed inset-x-0 z-100',
-        // okidoki: the shell lifts bottom toasts off the sidebar's library and account (--toast-bottom).
-        side === 'top' ? 'top-4' : 'bottom-[var(--toast-bottom,1rem)]',
+        // okidoki: notifications sit under the toolbar in the top-right, clear of the window's
+        // open/close controls and the card's own corner.
+        side === 'top' ? 'top-[var(--toast-top,10px)]' : 'bottom-[var(--toast-bottom,1rem)]',
       )}
     >
       {/* okidoki: step the native page aside while a toast overlaps it. */}

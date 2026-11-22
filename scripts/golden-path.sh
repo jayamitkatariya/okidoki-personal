@@ -152,7 +152,7 @@ ok "smart replay on (the skill generalizes with inputs)"
 # --- 2 · learn: the agent files one return ------------------------------------------------------
 step "learn: the agent files Asha's return in the browser"
 LEARN_GOAL="Go to $SITE, sign in with username eval and password eval, and file a return for Asha Rao: PAN ABCPR1234K, annual income 1250000, new regime, no capital gains, deductions: none. Submit it and tell me the reference number."
-RUN=$(ctl POST /tasks "$(python3 -c "import json,sys;print(json.dumps({'text': sys.argv[1], 'mode': 'browser', 'wait': 10}))" "$LEARN_GOAL")")
+RUN=$(ctl POST /tasks "$(python3 -c 'import json,sys;print(json.dumps({"text": sys.argv[1], "mode": "browser", "wait": 10}))' "$LEARN_GOAL")")
 RUN_ID=$(printf '%s' "$RUN" | jget "['id']")
 if [ -z "$RUN_ID" ]; then bad "no run started: $RUN"; else
   RUN=$(wait_run "$RUN_ID" 300)
@@ -172,9 +172,9 @@ fi
 # --- 3 · save: the run becomes a skill with inputs ----------------------------------------------
 step "save: keep the run as a skill"
 SKILL_NAME="golden filing"
-SAVED=$(ctl POST "/runs/$RUN_ID/save" "$(python3 -c "import json;print(json.dumps({'name': 'golden filing'}))")")
+SAVED=$(ctl POST "/runs/$RUN_ID/save" "$(python3 -c 'import json;print(json.dumps({"name": "golden filing"}))')")
 if [ "$(printf '%s' "$SAVED" | jget "['ok']")" = "True" ]; then
-  ok "saved “$SKILL_NAME”"
+  ok "saved “${SKILL_NAME}”"
   INPUTS=$(ctl GET /skills | python3 -c "
 import sys,json
 skills=json.load(sys.stdin)['skills']
@@ -188,7 +188,7 @@ fi
 # --- 4 · replay: new person, new values, seconds not minutes ------------------------------------
 step "replay: file Bharat's return with the saved skill"
 VALUES='{"name":"Bharat Mehta","pan":"BHMPM5678L","income":"980000","regime":"old"}'
-REPLAY=$(ctl POST "/skills/golden%20filing/run" "$(python3 -c "import json,sys;print(json.dumps({'values': json.loads(sys.argv[1]), 'wait': 10}))" "$VALUES")")
+REPLAY=$(ctl POST "/skills/golden%20filing/run" "$(python3 -c 'import json,sys;print(json.dumps({"values": json.loads(sys.argv[1]), "wait": 10}))' "$VALUES")")
 RID=$(printf '%s' "$REPLAY" | jget "['id']")
 if [ -z "$RID" ]; then bad "no replay run: $REPLAY"; else
   REPLAY=$(wait_run "$RID" 240)

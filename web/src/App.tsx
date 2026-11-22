@@ -24,7 +24,7 @@ function Root() {
       <>
         <AuthGate />
         <KobraToastBridge toasts={toasts} />
-        <Toasts position="bottom-center" />
+        <Toasts position="top-end" />
       </>
     );
   }

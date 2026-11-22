@@ -83,10 +83,25 @@ extension BrowserTab {
         await call("return window.__okidoki ? window.__okidoki.pageText() : (document.body ? document.body.innerText : '')") as? String ?? ""
     }
 
-    /// The page as smart replay compares it with a step's anchor.
+    /// The page's text for a model to read: content first, so a fare list isn't pushed past the cap by
+    /// a nav bar. Anchor comparisons use `observation()` instead, which keeps the page's own order.
+    func readText() async -> String {
+        await call("return window.__okidoki ? window.__okidoki.readText() : (document.body ? document.body.innerText : '')") as? String ?? ""
+    }
+
+    /// A cheap "is the page ready, and how much is on it" probe, safe to poll several times a second.
+    func fill() async -> (len: Int, loading: Bool, priced: Bool) {
+        let raw = await call("return window.__okidoki ? window.__okidoki.fill() : null") as? [String: Any]
+        return (raw?["len"] as? Int ?? 0, raw?["loading"] as? Bool ?? true, raw?["priced"] as? Bool ?? false)
+    }
+
+    /// The page as smart replay compares it with a step's anchor. One round-trip for both the headings and
+    /// the text: reading them separately made every step's anchor check two full-document scans, and the
+    /// loop does that check several times per step.
     func observation() async -> HybridReplay.Observation {
-        let text = await pageText()
-        let heads = await headings()
+        let raw = await call("return window.__okidoki ? { h: window.__okidoki.headings(), t: window.__okidoki.pageText() } : null") as? [String: Any]
+        let heads = raw?["h"] as? [String] ?? []
+        let text = raw?["t"] as? String ?? ""
         return HybridReplay.Observation(url: webView.url?.absoluteString ?? "", title: webView.title ?? "",
                                         text: (heads.joined(separator: "\n") + "\n" + text), app: "okidoki browser", window: webView.title ?? "")
     }

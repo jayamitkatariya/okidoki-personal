@@ -473,7 +473,7 @@ function ShellBody() {
 
       <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={setView} onOpenTab={openTab} onOpenURL={openURL} tab={view.kind === "tab" && tab && !tab.blank ? tab : null} />
       <KobraToastBridge toasts={toasts} />
-      <Toasts position="bottom-start" />
+      <Toasts position="top-end" />
     </div>
   );
 }

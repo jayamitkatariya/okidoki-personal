@@ -83,11 +83,17 @@ public enum SkillBinder {
 
     /// The pass's values made final: validated, lists checked, doubts and gaps listed.
     /// `confidence` and `sources` come from the model for values it found; given values are certain.
-    public static func finish(label: String, values: [String: String], inputs: [SkillInput],
+    public static func finish(label: String, values given: [String: String], inputs: [SkillInput],
                               confidence: [String: Double] = [:], sources: [String: String] = [:],
                               optionalByUse: Set<String> = []) -> Bound {
         var doubts: [String: String] = [:]
         var missing: [String] = []
+        // A value the skill always uses (the cabin, the number of adults) fills in what a pass didn't
+        // give: the recording already decided it, and refusing to start over it helps nobody.
+        var values = given
+        for input in inputs where values[input.name] == nil {
+            if let fallback = input.value, !fallback.isEmpty { values[input.name] = fallback }
+        }
         for input in inputs {
             // Given as empty is an answer ("no capital gains"); only a value nobody gave is missing.
             guard let value = values[input.name] else {
