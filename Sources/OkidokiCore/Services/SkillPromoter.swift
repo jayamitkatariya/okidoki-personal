@@ -26,10 +26,13 @@ public enum SkillPromoter {
         guard !acted.isEmpty, acted.allSatisfy({ !$0.selectors.isEmpty || $0.action == "press" }) else { return nil }
         // A click on something picked for this pass's data (the search result for "AirPods Pro 2") would
         // be that same thing on every pass: it stays a look.
+        //
+        // No length clause. It used to require a label over 40 characters, but labels are cleaned to 60 and
+        // a data-picked click is usually short ("Seville", "18"), so the guard never fired — the promotion
+        // became `click “Seville”` and every later replay clicked the wrong city.
         let picked = values.filter { key, value in !key.hasPrefix("today") && !key.hasPrefix("item.") && key != "ref" && value.count >= 3 }.map(\.value)
         if acted.contains(where: { action in
             action.action == "click" && picked.contains { value in (action.label ?? "").localizedCaseInsensitiveContains(value) }
-                && (action.label ?? "").count > 40
         }) { return nil }
         let named = Set(ParameterFill.names(in: think.text + " " + (think.when ?? "")).map(ParameterFill.key))
         let lists = inputs.filter { $0.kind == "list" && named.contains(ParameterFill.key($0.name)) }

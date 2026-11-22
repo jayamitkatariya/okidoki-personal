@@ -364,12 +364,35 @@ public enum SkillCompiler {
         }
         if let dateField {
             // Replace the walk with one think step that sets the date by value, so the next pass enters
-            // its own date instead of clicking this run's day again. The walk is dropped, and the think
-            // step is placed where the walk began (recorded by its anchor, not its index, so the drops
-            // don't shift it).
-            let placeholder = ParameterFill.names(in: dateField.input ?? "").first
-            let goal = "Set “\(dateField.label ?? "the date field")” to "
-                + (placeholder.map { "{{\($0)}}" } ?? "the date this run used")
+            // its own date instead of clicking this run's day again.
+            //
+            // The placeholder has to come from somewhere real. A `click` step's `input` is nil by
+            // construction, so reading it only here always fell through to "the date this run used" — and
+            // that is what a *promoted* walk turned into: a rescue learned the walk, promotion made it
+            // plain steps, this rewrite turned it back into a think step that no longer named the input.
+            // The binding is looked for in the field's own input, a type step on the same control, then a
+            // declared date-ish input.
+            var placeholder = ParameterFill.names(in: dateField.input ?? "").first
+            if placeholder == nil, let selectors = dateField.selectors {
+                placeholder = steps.lazy
+                    .filter { $0.action == "type" }
+                    .first { other in
+                        let theirs = Set(other.selectors ?? [])
+                        return !theirs.isDisjoint(with: Set(selectors))
+                    }
+                    .flatMap { ParameterFill.names(in: $0.input ?? "").first }
+            }
+            if placeholder == nil {
+                placeholder = (made.inputs ?? []).map(\.name).first { name in
+                    let key = ParameterFill.key(name)
+                    return ["date", "depart", "departure"].contains(where: { key.contains($0) })
+                }
+            }
+            // With no binding at all, the walk still cannot stay: it would click the learned day on every
+            // pass. The replacement asks for the date the run used and says to read it from the request,
+            // which is honest and still one step instead of a wrong one.
+            let target = placeholder.map { "{{\($0)}}" } ?? "the date this run asked for (read it from the request)"
+            let goal = "Set “\(dateField.label ?? "the date field")” to \(target)"
                 + " with the page's date picker: open it, move to the right month and year, click the day, "
                 + "then confirm. Check the field shows that date before carrying on."
             var index = 0

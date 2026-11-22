@@ -687,3 +687,43 @@ extension SkillCompilerPruneTests {
         XCTAssertEqual(SkillCompiler.pruneStale(skill).steps.count, 1)
     }
 }
+
+extension SkillCompilerPruneTests {
+    func testAPromotedDateWalkKeepsItsInputBinding() {
+        // A rescue learned "click Departure, click 18, click Done"; promotion made it plain steps; the
+        // date-walk rewrite then turned it into a think step — but read the placeholder from the click's
+        // `input`, which is always nil, so the goal said "the date this run used" and the binding was gone.
+        func click(_ label: String, _ selectors: [String]) -> SkillStep {
+            .browser("click", text: "click “\(label)”", url: "https://www.google.com/travel/flights",
+                     selectors: selectors, label: label)
+        }
+        let departure = click("Departure", ["role=textbox|Departure"])
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        // A type step on the same control carries the binding.
+        let bound = SkillStep.browser("type", text: "type “{{departure_date}}” in “Departure”",
+                                      url: "https://www.google.com/travel/flights",
+                                      selectors: ["role=textbox|Departure"], label: "Departure", input: "{{departure_date}}")
+        skill.steps = [departure, bound, click("12", ["#d12"]),
+                       click("Done. Search…", ["role=button|Done."])]
+        skill.inputs = [SkillInput(name: "departure_date", kind: "date", source: "request", example: "Dec 18, 2026")]
+        let pruned = SkillCompiler.pruneStale(skill)
+        let think = pruned.steps.first { $0.mode == "think" }
+        XCTAssertNotNil(think)
+        XCTAssertTrue(think?.text.contains("{{departure_date}}") == true,
+                      "the replacement names the input: \(think?.text ?? "")")
+        XCTAssertFalse(think?.text.contains("this run used") == true, "not the learned date")
+    }
+
+    func testAPromotedWalkWithNoBindingStillGoesAndSaysWhatToDo() {
+        func click(_ label: String) -> SkillStep {
+            .browser("click", text: "click “\(label)”", url: "https://www.google.com/travel/flights",
+                     selectors: ["#\(label)"], label: label)
+        }
+        var skill = Skill(accountID: "a", name: "book a flight", summary: "")
+        skill.steps = [click("Departure"), click("12"), click("Done. Search…")]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertFalse(pruned.steps.contains { $0.label == "12" }, "the learned day is gone")
+        let think = pruned.steps.first { $0.mode == "think" }
+        XCTAssertTrue(think?.text.contains("read it from the request") == true, "\(think?.text ?? "")")
+    }
+}

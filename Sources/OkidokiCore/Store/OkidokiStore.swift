@@ -640,8 +640,13 @@ public final class OkidokiStore: ObservableObject {
     }
 
     /// A replay repaired some steps (a selector that works again, say): keep the fix so the next one is direct.
+    ///
+    /// The repaired list may be *shorter*: the repair is pruned before it is written, and pruning can drop
+    /// a step whose selectors were all read off the old value. Requiring the same count threw the whole
+    /// write away when that happened — so one pruned step silently discarded every other repair in the
+    /// same run, and the next replay paid for all of them again.
     public func updateSkillSteps(_ id: String, _ steps: [SkillStep]) {
-        guard let index = skills.firstIndex(where: { $0.id == id }), skills[index].steps.count == steps.count else { return }
+        guard let index = skills.firstIndex(where: { $0.id == id }), !steps.isEmpty else { return }
         skills[index].steps = steps
         skills[index].revision = (skills[index].revision ?? 0) + 1
         skills[index].updatedAt = Date()

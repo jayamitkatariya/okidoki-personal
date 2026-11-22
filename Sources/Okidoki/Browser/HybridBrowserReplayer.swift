@@ -103,12 +103,25 @@ final class HybridBrowserReplayer {
                 for (n, tab) in tabs.enumerated() where n < ready.count { launch(ready[n], on: tab); next = n + 1 }
                 for await (index, result) in group {
                     if Task.isCancelled || self.runID != runID { group.cancelAll(); return }
-                    for (source, steps) in result.promotions where promotions[source] == nil { promotions[source] = steps }
+                    for (source, steps) in result.promotions where promotions[source] == nil {
+                        promotions[source] = steps
+                        // Applied to the working copy at once, not only written out at the end: a pass that
+                        // launches later (and every later iteration of a loop, which shares one source
+                        // index) then runs the plain steps instead of paying for the same rescue again. In
+                        // a three-pass run this was three rescues of the same step.
+                        healed = SkillPromoter.replacing(healed, at: source, with: steps)
+                    }
                     if taught == nil, result.ok, let lesson = result.taught { taught = lesson }
                     for source in result.echoes where healed.indices.contains(source) && healed[source].echoes != true {
                         healed[source].echoes = true
                     }
                     for (source, selectors) in result.healed where healed.indices.contains(source) {
+                        // A step inside a loop keeps its template. Its selectors carry `{{item.index}}`,
+                        // and a rescue on one row returns that row's own id ("#section-2-ermq"); saving it
+                        // either points every row at row 2 or, merged once per iteration, grows a list of
+                        // every row's id that no later page has. Left alone, the template keeps working.
+                        let templatedStep = (healed[source].selectors ?? []).contains { $0.contains("{{") }
+                        guard !templatedStep else { continue }
                         healed[source].selectors = selectors
                         healed[source].heals = (healed[source].heals ?? 0) + 1
                     }
@@ -141,17 +154,17 @@ final class HybridBrowserReplayer {
             if Task.isCancelled || self.runID != runID { return }
             let popups = self.learnedInterrupts
             if !promotions.isEmpty || !popups.isEmpty, var current = env.store.skill(skill.id) {
-                // What the model worked out becomes plain steps and rules: next time, these parts need no model.
-                var steps = healed
-                for (source, plain) in promotions.sorted(by: { $0.key > $1.key }) {
-                    env.replayLog(runID, "→ learned “\(skill.steps[source].text.prefix(60))…” as \(plain.count) plain steps")
-                    steps = SkillPromoter.replacing(steps, at: source, with: plain)
+                // What the model worked out becomes plain steps and rules: next time, these parts need no
+                // model. They are already in `healed` (each was applied as it arrived, so the passes that
+                // launched afterwards used them); this is only the log and the prune.
+                for source in promotions.keys.sorted(by: >) where skill.steps.indices.contains(source) {
+                    env.replayLog(runID, "→ learned “\(skill.steps[source].text.prefix(60))…” as \(promotions[source]?.count ?? 0) plain steps")
                 }
                 // Re-pruned, always. What a rescue promotes is a verbatim trace of what the model did
                 // ("click Departure, click 18, click Done") — the same date-picker walk and duplicate
                 // clicks the compiler prunes, and writing it back unpruned put them back into the skill.
                 // The next replay then paid for them again, and healed, and wrote them back again.
-                current.steps = SkillCompiler.pruneStale(steps: SkillCompiler.deriveChecks(steps))
+                current.steps = SkillCompiler.pruneStale(steps: SkillCompiler.deriveChecks(healed))
                 if !popups.isEmpty {
                     let known = current.interrupts ?? []
                     current.interrupts = known + popups.filter { new in !known.contains { $0.whenText == new.whenText } }
@@ -484,7 +497,10 @@ final class HybridBrowserReplayer {
                               next: cursor + 1 < plan.count ? plan[cursor + 1].step : nil)
             }
             let timedOut = worked == nil
-            var outcome: StepOutcome = worked ?? .done
+            // A step that ran out of time did not do its job. Reporting it as done claimed work that never
+            // happened, and nothing was learned from it either — so the next replay paid for the same
+            // stuck step again. An irreversible step is still `.done` (partially pressed is not undone).
+            var outcome: StepOutcome = worked ?? (step.irreversible == true ? .done : .doubt("took more than 45s and was skipped"))
             if timedOut {
                 env.replayLog(runID, "✗ \(prefix)“\(step.text)” took more than 45s — moving on")
             }
@@ -575,9 +591,14 @@ final class HybridBrowserReplayer {
                 rescues += 1
             case .learned(let actions):
                 rescues += 1
-                if result.promotions[planned.source] == nil,
-                   let plain = SkillPromoter.promote(step, actions: actions, values: values, inputs: skill.inputs ?? []) {
-                    result.promotions[planned.source] = plain
+                if result.promotions[planned.source] == nil {
+                    if let plain = SkillPromoter.promote(step, actions: actions, values: values, inputs: skill.inputs ?? []) {
+                        result.promotions[planned.source] = plain
+                    } else {
+                        // Say so. A silent nil here is why a rescue could be paid for on every replay
+                        // forever: nothing was learned, and nothing said why.
+                        env.replayLog(runID, "→ \(prefix)what the model did at “\(step.text.prefix(50))” can't be kept as plain steps (a value picked for this pass, or a control without selectors) — it will look again next time")
+                    }
                 }
             case .doubt(let why):
                 doubts.helped.append(why)
@@ -823,6 +844,12 @@ final class HybridBrowserReplayer {
             if !selectors.isEmpty { result.selectors = selectors; result.matched = -2 }
         }
         if !templated, result.matched > 0 || result.matched == -2 { healedSelectors = BrowserReplayer.reordered(step.selectors ?? [], found: result.selectors) }
+        // A rescue inside a loop finds *one row's* control ("#v2-section-1"), and saving that as-is would
+        // point every later iteration at row 1. Replacing the row number with the template's placeholder
+        // sounds right and is not: the rescue's own selector list also carries the controls it pressed to
+        // get there, and rewriting digits across all of them produced selectors for the wrong elements
+        // (a submit button filed under "the section dropdown"), which is far worse than a repeated rescue.
+        // So a templated step keeps its template; only a non-templated step takes a healed selector.
         if ["click", "press"].contains(action) {
             // Only a click that took the page somewhere needs a real wait. A same-page click (a dropdown
             // opening, a checkbox) is followed by the next step's own anchor check, which waits properly:
@@ -922,7 +949,10 @@ final class HybridBrowserReplayer {
         }
         if let doubt { return .doubt(doubt) }
         if !revealedBy.isEmpty {
-            // Promoted at the end of the run: the reveal, then this step on the element the rescue used.
+            // A reveal (a "Next" the rescue pressed to show more fields) is the bigger lesson, and it is
+            // returned as the promoted steps. The repaired selector rides along inside them: the last
+            // action is this step on the element the rescue used, so `SkillPromoter.promote` learns it
+            // too and the next replay doesn't rescue the same step again.
             let actions = revealedBy + [Touched(action: action, selectors: result.selectors, label: result.label ?? step.label,
                                                 role: result.role ?? step.role, input: typed ?? input, url: tab.webView.url?.absoluteString)]
             return .learned(actions.map { SkillPromoter.Action(action: $0.action, selectors: $0.selectors, label: $0.label, role: $0.role, input: $0.input, url: $0.url) })
@@ -977,7 +1007,13 @@ final class HybridBrowserReplayer {
             + " Do only this one step, then finish with success true; if nothing on the page does this, finish with success false."
         let startPath = URLComponents(string: tab.webView.url?.absoluteString ?? "")?.path
         let result = await thinkTouching(goal: goal, tab: tab, maxTurns: 4, tag: "fix-\(step.id)")
-        guard result.ok, let index = result.touched.lastIndex(where: { $0.action == action || action == "click" }) else { return nil }
+        // The element the rescue used for *this* step. The fallback to any click is only for a step that
+        // was itself a click: for a select or a type, a click the model made on the way (to reach the review
+        // page, to submit) is not this step's control — taking the last one filed a "Submit return" button
+        // under "the section dropdown", and the replay then submitted with the dropdown untouched.
+        let wanted = result.touched.lastIndex { $0.action == action }
+            ?? (action == "click" ? result.touched.lastIndex { $0.action == "click" } : nil)
+        guard result.ok, let index = wanted else { return nil }
         let last = result.touched[index]
         // Clicks before it that only showed more of the page (same address, nothing risky) are kept as steps.
         let before = Array(result.touched[..<index])
