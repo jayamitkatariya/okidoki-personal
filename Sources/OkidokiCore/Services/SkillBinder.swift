@@ -76,7 +76,10 @@ public enum SkillBinder {
         let last = { (path: String) in fold(path.split(separator: "/").last.map(String.init) ?? path) }
         let exact = folders.filter { last($0) == whole }
         if exact.count == 1 { return exact[0] }
-        if exact.count > 1 { return exact.min { $0.count < $1.count } }
+        // Several folders with this name is ambiguous, not "pick the shortest": choosing one read another
+        // person's documents and filled their PAN and salary in. The caller falls back to a weaker search,
+        // which is the honest answer.
+        if exact.count > 1 { return nil }
         let byFirst = folders.filter { last($0) == first }
         return byFirst.count == 1 ? byFirst[0] : nil
     }
@@ -90,18 +93,31 @@ public enum SkillBinder {
         var missing: [String] = []
         // A value the skill always uses (the cabin, the number of adults) fills in what a pass didn't
         // give: the recording already decided it, and refusing to start over it helps nobody.
+        //
+        // Never for a value that comes from a document or the request, and never a secret: doing that
+        // meant a pass whose documents were missing still had a value, so nothing looked missing, the
+        // recorded person's details were typed, and the run reported success. `SkillCompiler.finishing`
+        // applies the same rule when it compiles; this is where the value is actually consumed, so skills
+        // that arrive some other way (a library bundle, another Mac, an older file) are covered too.
         var values = given
         for input in inputs where values[input.name] == nil {
-            if let fallback = input.value, !fallback.isEmpty { values[input.name] = fallback }
+            guard let fallback = input.value, !fallback.isEmpty else { continue }
+            let fromData = ["document", "request", "record"].contains(input.source ?? "")
+            guard !fromData, !input.isSensitive else { continue }
+            values[input.name] = fallback
         }
         for input in inputs {
-            // Given as empty is an answer ("no capital gains"); only a value nobody gave is missing.
+            // Empty is a real answer for an optional input ("no capital gains"). For a required one it is
+            // not: the pass cannot start, exactly as if nobody had given it. This used to be recorded as
+            // a mere doubt, which only pauses before an irreversible step — so a form with no such step
+            // typed "" into the field and submitted.
+            let gating = optionalByUse.contains(input.name)
             guard let value = values[input.name] else {
-                if input.isRequired { missing.append(input.name) }
+                if input.isRequired, !gating { missing.append(input.name) }
                 continue
             }
             if value.isEmpty || (input.kind == "list" && HybridReplay.listValue(value).isEmpty) {
-                if input.isRequired, input.kind != "list", !optionalByUse.contains(input.name) { doubts[input.name] = "it's empty" }
+                if input.isRequired, !gating { missing.append(input.name) }
                 continue
             }
             if let problem = HybridReplay.invalid(value, for: input), input.kind != "list" {
@@ -119,6 +135,9 @@ public enum SkillBinder {
     public static func choice(_ value: String, in choices: [String]?) -> String {
         guard let choices, !choices.isEmpty else { return value }
         let v = value.lowercased().trimmingCharacters(in: .whitespaces)
+        // An empty value matches everything by substring — with one choice declared it silently became
+        // that option, which the person never gave. Empty is empty.
+        guard !v.isEmpty else { return value }
         if let exact = choices.first(where: { $0.lowercased() == v }) { return exact }
         // Written another way: "24(b)" is "24B", "Old" is "Old regime".
         let fold: (String) -> String = { $0.lowercased().filter { $0.isLetter || $0.isNumber } }

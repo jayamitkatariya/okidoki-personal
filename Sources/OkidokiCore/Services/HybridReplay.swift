@@ -24,12 +24,23 @@ public enum HybridReplay {
     public static func plan(_ steps: [SkillStep], values: [String: String]) -> [Planned] {
         var out: [Planned] = []
         var index = 0
+        // Names are matched loosely everywhere else ("Full Name" and full_name are the same input), so the
+        // loop's list is looked up the same way. An exact-only lookup silently found nothing when a skill
+        // was hand-authored or came from a bundle with different casing, and the loop then vanished.
+        let keyed = Dictionary(values.map { (ParameterFill.key($0.key), $0.value) }, uniquingKeysWith: { _, last in last })
         while index < steps.count {
             let step = steps[index]
             if let list = step.repeatOver, !list.isEmpty {
+                // The head's own condition is the loop's condition. Testing it only as `inner.when` for
+                // offset 0 dropped the head and kept the body, so the row steps ran against rows that
+                // were never created.
+                guard condition(step.when, values: values) else {
+                    index += max(1, min(step.repeatLength ?? 1, steps.count - index))
+                    continue
+                }
                 let length = max(1, min(step.repeatLength ?? 1, steps.count - index))
                 let body = Array(steps[index..<(index + length)])
-                let entries = listValue(values[list] ?? values[ParameterFill.key(list)] ?? "")
+                let entries = listValue(keyed[ParameterFill.key(list)] ?? "")
                 for (n, entry) in entries.enumerated() {
                     var scoped = values
                     for (field, value) in entry { scoped["item.\(field)"] = value }
@@ -106,7 +117,9 @@ public enum HybridReplay {
             let isEqual = text[range] == "=="
             let left = resolve(String(text[..<range.lowerBound]), values: values)
             let right = resolve(String(text[range.upperBound...]), values: values)
-            guard let left, let right else { return false }
+            // A side that doesn't resolve makes the comparison unknowable, so the step is skipped — but a
+            // negated one ("!{{a}} == {{b}}") should then run, which is what `negate` already means.
+            guard let left, let right else { return negate }
             result = (loose(left) == loose(right)) == isEqual
         } else {
             guard let value = resolve(text, values: values) else { return negate }

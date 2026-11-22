@@ -285,14 +285,50 @@ final class HybridReplayTests: XCTestCase {
         XCTAssertEqual(decoded.skill?.outline?.count, 2)
     }
 
-    func testGivenEmptyIsAnAnswerAndAbsentIsMissing() {
+    func testGivenEmptyIsAnAnswerForAGatingInputAndMissingForARequiredOne() {
+        // "No capital gains" is an answer, but only because the skill gates a step on `gains`: it is
+        // optional by use. A required field given as "" cannot start the pass — as a mere doubt it let the
+        // form be submitted with nothing in the field.
         let inputs = [SkillInput(name: "pan"), SkillInput(name: "gains", kind: "money"), SkillInput(name: "rows", kind: "list", required: false)]
         let given = SkillBinder.finish(label: "Asha", values: ["pan": "ABCPR1234K", "gains": "", "rows": "[]"], inputs: inputs, optionalByUse: ["gains"])
         XCTAssertEqual(given.missing, [])
         XCTAssertEqual(given.doubts, [:])
-        let absent = SkillBinder.finish(label: "Asha", values: ["gains": ""], inputs: inputs)
-        XCTAssertEqual(absent.missing, ["pan"])
-        XCTAssertEqual(absent.doubts["gains"], "it's empty")
+        let absent = SkillBinder.finish(label: "Asha", values: ["gains": ""], inputs: inputs, optionalByUse: ["gains"])
+        XCTAssertEqual(absent.missing, ["pan"], "the PAN nobody gave is missing")
+        XCTAssertEqual(absent.doubts, [:], "and the gating input's empty answer is fine")
+        // Without the gate, an empty required value is missing, not a doubt.
+        let requiredEmpty = SkillBinder.finish(label: "Asha", values: ["pan": "", "gains": ""], inputs: inputs)
+        XCTAssertEqual(Set(requiredEmpty.missing), ["pan", "gains"])
+        XCTAssertTrue(requiredEmpty.doubts.isEmpty)
+    }
+
+    func testARequiredListThatIsEmptyOrUnparseableCannotStartThePass() {
+        // A loop over a required list that came back "" (or as broken JSON) used to pass every check: the
+        // plan then unrolled zero rows and the return was filed with no deductions at all.
+        let inputs = [SkillInput(name: "deductions", kind: "list", fields: ["section", "amount"], required: true)]
+        let empty = SkillBinder.finish(label: "Asha", values: ["deductions": ""], inputs: inputs)
+        XCTAssertEqual(empty.missing, ["deductions"])
+        let broken = SkillBinder.finish(label: "Asha", values: ["deductions": "[]"], inputs: inputs)
+        XCTAssertEqual(broken.missing, ["deductions"])
+        // Given as a gating value it may be empty: the loop simply doesn't run.
+        let gating = SkillBinder.finish(label: "Asha", values: ["deductions": ""], inputs: inputs, optionalByUse: ["deductions"])
+        XCTAssertEqual(gating.missing, [])
+    }
+
+    func testAnEmptyChoiceNeverBecomesAnOption() {
+        // "anything".contains("") is true, so an empty value matched every choice — with one declared it
+        // silently became that option, a value the person never gave.
+        XCTAssertTrue(SkillBinder.choice("", in: ["Individual"]).isEmpty)
+        XCTAssertTrue(SkillBinder.choice("  ", in: ["Individual", "Company"]).trimmingCharacters(in: .whitespaces).isEmpty)
+        XCTAssertEqual(SkillBinder.choice("new", in: ["New regime", "Old regime"]), "New regime")
+    }
+
+    func testASkillConstantNeverFillsADocumentValue() {
+        // A value that comes from a document is the pass's own; the recorded default must not stand in.
+        let inputs = [SkillInput(name: "pan", source: "document", example: "ABCPR1234K", value: "ABCPR1234K")]
+        let bound = SkillBinder.finish(label: "Neha", values: [:], inputs: inputs)
+        XCTAssertEqual(bound.missing, ["pan"], "the learned person\'s PAN is not used")
+        XCTAssertNil(bound.values["pan"])
     }
 
     func testBinderMatchesGivenNamesLoosely() {
@@ -332,5 +368,50 @@ final class HybridReplayTests: XCTestCase {
         let rows = [["#amount-1", "text=input|Amount", "role=textbox|Amount 1"], ["#amount-2", "text=input|Amount", "role=textbox|Amount 2"]]
         XCTAssertEqual(SkillPromoter.template(rows), ["#amount-{{item.index}}", "role=textbox|Amount {{item.index}}"])
         XCTAssertEqual(SkillPromoter.template([["#add", "role=button|Add"], ["#add", "role=button|Add"]]), ["#add", "role=button|Add"])
+    }
+}
+
+/// How a loop unrolls: its head's condition is the loop's condition.
+final class HybridReplayLoopTests: XCTestCase {
+    private func loop(_ when: String?) -> [SkillStep] {
+        var head = SkillStep.browser("click", text: "click “Add row”", url: "https://x.example",
+                                     selectors: ["#add"], label: "Add row")
+        head.repeatOver = "rows"
+        head.repeatLength = 2
+        head.when = when
+        let cell = SkillStep.browser("type", text: "type “{{item.amount}}”", url: "https://x.example",
+                                     selectors: ["#amount"], label: "Amount", input: "{{item.amount}}")
+        return [head, cell]
+    }
+
+    func testTheLoopHeadConditionSkipsTheWholeLoop() {
+        // A false head used to drop only the head, leaving the row steps to run against rows that were
+        // never created.
+        let values = ["rows": #"[{"amount":"100"},{"amount":"200"}]"#, "regime": "new"]
+        let plan = HybridReplay.plan(loop("{{regime}} == old"), values: values)
+        XCTAssertTrue(plan.isEmpty, "\(plan.map { $0.step.label ?? "" })")
+    }
+
+    func testATrueHeadConditionRunsEveryRow() {
+        let values = ["rows": #"[{"amount":"100"},{"amount":"200"}]"#, "regime": "old"]
+        let plan = HybridReplay.plan(loop("{{regime}} == old"), values: values)
+        XCTAssertEqual(plan.count, 4, "two rows, head and cell each")
+        XCTAssertEqual(plan.filter { $0.step.input == "{{item.amount}}" }.map { $0.values["item.amount"] }, ["100", "200"])
+    }
+
+    func testAnUnconditionedLoopIsUnaffected() {
+        let values = ["rows": #"[{"amount":"100"}]"#]
+        XCTAssertEqual(HybridReplay.plan(loop(nil), values: values).count, 2)
+    }
+
+    func testTheListIsFoundWhateverItsCasing() {
+        // A hand-authored or bundled skill may name the list differently from the input.
+        let values = ["Deduction Rows": #"[{"amount":"100"}]"#]
+        let steps = loop(nil).map { step -> SkillStep in
+            var copy = step
+            copy.repeatOver = "deduction_rows"
+            return copy
+        }
+        XCTAssertEqual(HybridReplay.plan(steps, values: values).count, 2)
     }
 }
