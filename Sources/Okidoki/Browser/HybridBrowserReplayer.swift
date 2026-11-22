@@ -1125,19 +1125,21 @@ final class HybridBrowserReplayer {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         if !ready { await tab.settle(limit: 3) }
-        // The address carried the search but the site answered with its form (Google Flights' `?q=…`
-        // sometimes lands on the search page with the fields filled in). The results the step wants are
-        // one button away, and pressing it is far cheaper than asking the model to read nothing.
-        if !ready {
-            let pressed = await tab.act(["action": "click",
-                                         "selectors": ["role=button|Search", "button[aria-label=\"Search\"]",
-                                                       "role=button|Search for flights", "text=button|Search"]])
-            if pressed.ok {
-                env.replayLog(runID, "→ \(label): the address opened the form, so pressed Search")
+        // The address carried the search but the site answered with its form, or with a "best flights"
+        // strip that has no route rows (Google Flights' `?q=` free text). Fill the form and press Search:
+        // the values are right here, and it costs a second against a model call that reads nothing.
+        // Checked even when the probe looked ready: Google's "best flights" strip carries prices but no
+        // route rows, so a page can look ready and still have nothing to read.
+        let pageText = await tab.readText()
+        let looksLikeResults = ready && pageText.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil
+            && pageText.range(of: #"(?i)nonstop|\bstops?\b"#, options: .regularExpression) != nil
+        if !looksLikeResults {
+            if await fillSearchForm(tab: tab, values: values) {
+                env.replayLog(runID, "→ \(label): no route rows on the page, so filled the form and searched")
                 await tab.settle(limit: 6, fresh: true)
-                for _ in 0..<40 {
+                for _ in 0..<50 {
                     let probe = await tab.fill()
-                    if probe.len > 600, !probe.loading { ready = true; break }
+                    if probe.len > 600, probe.priced { ready = true; break }
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }
             }
@@ -1169,6 +1171,52 @@ final class HybridBrowserReplayer {
             }
         }
         return nil
+    }
+
+    /// Fills a search page's own form and presses its Search button, with the values this pass was given.
+    ///
+    /// A recorded `?q=` address is a search box's words, not a result page: Google Flights answers it with
+    /// the form filled in and a "best flights" strip that has no route rows. When a read finds no results
+    /// on a page that is clearly a search form, this does what a person would — type the trip in and
+    /// press Search — rather than spending a model call reading a page that has nothing on it.
+    private func fillSearchForm(tab: BrowserTab, values: [String: String]) async -> Bool {
+        func value(matching words: [String]) -> String? {
+            for (name, raw) in values where !raw.isEmpty {
+                let key = ParameterFill.key(name)
+                if words.contains(where: { key.contains($0) }) { return raw }
+            }
+            return nil
+        }
+        let origin = value(matching: ["origin", "from", "departure_city", "departure_airport"])
+        let destination = value(matching: ["destination", "to_city", "arrival_city", "arrival_airport"])
+        guard origin != nil || destination != nil else { return false }
+
+        var typedSomething = false
+        if let origin {
+            let result = await tab.act(["action": "type", "selectors": ["input[aria-label=\"Where from?\"]",
+                                                                        "input[aria-label*=\"Where from\"]"],
+                                        "text": origin])
+            typedSomething = typedSomething || result.ok
+        }
+        if let destination {
+            let result = await tab.act(["action": "type", "selectors": ["input[aria-label=\"Where to? \"]",
+                                                                        "input[aria-label*=\"Where to\"]"],
+                                        "text": destination])
+            typedSomething = typedSomething || result.ok
+        }
+        // A date is written the way the field's own placeholder shows it, so a bound ISO date still lands.
+        if let date = value(matching: ["date", "depart"]) {
+            _ = await tab.act(["action": "type", "selectors": ["input[aria-label=\"Departure\"]",
+                                                               "input[placeholder=\"Departure\"]"],
+                               "text": date])
+        }
+        guard typedSomething else { return false }
+        await tab.settle(limit: 2, fresh: true)
+        let pressed = await tab.act(["action": "click", "selectors": ["role=button|Search",
+                                                                      "button[aria-label=\"Search\"]",
+                                                                      "role=button|Search for flights",
+                                                                      "text=button|Search"]])
+        return pressed.ok
     }
 
     private func readOnce(_ step: SkillStep, input: SkillInput?, name: String, values: [String: String], label: String,
