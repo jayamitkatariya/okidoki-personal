@@ -103,28 +103,41 @@ final class HybridBrowserReplayer {
                 for (n, tab) in tabs.enumerated() where n < ready.count { launch(ready[n], on: tab); next = n + 1 }
                 for await (index, result) in group {
                     if Task.isCancelled || self.runID != runID { group.cancelAll(); return }
+                    // Heals are applied by step *id*, before any promotion changes the array's length: a
+                    // promoted block replaces one step with several, so a raw index from this pass's plan
+                    // then points at a different step. That misalignment filed "#add-row" under "Continue"
+                    // and "#regime" under "Annual income", and every later replay typed into the wrong
+                    // field.
+                    //
+                    // Looked up per access: applying a promotion below changes the array's length, so a
+                    // snapshot taken before it is stale again by the next heal. The id comes from the steps
+                    // this pass was launched with, not from `skill.steps` — the two stop lining up as soon
+                    // as anything is promoted.
+                    func indexOf(_ source: Int) -> Int? {
+                        guard result.stepIDs.indices.contains(source) else { return nil }
+                        let id = result.stepIDs[source]
+                        return healed.firstIndex { $0.id == id }
+                    }
+                    for (source, selectors) in result.healed {
+                        guard let at = indexOf(source) else { continue }
+                        let templatedStep = (healed[at].selectors ?? []).contains { $0.contains("{{") }
+                        guard !templatedStep else { continue }
+                        healed[at].selectors = selectors
+                        healed[at].heals = (healed[at].heals ?? 0) + 1
+                    }
+                    for source in result.echoes {
+                        guard let at = indexOf(source), healed[at].echoes != true else { continue }
+                        healed[at].echoes = true
+                    }
                     for (source, steps) in result.promotions where promotions[source] == nil {
                         promotions[source] = steps
                         // Applied to the working copy at once, not only written out at the end: a pass that
                         // launches later (and every later iteration of a loop, which shares one source
                         // index) then runs the plain steps instead of paying for the same rescue again. In
                         // a three-pass run this was three rescues of the same step.
-                        healed = SkillPromoter.replacing(healed, at: source, with: steps)
+                        if let at = indexOf(source) { healed = SkillPromoter.replacing(healed, at: at, with: steps) }
                     }
                     if taught == nil, result.ok, let lesson = result.taught { taught = lesson }
-                    for source in result.echoes where healed.indices.contains(source) && healed[source].echoes != true {
-                        healed[source].echoes = true
-                    }
-                    for (source, selectors) in result.healed where healed.indices.contains(source) {
-                        // A step inside a loop keeps its template. Its selectors carry `{{item.index}}`,
-                        // and a rescue on one row returns that row's own id ("#section-2-ermq"); saving it
-                        // either points every row at row 2 or, merged once per iteration, grows a list of
-                        // every row's id that no later page has. Left alone, the template keeps working.
-                        let templatedStep = (healed[source].selectors ?? []).contains { $0.contains("{{") }
-                        guard !templatedStep else { continue }
-                        healed[source].selectors = selectors
-                        healed[source].heals = (healed[source].heals ?? 0) + 1
-                    }
                     let item = bound[index]
                     outcomes.append((item.label, result.ok, result.note))
                     if !result.ok, !result.skipped, !result.stop, !result.unconfirmed, raw.indices.contains(index) { retryable.append(raw[index]) }
@@ -359,6 +372,12 @@ final class HybridBrowserReplayer {
         /// What the person did by hand on this pass's page while paused, before which step of the skill,
         /// with this pass's values (for turning what they typed back into inputs).
         var taught: (before: Int, steps: [SkillStep], values: [String: String])?
+        /// The steps this pass was launched with, in order. `healed`, `promotions` and `echoes` are keyed by
+        /// an index into *this* array, and by the time a result is merged the run's working copy may have a
+        /// different length (a promotion replaces one step with several). These ids are what keep a repair
+        /// on the step it belongs to — without them "#add-row" was filed under "Continue" and every later
+        /// replay clicked the wrong control.
+        var stepIDs: [String] = []
     }
 
     private func runPass(skill: Skill, steps: [SkillStep], item: SkillBinder.Bound, index: Int, of total: Int, tab: BrowserTab) async -> PassResult {
@@ -368,6 +387,9 @@ final class HybridBrowserReplayer {
         var plan = HybridReplay.plan(steps, values: values)
         var doubts = HybridReplay.PassDoubts(values: item.doubts)
         var result = PassResult(ok: false, note: "", tab: tab)
+        // The ids of the steps this pass was launched with: every repair it reports is keyed by an index
+        // into them, and the merge maps back through these instead of assuming the arrays still line up.
+        result.stepIDs = steps.map(\.id)
         var captured: [String] = []
         var cursor = 0
         var jumps = 0
@@ -436,7 +458,12 @@ final class HybridBrowserReplayer {
                         seen = await tab.observation()
                     }
                 }
-                if !HybridReplay.matches(anchor, seen), jumps < 6, let target = HybridReplay.resync(plan, current: cursor, seen: seen) {
+                if !HybridReplay.matches(anchor, seen), jumps < 6, let target = HybridReplay.resync(plan, current: cursor, seen: seen),
+                   target > cursor {
+                    // Only forward. A re-sync that points *back* at a step this pass already did is how a
+                    // form fill became a livelock: a field failed its read-back, the page's shared path made
+                    // an earlier anchor "match", and the replay redid the form six times while the return
+                    // had already been filed correctly.
                     jumps += 1
                     env.replayLog(runID, "→ \(prefix)already on “\(seen.title)”, picking up at “\(plan[target].step.text)”")
                     cursor = target
@@ -538,7 +565,7 @@ final class HybridBrowserReplayer {
                 outcome = ok ? .done : .failed(summary.isEmpty ? why : summary)
             } else if case .lost(let lostWhy) = outcome, jumps < 6, let page = step.anchor?.path,
                       case let seen = await tab.observation(), !HybridReplay.matches(StepAnchor(path: page), seen),
-                      let target = HybridReplay.resync(plan, current: cursor, seen: seen), target != cursor {
+                      let target = HybridReplay.resync(plan, current: cursor, seen: seen), target > cursor {
                 // It went to a page the skill knows, just not the one expected next (signed in again and
                 // sent straight back to where it was): carry on from there, no agent needed.
                 jumps += 1
@@ -863,15 +890,23 @@ final class HybridBrowserReplayer {
         // Did the field take it? Masks reformat, so this compares what matters.
         var doubt: String?
         if let typed, ["type", "select"].contains(action), payload["secret"] == nil {
-            let selectors = result.selectors.isEmpty ? (step.selectors ?? []) : result.selectors
-            if let now = await tab.value(of: selectors) {
-                let ok = HybridReplay.sameValue(typed: typed, field: now.value) || HybridReplay.sameValue(typed: typed, field: now.text)
-                if !ok {
+            let probe = result.selectors.isEmpty ? (step.selectors ?? []) : result.selectors
+            if let now = await tab.value(of: probe) {
+                let took = HybridReplay.sameValue(typed: typed, field: now.value) || HybridReplay.sameValue(typed: typed, field: now.text)
+                if !took {
                     _ = await tab.act(payload)
-                    if let again = await tab.value(of: selectors),
+                    if let again = await tab.value(of: probe),
                        !(HybridReplay.sameValue(typed: typed, field: again.value) || HybridReplay.sameValue(typed: typed, field: again.text)) {
-                        doubt = "“\(step.label ?? "a field")” shows “\(again.text)”, not “\(typed)”"
-                        env.replayLog(runID, "✗ \(item.label): \(doubt!)")
+                        // Only a real disagreement. A field the page hasn't painted yet reads "" — say so
+                        // as "not there yet" rather than as the wrong value, so it isn't retyped against a
+                        // field that is still being built (a form re-entered mid-sync did exactly that).
+                        if again.value.isEmpty, again.text.isEmpty {
+                            doubt = "“\(step.label ?? "a field")” isn't there yet"
+                            env.replayLog(runID, "· \(item.label): “\(step.label ?? "a field")” is empty after typing — the page may still be building it")
+                        } else {
+                            doubt = "“\(step.label ?? "a field")” shows “\(again.text)”, not “\(typed)”"
+                            env.replayLog(runID, "✗ \(item.label): \(doubt!)")
+                        }
                     }
                 }
             }
