@@ -5,15 +5,14 @@ import { isNative } from "../bridge";
 import { cx } from "../lib";
 import { Empty, KobraToastBridge } from "../components/ui";
 import { Toasts } from "@/components/ui/toast";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PixelIcon } from "../components/ui";
 import { jumpToSettingsSection, type Page } from "../nav";
-import { RunsPage } from "../pages/RunsPage";
-import { LivePage } from "../pages/LivePage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { MemoryPage } from "../pages/MemoryPage";
 import { SkillsPage } from "../pages/SkillsPage";
+import { AutomationsPage } from "../pages/AutomationsPage";
+import { WorkPage } from "../pages/WorkPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { VaultPage } from "../pages/VaultPage";
 import type { Run } from "../types";
@@ -361,10 +360,7 @@ function ShellBody() {
           >
             <Sidebar
               view={view}
-              activeTabID={activeTabID}
               onNavigate={setView}
-              onOpenTab={openTab}
-              onNewTab={newTab}
               onNewChat={newTab}
               onHide={() => setSidebarHidden(true)}
             />
@@ -447,7 +443,13 @@ function ShellBody() {
             >
               <div className="page-inner">
                 {view.page === "runs" ? (
-                  <ComputerPage />
+                  <WorkPage
+                    onOpenThread={(id) => {
+                      setArchivedOK(id);
+                      setView({ kind: "chat", id });
+                    }}
+                    onNewChat={newTab}
+                  />
                 ) : view.page === "history" ? (
                   <HistoryPage
                     go={go}
@@ -460,6 +462,8 @@ function ShellBody() {
                   <MemoryPage />
                 ) : view.page === "skills" ? (
                   <SkillsPage />
+                ) : view.page === "automations" ? (
+                  <AutomationsPage />
                 ) : view.page === "settings" ? (
                   <SettingsPage />
                 ) : view.page === "vault" ? (
@@ -474,54 +478,6 @@ function ShellBody() {
       <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={setView} onOpenTab={openTab} onOpenURL={openURL} tab={view.kind === "tab" && tab && !tab.blank ? tab : null} />
       <KobraToastBridge toasts={toasts} />
       <Toasts position="top-end" />
-    </div>
-  );
-}
-
-/** Computer: the runs on your Mac, and the live view while okidoki is driving. */
-function ComputerPage() {
-  const { state } = useDashboard();
-  const driving = Boolean(state.live?.active);
-  const [tab, setTab] = useState<"runs" | "live">(() => {
-    // A run asked for from History or Home shows in Runs, even while something else is driving.
-    if ((window as unknown as { __okidokiFocusRun?: string }).__okidokiFocusRun) return "runs";
-    return driving ? "live" : "runs";
-  });
-  // Once you've picked a tab here, a run starting doesn't yank you to Live.
-  const picked = useRef(false);
-  useEffect(() => {
-    if (driving && !picked.current) setTab("live");
-  }, [driving]);
-  useEffect(() => {
-    const onFocus = () => {
-      picked.current = true;
-      setTab("runs");
-    };
-    window.addEventListener("okidoki-focus-run", onFocus);
-    return () => window.removeEventListener("okidoki-focus-run", onFocus);
-  }, []);
-  const hasLive = driving || Boolean(state.live?.steps?.length);
-  return (
-    <div className="computer-page">
-      {hasLive ? (
-        <Tabs
-          value={tab}
-          onValueChange={(value) => {
-            picked.current = true;
-            setTab(value as "runs" | "live");
-          }}
-          className="computer-tabs"
-        >
-          <TabsList>
-            <TabsTrigger value="runs">Runs</TabsTrigger>
-            <TabsTrigger value="live">
-              {driving ? <span className="pulse-dot" aria-hidden="true" /> : <PixelIcon name="eye" size={13} />}
-              Live
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      ) : null}
-      {tab === "live" && hasLive ? <LivePage /> : <RunsPage />}
     </div>
   );
 }

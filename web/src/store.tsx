@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Account, NativeState, Settings, Toast } from "./types";
 import { useNativeState, invoke as nativeInvoke } from "./bridge";
+import { applyTheme } from "./shell/theme";
 import { demoState } from "./demo";
 
 interface DashboardContextValue {
@@ -52,6 +53,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     const apply = () => {
       const root = document.documentElement;
       const theme = resolveTheme(settings.appearance);
+      applyTheme(root, settings.palette, settings.accent, theme);
       const swap = () => {
         root.dataset.theme = theme;
         root.style.colorScheme = theme;
@@ -77,7 +79,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [settings.appearance]);
+  }, [settings.appearance, settings.palette, settings.accent]);
 
   const account = useMemo(
     () =>

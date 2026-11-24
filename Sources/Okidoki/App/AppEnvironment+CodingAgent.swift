@@ -173,6 +173,7 @@ extension AppEnvironment {
             "access": agent.access,
             "path": CodingAgentCatalog.searchPaths(),
             "allow": job.allow,
+            "engine": store.settings.codingAgents.useEngine,
         ]
         if agent.isCustom { body["template"] = agent.command } else { body["binary"] = binary }
         if let session = store.run(run.id)?.agentSession { body["sessionId"] = session }

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "../store";
-import { clamp, cx, futureTime, relativeTime, scheduleLabel } from "../lib";
-import type { Cadence, LibraryEntry, Routine, Skill, SkillStep, Watching } from "../types";
-import { Button, Chip, Choice, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
+import { clamp, cx, relativeTime } from "../lib";
+import type { LibraryEntry, Skill, SkillStep, Watching } from "../types";
+import { Button, Chip, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Segmented, Switch, TextField, type ConfirmRequest } from "../components/ui";
 
 const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -137,16 +137,6 @@ export function SkillsPage() {
   const [renaming, setRenaming] = useState<Skill | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
-  // routines (secondary)
-  const [routineOpen, setRoutineOpen] = useState(false);
-  const [editing, setEditing] = useState<Routine | null>(null);
-  const [name, setName] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [cadence, setCadence] = useState<Cadence>("weekly");
-  const [weekday, setWeekday] = useState(6);
-  const [hour, setHour] = useState(17);
-  const [minute, setMinute] = useState(0);
-  const [natural, setNatural] = useState("");
 
   // ticks the elapsed clock while recording
   const [now, setNow] = useState(Date.now());
@@ -172,81 +162,6 @@ export function SkillsPage() {
   const replay = (skill: Skill, times: number) => {
     invoke("replaySkill", { id: skill.id, times });
     notify(times > 1 ? `Replay ×${times} queued` : "Ready to replay", "Approve the preview to run it");
-  };
-
-  const openNewRoutine = () => {
-    setEditing(null);
-    setName("");
-    setPrompt("");
-    setCadence("weekly");
-    setWeekday(6);
-    setHour(17);
-    setMinute(0);
-    setNatural("");
-    setRoutineOpen(true);
-  };
-
-  const openEditRoutine = (routine: Routine) => {
-    setEditing(routine);
-    setName(routine.name);
-    setPrompt(routine.prompt);
-    setCadence(routine.cadence);
-    setWeekday(routine.weekday);
-    setHour(routine.hour);
-    setMinute(routine.minute);
-    setNatural("");
-    setRoutineOpen(true);
-  };
-
-  const scheduleSkill = (skill: Skill) => {
-    setEditing(null);
-    setName(skill.name);
-    setPrompt(`replay the “${skill.name}” skill`);
-    setCadence("weekly");
-    setWeekday(6);
-    setHour(17);
-    setMinute(0);
-    setNatural("");
-    setRoutineOpen(true);
-  };
-
-  const parseNatural = () => {
-    if (!natural.trim()) return;
-    const lower = natural.toLowerCase();
-    // whole words only, so "monitor" isn't Monday and "friend" isn't Friday
-    const dayMatch = lower.match(/\b(sun|mon|tue|wed|thu|fri|sat)(?:[a-z]*day|rs|s)?s?\b/);
-    const timeMatch = lower.match(/at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
-    if (/\b(hourly|every hour)\b/.test(lower)) setCadence("hourly");
-    else if (/\bweekdays?\b/.test(lower)) setCadence("weekdays");
-    else if (/\b(daily|every day|each day|every morning|every evening|every night)\b/.test(lower)) setCadence("daily");
-    else if (dayMatch) setCadence("weekly");
-    if (dayMatch) setWeekday(DAYS.indexOf(dayMatch[1]) + 1);
-    if (timeMatch) {
-      let value = Number(timeMatch[1]);
-      if (timeMatch[3] === "pm" && value < 12) value += 12;
-      if (timeMatch[3] === "am" && value === 12) value = 0;
-      if (!timeMatch[3] && value < 8) value += 12;
-      setHour(clamp(value, 0, 23));
-      setMinute(clamp(Number(timeMatch[2] ?? 0), 0, 59));
-    }
-    const comma = natural.indexOf(",");
-    const action = comma >= 0 ? natural.slice(comma + 1).trim() : natural;
-    setName(action.slice(0, 40) || "routine");
-    setPrompt(natural.trim());
-    setNatural("");
-  };
-
-  const saveRoutine = () => {
-    const title = name.trim() || "routine";
-    // enabled is left out: the snapshot from when the modal opened would undo a pause made since
-    if (editing) {
-      invoke("updateRoutine", { id: editing.id, name: title, prompt: prompt.trim(), cadence, weekday, hour, minute });
-      notify("Schedule updated", title);
-    } else {
-      invoke("addRoutine", { name: title, prompt: prompt.trim(), cadence, weekday, hour, minute });
-      notify("Schedule saved", scheduleLabel({ cadence, weekday, hour, minute }));
-    }
-    setRoutineOpen(false);
   };
 
   const liveSteps = watching.steps.slice(-6);
@@ -372,7 +287,19 @@ export function SkillsPage() {
                         setRenameValue(skill.name);
                       }}
                     />
-                    <IconButton icon="clock" label="Replay on a schedule" size={14} onClick={() => scheduleSkill(skill)} />
+                    <IconButton
+                      icon="clock"
+                      label="Replay on a schedule"
+                      size={14}
+                      onClick={() => {
+                        try {
+                          sessionStorage.setItem("okidoki.schedule.draft", JSON.stringify({ name: skill.name, prompt: `replay the “${skill.name}” skill` }));
+                        } catch {
+                          // A private window: the automation page still opens, just without the draft.
+                        }
+                        window.location.hash = "#/automations";
+                      }}
+                    />
                     <IconButton icon="share" label="Save as a file to share" size={14} onClick={() => invoke("exportSkill", { id: skill.id })} />
                     <IconButton
                       icon="trash"
@@ -502,82 +429,6 @@ export function SkillsPage() {
         }}
       />
 
-      <section className="skills-section routines-section">
-        <div className="section-head">
-          <h2 className="skills-heading">On a schedule</h2>
-          {state.routines.length ? <span className="tile-count">{state.routines.length}</span> : null}
-          <span className="spacer" />
-          <Button variant="ghost" size="sm" icon="plus" onClick={openNewRoutine}>
-            New schedule
-          </Button>
-        </div>
-        {state.routines.length ? (
-          <div className="tile routine-list reveal reveal-2">
-            {state.routines.map((routine) => (
-              <div className={cx("routine-row", !routine.enabled && "is-paused")} key={routine.id}>
-                <span className="kind-icon small">
-                  <PixelIcon name="clock" size={14} />
-                </span>
-                <button className="routine-copy" onClick={() => openEditRoutine(routine)} title="Edit schedule">
-                  <strong>{routine.name}</strong>
-                  <em>{routine.prompt}</em>
-                </button>
-                <span className="routine-when">
-                  <span className="routine-pill">
-                    <PixelIcon name="calendar" size={12} />
-                    {scheduleLabel(routine)}
-                  </span>
-                  <span className="routine-next">
-                    {routine.enabled ? `Next ${futureTime(routine.nextRunAt)}` : "Paused"}
-                    {routine.lastRunAt ? ` · Last ${relativeTime(routine.lastRunAt)}` : ""}
-                  </span>
-                </span>
-                <div className="routine-actions">
-                  <IconButton icon="edit" label="Edit schedule" size={14} className="routine-hover" onClick={() => openEditRoutine(routine)} />
-                  <IconButton
-                    icon="trash"
-                    label="Delete schedule"
-                    size={14}
-                    className="routine-hover"
-                    onClick={() =>
-                      setConfirm({
-                        title: "Delete this schedule?",
-                        detail: `“${routine.name}” won’t run again.`,
-                        action: "Delete schedule",
-                        onConfirm: () => {
-                          invoke("deleteRoutine", { id: routine.id });
-                          notify("Schedule removed", routine.name, "info");
-                        },
-                      })
-                    }
-                  />
-                  <IconButton
-                    icon="play"
-                    label="Run now"
-                    size={14}
-                    className="routine-run"
-                    onClick={() => {
-                      invoke("runRoutine", { id: routine.id });
-                      notify("Running", routine.name);
-                    }}
-                  />
-                  <Switch
-                    label={routine.enabled ? "Pause schedule" : "Resume schedule"}
-                    checked={routine.enabled}
-                    onChange={() => {
-                      invoke("toggleRoutine", { id: routine.id });
-                      notify(routine.enabled ? "Schedule paused" : "Schedule resumed", routine.name, "info");
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="section-note routines-empty">Optional. Use the clock on a skill to replay it at set times, or put any request on repeat.</p>
-        )}
-      </section>
-
       <Modal open={recordOpen} onClose={() => setRecordOpen(false)} title="Record a skill" subtitle="You’ll do the task once. okidoki learns it move by move." width={480}>
         <div className="routine-form">
           <div className="routine-field">
@@ -706,99 +557,7 @@ export function SkillsPage() {
         </footer>
       </Modal>
 
-      <Modal
-        open={routineOpen}
-        onClose={() => setRoutineOpen(false)}
-        title={editing ? "Edit schedule" : "New schedule"}
-        subtitle={editing ? undefined : "Describe it in plain words, or set it up by hand."}
-        width={540}
-      >
-        <div className="routine-form">
-          {!editing ? (
-            <div className="routine-natural">
-              <TextField value={natural} onChange={setNatural} placeholder="Every Friday at 5, clean my Downloads folder" icon="spark" onEnter={parseNatural} />
-              <Button variant="secondary" onClick={parseNatural} disabled={!natural.trim()}>
-                Fill in
-              </Button>
-            </div>
-          ) : null}
-          <div className="routine-field">
-            <span className="form-label">Name</span>
-            <TextField value={name} onChange={setName} placeholder="Friday cleanup" />
-          </div>
-          <div className="routine-field">
-            <span className="form-label">What should okidoki do?</span>
-            <TextField value={prompt} onChange={setPrompt} placeholder="Clean my Downloads folder" />
-          </div>
-          <div className="routine-field">
-            <span className="form-label">Repeats</span>
-            <Segmented
-              options={[
-                { value: "hourly", label: "Hourly" },
-                { value: "daily", label: "Daily" },
-                { value: "weekdays", label: "Weekdays" },
-                { value: "weekly", label: "Weekly" },
-                { value: "manual", label: "Manual" },
-              ]}
-              value={cadence}
-              onChange={(value) => setCadence(value as Cadence)}
-            />
-          </div>
-          {cadence !== "manual" ? (
-            <div className="routine-time">
-              {cadence === "weekly" ? (
-                <div className="routine-cell is-day">
-                  <span className="form-label">Day</span>
-                  <Choice label="Day" size="lg" value={weekday} onChange={setWeekday} options={DAYS.map((_, index) => ({ value: index + 1, label: DAY_LABELS[index] }))} />
-                </div>
-              ) : null}
-              {cadence !== "hourly" ? (
-                <label className="routine-cell">
-                  <span className="form-label">Hour</span>
-                  <NumberCell value={hour} min={0} max={23} onChange={setHour} />
-                </label>
-              ) : null}
-              <label className="routine-cell">
-                <span className="form-label">Minute</span>
-                <NumberCell value={minute} min={0} max={59} onChange={setMinute} />
-              </label>
-            </div>
-          ) : null}
-          <p className="routine-summary">
-            <PixelIcon name="calendar" size={13} />
-            {scheduleLabel({ cadence, weekday, hour, minute })}
-          </p>
-        </div>
-        <footer className="modal-actions">
-          <Button variant="ghost" onClick={() => setRoutineOpen(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={saveRoutine} disabled={!prompt.trim()}>
-            {editing ? "Save schedule" : "Add schedule"}
-          </Button>
-        </footer>
-      </Modal>
       <ConfirmModal request={confirm} onClose={() => setConfirm(null)} />
     </div>
-  );
-}
-
-/** A number box you can clear and retype: it keeps what you type, and settles to a valid value on blur. */
-function NumberCell({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (value: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  return (
-    <input
-      type="number"
-      min={min}
-      max={max}
-      value={draft}
-      onChange={(event) => {
-        setDraft(event.target.value);
-        const next = Number(event.target.value);
-        if (event.target.value !== "" && Number.isFinite(next)) onChange(clamp(Math.round(next), min, max));
-      }}
-      onBlur={() => setDraft(String(value))}
-    />
   );
 }

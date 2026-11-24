@@ -8,6 +8,8 @@ import "./styles/live.css";
 import "./styles/history.css";
 import "./styles/memory.css";
 import "./styles/skills.css";
+import "./styles/automations.css";
+import "./styles/work.css";
 import "./styles/settings.css";
 import "./styles/vault.css";
 import "./styles/shell.css";

@@ -38,12 +38,14 @@ public struct CodingAgentSettings: Codable, Equatable, Sendable {
     public var workingFolder: String = ""
     /// Let okidoki send file, terminal and code jobs to the default agent on its own.
     public var autoRoute: Bool = true
+    /// Run enabled agents on okidoki's own harness runtime instead of their CLI.
+    public var useEngine: Bool = false
 
-    public init(agents: [CodingAgentConfig] = [], defaultID: String = "", workingFolder: String = "", autoRoute: Bool = true) {
-        self.agents = agents; self.defaultID = defaultID; self.workingFolder = workingFolder; self.autoRoute = autoRoute
+    public init(agents: [CodingAgentConfig] = [], defaultID: String = "", workingFolder: String = "", autoRoute: Bool = true, useEngine: Bool = false) {
+        self.agents = agents; self.defaultID = defaultID; self.workingFolder = workingFolder; self.autoRoute = autoRoute; self.useEngine = useEngine
     }
 
-    enum CodingKeys: String, CodingKey { case agents, defaultID, workingFolder, autoRoute }
+    enum CodingKeys: String, CodingKey { case agents, defaultID, workingFolder, autoRoute, useEngine }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -51,6 +53,7 @@ public struct CodingAgentSettings: Codable, Equatable, Sendable {
         defaultID = (try? c.decodeIfPresent(String.self, forKey: .defaultID)).flatMap { $0 } ?? ""
         workingFolder = (try? c.decodeIfPresent(String.self, forKey: .workingFolder)).flatMap { $0 } ?? ""
         autoRoute = (try? c.decodeIfPresent(Bool.self, forKey: .autoRoute)).flatMap { $0 } ?? true
+        useEngine = (try? c.decodeIfPresent(Bool.self, forKey: .useEngine)).flatMap { $0 } ?? false
     }
 
     public var enabled: [CodingAgentConfig] { agents.filter(\.enabled) }

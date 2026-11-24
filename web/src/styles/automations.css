@@ -1,0 +1,46 @@
+.automations-page {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+.automations-page .routines-section {
+  margin: 0;
+}
+.routine-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--s-faint);
+}
+.automations-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 52px 24px;
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+}
+.automations-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--c-soft);
+  color: var(--s-ink-2);
+}
+.automations-empty h2 {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s-ink);
+}
+.automations-empty p {
+  margin: 0 0 6px;
+  max-width: 480px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--s-muted);
+  text-wrap: pretty;
+}

@@ -268,17 +268,9 @@ final class AppEnvironment: ObservableObject {
         onboarding = OnboardingWindowController(environment: self)
         notch.install()
         glows.install()
-        applyShake(store.settings.shakeToSummon)
-        store.$settings.map(\.shakeToSummon).removeDuplicates().dropFirst()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] on in self?.applyShake(on) }
-            .store(in: &cancellables)
-        summonHotKey.onPress = { [weak self] in self?.handleSummonHotKey() }
-        applySummonHotKey(Self.activeHotkey(store.settings), announce: false)
-        store.$settings.map(Self.activeHotkey).removeDuplicates().dropFirst()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] spec in self?.applySummonHotKey(spec) }
-            .store(in: &cancellables)
+        // okidoki lives in the notch and the dashboard. There is no shake or global
+        // shortcut to learn: the notch's Ask button is the one way in.
+        BrainSidecar.engineWorkspaceRoot = store.settings.codingAgents.workingFolder
         if ProcessInfo.processInfo.environment["OKIDOKI_OVERLAY_PREVIEW"] != "1" { sidecar.start() }
 
         scheduler = RoutineScheduler(store: store)
@@ -662,15 +654,9 @@ final class AppEnvironment: ObservableObject {
               onEdit: { [weak self] in self?.openDashboard(.settings) }, runID: nil)
     }
 
-    /// "Shake your mouse", "Press ⌥ Space", or both, for copy that tells people how to call okidoki.
+    /// The one way in, said once.
     static func summonHint(_ settings: AppSettings) -> String {
-        let key = SummonHotKey.label(activeHotkey(settings))
-        switch (settings.shakeToSummon, key.isEmpty) {
-        case (true, true): return "Shake your mouse"
-        case (true, false): return "Shake your mouse or press \(key)"
-        case (false, false): return "Press \(key)"
-        case (false, true): return "Tap Ask in the notch"
-        }
+        "Tap Ask in the notch"
     }
 
     /// The shortcut toggles summon the way a shake does, minus the pointer checks.

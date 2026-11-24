@@ -6,6 +6,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - name: Clean names
+        run: ./scripts/check-clean-names.sh
       - name: Brain
         run: cd brain && bun install && bun run typecheck && bun test tests
       - name: Control panel (both pages build self-contained)

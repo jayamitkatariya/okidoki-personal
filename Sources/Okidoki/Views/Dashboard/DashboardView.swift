@@ -232,6 +232,11 @@ struct DashboardServicesPayload: Encodable {
         var version: String?
         var port: Int
     }
+    struct Engine: Encodable {
+        var running: Bool
+        var healthy: Bool
+        var port: Int
+    }
     struct Memory: Encodable {
         /// A Moss key is set, so the Mac sends its data to the index.
         var configured: Bool
@@ -252,6 +257,7 @@ struct DashboardServicesPayload: Encodable {
         var checkedAt: Date?
     }
     var brain: Brain
+    var engine: Engine
     var memory: Memory
     var mcp: MCP
 }
@@ -557,11 +563,15 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
         let health = env.sidecar.lastHealth
         let mcpEnabled = env.store.connectors.contains { $0.id == "mcp" && $0.enabled }
         let servers = mcpEnabled ? settings.mcpServers.filter(\.enabled) : []
+        let engine = health?["engine"] as? [String: Any]
         return DashboardServicesPayload(
             brain: .init(status: env.sidecar.status.label,
                          ready: env.sidecar.status.isReady,
                          version: health?["version"] as? String,
                          port: env.sidecar.port),
+            engine: .init(running: engine?["running"] as? Bool ?? false,
+                          healthy: engine?["healthy"] as? Bool ?? false,
+                          port: engine?["port"] as? Int ?? 0),
             memory: .init(configured: env.hasKey("moss"),
                           ready: env.memoryIndex.ready,
                           documents: env.memoryIndex.documents,
@@ -768,8 +778,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
                 env.speaker.speak("hey, i'm okidoki. this is what i sound like.", voiceID: voice,
                                   speed: env.store.settings.voiceSpeed)
             }
-        case "summon":
-            env.startSummon()
         case "openOnboarding":
             env.openOnboarding()
         case "openDashboard":
@@ -1092,8 +1100,6 @@ final class WebDashboardController: NSObject, WKNavigationDelegate, WKScriptMess
             env.seedShellPins()
         case "markSeen":
             env.store.markSeen(threadID: payload["threadID"] as? String, runID: payload["runID"] as? String)
-        case "hotkeyRecording":
-            env.holdSummonHotKey(payload["on"] as? Bool == true)
         case "browserFrame":
             if payload["hidden"] as? Bool == true { env.browserFrame = nil }
             else if let x = payload["x"] as? Double, let y = payload["y"] as? Double,

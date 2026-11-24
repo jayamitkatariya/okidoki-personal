@@ -10,7 +10,7 @@ The loop runs on three stages. The skill is the unit of value; the stage is just
 
 | Stage | What it is | Today |
 |---|---|---|
-| **Your Mac** | Shake the pointer, ask or teach, approve in the notch, Esc takes over. | shipped |
+| **Your Mac** | Ask from the notch, teach, approve in the notch, Esc takes over. | shipped |
 | **Private Mac** | okidoki's own macOS VM. Runs drive it while you keep your screen, cursor and keyboard. Watch it live in the shell. | shipped (Apple silicon) |
 | **Shared session** | One Mac hosts its private Mac; everyone on the same WiFi joins in a browser — live screen, a group chat, and the host's skills replayed on request. okidoki acts; the host approves; anyone can take the wheel. | shipped (Apple silicon) |
 

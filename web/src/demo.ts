@@ -214,6 +214,8 @@ export const demoState: NativeState = {
     notificationStyle: "everything",
     notchExternalPosition: "top-center",
     appearance: "light",
+    palette: "okidoki",
+    accent: "okidoki",
     cursorGlowHex: "44E45E",
     glowEnabled: true,
     shakeSensitivity: 0.65,

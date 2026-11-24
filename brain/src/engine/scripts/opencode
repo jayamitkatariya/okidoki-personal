@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const cliPath = require.resolve('opencode-ai/bin/opencode.exe');
+const child = spawn(cliPath, process.argv.slice(2), {
+  stdio: ['inherit', 'pipe', 'pipe'],
+  env: process.env,
+});
+const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+for (const signal of signals) {
+  process.on(signal, () => {
+    child.kill(signal);
+    // A hung server never handles the signal and would outlive the chat that stopped it.
+    setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
+  });
+}
+
+child.stdout.on('data', (chunk) => {
+  process.stdout.write(chunk.toString().replace(/^server listening/mg, 'opencode server listening'));
+});
+
+child.stderr.on('data', (chunk) => {
+  process.stderr.write(chunk);
+});
+
+child.on('error', (error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 0);
+});

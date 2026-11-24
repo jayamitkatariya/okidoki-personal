@@ -13,8 +13,6 @@ struct OnboardingView: View {
     @State private var about = ""
     @State private var permissions: [PermissionKind: PermissionState] = [:]
     @State private var connecting: String?
-    @State private var didShake = false
-    @State private var didCircle = false
     @State private var workspace = "mac"
     @State private var mode = "personal"
     @State private var anthropicKey = ""
@@ -55,10 +53,6 @@ struct OnboardingView: View {
             refreshPermissions()
         }
         .onDisappear { env.suspendSummonForTour = false }
-        .onReceive(env.$shakePulse.dropFirst()) { _ in
-            guard step == .tour else { return }
-            withAnimation(stateChange) { didShake = true }
-        }
         // Permissions are granted in System Settings; re-check whenever the user comes back.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshPermissions()
@@ -166,7 +160,7 @@ struct OnboardingView: View {
             OKLogo(size: 52, glow: true)
                 .padding(.bottom, 22)
             title("Hi, I'm okidoki.")
-            subtitle("Shake your mouse anywhere and I'll answer, act, or show you how. Then I get out of the way.")
+            subtitle("I live in your Mac's notch. Ask me and I'll answer, act, or show you how. Then I get out of the way.")
             fieldLabel("What should I call you?").padding(.top, 26)
             TextField("Your name", text: $name)
                 .textFieldStyle(.plain)
@@ -640,36 +634,11 @@ struct OnboardingView: View {
     private var tourStep: some View {
         VStack(alignment: .leading, spacing: 0) {
             title("Try it")
-            subtitle("Two gestures are all you need.")
+            subtitle("One place to start.")
             VStack(spacing: 10) {
-                if env.store.settings.shakeToSummon {
-                    tourCard(symbol: "cursorarrow.motionlines", title: "Shake your mouse",
-                             detail: didShake ? "That's it. Shake again or press Esc to dismiss." : "Anywhere on screen, like scribbling out a mistake.",
-                             done: didShake) {
-                        if !didShake {
-                            // Shaking isn't for everyone: the shortcut does the same, and the mouse is left alone.
-                            Button("Use \(SummonHotKey.label(env.store.settings.summonHotkey.isEmpty ? "option+space" : env.store.settings.summonHotkey)) instead") {
-                                if env.store.settings.summonHotkey.isEmpty { env.store.settings.summonHotkey = "option+space" }
-                                env.store.settings.shakeToSummon = false
-                                env.store.saveNow()
-                                withAnimation(stateChange) { didShake = true }
-                            }
-                            .buttonStyle(ShellButtonStyle(kind: .ghost, small: true))
-                            .padding(.top, 8)
-                        }
-                    }
-                } else {
-                    tourCard(symbol: "keyboard", title: "Press \(SummonHotKey.label(env.store.settings.summonHotkey))",
-                             detail: "Your shortcut opens okidoki in any app. Shake to summon is off; turn it on in Settings › Summon.",
-                             done: true) { EmptyView() }
-                }
-                tourCard(symbol: "lasso", title: "Circle something",
-                         detail: didCircle ? "Nice. That's how you point at things." : "Draw around the dot to show what you mean.",
-                         done: didCircle) {
-                    TourCanvas(done: $didCircle)
-                        .frame(height: 104)
-                        .padding(.top, 12)
-                }
+                tourCard(symbol: "menubar.rectangle", title: "Ask from the notch",
+                         detail: "Click Ask at the top of your screen. Tell me what you need done — on your Mac, in your browser, or with a coding agent.",
+                         done: true) { EmptyView() }
             }
             .padding(.top, 22)
         }
@@ -687,7 +656,7 @@ struct OnboardingView: View {
             title("You're all set\(name.isEmpty ? "" : ", \(firstName)").")
             subtitle("okidoki lives in your notch. It's there whenever you need it.")
             VStack(spacing: 0) {
-                hintRow(keys: env.store.settings.shakeToSummon ? "Shake" : SummonHotKey.label(env.store.settings.summonHotkey), detail: "Summon okidoki")
+                hintRow(keys: "Ask", detail: "Ask okidoki from the notch")
                 divider
                 hintRow(keys: "Esc", detail: "Dismiss")
                 divider
@@ -708,7 +677,7 @@ struct OnboardingView: View {
         switch step {
         case .welcome: return "Get started"
         case .brain: return "Continue"
-        case .tour: return ((didShake || !env.store.settings.shakeToSummon) && didCircle) ? "Continue" : "Skip"
+        case .tour: return "Continue"
         case .done: return "Start using okidoki"
         default: return "Continue"
         }

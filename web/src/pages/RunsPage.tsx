@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "../store";
 import { cx, clockLabel, copyText, formatBytes, relativeTime } from "../lib";
 import type { Run, RunKind, RunStatus } from "../types";
-import { Button, Empty, IconButton, isComposing, Modal, PixelIcon, RiskBadge, Segmented, StatusBadge, TextArea, TextField } from "../components/ui";
+import { Button, Empty, IconButton, isComposing, Modal, PixelIcon, RiskBadge,  StatusBadge, TextArea, TextField } from "../components/ui";
 
 const kindGlyph: Record<RunKind, string> = {
   answer: "spark",
@@ -28,16 +28,6 @@ const kindName: Record<RunKind, string> = {
   coding_agent: "Coding agent",
 };
 
-type FilterId = "all" | "waiting" | "running" | "done" | "failed";
-
-const FILTERS: Array<{ value: FilterId; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "waiting", label: "Waiting" },
-  { value: "running", label: "Running" },
-  { value: "done", label: "Done" },
-  { value: "failed", label: "Failed" },
-];
-
 /** "45s", "3m 10s", "3h 5m" — readable at a glance. */
 function elapsed(start: string | null | undefined, end: string | null | undefined): string | null {
   if (!start) return null;
@@ -57,31 +47,23 @@ function rowState(status: RunStatus): "wait" | "live" | null {
 
 export function RunsPage() {
   const { state, invoke, notify } = useDashboard();
-  const [filter, setFilter] = useState<FilterId>("all");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [redirectOpen, setRedirectOpen] = useState(false);
   const [redirectText, setRedirectText] = useState("");
   const detailRef = useRef<HTMLDivElement>(null);
 
-  const runs = useMemo(() => {
-    return [...state.runs]
-      .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
-      .filter((run) => {
-        const matchFilter =
-          filter === "all"
-            ? true
-            : filter === "waiting"
-              ? run.status === "waiting" || run.status === "previewing" || run.status === "asked"
-              : filter === "running"
-                ? run.status === "running" || run.status === "paused"
-                : filter === "done"
-                  ? run.status === "done"
-                  : run.status === "failed" || run.status === "cancelled";
-        const matchQuery = !query || run.title.toLowerCase().includes(query.toLowerCase()) || run.prompt.toLowerCase().includes(query.toLowerCase());
-        return matchFilter && matchQuery;
-      });
-  }, [state.runs, filter, query]);
+  const groups = useMemo(() => {
+    const matchQuery = (run: Run) =>
+      !query || run.title.toLowerCase().includes(query.toLowerCase()) || run.prompt.toLowerCase().includes(query.toLowerCase());
+    const all = [...state.runs].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).filter(matchQuery);
+    return {
+      needs: all.filter((run) => run.status === "waiting" || run.status === "previewing" || run.status === "asked"),
+      working: all.filter((run) => run.status === "running" || run.status === "paused"),
+      finished: all.filter((run) => run.status === "done" || run.status === "failed" || run.status === "cancelled"),
+    };
+  }, [state.runs, query]);
+  const runs = useMemo(() => [...groups.needs, ...groups.working, ...groups.finished], [groups]);
 
   // the selection always comes from the visible list, so the highlighted row and the detail agree
   const current = runs.find((run) => run.id === selected) ?? runs[0] ?? null;
@@ -98,7 +80,6 @@ export function RunsPage() {
 
   useEffect(() => {
     const focusRun = (id: string) => {
-      setFilter("all");
       setQuery("");
       setSelected(id);
     };
@@ -126,46 +107,59 @@ export function RunsPage() {
       <aside className="runs-list">
         <div className="runs-list-head">
           <div className="runs-heading">
-            <h1 className="page-title-sm">Computer</h1>
+            <h1 className="page-title-sm">Work</h1>
             {state.runs.length ? <span className="tile-count">{state.runs.length}</span> : null}
           </div>
-          <TextField value={query} onChange={setQuery} placeholder="Search runs" icon="search" className="runs-search" />
-          <div className="runs-filters">
-            <Segmented options={FILTERS} value={filter} onChange={setFilter} compact />
-          </div>
+          <TextField value={query} onChange={setQuery} placeholder="Search work" icon="search" className="runs-search" />
         </div>
         <div className="runs-scroll">
           {runs.length ? (
-            runs.map((run) => {
-              const flag = rowState(run.status);
-              return (
-                <button
-                  key={run.id}
-                  className={cx("run-row", current?.id === run.id && "is-selected")}
-                  title={run.title}
-                  onClick={() => setSelected(run.id)}
-                  aria-current={current?.id === run.id ? "true" : undefined}
-                >
-                  <span className="kind-icon small">
-                    <PixelIcon name={kindGlyph[run.kind] ?? "spark"} size={14} />
-                  </span>
-                  <span className="run-row-copy">
-                    <span className="run-row-top">
-                      <strong>{run.title}</strong>
-                      <time>{relativeTime(run.createdAt)}</time>
-                    </span>
-                    <span className="run-row-sub">
-                      {flag ? <i className={cx("run-flag", `run-flag-${flag}`)} /> : null}
-                      <em>{run.summary || run.status}</em>
-                    </span>
-                  </span>
-                </button>
-              );
-            })
+            <>
+              {([
+                ["Needs you", groups.needs],
+                ["Working", groups.working],
+                ["Finished", groups.finished],
+              ] as const).map(([title, list]) =>
+                list.length ? (
+                  <section key={title} className="runs-group" aria-label={title}>
+                    <header className="runs-group-head">
+                      <span>{title}</span>
+                      <span className="tnum">{list.length}</span>
+                    </header>
+                    {list.map((run) => {
+                      const flag = rowState(run.status);
+                      return (
+                        <button
+                          key={run.id}
+                          className={cx("run-row", current?.id === run.id && "is-selected")}
+                          title={run.title}
+                          onClick={() => setSelected(run.id)}
+                          aria-current={current?.id === run.id ? "true" : undefined}
+                        >
+                          <span className="kind-icon small">
+                            <PixelIcon name={kindGlyph[run.kind] ?? "spark"} size={14} />
+                          </span>
+                          <span className="run-row-copy">
+                            <span className="run-row-top">
+                              <strong>{run.title}</strong>
+                              <time>{relativeTime(run.createdAt)}</time>
+                            </span>
+                            <span className="run-row-sub">
+                              {flag ? <i className={cx("run-flag", `run-flag-${flag}`)} /> : null}
+                              <em>{run.summary || run.status}</em>
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </section>
+                ) : null,
+              )}
+            </>
           ) : (
             <div className="runs-none">
-              <strong>{query ? "No matches" : "Nothing here"}</strong>
-              <span>{query ? `No runs mention “${query}”.` : "Runs with this status show up here."}</span>
+              <strong>{query ? "No matches" : "Nothing here yet"}</strong>
+              <span>{query ? `Nothing mentions “${query}”.` : "Ask okidoki for something and it will show up here."}</span>
             </div>
           )}
         </div>

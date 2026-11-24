@@ -10,13 +10,42 @@ import { ACTIVE, FINISHED, NEEDS_YOU } from "./model";
 import { useNow } from "./media";
 import { askAndOpen } from "./ask";
 
-const STARTERS = [
-  { text: "Find the cheapest nonstop to Chicago next Thursday", icon: "globe" },
-  { text: "Summarize the PDF in my vault folder", icon: "note" },
-  { text: "My Mac is out of space", icon: "screen" },
+/** The four things okidoki does, in the person's words. */
+const CAPABILITIES = [
+  {
+    icon: "screen",
+    title: "On my Mac",
+    text: "Clean up my desktop and file what's on it",
+    prompt: "Clean up my desktop and file what's on it",
+    mode: "act",
+  },
+  {
+    icon: "globe",
+    title: "In the browser",
+    text: "Find the cheapest nonstop to Chicago next Thursday",
+    prompt: "Find the cheapest nonstop flight to Chicago next Thursday",
+    mode: "browser",
+  },
+  {
+    icon: "repeat",
+    title: "Replay a skill",
+    text: "Run my morning routine again",
+    prompt: "replay my morning routine",
+    mode: "auto",
+  },
+  {
+    icon: "switch",
+    title: "With a harness",
+    text: "Fix the failing tests in my project folder",
+    prompt: "Fix the failing tests in my project folder",
+    mode: "auto",
+  },
 ];
 
-/** Home is the new tab: ask or search, what needs you, what's moving, and what you can replay. */
+/**
+ * Home is the conversation with okidoki. She is the front door: computer use,
+ * browser work, replays and coding harnesses all start from this one ask.
+ */
 export function Home({
   onOpenRun,
   onAsked,
@@ -47,7 +76,6 @@ export function Home({
   }, [runs]);
   const skills = useMemo(() => [...(state.skills ?? [])].sort((a, b) => (b.runCount ?? 0) - (a.runCount ?? 0)).slice(0, 4), [state.skills]);
   const templates = (state.library ?? []).filter((entry) => !entry.added).slice(0, Math.max(0, 4 - skills.length));
-  const empty = runs.length === 0;
   // Said up front, not after the first request bounces: nothing answers until a key is saved.
   const anthropic = state.keyProviders?.find((provider) => provider.id === "anthropic");
   const needsKey = anthropic ? !anthropic.set && !anthropic.builtin : state.keys?.anthropic === false;
@@ -66,6 +94,10 @@ export function Home({
     <div className="nt">
       <div className="nt-hero">
         <motion.div className={cx("nt-mark", working && "is-working")} aria-hidden="true" {...rise(0)} />
+        <motion.div className="nt-headline" {...rise(1)}>
+          <h1>What should I get done?</h1>
+          <p>I can drive your Mac, work in your browser, replay a skill, or hand a job to a coding harness. Just ask.</p>
+        </motion.div>
         <motion.div className="nt-composer" {...rise(1)}>
           <Composer variant="home" autoFocus focusTick={focusTick} onAsked={onAsked} onSearched={onSearched} />
         </motion.div>
@@ -78,19 +110,24 @@ export function Home({
             </button>
           </p>
         ) : null}
-        {empty ? (
-          <motion.div className="nt-starters" {...rise(2)}>
-            <p>Ask okidoki to do something. It works in a tab or on your Mac, and anything it learns you can replay forever.</p>
-            <div>
-              {STARTERS.map((starter) => (
-                <button key={starter.text} type="button" className="starter" onClick={() => askAndOpen(invoke, { text: starter.text, mode: "auto" }, onAsked)}>
-                  <PixelIcon name={starter.icon} size={15} />
-                  <span>{starter.text}</span>
-                </button>
-              ))}
-            </div>
-          </motion.div>
-        ) : null}
+        <motion.div className="nt-capabilities" {...rise(2)}>
+          {CAPABILITIES.map((capability) => (
+            <button
+              key={capability.title}
+              type="button"
+              className="nt-capability"
+              onClick={() => askAndOpen(invoke, { text: capability.prompt, mode: capability.mode }, onAsked)}
+            >
+              <span className="nt-capability-icon">
+                <PixelIcon name={capability.icon} size={16} />
+              </span>
+              <span>
+                <strong>{capability.title}</strong>
+                <em>{capability.text}</em>
+              </span>
+            </button>
+          ))}
+        </motion.div>
       </div>
 
       {needs.length ? (
@@ -155,7 +192,7 @@ export function Home({
       {recent.length ? (
         <motion.section className="nt-section" aria-labelledby="recent-title" {...rise(3)}>
           <header className="nt-head">
-            <h2 id="recent-title">Recent tasks</h2>
+            <h2 id="recent-title">Recent</h2>
             <button type="button" className="link-btn" onClick={onShowAll}>
               Show all
             </button>

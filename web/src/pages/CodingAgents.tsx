@@ -4,7 +4,7 @@ import { cx } from "../lib";
 import type { CodingAgentConfig, CodingAgentSettings, DetectedCodingAgent } from "../types";
 import { Button, IconButton, Modal, PixelIcon, Segmented, Switch, TextField } from "../components/ui";
 
-const EMPTY: CodingAgentSettings = { agents: [], defaultID: "", workingFolder: "", autoRoute: true };
+const EMPTY: CodingAgentSettings = { agents: [], defaultID: "", workingFolder: "", autoRoute: true, useEngine: false };
 
 /** What each access level means per agent, said the same way the Mac says it in a run's preview. */
 const ACCESS: Record<string, { workspace: string; full: string }> = {
@@ -152,6 +152,9 @@ export function CodingAgents() {
         }
       >
         <Switch label="Send file and code jobs on its own" checked={config.autoRoute} onChange={(value) => save({ autoRoute: value })} />
+      </PrefRow>
+      <PrefRow title="Use the harness runtime" detail="Run enabled agents inside okidoki's own runtime: one queue, mid-turn steering, subagents and shared history. Falls back to the CLI if it can't start.">
+        <Switch label="Use the harness runtime" checked={config.useEngine ?? false} onChange={(value) => save({ useEngine: value })} />
       </PrefRow>
 
       <AgentModal

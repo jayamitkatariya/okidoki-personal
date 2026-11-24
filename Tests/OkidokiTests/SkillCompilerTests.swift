@@ -727,3 +727,35 @@ extension SkillCompilerPruneTests {
         XCTAssertTrue(think?.text.contains("read it from the request") == true, "\(think?.text ?? "")")
     }
 }
+
+extension SkillCompilerPruneTests {
+    func testALoopRowsLabelIsTemplatedLikeItsSelectors() {
+        // The recorded row is row one, so its label says "Section 1" while its selector carries
+        // `{{item.index}}`. On row two the label looked for row one's control, missed, and paid for a model
+        // rescue on every row of every replay.
+        var head = SkillStep.browser("click", text: "click “Add row”", url: "https://x.example", selectors: ["#add"], label: "Add row")
+        head.repeatOver = "rows"
+        // The body is the two steps after the head: a repeatLength counts the head too.
+        head.repeatLength = 3
+        let section = SkillStep.browser("select", text: "choose section", url: "https://x.example",
+                                        selectors: ["#section-{{item.index}}"], label: "Section 1", input: "{{item.section}}")
+        let amount = SkillStep.browser("type", text: "type amount", url: "https://x.example",
+                                       selectors: ["#amount-{{item.index}}"], label: "Amount 1 (₹)", input: "{{item.amount}}")
+        var skill = Skill(accountID: "a", name: "file a return", summary: "")
+        skill.steps = [head, section, amount]
+        let pruned = SkillCompiler.pruneStale(skill)
+        XCTAssertEqual(pruned.steps.first { $0.action == "select" }?.label, "Section {{item.index}}")
+        XCTAssertEqual(pruned.steps.first { $0.action == "type" }?.label, "Amount {{item.index}} (₹)")
+    }
+
+    func testANameWithANumberIsNotATemplate() {
+        // "80C" and "Form 16" are names, not rows: rewriting their digits would change what the control is.
+        XCTAssertNil(SkillCompiler.trailingRowNumber(in: "80C"))
+        XCTAssertNil(SkillCompiler.trailingRowNumber(in: "24B"))
+        XCTAssertNil(SkillCompiler.trailingRowNumber(in: "Section 80C"))
+        XCTAssertNil(SkillCompiler.trailingRowNumber(in: "Form 16"))
+        XCTAssertNil(SkillCompiler.trailingRowNumber(in: "Select 2 of 3"))
+        XCTAssertEqual(SkillCompiler.trailingRowNumber(in: "Section 1"), 1)
+        XCTAssertEqual(SkillCompiler.trailingRowNumber(in: "Amount 2 (₹)"), 2)
+    }
+}

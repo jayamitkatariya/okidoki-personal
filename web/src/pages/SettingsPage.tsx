@@ -4,6 +4,7 @@ import { copyText, cx, relativeTime } from "../lib";
 import { joinCommand, parseServerJSON, serversFromConfig, splitCommand } from "../mcp";
 import type { Connector, KeyProvider, McpServer, PrivateMacPhase, PrivateMacState, Toast } from "../types";
 import { SETTINGS_JUMP_EVENT } from "../nav";
+import { ACCENTS, PALETTES, accentPreview, palettePreview } from "../shell/theme";
 import { CodingAgents } from "./CodingAgents";
 import { Button, ConfirmModal, IconButton, Modal, PageTitle, PixelIcon, Progress, Segmented, Switch, TextArea, TextField, type ConfirmRequest } from "../components/ui";
 
@@ -45,7 +46,6 @@ const SECTIONS = [
   { id: "advanced", label: "Advanced", icon: "link" },
   { id: "agents", label: "Use from agents", icon: "code" },
   { id: "private-mac", label: "Private Mac", icon: "screen" },
-  { id: "summon", label: "Summon", icon: "spark" },
   { id: "general", label: "General", icon: "gear" },
 ];
 
@@ -57,6 +57,7 @@ export function SettingsPage() {
   const [appDraft, setAppDraft] = useState("");
   const [active, setActive] = useState(SECTIONS[0].id);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const themeMode = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 
   useEffect(() => setInstructions(settings.customInstructions), [settings.customInstructions]);
   useEffect(() => {
@@ -462,6 +463,22 @@ export function SettingsPage() {
               </div>
               <h3 className="settings-subhead">Hand work to coding agents</h3>
               <p className="settings-advanced-note">okidoki hands files, the terminal and code to Claude Code, Codex and other coding agents. Each uses its own sign-in.</p>
+              <div className="pref-group">
+                <PrefRow
+                  title="Harness runtime"
+                  detail={
+                    state.services?.engine?.healthy
+                      ? `Ready in the background · port ${state.services.engine.port}`
+                      : state.services?.engine?.running
+                        ? "Starting in the background"
+                        : "Not running"
+                  }
+                >
+                  <span className={cx("harness-state", state.services?.engine?.healthy && "is-on")}>
+                    {state.services?.engine?.healthy ? "Ready" : state.services?.engine?.running ? "Starting" : "Off"}
+                  </span>
+                </PrefRow>
+              </div>
               <CodingAgents />
             </div>
           </details>
@@ -490,38 +507,12 @@ export function SettingsPage() {
             </SettingsSection>
           ) : null}
 
-          <SettingsSection id="summon" title="Summon" description="How you call okidoki from anywhere on your Mac. The notch’s Ask button and the menu bar always work too.">
-            <div className="pref-group">
-              <PrefRow title="Shake to summon" detail="Shake the pointer and okidoki opens beside it. Off stops watching the mouse entirely.">
-                <Switch label="Shake to summon" checked={settings.shakeToSummon ?? true} onChange={(value) => updateSettings({ shakeToSummon: value })} />
-              </PrefRow>
-              <PrefRow
-                title="Shake sensitivity"
-                detail={(settings.shakeToSummon ?? true) ? "Lower is easier to trigger" : "Turn on Shake to summon to tune this"}
-              >
-                <span className={(settings.shakeToSummon ?? true) ? undefined : "pref-disabled"} aria-disabled={!(settings.shakeToSummon ?? true)} inert={!(settings.shakeToSummon ?? true)}>
-                  <Slider
-                    name="Shake sensitivity"
-                    min={0.2}
-                    max={1}
-                    step={0.05}
-                    value={settings.shakeSensitivity}
-                    onChange={(value) => updateSettings({ shakeSensitivity: value })}
-                    format={(value) => `${Math.round(value * 100)}%`}
-                  />
-                </span>
-              </PrefRow>
-              <PrefRow title="Summon shortcut" detail="Works in any app. Click, then press the keys you want.">
-                <HotkeyField value={settings.summonHotkey ?? "option+space"} onChange={(value) => updateSettings({ summonHotkey: value })} />
-              </PrefRow>
-              <PrefRow title="Notch" detail="Progress, approvals and answers at the top of the screen. On Macs without a notch it floats there.">
-                <Switch label="Show in the notch" checked={settings.notchEnabled} onChange={(value) => updateSettings({ notchEnabled: value })} />
-              </PrefRow>
-            </div>
-          </SettingsSection>
 
           <SettingsSection id="general" title="General" description="Look, setup and where your data lives.">
             <div className="pref-group">
+              <PrefRow title="Notch" detail="Progress, approvals and answers at the top of the screen. On Macs without a notch it floats there.">
+                <Switch label="Show in the notch" checked={settings.notchEnabled} onChange={(value) => updateSettings({ notchEnabled: value })} />
+              </PrefRow>
               <PrefRow title="Theme">
                 <Segmented
                   options={[
@@ -532,6 +523,50 @@ export function SettingsPage() {
                   value={settings.appearance}
                   onChange={(value) => updateSettings({ appearance: value as typeof settings.appearance })}
                 />
+              </PrefRow>
+              <PrefRow title="Palette" detail="Surfaces, ink and hairlines.">
+                <div className="token-row" role="radiogroup" aria-label="Palette">
+                  {PALETTES.map((entry) => {
+                    const on = (settings.palette ?? "okidoki") === entry.id;
+                    const preview = palettePreview(entry.id, themeMode);
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        className={cx("token-chip", on && "is-on")}
+                        onClick={() => updateSettings({ palette: entry.id })}
+                      >
+                        <span className="token-dots" style={{ background: preview.bg }} aria-hidden="true">
+                          <span style={{ background: preview.fg }} />
+                        </span>
+                        {entry.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </PrefRow>
+              <PrefRow title="Accent" detail="Buttons, focus and live states.">
+                <div className="token-row" role="radiogroup" aria-label="Accent">
+                  {ACCENTS.map((entry) => {
+                    const on = (settings.accent ?? "okidoki") === entry.id;
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        className={cx("accent-chip", on && "is-on")}
+                        onClick={() => updateSettings({ accent: entry.id })}
+                        title={entry.label}
+                        aria-label={entry.label}
+                      >
+                        <span className="accent-dot" style={{ background: accentPreview(entry.id, themeMode) }} />
+                      </button>
+                    );
+                  })}
+                </div>
               </PrefRow>
               <PrefRow title="Onboarding" detail="Walk through setup again">
                 <Button variant="secondary" size="sm" icon="wand" onClick={() => invoke("openOnboarding")}>
@@ -1336,89 +1371,6 @@ function McpServerModal({ server, onClose }: { server: McpServer | "new" | null;
         </Button>
       </footer>
     </Modal>
-  );
-}
-
-const KEY_GLYPH: Record<string, string> = { command: "⌘", option: "⌥", control: "⌃", shift: "⇧", space: "Space", return: "↩", escape: "esc", tab: "⇥" };
-
-/** "option+space" → "⌥ Space". */
-export function hotkeyLabel(value: string): string {
-  if (!value) return "Off";
-  return value
-    .split("+")
-    .map((part) => KEY_GLYPH[part] ?? part.toUpperCase())
-    .join(" ");
-}
-
-/** Records a global shortcut: at least one modifier and one key. */
-function HotkeyField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const { invoke } = useDashboard();
-  const [recording, setRecording] = useState(false);
-  const [error, setError] = useState("");
-  // While recording, the Mac lets go of the current shortcut so pressing it records instead of summoning.
-  useEffect(() => {
-    if (!recording) return;
-    invoke("hotkeyRecording", { on: true });
-    return () => invoke("hotkeyRecording", { on: false });
-  }, [recording, invoke]);
-  const stop = () => {
-    setRecording(false);
-    setError("");
-  };
-  // Only the field itself listens, so typing anywhere else in Settings is never swallowed.
-  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (!recording) return;
-    if (event.key === "Tab") {
-      stop();
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      stop();
-      return;
-    }
-    if (["Meta", "Alt", "Control", "Shift"].includes(event.key)) return;
-    const mods = [event.metaKey && "command", event.altKey && "option", event.ctrlKey && "control", event.shiftKey && "shift"].filter(Boolean) as string[];
-    if (!mods.length || (mods.length === 1 && mods[0] === "shift")) {
-      setError("Add ⌘, ⌥ or ⌃ so it doesn’t fire while you type");
-      return;
-    }
-    const code = event.code;
-    const key = code === "Space" ? "space" : code.startsWith("Key") ? code.slice(3).toLowerCase() : code.startsWith("Digit") ? code.slice(5) : code === "Enter" ? "return" : "";
-    if (!key) {
-      setError("Use a letter, a number or Space");
-      return;
-    }
-    if (mods.length === 1 && mods[0] === "command" && ["q", "w", "h", "m", "c", "v", "x", "z", "a"].includes(key)) {
-      setError("That one belongs to every Mac app — try adding ⌥ or ⌃");
-      return;
-    }
-    stop();
-    onChange([...mods, key].join("+"));
-  };
-  return (
-    <span className="hotkey-field">
-      <button
-        type="button"
-        className={cx("hotkey-keys", recording && "is-recording")}
-        onClick={() => {
-          setError("");
-          setRecording((v) => !v);
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={stop}
-        aria-label={recording ? "Press the new shortcut, or Escape to cancel" : "Record a shortcut"}
-      >
-        {recording ? "Press keys…" : hotkeyLabel(value)}
-      </button>
-      {value && !recording ? (
-        <button type="button" className="hotkey-clear" onClick={() => onChange("")}>
-          Turn off
-        </button>
-      ) : null}
-      {error ? <em className="hotkey-error" role="alert">{error}</em> : null}
-    </span>
   );
 }
 

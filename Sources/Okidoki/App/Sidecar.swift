@@ -28,6 +28,8 @@ enum SidecarStatus: Equatable {
 
 @MainActor
 final class BrainSidecar: ObservableObject {
+    /// Where harness chats run. Set from the app's coding folder before start; empty keeps the default.
+    static var engineWorkspaceRoot = ""
     @Published private(set) var status: SidecarStatus = .idle
     @Published private(set) var lastHealth: [String: Any]?
     private(set) var port: Int
@@ -98,6 +100,7 @@ final class BrainSidecar: ObservableObject {
         env["PATH"] = ShellRunner.shared.pathEnvironment + ":" + (env["PATH"] ?? "")
         env["OKIDOKI_BRAIN_TOKEN"] = BrainConnection.token
         env["OKIDOKI_SUPPORT_DIR"] = AppPaths.support.path
+        if !Self.engineWorkspaceRoot.isEmpty { env["OKIDOKI_ENGINE_WORKSPACE_ROOT"] = Self.engineWorkspaceRoot }
         for (name, value) in ServiceSecrets.brainEnvironment where !value.isEmpty {
             env[name] = value
         }

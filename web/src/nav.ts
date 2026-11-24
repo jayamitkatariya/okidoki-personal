@@ -1,7 +1,7 @@
 /** The places the shell can route to. Most are library pages; "home", "browser" and "live" map onto Home, a tab and Computer. */
-export type Page = "home" | "browser" | "runs" | "live" | "history" | "memory" | "skills" | "vault" | "settings";
+export type Page = "home" | "browser" | "runs" | "live" | "history" | "memory" | "skills" | "automations" | "vault" | "settings";
 
-const PAGES: ReadonlySet<string> = new Set<Page>(["home", "browser", "runs", "live", "history", "memory", "skills", "vault", "settings"]);
+const PAGES: ReadonlySet<string> = new Set<Page>(["home", "browser", "runs", "live", "history", "memory", "skills", "automations", "vault", "settings"]);
 
 export function isPage(value: string): value is Page {
   return PAGES.has(value);

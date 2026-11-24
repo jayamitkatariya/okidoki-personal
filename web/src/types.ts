@@ -31,6 +31,10 @@ export interface Settings {
   notificationStyle: NotificationStyle;
   notchExternalPosition: string;
   appearance: Appearance;
+  /** Theme palette: okidoki, slate, stone, neutral or high-contrast. Missing on older builds. */
+  palette?: string;
+  /** Accent: okidoki, blue, purple or pink. Missing on older builds. */
+  accent?: string;
   cursorGlowHex: string;
   glowEnabled: boolean;
   shakeSensitivity: number;
@@ -88,6 +92,8 @@ export interface CodingAgentSettings {
   /** Empty means the vault folder. */
   workingFolder: string;
   autoRoute: boolean;
+  /** Run enabled agents on okidoki's harness runtime instead of their CLI. */
+  useEngine?: boolean;
 }
 
 /** A known coding agent CLI and where it was found on this Mac (null: not installed). */
@@ -169,6 +175,8 @@ export interface McpStatus {
 /** The brain, the Moss index and MCP as the Mac sees them right now. */
 export interface ServicesState {
   brain: { status: string; ready: boolean; version?: string | null; port: number };
+  /** The harness runtime: Claude Code, Codex, OpenCode, Cursor, Gemini, Pi and the built-in loop. */
+  engine?: { running: boolean; healthy: boolean; port: number };
   memory: {
     configured: boolean;
     ready: boolean;

@@ -7,6 +7,7 @@
  * docs (amp: ampcode.com/docs/cli, gemini: gemini-cli docs/cli). Anything else is a custom command.
  */
 import type { Subprocess } from "bun";
+import { engineAvailable, runEngineAgent, stopEngineRun } from "./engine/chats";
 
 export type AgentFormat = "claude" | "codex" | "pi" | "opencode" | "gemini" | "text";
 export type AgentAccess = "workspace" | "full";
@@ -105,6 +106,8 @@ function denyLifted(denied: string, allow: string[]): boolean {
 
 export interface AgentRunRequest {
   runId: string;
+  /** Run on the local harness runtime (the engine) instead of the agent's CLI. */
+  engine?: boolean;
   /** A preset id, or "custom". */
   agent: string;
   prompt: string;
@@ -469,6 +472,7 @@ const running = new Map<string, { proc: Subprocess; stopped: boolean; timedOut?:
 
 /** Stops a coding agent run and everything it started. True when one was running. */
 export function stopCodingAgent(runId: string): boolean {
+  if (stopEngineRun(runId)) return true;
   const entry = running.get(runId);
   if (!entry) return false;
   entry.stopped = true;
@@ -492,6 +496,25 @@ function killGroup(proc: Subprocess, signal: NodeJS.Signals): void {
 
 /** Runs one job to the end, calling `onEvent` for everything it does. */
 export async function runCodingAgent(request: AgentRunRequest, onEvent: (event: AgentEvent) => void): Promise<AgentOutcome> {
+  if (request.engine) {
+    if (await engineAvailable()) {
+      let emitted = 0;
+      try {
+        return await runEngineAgent(request, (event) => {
+          emitted += 1;
+          onEvent(event);
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "the harness runtime failed";
+        if (emitted > 0) {
+          return { ok: false, answer: "", exitCode: null, denials: [], stopped: false, tools: 0, error: message };
+        }
+        onEvent({ type: "log", text: `harness runtime unavailable: ${message} — using the CLI` });
+      }
+    } else {
+      onEvent({ type: "log", text: "harness runtime is not ready — using the CLI" });
+    }
+  }
   const argv = buildCommand(request);
   const format: AgentFormat = request.agent === "custom" || !preset(request.agent) ? "text" : preset(request.agent)!.format;
   const builder = new OutcomeBuilder(format);

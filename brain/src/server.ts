@@ -14,6 +14,7 @@ import { browserStep, type BrowserRequest } from "./browser";
 import { compileSkill, resolveValues, routeRequest, type CompileRequest, type ResolveRequest, type RouteRequest } from "./skillcompile";
 import { macStep, type MacStepRequest } from "./macstep";
 import { buildCommand, runCodingAgent, stopAllCodingAgents, stopCodingAgent, type AgentRunRequest } from "./codingagents";
+import { localEngine } from "./engine/local";
 
 const port = Number(process.env.OKIDOKI_BRAIN_PORT ?? 4329);
 
@@ -66,12 +67,23 @@ async function route(request: Request): Promise<Response> {
       return json({ error: "unauthorized" }, 401);
     }
 
+    if (url.pathname === "/engine/status") {
+      return json(await localEngine.status());
+    }
+
+    // The engine is the harness runtime. Everything it exposes lives one path
+    // segment behind the brain so the app talks to a single local backend.
+    if (url.pathname.startsWith("/engine/")) {
+      return localEngine.proxy(request);
+    }
+
     if (url.pathname === "/health") {
       return json({
         ok: true,
         version: "0.9.2",
         runtime: `bun ${Bun.version}`,
         port,
+        engine: await localEngine.status(),
       });
     }
 
@@ -417,6 +429,7 @@ function shutdown() {
   shuttingDown = true;
   stopAllConnectors();
   stopAllCodingAgents();
+  localEngine.stop();
   closeAll(); // don't leave MCP server processes behind
   void closeMemory();
   server.stop(true);
@@ -427,6 +440,13 @@ process.on("SIGINT", shutdown);
 
 console.log(`okidoki brain listening on http://127.0.0.1:${server.port}`);
 console.log(`bun ${Bun.version}`);
+
+if (process.env.OKIDOKI_ENGINE_DISABLED !== "1") {
+  void localEngine.start().then(
+    () => console.log(`okidoki engine ready on http://127.0.0.1:${localEngine.port}`),
+    (error) => console.error(`okidoki engine failed to start: ${error instanceof Error ? error.message : "unknown error"}`),
+  );
+}
 
 const moss = mossCredentials();
 if (moss) {

@@ -31,16 +31,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         item?.button?.toolTip = Self.tooltip(env?.store.settings)
     }
 
-    /// Says how to summon, given what's turned on.
+    /// The notch is the front door.
     static func tooltip(_ settings: AppSettings?) -> String {
-        guard let settings else { return "Okidoki" }
-        let key = SummonHotKey.label(AppEnvironment.activeHotkey(settings))
-        switch (settings.shakeToSummon, key.isEmpty) {
-        case (true, true): return "Okidoki — shake your mouse to summon"
-        case (true, false): return "Okidoki — shake your mouse or press \(key) to summon"
-        case (false, false): return "Okidoki — press \(key) to summon"
-        case (false, true): return "Okidoki — summon from here or the notch"
-        }
+        "Okidoki — ask from the notch"
     }
 
     private func rebuildMenu() {
@@ -56,12 +49,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         dashboard.keyEquivalentModifierMask = [.command, .shift]
         dashboard.target = self
         menu.addItem(dashboard)
-
-        let summon = NSMenuItem(title: "summon okidoki", action: #selector(summonNow), keyEquivalent: "")
-        summon.target = self
-        let key = SummonHotKey.label(AppEnvironment.activeHotkey(env.store.settings))
-        if !key.isEmpty { summon.toolTip = key }
-        menu.addItem(summon)
 
         let ask = NSMenuItem(title: "ask okidoki", action: #selector(ask), keyEquivalent: "")
         ask.target = self
@@ -115,9 +102,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func openDashboard() { env?.openDashboard(.home) }
     /// After the menu closes, so the capsule opens where the pointer is and keeps the keyboard.
-    @objc private func summonNow() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.env?.startSummon() }
-    }
     @objc private func openSettings() { env?.openDashboard(.settings) }
     @objc private func openOnboarding() { env?.openOnboarding() }
     @objc private func ask() {

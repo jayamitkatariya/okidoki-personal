@@ -97,6 +97,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var notchExternalPosition: String = "top-center"
 
     public var appearance: AppAppearance = .light
+    /// Theme palette: okidoki, slate, stone, neutral or high-contrast.
+    public var palette: String = "okidoki"
+    /// Theme accent: okidoki, blue, purple or pink.
+    public var accent: String = "okidoki"
     public var cursorGlowHex: String = "44E45E"
     public var glowEnabled: Bool = true
     public var shakeSensitivity: Double = 0.65
@@ -161,6 +165,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case okidokiEnabled, defaultInput, voiceID, voiceSpeed, voiceEnabled, captions, confirmOK
         case customInstructions, backgroundMode, screenBorrowing, proactiveNudges
         case quietMode, notchEnabled, notificationStyle, notchExternalPosition, appearance
+        case palette, accent
         case cursorGlowHex, glowEnabled, shakeSensitivity, drawingStyle, drawingColorHex
         case blockedApps, alwaysAsk, alwaysAllow, spendingLimit, hideInScreenshots
         case appleCalendar, automationGranted, inputMonitoringGranted
@@ -193,6 +198,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         notificationStyle = (try? c.decodeIfPresent(NotificationStyle.self, forKey: .notificationStyle)).flatMap { $0 } ?? .everything
         notchExternalPosition = string(.notchExternalPosition, "top-center")
         appearance = (try? c.decodeIfPresent(AppAppearance.self, forKey: .appearance)).flatMap { $0 } ?? .light
+        palette = string(.palette, "okidoki")
+        accent = string(.accent, "okidoki")
         cursorGlowHex = string(.cursorGlowHex, "44E45E")
         glowEnabled = bool(.glowEnabled, true)
         shakeSensitivity = double(.shakeSensitivity, 0.65)

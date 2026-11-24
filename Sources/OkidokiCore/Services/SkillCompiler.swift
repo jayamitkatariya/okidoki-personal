@@ -282,6 +282,18 @@ public enum SkillCompiler {
             guard let length = steps[head].repeatLength, length > 0 else { continue }
             for offset in 0..<length where head + offset < steps.count { inLoop.insert(head + offset) }
         }
+        // The row a loop body recorded is row *one*. Its label says so ("Section 1", "Amount 1 (₹)") while
+        // its selectors carry `{{item.index}}`, so on the second row the label looks for row one's control,
+        // misses, and pays for a model rescue on every row of every replay. The label is templated the same
+        // way as the selectors.
+        for index in inLoop where ["select", "type", "click"].contains(steps[index].action ?? "") {
+            guard let label = steps[index].label, !label.contains("{{") else { continue }
+            guard let row = Self.trailingRowNumber(in: label) else { continue }
+            let templated = label.replacingOccurrences(of: String(row), with: "{{item.index}}")
+            // Only when the number is the row's own, not part of a name ("80C", "24B", a year).
+            guard templated != label, row >= 1, row <= 9 else { continue }
+            steps[index].label = templated
+        }
 
         for index in steps.indices {
             let step = steps[index]
@@ -582,6 +594,19 @@ public enum SkillCompiler {
         // Written back even when nothing was dropped: the selectors repaired above are part of the result.
         made.steps = steps
         return made
+    }
+
+    /// The row number a loop-recorded label carries, when the number stands on its own: "Section 1" → 1,
+    /// "Amount 2 (₹)" → 2. Nil for a label where every number is part of a name or a code ("80C", "24B",
+    /// "Form 16"), because rewriting that would change what the control *is*.
+    static func trailingRowNumber(in label: String) -> Int? {
+        // A number that is not glued to letters or to another digit.
+        let pattern = try! NSRegularExpression(pattern: "(?<![A-Za-z0-9])([1-9])(?![0-9A-Za-z])")
+        let range = NSRange(label.startIndex..., in: label)
+        let hits = pattern.matches(in: label, range: range)
+        // Exactly one candidate, so "Select 2 of 3" can't be guessed at.
+        guard hits.count == 1, let hit = hits.first, let r = Range(hit.range(at: 1), in: label) else { return nil }
+        return Int(label[r])
     }
 
     /// The one control a think step names, when pressing it is all the step asks for.

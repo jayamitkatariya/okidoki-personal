@@ -6,8 +6,9 @@ build:
 test:
 	swift test
 
-# Everything that doesn't need a real screen: brain, panel and the Swift unit tests.
+# Everything that doesn't need a real screen: naming, brain, panel and the Swift unit tests.
 verify:
+	./scripts/check-clean-names.sh
 	cd brain && bun run typecheck && bun test tests
 	cd web && bunx tsc --noEmit -p . && bun test tests && bun run build
 	swift test --skip SkillReplayRealAppTests

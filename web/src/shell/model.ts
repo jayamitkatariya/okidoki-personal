@@ -14,11 +14,12 @@ export type LibraryPage = Exclude<Page, "home" | "browser">;
 
 export const LIBRARY: Array<{ page: LibraryPage; title: string; icon: string; hint: string }> = [
   { page: "skills", title: "Replay", icon: "repeat", hint: "Show it once, replay it forever" },
-  { page: "runs", title: "Computer", icon: "screen", hint: "Act runs on your Mac and what they wait on" },
+  { page: "automations", title: "Automations", icon: "clock", hint: "Tasks okidoki runs on a schedule" },
+  { page: "runs", title: "Work", icon: "hand", hint: "What is running and what needs you" },
   { page: "history", title: "History", icon: "clock", hint: "Every chat and request" },
   { page: "memory", title: "Memory", icon: "memory", hint: "What okidoki knows about you" },
   { page: "vault", title: "Vault", icon: "lock", hint: "Your documents and sealed logins" },
-  { page: "settings", title: "Settings", icon: "gear", hint: "Keys, summon, safety, look" },
+  { page: "settings", title: "Settings", icon: "gear", hint: "Keys, safety, look" },
 ];
 
 export function viewKey(view: View): string {

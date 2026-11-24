@@ -6,16 +6,46 @@
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
-    "build": "bun build src/server.ts --outfile dist/server.js --target=bun --external @moss-js/moss",
+    "build": "bun build src/server.ts --outfile dist/server.js --target=bun --external @moss-js/moss --external node-pty",
+    "build:engine": "bun build src/engine/index.ts --outfile dist/engine.js --target=bun --external node-pty --external @cursor/sdk --external @anthropic-ai/claude-agent-sdk --external @earendil-works/pi-coding-agent --external @opencode-ai/sdk",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
     "smoke:api": "bun scripts/smoke-api.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^20.11.17",
+    "@types/ws": "8.18.1",
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "@moss-js/moss": "1.21.0"
+    "@anthropic-ai/claude-agent-sdk": "0.3.321",
+    "@anthropic-ai/sdk": "0.128.0",
+    "@cursor/sdk": "1.0.36",
+    "@earendil-works/pi-ai": "0.85.0",
+    "@earendil-works/pi-coding-agent": "0.85.0",
+    "@earendil-works/pi-server": "0.85.0",
+    "@hono/node-server": "^1.19.5",
+    "@jitl/quickjs-singlefile-mjs-release-sync": "0.32.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@moss-js/moss": "1.21.0",
+    "@okidoki/shared": "file:../shared",
+    "@opencode-ai/sdk": "1.19.4",
+    "hono": "^4.10.3",
+    "node-datachannel": "^0.33.6",
+    "opencode-ai": "1.19.4",
+    "pi-mcp-adapter": "2.32.1",
+    "quickjs-emscripten-core": "0.32.0",
+    "sharp": "^0.35.5",
+    "tsx": "^4.23.15",
+    "undici": "7.30.1",
+    "vscode-jsonrpc": "^8.2.0",
+    "ws": "8.21.0",
+    "yaml": "^2.8.2",
+    "zod": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "1.2.0-beta.15"
   }
 }
